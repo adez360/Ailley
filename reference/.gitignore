@@ -1,0 +1,12 @@
+# Ignore reference images (mood board / scraped refs)
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+*.bmp
+*.svg
+
+# ...but keep generated assets
+!generated/
+!generated/**
