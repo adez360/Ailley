@@ -1,0 +1,63 @@
+# ── 第三方工具（本地 build 用，不進版控）─────────────
+poc/llama.cpp/
+llama.cpp/
+
+# ── 模型檔（動輒數 GB，絕對不能進 git）──────────────
+*.gguf
+*.ggml
+*.bin
+*.safetensors
+models/
+
+# ── Python ──────────────────────────────────────────
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── 環境變數 / 密鑰（雲端 API key 千萬別進版控）──────
+.env
+.env.*
+*.key
+secrets.*
+
+# ── Godot ───────────────────────────────────────────
+.godot/
+.import/
+export.cfg
+export_presets.cfg
+*.translation
+# 匯出的打包產物
+build/
+dist/
+*.exe
+*.pck
+*.dmg
+*.app/
+
+# ── SQLite 本地資料庫（開發期資料，不共用）──────────
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# ── 編輯器 / 系統雜項 ───────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── 日誌與暫存 ──────────────────────────────────────
+*.log
+tmp/
+*.tm
+
+# ── 各自的obsidian ──────────────────────────────────────
+.obsidian/
