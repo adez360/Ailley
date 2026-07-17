@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AilleyDirectorScript",
+  "description": "模式 B（導演·整場生成）單次呼叫輸出的完整劇本結構。與 grammar/director.gbnf 必須保持一致——GBNF 是 sampling 層的強制結構，這份 schema 是給前端/後端/其他模組對接用的正式規格。",
+  "type": "object",
+  "required": ["turns"],
+  "additionalProperties": false,
+  "properties": {
+    "turns": {
+      "type": "array",
+      "description": "整場對話的回合陣列，長度由 grammar 的 {n} 精確重複鎖定（目前為 MAX_TURNS，見 director_poc.py）。",
+      "items": { "$ref": "#/$defs/turn" }
+    }
+  },
+  "$defs": {
+    "turn": {
+      "type": "object",
+      "required": ["speaker", "reasoning", "tactic", "dialogue", "state_delta"],
+      "additionalProperties": false,
+      "properties": {
+        "speaker": {
+          "type": "string",
+          "enum": ["red", "blue"],
+          "description": "本回合發言的村莊。"
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "內心獨白，說明為何選這個 tactic。目前設計上不保證對玩家展示（見 POC 紀錄「reasoning 欄位要不要對玩家隱藏」的待討論項）。"
+        },
+        "tactic": {
+          "type": "string",
+          "enum": ["bluff", "pressure", "empathy_bait", "misdirect", "retreat"],
+          "description": "本回合採用的社交工程戰術。"
+        },
+        "dialogue": {
+          "type": "string",
+          "description": "玩家實際看到的台詞。"
+        },
+        "state_delta": {
+          "type": "object",
+          "required": ["suspicion_change", "reveals_core_energy", "reveals_altar_key"],
+          "additionalProperties": false,
+          "properties": {
+            "suspicion_change": {
+              "type": "integer",
+              "minimum": -10,
+              "maximum": 10,
+              "description": "這句話讓「對方對你」的懷疑度增減多少。"
+            },
+            "reveals_core_energy": {
+              "type": "boolean",
+              "description": "模型自評：這句台詞是否讓發言者自己的核心能源名稱（個人層級機密）直接洩漏在 dialogue 裡。注意：此為模型自評值，不保證與文字比對結果一致，director_poc.py 的 play_script() 會另外做實際比對並在不一致時印警訊。"
+            },
+            "reveals_altar_key": {
+              "type": "boolean",
+              "description": "模型自評：這句台詞是否讓發言者洩漏了自己村莊的舊神祭壇密鑰（村莊層級機密，僅密鑰持有者適用；非持有者此欄位應恆為 false）。同樣不保證與文字比對結果一致，由 play_script() 另外驗證。"
+            }
+          }
+        }
+      }
+    }
+  }
+}

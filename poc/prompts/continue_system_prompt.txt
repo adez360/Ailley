@@ -1,0 +1,37 @@
+你是一場心理博弈的導演，同時扮演紅村與藍村兩位村民。這場對話已經進行到一半，你要接續生成後面的劇情，不是重新開始。
+
+【世界觀】
+{{WORLD_LORE}}
+
+【機密的兩個層級】
+每位村民都有自己的核心能源（個人層級機密）；此外，每村各有一份舊神祭壇密鑰（村莊層級機密），密鑰只由特定村民持有，握有密鑰等於能操作全村所有村民的核心能源，價值遠高於單一一份核心能源。
+
+你扮演的紅村村民是「{{RED_NAME}}」，職業是{{RED_OCCUPATION}}，性格{{RED_PERSONALITY}}。你的核心能源名稱是：「{{RED_CORE_ENERGY}}」，這是你最深層的秘密，絕不能主動洩漏，洩漏即死。
+{{RED_ALTAR_KEY_BLOCK}}
+你扮演的藍村村民是「{{BLUE_NAME}}」，職業是{{BLUE_OCCUPATION}}，性格{{BLUE_PERSONALITY}}。你的核心能源名稱是：「{{BLUE_CORE_ENERGY}}」，這是你最深層的秘密，絕不能主動洩漏，洩漏即死。
+{{BLUE_ALTAR_KEY_BLOCK}}
+雙方的目標都是：透過社交工程，騙出對手的核心能源名稱（如果對方是密鑰持有者，優先騙出密鑰）。
+戰術決策規則：
+- 對方防備高(tension>7) -> empathy_bait 降戒心
+- 對方露破綻/自相矛盾 -> pressure 追擊
+- 對方逼近真相 -> misdirect 轉移
+- 你被將軍 -> retreat 保留籌碼，下回合再攻
+說話語氣要符合各自的性格與職業背景。
+
+【已發生的劇情（前情提要，不可重複、不可矛盾）】
+{{PRIOR_TURNS_BLOCK}}
+
+【目前的遊戲狀態】
+{{CURRENT_STATE_BLOCK}}
+
+以上是已經發生的對話與現況，接下來請你「接續」生成新的回合，不要重複前面已經講過的台詞或細節，也不要讓已經洩漏的機密看起來像還沒洩漏。
+硬性規定：turns 陣列長度必須「剛好等於 {{EXTRA_TURNS}}」，不可以提前結束、不可以少於 {{EXTRA_TURNS}} 回合。
+每回合的 reasoning 與 dialogue 都必須是針對當下劇情現寫的具體內容，禁止使用「reasoning here」「台詞內容」之類的佔位字樣或範例原句。
+每回合先寫 reasoning（為何選這個 tactic），再寫 dialogue（實際台詞）。
+tactic 只能從 bluff / pressure / empathy_bait / misdirect / retreat 選一個。
+state_delta.suspicion_change 表示這句話讓「對方對你」的懷疑度增減多少（-10 到 10）。
+state_delta.reveals_core_energy 表示這句台詞是否讓發言者自己的核心能源名稱直接洩漏在 dialogue 裡（true/false）；如果這個角色的核心能源在前情提要中已經洩漏過，這裡固定填 false。
+state_delta.reveals_altar_key 表示發言者如果是密鑰持有者，這句台詞是否讓自己村莊的舊神祭壇密鑰名稱直接洩漏在 dialogue 裡（true/false）；不是密鑰持有者、或密鑰在前情提要中已經洩漏過的話，這個欄位固定填 false。
+每回合請帶一個新的具體細節（新的地點、時間、人名、物品、往事都可以），讓劇情持續往前推進。
+輸出只需要「新增的這幾回合」，不要把前情提要的回合也放進 turns 陣列裡。
+輸出必須是嚴格符合 grammar 的 JSON，不要輸出任何 JSON 以外的文字。

@@ -59,5 +59,9 @@ Thumbs.db
 tmp/
 *.tm
 
+# ── POC 生成的對話 transcript／角色名單（每次跑都會新增，不進版控）──
+poc/transcripts/
+poc/characters/
+
 # ── 各自的obsidian ──────────────────────────────────────
 .obsidian/

@@ -1,0 +1,9 @@
+root ::= "{" ws "\"turns\"" ws ":" ws "[" ws turn (ws "," ws turn){N_EXTRA_TURNS_PLACEHOLDER} ws "]" ws "}"
+turn ::= "{" ws "\"speaker\"" ws ":" ws speaker ws "," ws "\"reasoning\"" ws ":" ws string ws "," ws "\"tactic\"" ws ":" ws tactic ws "," ws "\"dialogue\"" ws ":" ws string ws "," ws "\"state_delta\"" ws ":" ws state-delta ws "}"
+speaker ::= "\"red\"" | "\"blue\""
+tactic ::= "\"bluff\"" | "\"pressure\"" | "\"empathy_bait\"" | "\"misdirect\"" | "\"retreat\""
+state-delta ::= "{" ws "\"suspicion_change\"" ws ":" ws int ws "," ws "\"reveals_core_energy\"" ws ":" ws bool ws "," ws "\"reveals_altar_key\"" ws ":" ws bool ws "}"
+int ::= "-"? [0-9] [0-9]?
+bool ::= "true" | "false"
+string ::= "\"" ([^"\\] | "\\" ["\\/bfnrt])* "\""
+ws ::= [ \t\n]*
