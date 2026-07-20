@@ -1,11 +1,14 @@
-"""Ailley POC — 模式 B：導演·整場生成
+"""Ailley POC — 模式 B 雲端對照版：改打 OpenRouter 免費模型，其餘架構跟 director_poc.py 一致
 
-單次呼叫 llama-server，一口氣生成整場對話劇本 + state_delta（JSON，GBNF 鎖死結構），
-再逐字（逐回合）於終端機播放，並依 state_delta 累計 suspicion、判斷是否洩漏 flag。
+跟本地 llama-server 版本的差異只有「怎麼呼叫模型」：
+  - 沒有 GBNF grammar 可以在取樣層鎖死 JSON 結構（OpenRouter 免費模型不支援），
+    改成在 prompt 尾端額外強調輸出格式，事後用 json.loads 解析，容錯度較低。
+  - 呼叫的是 OpenRouter 的 OpenAI 相容 /chat/completions endpoint，不是 llama-server 的 /completion。
+角色卡、世界觀、洩漏偵測、OpenCC 正規化這些邏輯完全比照 director_poc.py，方便直接比較「同一套架構，
+本地 7B 量化模型 vs 雲端免費模型」的輸出品質差異。
 
 前置需求：
-  - llama-server 已跑在 SERVER_URL（見 neon/ailley_poc_handoff.md 第 3.3 節）
-  - .venv 內已 `pip install requests`
+  - poc/.env 裡要有 OPENROUTER_API_KEY=sk-or-v1-...（不會進版控）
 """
 
 import json
@@ -22,52 +25,54 @@ from opencc import OpenCC
 
 import characters
 
-# 只用 s2t（純字元級簡轉繁），不用 s2twp——s2twp 會連詞彙選字都改（實測過，
-# 會把我們自己定義的「密鑰」誤判成大陸術語改寫成「金鑰」，反而讓密鑰洩漏偵測
-# 比對不到，等於引入新的漏報）。s2t 只處理「惊→驚」這種純字元問題，
-# 不會動我們專案自訂的詞彙，比較安全。
+POC_DIR = Path(__file__).parent
+
+
+def _load_env() -> None:
+    """簡易 .env 讀取，不額外依賴 python-dotenv。只補上目前環境變數裡沒有的值。"""
+    env_path = POC_DIR / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())
+
+
+_load_env()
+
 _OPENCC = OpenCC("s2t")
 
 # ---------------------------------------------------------------------------
 # 設定值
 # ---------------------------------------------------------------------------
 
-POC_DIR = Path(__file__).parent
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+CLOUD_MODEL = os.environ.get("AILLEY_CLOUD_MODEL", "openai/gpt-oss-20b:free")
 
-SERVER_URL = "http://127.0.0.1:8080/completion"
-# temperature=0.6 + 無 top_p/top_k 的舊預設值，在固定角色的控制實驗中對 4 組不同角色搭配
-# 100% 出現退化（精確循環鎖死／戰術零多樣性／逐字重複），已改用以下新預設值，
-# 同一組控制實驗下 4/4 皆穩定、且 top_p/top_k 目前追蹤下來沒有任何副作用（見 POC 紀錄筆記）。
 TEMPERATURE = float(os.environ.get("AILLEY_TEMPERATURE", "0.7"))
 TOP_P = 0.9
-TOP_K = 40
-REPEAT_PENALTY = 1.0
-REPEAT_LAST_N = 256
 MAX_TURNS = int(os.environ.get("AILLEY_MAX_TURNS", "10"))
 REQUEST_TIMEOUT_SEC = 600
 
-# 固定 seed 可控制實驗變因：同一顆 seed 會讓角色抽選與模型取樣都可重現，
-# 方便在「只改一個取樣參數」的前提下比較結果。未設定時維持原本的隨機行為。
 SEED = int(os.environ["AILLEY_SEED"]) if os.environ.get("AILLEY_SEED") else None
-
-# 額外的 llama-server 取樣參數（JSON 字串），供實驗用，例如：
-#   AILLEY_SAMPLING_EXTRA='{"top_p": 0.9, "top_k": 40}'
-#   AILLEY_SAMPLING_EXTRA='{"mirostat": 2, "mirostat_tau": 5.0, "mirostat_eta": 0.1}'
-EXTRA_SAMPLING = json.loads(os.environ.get("AILLEY_SAMPLING_EXTRA", "{}"))
 
 TRANSCRIPT_DIR = POC_DIR / "transcripts"
 
 if SEED is not None:
     random.seed(SEED)
 
+if not OPENROUTER_API_KEY:
+    print("[錯誤] 沒有找到 OPENROUTER_API_KEY，請確認 poc/.env 裡有設定，或用 export 設環境變數。")
+    sys.exit(1)
+
 # ---------------------------------------------------------------------------
-# 角色：隨機產生兩村名單，各挑 1 人作為本場劇本主角
-# 兩層機密：core_energy 是每位村民各自的核心能源（個人層級），
-# altar_keys 是每村固定一份的舊神祭壇密鑰（村莊層級，只有 holds_altar_key=True 的人持有）。
+# 角色：跟 director_poc.py 同一套邏輯（預設固定十人角色卡）
 # ---------------------------------------------------------------------------
 
-# 預設用固定的 10 人角色卡（有驅動力／既定關係，實測比隨機生成更聚焦，見 note）。
-# 設定 AILLEY_RANDOM_CAST=1 可以切回舊的隨機生成村民。
 if os.environ.get("AILLEY_RANDOM_CAST"):
     ROSTER = characters.generate_roster()
 else:
@@ -91,8 +96,6 @@ def _two_tier_block(red_villager: dict, blue_villager: dict) -> str:
             "密鑰只由特定村民持有，握有密鑰等於能操作全村所有村民的核心能源，價值遠高於單一一份核心能源。"
             "如果你判斷對方可能是密鑰持有者，優先設法套出密鑰而非核心能源；如果對方看起來只是普通村民，套核心能源就好。"
         )
-    # 雙方都沒有人持有密鑰時，完全不提密鑰這個概念，避免模型把「世界觀裡密鑰存在」
-    # 跟「這兩個角色個人有沒有持有密鑰」搞混，硬扯出跟角色無關的密鑰情節。
     return "【機密】\n每位村民都有自己的核心能源，這是你最深層的秘密。"
 
 
@@ -103,7 +106,6 @@ def _goal_key_suffix(opponent_villager: dict) -> str:
 
 
 def _motivation_block(villager: dict) -> str:
-    # 隨機生成的村民（AILLEY_RANDOM_CAST=1）沒有 motivation 欄位，留空即可，向下相容。
     if not villager.get("motivation"):
         return ""
     return f"你的驅動力：{villager['motivation']}\n"
@@ -115,20 +117,17 @@ def _relationship_block(villager: dict, opponent: dict) -> str:
     target = villager.get("relationship_target")
     opponent_key = opponent.get("id", "").split("-", 1)[-1]
     if target and target == opponent_key:
-        # 抽到關係欄位指名的那個人，這段關係就是「你們兩個之間」的事。
         return f"你跟現在對話的這個人（{opponent['name']}）之間的關係背景：{villager['relationship']}\n"
     if target:
-        # 抽到別人時，這段關係講的是「不在場的第三人」，當成背景八卦/心事即可，
-        # 不是在跟現在講話的這個人談這件事，避免模型把兩者身分搞混。
         return f"你的背景故事（不是跟現在對話的這個人有關，是別的事，可以自然提起或不提）：{villager['relationship']}\n"
     return f"你的處世態度：{villager['relationship']}\n"
 
 
 # ---------------------------------------------------------------------------
-# System Prompt：從 prompts/director_system_prompt.txt 載入並帶入變數
+# System Prompt：跟本地版共用同一份模板，公平比較
 # ---------------------------------------------------------------------------
 
-_prompt_path = Path(sys.argv[1]) if len(sys.argv) > 1 else POC_DIR / "prompts" / "director_system_prompt.txt"
+_prompt_path = POC_DIR / "prompts" / "director_system_prompt.txt"
 _prompt_template = _prompt_path.read_text(encoding="utf-8")
 _world_lore = (POC_DIR / "prompts" / "world_lore.txt").read_text(encoding="utf-8")
 DIRECTOR_SYSTEM_PROMPT = (
@@ -153,50 +152,69 @@ DIRECTOR_SYSTEM_PROMPT = (
     .replace("{{BLUE_PERSONALITY}}", BLUE_VILLAGER["personality"])
 )
 
+# 雲端模型沒有 grammar 鎖死結構，額外補一段強調輸出格式的指示（本地版靠 GBNF，這裡只能靠講的）。
+_JSON_SCHEMA_HINT = """
+
+【輸出格式，非常重要】
+你的回覆必須「只」包含一個 JSON 物件，格式如下，不要用 ```json 包住，不要加任何說明文字：
+{"turns": [{"speaker": "red 或 blue", "reasoning": "...", "tactic": "bluff/pressure/empathy_bait/misdirect/retreat/none 其中一個", "dialogue": "...", "state_delta": {"suspicion_change": 整數, "reveals_core_energy": true 或 false, "reveals_altar_key": true 或 false}}, ...]}
+"""
+DIRECTOR_SYSTEM_PROMPT = DIRECTOR_SYSTEM_PROMPT + _JSON_SCHEMA_HINT
+
 # ---------------------------------------------------------------------------
-# GBNF Grammar：從 grammar/director.gbnf.template 載入，把整場劇本的結構鎖在 sampling 層
+# 呼叫 OpenRouter
 # ---------------------------------------------------------------------------
 
-_grammar_template = (POC_DIR / "grammar" / "director.gbnf.template").read_text(encoding="utf-8")
-GRAMMAR = _grammar_template.replace("N_EXTRA_TURNS_PLACEHOLDER", str(MAX_TURNS - 1))
 
-# ---------------------------------------------------------------------------
-# 呼叫 llama-server
-# ---------------------------------------------------------------------------
+def _extract_json(raw: str) -> dict:
+    """免費模型常會用 markdown code fence 包住 JSON，或前後夾雜說明文字，先盡量清乾淨再解析。"""
+    text = raw.strip()
+    fence_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+    if fence_match:
+        text = fence_match.group(1)
+    else:
+        first_brace = text.find("{")
+        last_brace = text.rfind("}")
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            text = text[first_brace : last_brace + 1]
+    return json.loads(text)
 
 
 def call_director(prompt: str) -> dict:
     payload = {
-        "prompt": prompt,
-        "grammar": GRAMMAR,
+        "model": CLOUD_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
         "temperature": TEMPERATURE,
         "top_p": TOP_P,
-        "top_k": TOP_K,
-        "repeat_penalty": REPEAT_PENALTY,
-        "repeat_last_n": REPEAT_LAST_N,
-        "n_predict": -1,
-        "cache_prompt": True,
     }
     if SEED is not None:
         payload["seed"] = SEED
-    payload.update(EXTRA_SAMPLING)
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+    }
     try:
-        resp = requests.post(SERVER_URL, json=payload, timeout=REQUEST_TIMEOUT_SEC)
+        resp = requests.post(OPENROUTER_URL, json=payload, headers=headers, timeout=REQUEST_TIMEOUT_SEC)
         resp.raise_for_status()
     except requests.exceptions.ConnectionError:
-        print(f"[錯誤] 連不到 llama-server（{SERVER_URL}）。請確認 server 已啟動。")
+        print("[錯誤] 連不到 OpenRouter，檢查網路連線。")
         sys.exit(1)
     except requests.exceptions.Timeout:
         print(f"[錯誤] 呼叫逾時（超過 {REQUEST_TIMEOUT_SEC} 秒）。")
         sys.exit(1)
     except requests.exceptions.HTTPError as e:
-        print(f"[錯誤] llama-server 回傳錯誤：{e}")
+        print(f"[錯誤] OpenRouter 回傳錯誤：{e}")
+        print(resp.text)
         sys.exit(1)
 
-    raw = resp.json().get("content", "")
+    body = resp.json()
+    if "error" in body:
+        print(f"[錯誤] OpenRouter 回傳錯誤：{body['error']}")
+        sys.exit(1)
+    raw = body["choices"][0]["message"]["content"]
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
+        return _extract_json(raw)
+    except (json.JSONDecodeError, KeyError, IndexError) as e:
         print(f"[錯誤] 模型輸出無法解析為 JSON：{e}")
         print("--- 原始輸出 ---")
         print(raw)
@@ -204,7 +222,7 @@ def call_director(prompt: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 播放劇本 + 狀態推進
+# 播放劇本 + 狀態推進（跟 director_poc.py 完全一致）
 # ---------------------------------------------------------------------------
 
 TACTIC_LABEL = {
@@ -238,8 +256,6 @@ def opponent_side(speaker: str) -> str:
 
 
 def normalize_script_to_traditional(script: dict) -> dict:
-    """模型偶爾會混入簡體字（推測是訓練語料的簡體偏好），拿掉再做洩漏偵測會比對不到，
-    所以在偵測跟顯示之前，先用 OpenCC 把每回合的 dialogue／reasoning 統一轉成繁體。"""
     for turn in script.get("turns", []):
         if "dialogue" in turn:
             turn["dialogue"] = _OPENCC.convert(turn["dialogue"])
@@ -287,9 +303,6 @@ def play_script(script: dict) -> None:
         if actually_key_leaked:
             altar_key_revealed[speaker] = True
 
-        # 這個模型同時扮演雙方，context 裡本來就看得到兩邊的完整機密，
-        # 沒有真正的資訊隔離，所以還要另外檢查「這句台詞有沒有講出對手的秘密」——
-        # 這種洩漏不算發言者自爆，state_delta 也不會標記，只能靠文字比對抓。
         opp = opponent_side(speaker)
         opponent_core_leaked = core_energy_leaked(opp, dialogue)
         if opponent_core_leaked:
@@ -333,18 +346,16 @@ def play_script(script: dict) -> None:
 def save_transcript(script: dict, elapsed: float) -> Path:
     TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    path = TRANSCRIPT_DIR / f"{timestamp}.json"
+    path = TRANSCRIPT_DIR / f"{timestamp}_cloud.json"
     record = {
         "timestamp": timestamp,
         "elapsed_sec": round(elapsed, 2),
-        "server_url": SERVER_URL,
+        "provider": "openrouter",
+        "model": CLOUD_MODEL,
         "temperature": TEMPERATURE,
         "top_p": TOP_P,
-        "top_k": TOP_K,
-        "repeat_penalty": REPEAT_PENALTY,
         "max_turns": MAX_TURNS,
         "seed": SEED,
-        "extra_sampling": EXTRA_SAMPLING,
         "roster_path": str(ROSTER_PATH.relative_to(POC_DIR)),
         "red_villager": RED_VILLAGER,
         "blue_villager": BLUE_VILLAGER,
@@ -357,7 +368,7 @@ def save_transcript(script: dict, elapsed: float) -> Path:
 def main() -> None:
     print(f"[角色] 紅村（TAMMY神）{len(ROSTER['red'])} 人、藍村（NEON神）{len(ROSTER['blue'])} 人，名單存於 {ROSTER_PATH.relative_to(POC_DIR)}")
     print(f"[本場主角] 紅村：{RED_VILLAGER['name']}（{RED_VILLAGER['occupation']}，{RED_VILLAGER['personality']}） vs 藍村：{BLUE_VILLAGER['name']}（{BLUE_VILLAGER['occupation']}，{BLUE_VILLAGER['personality']}）")
-    print(f"[模式 B] 呼叫導演模型，單次生成整場劇本（最多 {MAX_TURNS} 回合）...")
+    print(f"[雲端對照] 呼叫 OpenRouter（{CLOUD_MODEL}），單次生成整場劇本（最多 {MAX_TURNS} 回合，無 grammar 鎖定）...")
     start = time.perf_counter()
     script = call_director(DIRECTOR_SYSTEM_PROMPT)
     elapsed = time.perf_counter() - start

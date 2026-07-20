@@ -36,7 +36,7 @@ tactic 為 none 時，這回合的 dialogue 不能是為了迴避對方剛才的
 {{CURRENT_STATE_BLOCK}}
 
 以上是已經發生的對話與現況，接下來請你「接續」生成新的回合，不要重複前面已經講過的台詞或細節，也不要讓已經洩漏的機密看起來像還沒洩漏。
-硬性規定：turns 陣列長度必須「剛好等於 {{EXTRA_TURNS}}」，不可以提前結束、不可以少於 {{EXTRA_TURNS}} 回合。
+硬性規定：turns 陣列長度必須「剛好等於 {{EXTRA_TURNS}}」，不可以提前結束、不可以少於 {{EXTRA_TURNS}} 回合——就算判斷要自然收尾，也是在這 {{EXTRA_TURNS}} 回合的最後一回合收尾，不是縮短回合數。
 每回合的 reasoning 與 dialogue 都必須是針對當下劇情現寫的具體內容，禁止使用「reasoning here」「台詞內容」之類的佔位字樣或範例原句。
 每回合先寫 reasoning（為何選這個 tactic），再寫 dialogue（實際台詞）。
 tactic 只能從 bluff / pressure / empathy_bait / misdirect / retreat / none 選一個。

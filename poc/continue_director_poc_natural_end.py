@@ -1,14 +1,16 @@
-"""Ailley POC — 模式 B：續寫既有劇本
+"""Ailley POC — 方向 C 實驗：續寫加「自然收尾」機制
 
-讀取一份已存的 transcript（例如 6 回合的短場次），把角色設定＋前情提要＋目前的
-遊戲狀態（懷疑度、是否已洩漏）重新組成 prompt，請導演模型「接續」生成後面的 N 回合，
-而不是重新開一場新戲。目的是把長對話拆成多個短 chunk 分批生成，讓每一段都落在
-「不會退化」的安全區間內（見 note：MAX_TURNS=6 穩定性驗證），藉此疊出比單次生成更長的完整劇本。
+跟正式版 continue_director_poc.py 幾乎一樣，差異只有：
+  - 用實驗版 grammar/prompt（state_delta 多一個 conversation_ending 欄位）。
+  - 如果新增回合的最後一回合 conversation_ending=true，印出明確的「自然收尾」訊息，
+    讓 chain_continue_natural_end.py 可以偵測到並停止繼續串接下一輪，不用硬跑滿指定輪數。
+
+動機：長對話串接測試（36 回合）發現懷疑度不會隨回合數自然收斂到洩漏，`retreat` 讓
+模型可以無限期防守，跑到 MAX_TURNS 上限只會印出「未分出勝負」，不像真實對話——
+真人如果聊不出什麼、懷疑度一直很低，會找藉口結束對話，不會被迫聊到某個回合數上限。
 
 用法：
-  python continue_director_poc.py <transcript.json> [額外回合數，預設 6]
-
-前置需求同 director_poc.py：llama-server 已跑在 SERVER_URL，.venv 已 pip install requests。
+  python continue_director_poc_natural_end.py <transcript.json> [額外回合數，預設 6]
 """
 
 import json
@@ -24,8 +26,6 @@ from opencc import OpenCC
 
 from characters import ALTAR_KEY_NAMES
 
-# 只用 s2t（純字元級簡轉繁），理由同 director_poc.py：s2twp 會把我們自訂的
-# 「密鑰」誤判成大陸術語改寫成「金鑰」，反而讓洩漏偵測比對不到。
 _OPENCC = OpenCC("s2t")
 
 POC_DIR = Path(__file__).parent
@@ -38,17 +38,14 @@ REPEAT_PENALTY = 1.0
 REPEAT_LAST_N = 256
 REQUEST_TIMEOUT_SEC = 600
 
-# 前情提要只帶「最近幾回合」的視窗，不把整段歷史逐字塞進 prompt。
-# 動機：串接測試發現總回合數拉到 26-32 以上時，模型會把更早之前的整段劇情原樣重演一次；
-# 懷疑是前情提要隨串接輪數線性變長，模型在一份越滾越長的歷史文字裡，
-# 反而更容易把早期內容當成「可以再講一次」的素材。限制視窗讓早期台詞直接從 prompt 消失，
-# 從機制上讓模型沒東西可抄，而不是單靠一句「不要重複」的指令去約束它。
 RECENT_TURNS_WINDOW = 12
 
 SEED = int(os.environ["AILLEY_SEED"]) if os.environ.get("AILLEY_SEED") else None
 EXTRA_SAMPLING = json.loads(os.environ.get("AILLEY_SAMPLING_EXTRA", "{}"))
 
 TRANSCRIPT_DIR = POC_DIR / "transcripts"
+PROMPT_PATH = POC_DIR / "prompts" / "experiments" / "continue_system_prompt.experiment_natural_end.txt"
+GRAMMAR_PATH = POC_DIR / "grammar" / "experiments" / "director.gbnf.experiment_natural_end.template"
 
 TACTIC_LABEL = {
     "bluff": "虛張聲勢",
@@ -58,11 +55,6 @@ TACTIC_LABEL = {
     "retreat": "戰略撤退",
     "none": "日常閒聊",
 }
-
-
-# ---------------------------------------------------------------------------
-# 洩漏偵測（不依賴 director_poc.py 的模組層全域狀態，直接吃 villager dict）
-# ---------------------------------------------------------------------------
 
 
 def core_energy_leaked(villager: dict, dialogue: str) -> bool:
@@ -79,15 +71,104 @@ def opponent_side(speaker: str) -> str:
     return "blue" if speaker == "red" else "red"
 
 
-# ---------------------------------------------------------------------------
-# 自然收尾（方向 C 實驗驗證成功後併入，詳見 note：POC 紀錄 - 導演模式 B）
-# 判斷邏輯跟關鍵詞驗證都交給程式碼決定，不信任模型自己判斷懷疑度高低或自己
-# 判斷 dialogue 有沒有真的寫成道別——這跟洩漏偵測「不信任 state_delta 自評，
-# 靠文字比對驗證」是同一套設計哲學。實測發現「可以收尾」這種軟性許可對這個
-# 規模的模型不夠有拉力，模型幾乎不會主動使用，改成條件符合時直接強制指示
-# 才有效（5/8 場成功收尾，且全部是真正的道別台詞，見 note）。
-# ---------------------------------------------------------------------------
+def _altar_key_block(villager: dict, village: str) -> str:
+    if not villager["holds_altar_key"]:
+        return ""
+    key_name = ALTAR_KEY_NAMES[village]
+    side = "紅" if village == "red" else "藍"
+    return f"你同時也是{side}村的舊神祭壇密鑰持有者，密鑰名稱是：「{key_name}」，這是比核心能源更重要的秘密，絕不能主動洩漏。\n"
 
+
+def replay_state(turns: list, red_villager: dict, blue_villager: dict) -> dict:
+    villager_by_side = {"red": red_villager, "blue": blue_villager}
+    suspicion = {"red": 0, "blue": 0}
+    revealed = {"red": False, "blue": False}
+    altar_key_revealed = {"red": False, "blue": False}
+
+    for turn in turns:
+        speaker = turn.get("speaker", "?")
+        dialogue = turn.get("dialogue", "")
+        delta = turn.get("state_delta", {})
+        suspicion[speaker] = suspicion.get(speaker, 0) + delta.get("suspicion_change", 0)
+        villager = villager_by_side.get(speaker)
+        if villager and core_energy_leaked(villager, dialogue):
+            revealed[speaker] = True
+        if villager and altar_key_leaked(villager, speaker, dialogue):
+            altar_key_revealed[speaker] = True
+
+        opp = opponent_side(speaker)
+        opp_villager = villager_by_side.get(opp)
+        if opp_villager and core_energy_leaked(opp_villager, dialogue):
+            revealed[opp] = True
+        if opp_villager and altar_key_leaked(opp_villager, opp, dialogue):
+            altar_key_revealed[opp] = True
+
+    return {"suspicion": suspicion, "revealed": revealed, "altar_key_revealed": altar_key_revealed}
+
+
+def _prior_turns_block(turns: list, window: int = RECENT_TURNS_WINDOW) -> tuple[str, str]:
+    start_index = max(0, len(turns) - window)
+    visible = turns[start_index:]
+    lines = []
+    for offset, turn in enumerate(visible):
+        i = start_index + offset + 1
+        village = "紅村" if turn.get("speaker") == "red" else "藍村"
+        lines.append(f"第 {i} 回合｜{village}：「{turn.get('dialogue', '')}」")
+    note = ""
+    if start_index > 0:
+        note = f"（更早之前的第 1-{start_index} 回合因篇幅省略未列出，你不需要也不應該回頭複述那些內容，只要不跟下面列出的這些矛盾即可）\n"
+    return note, "\n".join(lines)
+
+
+def _two_tier_block(red_villager: dict, blue_villager: dict) -> str:
+    if red_villager["holds_altar_key"] or blue_villager["holds_altar_key"]:
+        return (
+            "【機密的兩個層級】\n"
+            "每位村民都有自己的核心能源（個人層級機密）；此外，每村各有一份舊神祭壇密鑰（村莊層級機密），"
+            "密鑰只由特定村民持有，握有密鑰等於能操作全村所有村民的核心能源，價值遠高於單一一份核心能源。"
+        )
+    return "【機密】\n每位村民都有自己的核心能源，這是你最深層的秘密。"
+
+
+def _motivation_block(villager: dict) -> str:
+    return f"你的驅動力：{villager['motivation']}\n" if villager.get("motivation") else ""
+
+
+def _relationship_block(villager: dict, opponent: dict) -> str:
+    if not villager.get("relationship"):
+        return ""
+    target = villager.get("relationship_target")
+    opponent_key = opponent.get("id", "").split("-", 1)[-1]
+    if target and target == opponent_key:
+        return f"你跟現在對話的這個人（{opponent['name']}）之間的關係背景：{villager['relationship']}\n"
+    if target:
+        return f"你的背景故事（不是跟現在對話的這個人有關，是別的事，可以自然提起或不提）：{villager['relationship']}\n"
+    return f"你的處世態度：{villager['relationship']}\n"
+
+
+def _current_state_block(state: dict, red_villager: dict, blue_villager: dict) -> str:
+    lines = [
+        f"目前懷疑度：紅={state['suspicion']['red']} 藍={state['suspicion']['blue']}",
+        f"紅村（{red_villager['name']}）核心能源是否已洩漏：{state['revealed']['red']}",
+        f"藍村（{blue_villager['name']}）核心能源是否已洩漏：{state['revealed']['blue']}",
+    ]
+    if red_villager["holds_altar_key"]:
+        lines.append(f"紅村舊神祭壇密鑰是否已洩漏：{state['altar_key_revealed']['red']}")
+    if blue_villager["holds_altar_key"]:
+        lines.append(f"藍村舊神祭壇密鑰是否已洩漏：{state['altar_key_revealed']['blue']}")
+    return "\n".join(lines)
+
+
+# 收尾條件、關鍵詞驗證都交給程式碼決定，不信任模型自己判斷懷疑度高低或
+# 自己判斷 dialogue 有沒有真的寫成道別——這跟洩漏偵測「不信任 state_delta 自評，
+# 靠文字比對驗證」是同一套設計哲學。
+
+# 一開始用「懷疑度絕對值要低」判斷是不是該收尾，實測發現懷疑度只要開始波動，
+# 很少會回到低迷區間，導致這個條件幾乎永遠不成立。使用者指出真正該看的訊號是
+# 「卡住」：不管懷疑度目前累積到多高，只要最近一段時間問不出新東西、雙方懷疑度
+# 都沒什麼淨變化，就代表這個話題已經聊乾了，這才是真人會轉話題/結束對話的時機——
+# 跟懷疑度本身高不高無關。改成看「最近一輪（RECENT_STALL_WINDOW 回合）的懷疑度
+# 淨變動量」，不是看累積絕對值。
 RECENT_STALL_WINDOW = 6  # 看最近幾回合（一輪續寫的量）的懷疑度變動
 STALL_THRESHOLD = 5  # 最近這個窗口內，雙方懷疑度淨變動量都要 <= 這個數字才算「卡住」
 MIN_PRIOR_TURNS_FOR_ENDING = 12  # 至少要跑完初始 6 回合 + 1 輪續寫，才允許收尾（避免太早結束）
@@ -145,123 +226,12 @@ def dialogue_reads_as_farewell(dialogue: str) -> bool:
     return any(kw in dialogue for kw in FAREWELL_KEYWORDS)
 
 
-def _altar_key_block(villager: dict, village: str) -> str:
-    if not villager["holds_altar_key"]:
-        return ""
-    key_name = ALTAR_KEY_NAMES[village]
-    side = "紅" if village == "red" else "藍"
-    return f"你同時也是{side}村的舊神祭壇密鑰持有者，密鑰名稱是：「{key_name}」，這是比核心能源更重要的秘密，絕不能主動洩漏。\n"
-
-
-# ---------------------------------------------------------------------------
-# 重播既有 turns，算出目前狀態（懷疑度／是否已洩漏）
-# ---------------------------------------------------------------------------
-
-
-def replay_state(turns: list, red_villager: dict, blue_villager: dict) -> dict:
-    villager_by_side = {"red": red_villager, "blue": blue_villager}
-    suspicion = {"red": 0, "blue": 0}
-    revealed = {"red": False, "blue": False}
-    altar_key_revealed = {"red": False, "blue": False}
-
-    for turn in turns:
-        speaker = turn.get("speaker", "?")
-        dialogue = turn.get("dialogue", "")
-        delta = turn.get("state_delta", {})
-        suspicion[speaker] = suspicion.get(speaker, 0) + delta.get("suspicion_change", 0)
-        villager = villager_by_side.get(speaker)
-        if villager and core_energy_leaked(villager, dialogue):
-            revealed[speaker] = True
-        if villager and altar_key_leaked(villager, speaker, dialogue):
-            altar_key_revealed[speaker] = True
-
-        # 同一個模型同時扮演雙方，也要檢查這句話有沒有講出對手的秘密（跨陣營洩題）。
-        opp = opponent_side(speaker)
-        opp_villager = villager_by_side.get(opp)
-        if opp_villager and core_energy_leaked(opp_villager, dialogue):
-            revealed[opp] = True
-        if opp_villager and altar_key_leaked(opp_villager, opp, dialogue):
-            altar_key_revealed[opp] = True
-
-    return {"suspicion": suspicion, "revealed": revealed, "altar_key_revealed": altar_key_revealed}
-
-
-def _prior_turns_block(turns: list, window: int = RECENT_TURNS_WINDOW) -> tuple[str, str]:
-    """回傳 (truncation_note, block)。只帶最近 window 回合，並標記真實回合編號（不從 1 重新編號）。"""
-    start_index = max(0, len(turns) - window)
-    visible = turns[start_index:]
-    lines = []
-    for offset, turn in enumerate(visible):
-        i = start_index + offset + 1
-        village = "紅村" if turn.get("speaker") == "red" else "藍村"
-        lines.append(f"第 {i} 回合｜{village}：「{turn.get('dialogue', '')}」")
-    note = ""
-    if start_index > 0:
-        note = f"（更早之前的第 1-{start_index} 回合因篇幅省略未列出，你不需要也不應該回頭複述那些內容，只要不跟下面列出的這些矛盾即可）\n"
-    return note, "\n".join(lines)
-
-
-def _two_tier_block(red_villager: dict, blue_villager: dict) -> str:
-    if red_villager["holds_altar_key"] or blue_villager["holds_altar_key"]:
-        return (
-            "【機密的兩個層級】\n"
-            "每位村民都有自己的核心能源（個人層級機密）；此外，每村各有一份舊神祭壇密鑰（村莊層級機密），"
-            "密鑰只由特定村民持有，握有密鑰等於能操作全村所有村民的核心能源，價值遠高於單一一份核心能源。"
-        )
-    # 雙方都沒有人持有密鑰時，完全不提密鑰這個概念，避免模型把「世界觀裡密鑰存在」
-    # 跟「這兩個角色個人有沒有持有密鑰」搞混，硬扯出跟角色無關的密鑰情節。
-    return "【機密】\n每位村民都有自己的核心能源，這是你最深層的秘密。"
-
-
-def _motivation_block(villager: dict) -> str:
-    # 隨機生成的村民（AILLEY_RANDOM_CAST=1）沒有 motivation 欄位，留空即可，向下相容。
-    if not villager.get("motivation"):
-        return ""
-    return f"你的驅動力：{villager['motivation']}\n"
-
-
-def _relationship_block(villager: dict, opponent: dict) -> str:
-    if not villager.get("relationship"):
-        return ""
-    target = villager.get("relationship_target")
-    opponent_key = opponent.get("id", "").split("-", 1)[-1]
-    if target and target == opponent_key:
-        return f"你跟現在對話的這個人（{opponent['name']}）之間的關係背景：{villager['relationship']}\n"
-    if target:
-        # 抽到別人時，這是背景故事（不在場的第三人），當成心事/八卦即可，不是在跟眼前這個人談這件事。
-        return f"你的背景故事（不是跟現在對話的這個人有關，是別的事，可以自然提起或不提）：{villager['relationship']}\n"
-    return f"你的處世態度：{villager['relationship']}\n"
-
-
-def _current_state_block(state: dict, red_villager: dict, blue_villager: dict) -> str:
-    lines = [
-        f"目前懷疑度：紅={state['suspicion']['red']} 藍={state['suspicion']['blue']}",
-        f"紅村（{red_villager['name']}）核心能源是否已洩漏：{state['revealed']['red']}",
-        f"藍村（{blue_villager['name']}）核心能源是否已洩漏：{state['revealed']['blue']}",
-    ]
-    if red_villager["holds_altar_key"]:
-        lines.append(f"紅村舊神祭壇密鑰是否已洩漏：{state['altar_key_revealed']['red']}")
-    if blue_villager["holds_altar_key"]:
-        lines.append(f"藍村舊神祭壇密鑰是否已洩漏：{state['altar_key_revealed']['blue']}")
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# 呼叫 llama-server
-# ---------------------------------------------------------------------------
-
-
 def call_director(prompt: str, grammar: str) -> dict:
     payload = {
-        "prompt": prompt,
-        "grammar": grammar,
-        "temperature": TEMPERATURE,
-        "top_p": TOP_P,
-        "top_k": TOP_K,
-        "repeat_penalty": REPEAT_PENALTY,
-        "repeat_last_n": REPEAT_LAST_N,
-        "n_predict": -1,
-        "cache_prompt": True,
+        "prompt": prompt, "grammar": grammar,
+        "temperature": TEMPERATURE, "top_p": TOP_P, "top_k": TOP_K,
+        "repeat_penalty": REPEAT_PENALTY, "repeat_last_n": REPEAT_LAST_N,
+        "n_predict": -1, "cache_prompt": True,
     }
     if SEED is not None:
         payload["seed"] = SEED
@@ -284,19 +254,13 @@ def call_director(prompt: str, grammar: str) -> dict:
         return json.loads(raw)
     except json.JSONDecodeError as e:
         print(f"[錯誤] 模型輸出無法解析為 JSON：{e}")
-        print("--- 原始輸出 ---")
         print(raw)
         sys.exit(1)
 
 
-# ---------------------------------------------------------------------------
-# 主流程
-# ---------------------------------------------------------------------------
-
-
 def main() -> None:
     if len(sys.argv) < 2:
-        print("用法：python continue_director_poc.py <transcript.json> [額外回合數，預設 6]")
+        print("用法：python continue_director_poc_natural_end.py <transcript.json> [額外回合數，預設 6]")
         sys.exit(1)
 
     transcript_path = Path(sys.argv[1])
@@ -323,7 +287,7 @@ def main() -> None:
           f"既有回合數={len(prior_turns)} -> {'強制收尾（卡住了）' if allow_ending else '不收尾'}（程式端計算，不交給模型判斷）")
 
     world_lore = (POC_DIR / "prompts" / "world_lore.txt").read_text(encoding="utf-8")
-    prompt_template = (POC_DIR / "prompts" / "continue_system_prompt.txt").read_text(encoding="utf-8")
+    prompt_template = PROMPT_PATH.read_text(encoding="utf-8")
     truncation_note, prior_turns_block = _prior_turns_block(prior_turns)
     prompt = (
         prompt_template.replace("{{WORLD_LORE}}", world_lore)
@@ -349,7 +313,7 @@ def main() -> None:
         .replace("{{EXTRA_TURNS}}", str(extra_turns))
     )
 
-    grammar_template = (POC_DIR / "grammar" / "continue_director.gbnf.template").read_text(encoding="utf-8")
+    grammar_template = GRAMMAR_PATH.read_text(encoding="utf-8")
     grammar = grammar_template.replace("N_EXTRA_TURNS_PLACEHOLDER", str(extra_turns - 1))
 
     print(f"[續寫] 讀取 {transcript_path.name}（既有 {len(prior_turns)} 回合），請模型接續生成 {extra_turns} 回合...")
@@ -369,19 +333,12 @@ def main() -> None:
 
     TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out_path = TRANSCRIPT_DIR / f"{timestamp}_continued_from_{transcript_path.stem}.json"
+    out_path = TRANSCRIPT_DIR / f"{timestamp}_natural_end_from_{transcript_path.stem}.json"
     out_record = {
         "timestamp": timestamp,
         "continued_from": str(transcript_path.name),
         "elapsed_sec": round(elapsed, 2),
-        "server_url": SERVER_URL,
-        "temperature": TEMPERATURE,
-        "top_p": TOP_P,
-        "top_k": TOP_K,
-        "repeat_penalty": REPEAT_PENALTY,
         "extra_turns": extra_turns,
-        "seed": SEED,
-        "extra_sampling": EXTRA_SAMPLING,
         "red_villager": red_villager,
         "blue_villager": blue_villager,
         "script": {"turns": merged_turns},
@@ -394,6 +351,7 @@ def main() -> None:
     revealed = dict(state["revealed"])
     altar_key_revealed = dict(state["altar_key_revealed"])
     villager_by_side = {"red": red_villager, "blue": blue_villager}
+    natural_ended = False
 
     for i, turn in enumerate(new_turns, start=len(prior_turns) + 1):
         speaker = turn.get("speaker", "?")
@@ -410,21 +368,13 @@ def main() -> None:
         suspicion[speaker] = suspicion.get(speaker, 0) + delta.get("suspicion_change", 0)
         villager = villager_by_side.get(speaker)
 
-        claims_core_leak = bool(delta.get("reveals_core_energy", False))
         actually_core_leaked = bool(villager and core_energy_leaked(villager, dialogue))
-        if claims_core_leak != actually_core_leaked:
-            print(f"  [警訊] state_delta 宣稱核心能源洩漏={claims_core_leak}，但文字比對結果={actually_core_leaked}")
         if actually_core_leaked:
             revealed[speaker] = True
-
-        claims_key_leak = bool(delta.get("reveals_altar_key", False))
         actually_key_leaked = bool(villager and altar_key_leaked(villager, speaker, dialogue))
-        if claims_key_leak != actually_key_leaked:
-            print(f"  [警訊] state_delta 宣稱密鑰洩漏={claims_key_leak}，但文字比對結果={actually_key_leaked}")
         if actually_key_leaked:
             altar_key_revealed[speaker] = True
 
-        # 檢查這句台詞有沒有講出對手的秘密（跨陣營洩題，state_delta 不會標記這種情況）。
         opp = opponent_side(speaker)
         opp_villager = villager_by_side.get(opp)
         if opp_villager and core_energy_leaked(opp_villager, dialogue):
@@ -447,11 +397,12 @@ def main() -> None:
             break
         if bool(delta.get("conversation_ending", False)):
             if not allow_ending:
-                print("  [警訊] 模型在不允許收尾的情況下仍把 conversation_ending 設為 true，判定無效、不採計")
+                print(f"  [警訊] 模型在不允許收尾的情況下仍把 conversation_ending 設為 true，判定無效、不採計")
             elif not dialogue_reads_as_farewell(dialogue):
-                print("  [警訊] conversation_ending=true 但台詞內容不像道別（沒有比對到告別關鍵詞），判定無效、不採計")
+                print(f"  [警訊] conversation_ending=true 但台詞內容不像道別（沒有比對到告別關鍵詞），判定無效、不採計")
             else:
                 print(f"\n=== 第 {i} 回合：對話自然收尾（已驗證：懷疑度低迷 + 台詞確實是道別）===")
+                natural_ended = True
                 break
     else:
         print(f"\n=== 新增的 {len(new_turns)} 回合跑完，未分出勝負，也沒有自然收尾 ===")
