@@ -55,7 +55,7 @@ CLOUD_MODEL = os.environ.get("AILLEY_CLOUD_MODEL", "openai/gpt-oss-20b:free")
 
 TEMPERATURE = float(os.environ.get("AILLEY_TEMPERATURE", "0.7"))
 TOP_P = 0.9
-MAX_TURNS = int(os.environ.get("AILLEY_MAX_TURNS", "10"))
+MAX_TURNS = int(os.environ.get("AILLEY_MAX_TURNS", "6"))
 REQUEST_TIMEOUT_SEC = 600
 
 SEED = int(os.environ["AILLEY_SEED"]) if os.environ.get("AILLEY_SEED") else None

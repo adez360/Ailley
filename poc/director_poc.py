@@ -43,7 +43,7 @@ TOP_P = 0.9
 TOP_K = 40
 REPEAT_PENALTY = 1.0
 REPEAT_LAST_N = 256
-MAX_TURNS = int(os.environ.get("AILLEY_MAX_TURNS", "10"))
+MAX_TURNS = int(os.environ.get("AILLEY_MAX_TURNS", "6"))
 REQUEST_TIMEOUT_SEC = 600
 
 # 固定 seed 可控制實驗變因：同一顆 seed 會讓角色抽選與模型取樣都可重現，
