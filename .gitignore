@@ -59,9 +59,13 @@ Thumbs.db
 tmp/
 *.tm
 
-# ── POC 生成的對話 transcript／角色名單（每次跑都會新增，不進版控）──
+# ── POC 生成的對話 transcript／角色名單／持久化記憶（每次跑都會新增，不進版控）──
 poc/transcripts/
 poc/characters/
+poc_mode_a/transcripts/
+poc_planning/transcripts/
+poc_agent_loop/transcripts/
+poc_agent_loop/memory_store/
 
 # ── 各自的obsidian ──────────────────────────────────────
 .obsidian/

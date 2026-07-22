@@ -1,12 +1,19 @@
-"""Ailley POC — 模式 B：續寫既有劇本
+"""Ailley POC 實驗版 — narrowwindow：把前情提要視窗從 12 縮小到 6
 
-讀取一份已存的 transcript（例如 6 回合的短場次），把角色設定＋前情提要＋目前的
-遊戲狀態（懷疑度、是否已洩漏）重新組成 prompt，請導演模型「接續」生成後面的 N 回合，
-而不是重新開一場新戲。目的是把長對話拆成多個短 chunk 分批生成，讓每一段都落在
-「不會退化」的安全區間內（見 note：MAX_TURNS=6 穩定性驗證），藉此疊出比單次生成更長的完整劇本。
+跟正式版 continue_director_poc.py 的唯一差異是 RECENT_TURNS_WINDOW 從 12 改成 6。
+
+動機：這次 session 測過的所有重複退化修復方向裡，模式 A（poc_mode_a/）驗證出「限制 prompt
+長度」是效果最明顯的變因——把「全部歷史無限制塞進 prompt」改成「只留最近 6 筆」，重複組數
+降了約 49%（純視窗，不含重要性評分），比取樣參數、事後重打、文字規則、收尾觸發都有效。
+模式 B 現有的 RECENT_TURNS_WINDOW=12 當初是為了解決另一個問題（前情提要越長模型越容易
+把早期內容當可以再講的素材）才加上的，但沒測過縮到 6 會不會有同等幅度的改善，這次驗證。
+
+【已驗證併入正式版】15 條鏈驗證（跟乾淨基準對照，非 batch_regen 那批）：平均重複組數
+8.60→4.00（-53%），跟模式 A 的幅度一致，已正式套用到 continue_director_poc.py。
+這份實驗檔案保留作為驗證紀錄，不再更新，之後請直接用正式版。
 
 用法：
-  python continue_director_poc.py <transcript.json> [額外回合數，預設 6]
+  python continue_director_poc_narrowwindow.py <transcript.json> [額外回合數，預設 6]
 
 前置需求同 director_poc.py：llama-server 已跑在 SERVER_URL，.venv 已 pip install requests。
 """
@@ -43,9 +50,6 @@ REQUEST_TIMEOUT_SEC = 600
 # 懷疑是前情提要隨串接輪數線性變長，模型在一份越滾越長的歷史文字裡，
 # 反而更容易把早期內容當成「可以再講一次」的素材。限制視窗讓早期台詞直接從 prompt 消失，
 # 從機制上讓模型沒東西可抄，而不是單靠一句「不要重複」的指令去約束它。
-# 從 12 縮小到 6（見 continue_director_poc_narrowwindow.py 的驗證）：15 條鏈同構對照，
-# 平均重複組數從 8.60 降到 4.00（-53%），跟模式 A（poc_mode_a/）獨立驗證出的視窗效果
-# 幅度一致，兩個架構互相印證，是目前為止最有效的單一改動。
 RECENT_TURNS_WINDOW = 6
 
 SEED = int(os.environ["AILLEY_SEED"]) if os.environ.get("AILLEY_SEED") else None

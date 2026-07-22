@@ -1,16 +1,26 @@
-"""Ailley POC — 模式 B：續寫既有劇本
+"""Ailley POC 實驗版 — repeat_end：偵測到重複也當成收尾訊號
 
-讀取一份已存的 transcript（例如 6 回合的短場次），把角色設定＋前情提要＋目前的
-遊戲狀態（懷疑度、是否已洩漏）重新組成 prompt，請導演模型「接續」生成後面的 N 回合，
-而不是重新開一場新戲。目的是把長對話拆成多個短 chunk 分批生成，讓每一段都落在
-「不會退化」的安全區間內（見 note：MAX_TURNS=6 穩定性驗證），藉此疊出比單次生成更長的完整劇本。
+跟正式版 continue_director_poc.py 的差異：既有的自然收尾機制只把「懷疑度連續卡住」
+當成收尾訊號，但 batch_regen／misdirect_settle 兩個「不讓模型重複」的方向都驗證失敗
+（大樣本下沒有顯著優於 baseline，見 note），顯示這是模型在長輸出後段的容量瓶頸，
+不是加規則或事後重打能穩定解決的。這一版改個方向：不追求「不重複」，改成「偵測到
+重複就當作卡住的訊號，跟懷疑度卡住一樣觸發強制收尾」——限制重複能累積多久，而不是
+消除重複本身。
+
+具體改動：移入 continue_director_poc_repeat_guard.py 的 detect_recent_repetition()
+（純函式，兩輪實驗已驗證偵測邏輯正確），收尾判斷條件從「只看懷疑度卡住」改成
+「懷疑度卡住 OR 偵測到近期重複」；build_ending_instruction() 的措辭同步改成不指名
+觸發原因、但對兩種情況都真實的表述。
+
+實驗結果驗證通過才會考慮併入正式版 continue_director_poc.py，見計畫文件。
 
 用法：
-  python continue_director_poc.py <transcript.json> [額外回合數，預設 6]
+  python continue_director_poc_repeat_end.py <transcript.json> [額外回合數，預設 6]
 
 前置需求同 director_poc.py：llama-server 已跑在 SERVER_URL，.venv 已 pip install requests。
 """
 
+import difflib
 import json
 import os
 import re
@@ -43,10 +53,7 @@ REQUEST_TIMEOUT_SEC = 600
 # 懷疑是前情提要隨串接輪數線性變長，模型在一份越滾越長的歷史文字裡，
 # 反而更容易把早期內容當成「可以再講一次」的素材。限制視窗讓早期台詞直接從 prompt 消失，
 # 從機制上讓模型沒東西可抄，而不是單靠一句「不要重複」的指令去約束它。
-# 從 12 縮小到 6（見 continue_director_poc_narrowwindow.py 的驗證）：15 條鏈同構對照，
-# 平均重複組數從 8.60 降到 4.00（-53%），跟模式 A（poc_mode_a/）獨立驗證出的視窗效果
-# 幅度一致，兩個架構互相印證，是目前為止最有效的單一改動。
-RECENT_TURNS_WINDOW = 6
+RECENT_TURNS_WINDOW = 12
 
 SEED = int(os.environ["AILLEY_SEED"]) if os.environ.get("AILLEY_SEED") else None
 EXTRA_SAMPLING = json.loads(os.environ.get("AILLEY_SAMPLING_EXTRA", "{}"))
@@ -129,9 +136,10 @@ def build_ending_instruction(allow_ending: bool) -> str:
         return (
             "【強制規定：這批新增回合的最後一回合就是收尾回合，這不是你可以自行選擇的事，"
             "是規則規定必須執行的事】\n"
-            "外部系統已經確認：最近幾個回合雙方懷疑度都沒什麼變化，這個話題已經卡住、聊不出新東西了。"
-            "不管目前的懷疑度累積到多高或多低，這都不重要，重點是最近問也問不到、套也套不出，"
-            "繼續聊下去只會很尷尬——所以規定這批新增回合的「最後一回合」必須是收尾回合，沒有例外。\n"
+            "外部系統已經確認：最近的對話已經卡住了——不是懷疑度沒什麼進展，就是內容一直圍著同樣的"
+            "話題打轉，兩種情況都算，不用糾結是哪一種。不管目前的懷疑度累積到多高或多低，這都不重要，"
+            "重點是最近問也問不到、套也套不出，繼續聊下去只會很尷尬——所以規定這批新增回合的"
+            "「最後一回合」必須是收尾回合，沒有例外。\n"
             "具體規定：讓發言的那位村民用符合身分的理由結束對話（例如要去忙農活、該回去巡邏、"
             "天色晚了該睡了、有事要先走），這回合的 dialogue 必須清楚包含道別或離開的意思"
             "（例如：晚安、我先走了、改天再聊、該去忙了），而且這回合的 state_delta.conversation_ending "
@@ -146,6 +154,40 @@ def build_ending_instruction(allow_ending: bool) -> str:
 
 def dialogue_reads_as_farewell(dialogue: str) -> bool:
     return any(kw in dialogue for kw in FAREWELL_KEYWORDS)
+
+
+# ---------------------------------------------------------------------------
+# 重複偵測（移自 continue_director_poc_repeat_guard.py，純函式，邏輯不變）
+# 這一版不拿偵測結果去塞提示指令，而是拿來當收尾判斷的第二個觸發條件。
+# ---------------------------------------------------------------------------
+
+REPEAT_DETECT_THRESHOLD = 0.8
+
+
+def detect_recent_repetition(prior_turns: list, window: int = RECENT_TURNS_WINDOW,
+                              threshold: float = REPEAT_DETECT_THRESHOLD) -> list:
+    """比對最近 window 回合內，同一位發言者的 reasoning/dialogue 是否有相似句子。
+    回傳每位發言者最多一筆最新命中的紀錄。"""
+    recent = prior_turns[-window:]
+    by_speaker: dict[str, list[tuple[int, dict]]] = {}
+    for idx, turn in enumerate(recent):
+        speaker = turn.get("speaker", "?")
+        by_speaker.setdefault(speaker, []).append((idx, turn))
+
+    findings: dict[str, dict] = {}
+    for speaker, items in by_speaker.items():
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                _, turn_i = items[i]
+                _, turn_j = items[j]
+                for field in ("dialogue", "reasoning"):
+                    a, b = turn_i.get(field, ""), turn_j.get(field, "")
+                    if not a or not b:
+                        continue
+                    ratio = difflib.SequenceMatcher(None, a, b).ratio()
+                    if ratio >= threshold:
+                        findings[speaker] = {"speaker": speaker, "field": field, "text": b, "ratio": ratio}
+    return list(findings.values())
 
 
 def _altar_key_block(villager: dict, village: str) -> str:
@@ -319,11 +361,26 @@ def main() -> None:
         print("[中止] 這場劇本在前情提要中雙方核心能源都已洩漏，遊戲照規則應該已經結束，沒有續寫的必要。")
         sys.exit(1)
 
-    allow_ending, recent_movement = suspicion_allows_ending(prior_turns)
+    suspicion_stalled, recent_movement = suspicion_allows_ending(prior_turns)
+    repeat_findings = detect_recent_repetition(prior_turns) if len(prior_turns) >= MIN_PRIOR_TURNS_FOR_ENDING else []
+    allow_ending = suspicion_stalled or bool(repeat_findings)
     ending_instruction = build_ending_instruction(allow_ending)
+
+    trigger = "無"
+    if suspicion_stalled and repeat_findings:
+        trigger = "懷疑度卡住+偵測到重複"
+    elif suspicion_stalled:
+        trigger = "懷疑度卡住"
+    elif repeat_findings:
+        trigger = "偵測到重複"
+    if repeat_findings:
+        for f in repeat_findings:
+            village = "紅村" if f["speaker"] == "red" else "藍村"
+            print(f"[repeat_end] 偵測到{village}近期重複（{f['field']}，相似度{f['ratio']:.2f}）："
+                  f"「{f['text'][:40]}」")
     print(f"[判斷] 累積懷疑度 紅={state['suspicion']['red']} 藍={state['suspicion']['blue']}，"
           f"最近{RECENT_STALL_WINDOW}回合淨變動 紅={recent_movement['red']} 藍={recent_movement['blue']}，"
-          f"既有回合數={len(prior_turns)} -> {'強制收尾（卡住了）' if allow_ending else '不收尾'}（程式端計算，不交給模型判斷）")
+          f"既有回合數={len(prior_turns)} -> {'強制收尾（' + trigger + '）' if allow_ending else '不收尾'}（程式端計算，不交給模型判斷）")
 
     world_lore = (POC_DIR / "prompts" / "world_lore.txt").read_text(encoding="utf-8")
     prompt_template = (POC_DIR / "prompts" / "continue_system_prompt.txt").read_text(encoding="utf-8")
