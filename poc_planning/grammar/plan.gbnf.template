@@ -1,0 +1,4 @@
+root ::= "{" ws "\"plan\"" ws ":" ws "[" ws block (ws "," ws block){5} ws "]" ws "}"
+block ::= "{" ws "\"time\"" ws ":" ws string ws "," ws "\"activity\"" ws ":" ws string ws "}"
+string ::= "\"" ([^"\\] | "\\" ["\\/bfnrt])* "\""
+ws ::= [ \t\n]*
