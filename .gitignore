@@ -66,6 +66,9 @@ poc_mode_a/transcripts/
 poc_planning/transcripts/
 poc_agent_loop/transcripts/
 poc_agent_loop/memory_store/
+poc_archive/poc/transcripts/
+poc_archive/poc/characters/
+poc_archive/poc_planning/transcripts/
 
 # ── 各自的obsidian ──────────────────────────────────────
 .obsidian/
