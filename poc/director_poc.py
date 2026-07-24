@@ -44,6 +44,10 @@ TOP_K = 40
 REPEAT_PENALTY = 1.0
 REPEAT_LAST_N = 256
 MAX_TURNS = int(os.environ.get("AILLEY_MAX_TURNS", "6"))
+# 每回合 token 預算：對 poc/transcripts/chain_log_20260717-000609.json 的 6 回合完整
+# dialogue blob 實測 /tokenize 得 915 tokens（約 152 tokens/回合），乘 1.5 倍緩衝取整。
+# 用來取代 n_predict=-1（無上限）——曾經踩過 grammar 的 ws 規則卡死狂吐空白字元的坑。
+TOKENS_PER_TURN_BUDGET = 300
 REQUEST_TIMEOUT_SEC = 600
 
 # 固定 seed 可控制實驗變因：同一顆 seed 會讓角色抽選與模型取樣都可重現，
@@ -174,33 +178,37 @@ def call_director(prompt: str) -> dict:
         "top_k": TOP_K,
         "repeat_penalty": REPEAT_PENALTY,
         "repeat_last_n": REPEAT_LAST_N,
-        "n_predict": -1,
+        "n_predict": MAX_TURNS * TOKENS_PER_TURN_BUDGET,
         "cache_prompt": True,
     }
     if SEED is not None:
         payload["seed"] = SEED
     payload.update(EXTRA_SAMPLING)
-    try:
-        resp = requests.post(SERVER_URL, json=payload, timeout=REQUEST_TIMEOUT_SEC)
-        resp.raise_for_status()
-    except requests.exceptions.ConnectionError:
-        print(f"[錯誤] 連不到 llama-server（{SERVER_URL}）。請確認 server 已啟動。")
-        sys.exit(1)
-    except requests.exceptions.Timeout:
-        print(f"[錯誤] 呼叫逾時（超過 {REQUEST_TIMEOUT_SEC} 秒）。")
-        sys.exit(1)
-    except requests.exceptions.HTTPError as e:
-        print(f"[錯誤] llama-server 回傳錯誤：{e}")
-        sys.exit(1)
+    for attempt in range(2):
+        try:
+            resp = requests.post(SERVER_URL, json=payload, timeout=REQUEST_TIMEOUT_SEC)
+            resp.raise_for_status()
+        except requests.exceptions.ConnectionError:
+            print(f"[錯誤] 連不到 llama-server（{SERVER_URL}）。請確認 server 已啟動。")
+            sys.exit(1)
+        except requests.exceptions.Timeout:
+            print(f"[錯誤] 呼叫逾時（超過 {REQUEST_TIMEOUT_SEC} 秒）。")
+            sys.exit(1)
+        except requests.exceptions.HTTPError as e:
+            print(f"[錯誤] llama-server 回傳錯誤：{e}")
+            sys.exit(1)
 
-    raw = resp.json().get("content", "")
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        print(f"[錯誤] 模型輸出無法解析為 JSON：{e}")
-        print("--- 原始輸出 ---")
-        print(raw)
-        sys.exit(1)
+        raw = resp.json().get("content", "")
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            if attempt == 0:
+                print(f"[警告] JSON 解析失敗，重打一次：{e}")
+                continue
+            print(f"[錯誤] 重打後仍無法解析為 JSON：{e}")
+            print("--- 原始輸出 ---")
+            print(raw)
+            sys.exit(1)
 
 
 # ---------------------------------------------------------------------------

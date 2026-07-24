@@ -856,7 +856,7 @@ repeat_guard 那批測試中，5 條鏈有 2 條在第 2 輪續寫（12→18 回
 ## 目前累積的待決策/待辦清單（更新，模式 B 窄視窗驗證通過後）
 
 1. **reasoning／dialogue 長鏈重複退化：找到目前為止最有效的緩解手段——限制 prompt 長度，且已在模式 A、模式 B 兩個架構下都驗證通過**（模式 A 純視窗 -49%、模式 A 記憶流檢索 -54%、模式 B 窄視窗 -53%）。**待辦**：(a) `RECENT_TURNS_WINDOW` 從 12 改成 6，正式併入 `poc/continue_director_poc.py`（這次驗證用的是獨立實驗檔案，還沒動正式版）；(b) 記得先修正比較基準用錯的教訓——之後任何新實驗都要先確認拿來對照的是不是乾淨基準，不要直接沿用某個「剛好手上有」的舊資料；(c) 換更大/不同的模型重新評估，這次所有實驗都基於 Qwen2.5-7B-Instruct-Q4_K_M，這條路線還沒排除，但既然窄視窗已經驗證出接近腰斬的效果，優先度降低。
-2. **新發現：兩種崩潰模式，目前都沒有處理**——(a) 單欄位失控崩潰；(b) JSON 引號混用語法錯誤；(c) 這次新增：grammar `ws` 規則無長度上限導致的空白字元卡死崩潰（已在 `dialogue_ping_pong_memory.py` 修好，用 `n_predict` 上限防呆，但正式版其他呼叫尚未逐一檢查有沒有同樣風險）。三者都發生在 JSON 解析成功之前，事後比對類機制天生攔不到。
+2. ~~新發現：兩種崩潰模式，目前都沒有處理~~ **已解決**，見下方「JSON 崩潰防禦修復：n_predict 上限 + 解析失敗重試」章節。
 3. **misdirect 標籤跟懷疑度脫鉤的問題**：純 prompt 規則（misdirect_settle）已驗證無效，尚未開始新實驗。
 4. **reasoning 讀心視角的爆雷邊界**：使用者明確要求先不決定，等重複退化問題處理得差不多再議。
 5. ~~遠端 `-c 4096` 偏小~~ **已解決**。
@@ -869,3 +869,23 @@ repeat_guard 那批測試中，5 條鏈有 2 條在第 2 輪續寫（12→18 回
 **煙霧測試**：`director_poc.py` 起始場次 + `continue_director_poc.py` 續寫一次，正常運作，無錯誤。沒有重跑 15 條鏈驗證——改動邏輯跟已經驗證過的 `continue_director_poc_narrowwindow.py` 完全一致（複製貼上、只改一個常數），沒有理由懷疑正式版套用同一個改動會有不同結果。
 
 **後續**：使用者表示接下來要把模式 A（雙 AI Ping-Pong，`poc_mode_a/`）獨立分支出來，先看能不能把雙 AI 對話本身改良，細節待後續討論。
+
+## JSON 崩潰防禦修復：n_predict 上限 + 解析失敗重試
+
+延續交接筆記（`任務交接 - JSON崩潰防禦修復（n_predict 上限）.md`）整理出的三種崩潰模式，把 `dialogue_ping_pong_memory.py` 已驗證過的「`n_predict` 上限＋失敗重打」pattern 複製到其餘還在用 `n_predict: -1`（無上限）的呼叫點：`poc/director_poc.py`、`poc/continue_director_poc.py`、`poc_mode_a/dialogue_ping_pong.py`、`poc_mode_a/dialogue_ping_pong_memory.py`（補上主對話呼叫，先前只有重要性評分呼叫有蓋上限）、`poc_agent_loop/agent_loop.py`（主對話／規劃／意識流三處呼叫）。`poc/director_poc_cloud.py` 排除在外——走 OpenRouter `/chat/completions`，沒有 GBNF grammar，不會踩到 `ws` 規則卡死這種崩潰模式，也沒有對應的長度上限欄位可設。
+
+**上限怎麼抓**：用 llama-server 的 `/tokenize` 端點對 `poc/transcripts/chain_log_20260717-000609.json` 的完整 6 回合 dialogue blob 實測，915 tokens／1958 字元，約 152 tokens/回合，乘 1.5 倍緩衝取整為 `TOKENS_PER_TURN_BUDGET=300`（單回合呼叫直接用；`director_poc.py`／`continue_director_poc.py` 這種一次呼叫產出整批回合的，乘上該次要生成的回合數）。規劃呼叫（`agent_loop.py`）沒有實測樣本，用同一份緩衝原則保守估算 600；意識流呼叫估算 150——這兩個是估算值，不是實測值。
+
+**重試機制**：`call_director()` 內把「送出請求→解析 JSON」包成最多 2 次嘗試的迴圈，只針對 `json.JSONDecodeError` 重試；連線/逾時/HTTP 錯誤維持原樣直接中止，不在這次範圍內。
+
+**驗證（三條線各自跑一次原規模長鏈驗證）**：
+
+| 驗證線 | 規模 | 完成率 | JSON 解析失敗（觸發重試） | 重打後仍失敗（真正崩潰） |
+|---|---|---|---|---|
+| `director_poc.py`＋`continue_director_poc.py`（模式 B） | 15 條鏈，`MAX_TURNS=6` 起始＋續 5 輪疊到 36 回合 | 15/15 | 1 | 0 |
+| `dialogue_ping_pong.py`（模式 A） | 15 場，`MAX_TURNS=10` | 15/15 | 1 | 0 |
+| `agent_loop.py`（10 人規模） | 5 天（第 6-10 天，狀態延續自先前批次） | 5/5 | 23（涵蓋對話／規劃／意識流／重要性評分四種呼叫） | 2（皆為重要性評分呼叫，被既有的 `except SystemExit` 保底機制接住，跟這次新加的 `call_director` 重試無關） |
+
+三條線加總 **0 個真正拖垮整場/整鏈的崩潰**。抓到的真實案例：模式 B 第 7 條鏈初始場次觸發過一次 `Expecting ',' delimiter` 語法錯誤，重打一次後正常完成；agent_loop 5 天內 23 次解析失敗大多是 `Expecting property name enclosed in double quotes`（引號混用/截斷型錯誤），21 次被新加的重試接住，2 次是重要性評分呼叫踩到（原本就有獨立的保底機制，不算新問題）。修復前，這些失敗任一次都會讓 `sys.exit(1)` 直接终止整支腳本、殺光當時整場/整天累積的進度；修復後，多數情況下只多花一次呼叫的時間（各批次的每回合耗時仍落在 2-20 秒的正常範圍，沒有觀察到內容被腰斬的跡象）。
+
+**尚待確認**：規劃（600）／意識流（150）這兩個 `n_predict` 上限是估算值，沒有實測基礎；這次驗證沒有觀察到內容被腰斬，暫時視為夠用，但如果之後角色描述變長或加入新欄位，需要重新用 `/tokenize` 校準。

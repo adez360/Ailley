@@ -52,6 +52,11 @@ REPEAT_PENALTY = 1.0
 REPEAT_LAST_N = 256
 REQUEST_TIMEOUT_SEC = 600
 MAX_TURNS = int(os.environ.get("AILLEY_MODE_A_MAX_TURNS", "10"))
+# 單回合 token 預算：對 poc/transcripts 的完整 6 回合 dialogue blob 實測 /tokenize 得
+# 915 tokens（約 152 tokens/回合），乘 1.5 倍緩衝取整。用來取代 n_predict=-1（無上限）
+# ——曾經踩過 grammar 的 ws 規則卡死狂吐空白字元的坑（同一個坑 dialogue_ping_pong_memory.py
+# 已經修過，這裡是同一個 pattern）。
+TOKENS_PER_TURN_BUDGET = 300
 STAGNATION_ENABLED = os.environ.get("AILLEY_MODE_A_STAGNATION", "1") != "0"
 # 前情提要只帶最近幾回合，不把整段歷史無限制塞進 prompt——控制實驗驗證過（見
 # dialogue_ping_pong_memory.py 的純視窗對照組），這個改動本身就能把重複組數降約 49%，
@@ -256,7 +261,7 @@ def build_prompt(template: str, world_lore: str, speaker: str, self_villager: di
 # ---------------------------------------------------------------------------
 
 
-def call_director(prompt: str, grammar: str, seed_override: int | None = None) -> dict:
+def call_director(prompt: str, grammar: str, seed_override: int | None = None, n_predict: int = TOKENS_PER_TURN_BUDGET) -> dict:
     payload = {
         "prompt": prompt,
         "grammar": grammar,
@@ -265,7 +270,7 @@ def call_director(prompt: str, grammar: str, seed_override: int | None = None) -
         "top_k": TOP_K,
         "repeat_penalty": REPEAT_PENALTY,
         "repeat_last_n": REPEAT_LAST_N,
-        "n_predict": -1,
+        "n_predict": n_predict,
         "cache_prompt": True,
     }
     if seed_override is not None:
@@ -273,27 +278,31 @@ def call_director(prompt: str, grammar: str, seed_override: int | None = None) -
     elif SEED is not None:
         payload["seed"] = SEED
     payload.update(EXTRA_SAMPLING)
-    try:
-        resp = requests.post(SERVER_URL, json=payload, timeout=REQUEST_TIMEOUT_SEC)
-        resp.raise_for_status()
-    except requests.exceptions.ConnectionError:
-        print(f"[錯誤] 連不到 llama-server（{SERVER_URL}）。請確認 server 已啟動。")
-        sys.exit(1)
-    except requests.exceptions.Timeout:
-        print(f"[錯誤] 呼叫逾時（超過 {REQUEST_TIMEOUT_SEC} 秒）。")
-        sys.exit(1)
-    except requests.exceptions.HTTPError as e:
-        print(f"[錯誤] llama-server 回傳錯誤：{e}")
-        sys.exit(1)
+    for attempt in range(2):
+        try:
+            resp = requests.post(SERVER_URL, json=payload, timeout=REQUEST_TIMEOUT_SEC)
+            resp.raise_for_status()
+        except requests.exceptions.ConnectionError:
+            print(f"[錯誤] 連不到 llama-server（{SERVER_URL}）。請確認 server 已啟動。")
+            sys.exit(1)
+        except requests.exceptions.Timeout:
+            print(f"[錯誤] 呼叫逾時（超過 {REQUEST_TIMEOUT_SEC} 秒）。")
+            sys.exit(1)
+        except requests.exceptions.HTTPError as e:
+            print(f"[錯誤] llama-server 回傳錯誤：{e}")
+            sys.exit(1)
 
-    raw = resp.json().get("content", "")
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        print(f"[錯誤] 模型輸出無法解析為 JSON：{e}")
-        print("--- 原始輸出 ---")
-        print(raw)
-        sys.exit(1)
+        raw = resp.json().get("content", "")
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            if attempt == 0:
+                print(f"[警告] JSON 解析失敗，重打一次：{e}")
+                continue
+            print(f"[錯誤] 重打後仍無法解析為 JSON：{e}")
+            print("--- 原始輸出 ---")
+            print(raw)
+            sys.exit(1)
 
 
 # ---------------------------------------------------------------------------

@@ -254,7 +254,13 @@ def _current_state_block(state: dict, red_villager: dict, blue_villager: dict) -
 # ---------------------------------------------------------------------------
 
 
-def call_director(prompt: str, grammar: str) -> dict:
+# 每回合 token 預算：對 poc/transcripts/chain_log_20260717-000609.json 的 6 回合完整
+# dialogue blob 實測 /tokenize 得 915 tokens（約 152 tokens/回合），乘 1.5 倍緩衝取整。
+# 用來取代 n_predict=-1（無上限）——曾經踩過 grammar 的 ws 規則卡死狂吐空白字元的坑。
+TOKENS_PER_TURN_BUDGET = 300
+
+
+def call_director(prompt: str, grammar: str, n_predict: int) -> dict:
     payload = {
         "prompt": prompt,
         "grammar": grammar,
@@ -263,33 +269,37 @@ def call_director(prompt: str, grammar: str) -> dict:
         "top_k": TOP_K,
         "repeat_penalty": REPEAT_PENALTY,
         "repeat_last_n": REPEAT_LAST_N,
-        "n_predict": -1,
+        "n_predict": n_predict,
         "cache_prompt": True,
     }
     if SEED is not None:
         payload["seed"] = SEED
     payload.update(EXTRA_SAMPLING)
-    try:
-        resp = requests.post(SERVER_URL, json=payload, timeout=REQUEST_TIMEOUT_SEC)
-        resp.raise_for_status()
-    except requests.exceptions.ConnectionError:
-        print(f"[錯誤] 連不到 llama-server（{SERVER_URL}）。請確認 server 已啟動。")
-        sys.exit(1)
-    except requests.exceptions.Timeout:
-        print(f"[錯誤] 呼叫逾時（超過 {REQUEST_TIMEOUT_SEC} 秒）。")
-        sys.exit(1)
-    except requests.exceptions.HTTPError as e:
-        print(f"[錯誤] llama-server 回傳錯誤：{e}")
-        sys.exit(1)
+    for attempt in range(2):
+        try:
+            resp = requests.post(SERVER_URL, json=payload, timeout=REQUEST_TIMEOUT_SEC)
+            resp.raise_for_status()
+        except requests.exceptions.ConnectionError:
+            print(f"[錯誤] 連不到 llama-server（{SERVER_URL}）。請確認 server 已啟動。")
+            sys.exit(1)
+        except requests.exceptions.Timeout:
+            print(f"[錯誤] 呼叫逾時（超過 {REQUEST_TIMEOUT_SEC} 秒）。")
+            sys.exit(1)
+        except requests.exceptions.HTTPError as e:
+            print(f"[錯誤] llama-server 回傳錯誤：{e}")
+            sys.exit(1)
 
-    raw = resp.json().get("content", "")
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        print(f"[錯誤] 模型輸出無法解析為 JSON：{e}")
-        print("--- 原始輸出 ---")
-        print(raw)
-        sys.exit(1)
+        raw = resp.json().get("content", "")
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            if attempt == 0:
+                print(f"[警告] JSON 解析失敗，重打一次：{e}")
+                continue
+            print(f"[錯誤] 重打後仍無法解析為 JSON：{e}")
+            print("--- 原始輸出 ---")
+            print(raw)
+            sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -357,7 +367,7 @@ def main() -> None:
 
     print(f"[續寫] 讀取 {transcript_path.name}（既有 {len(prior_turns)} 回合），請模型接續生成 {extra_turns} 回合...")
     start = time.perf_counter()
-    result = call_director(prompt, grammar)
+    result = call_director(prompt, grammar, n_predict=extra_turns * TOKENS_PER_TURN_BUDGET)
     elapsed = time.perf_counter() - start
     new_turns = result.get("turns", [])
     print(f"[完成] 續寫呼叫耗時 {elapsed:.2f} 秒，共生成 {len(new_turns)} 個新回合。")

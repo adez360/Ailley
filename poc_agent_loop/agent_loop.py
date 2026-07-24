@@ -55,6 +55,12 @@ REPEAT_PENALTY = 1.0
 REPEAT_LAST_N = 256
 REQUEST_TIMEOUT_SEC = 600
 ENCOUNTER_MAX_TURNS = int(os.environ.get("AILLEY_ENCOUNTER_MAX_TURNS", "6"))
+# n_predict 預算：對話單回合實測（見 poc/transcripts 的 /tokenize 結果，152 tokens/回合，
+# 乘 1.5 倍緩衝取整）；規劃／意識流沒有實測樣本，用同一份緩衝原則保守估算。
+# 用來取代 n_predict=-1（無上限）——曾經踩過 grammar 的 ws 規則卡死狂吐空白字元的坑。
+DIALOGUE_TURN_TOKEN_BUDGET = 300
+PLAN_TOKEN_BUDGET = 600
+THOUGHT_TOKEN_BUDGET = 150
 
 SEED = int(os.environ["AILLEY_SEED"]) if os.environ.get("AILLEY_SEED") else None
 EXTRA_SAMPLING = json.loads(os.environ.get("AILLEY_SAMPLING_EXTRA", "{}"))
@@ -96,34 +102,38 @@ def call_director(prompt: str, grammar: str, extra_payload: dict | None = None) 
     payload = {
         "prompt": prompt, "grammar": grammar, "temperature": TEMPERATURE,
         "top_p": TOP_P, "top_k": TOP_K, "repeat_penalty": REPEAT_PENALTY,
-        "repeat_last_n": REPEAT_LAST_N, "n_predict": -1, "cache_prompt": True,
+        "repeat_last_n": REPEAT_LAST_N, "n_predict": DIALOGUE_TURN_TOKEN_BUDGET, "cache_prompt": True,
     }
     if SEED is not None:
         payload["seed"] = SEED
     payload.update(EXTRA_SAMPLING)
     if extra_payload:
         payload.update(extra_payload)
-    try:
-        resp = requests.post(SERVER_URL, json=payload, timeout=REQUEST_TIMEOUT_SEC)
-        resp.raise_for_status()
-    except requests.exceptions.ConnectionError:
-        print(f"[錯誤] 連不到 llama-server（{SERVER_URL}）。請確認 server 已啟動。")
-        sys.exit(1)
-    except requests.exceptions.Timeout:
-        print(f"[錯誤] 呼叫逾時（超過 {REQUEST_TIMEOUT_SEC} 秒）。")
-        sys.exit(1)
-    except requests.exceptions.HTTPError as e:
-        print(f"[錯誤] llama-server 回傳錯誤：{e}")
-        sys.exit(1)
+    for attempt in range(2):
+        try:
+            resp = requests.post(SERVER_URL, json=payload, timeout=REQUEST_TIMEOUT_SEC)
+            resp.raise_for_status()
+        except requests.exceptions.ConnectionError:
+            print(f"[錯誤] 連不到 llama-server（{SERVER_URL}）。請確認 server 已啟動。")
+            sys.exit(1)
+        except requests.exceptions.Timeout:
+            print(f"[錯誤] 呼叫逾時（超過 {REQUEST_TIMEOUT_SEC} 秒）。")
+            sys.exit(1)
+        except requests.exceptions.HTTPError as e:
+            print(f"[錯誤] llama-server 回傳錯誤：{e}")
+            sys.exit(1)
 
-    raw = resp.json().get("content", "")
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as e:
-        print(f"[錯誤] 模型輸出無法解析為 JSON：{e}")
-        print("--- 原始輸出 ---")
-        print(raw)
-        sys.exit(1)
+        raw = resp.json().get("content", "")
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            if attempt == 0:
+                print(f"[警告] JSON 解析失敗，重打一次：{e}")
+                continue
+            print(f"[錯誤] 重打後仍無法解析為 JSON：{e}")
+            print("--- 原始輸出 ---")
+            print(raw)
+            sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +455,7 @@ def run_one_day(roster: dict, state: dict) -> dict:
         retrieved = memory_store.retrieve_memories(existing_memories[char_id], current_index=state["next_global_index"])
         prompt = build_plan_prompt(plan_template, world_lore, villager, retrieved)
         start = time.perf_counter()
-        result = call_director(prompt, plan_grammar)
+        result = call_director(prompt, plan_grammar, extra_payload={"n_predict": PLAN_TOKEN_BUDGET})
         elapsed = time.perf_counter() - start
         plan = result.get("plan", [])
         for block in plan:
@@ -513,7 +523,7 @@ def run_one_day(roster: dict, state: dict) -> dict:
             activity = plans[char_id][idx].get("activity", "")
             prompt = build_thought_prompt(thought_template, world_lore, villager, activity)
             start = time.perf_counter()
-            result = call_director(prompt, thought_grammar)
+            result = call_director(prompt, thought_grammar, extra_payload={"n_predict": THOUGHT_TOKEN_BUDGET})
             elapsed = time.perf_counter() - start
             thought = _OPENCC.convert(result.get("thought", ""))
             print(f"  [第 {idx+1} 時段｜{village_label}｜{villager['name']}] "
