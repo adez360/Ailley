@@ -1,0 +1,25 @@
+root ::= "{" ws "\"emotion\"" ws ":" ws emotion ws "," ws "\"intent\"" ws ":" ws intent ws "," ws "\"inner_monologue\"" ws ":" ws string ws "," ws "\"speech\"" ws ":" ws nullable-string ws "," ws "\"speech_volume\"" ws ":" ws speech-volume ws "}"
+
+# 2026-07-28：把 intent 移到 inner_monologue／speech 前面——GBNF 是嚴格左到右生成，
+# 原本 inner_monologue 排在 target 前面，代表模型寫內心獨白時 target 根本還沒被生成，
+# 敘事內容跟結構化欄位等於各自生成、沒有真正的因果關係（觀察到「鐵牛攻擊阿蘭，但內心
+# 獨白在講一隻狼／一個不存在的人」這種脫節）。改成先決定 intent 再寫獨白/台詞，讓敘事
+# 有機會真的條件於已經選定的對象。
+
+intent ::= "{" ws "\"action\"" ws ":" ws action ws "," ws "\"target\"" ws ":" ws target-value ws "," ws "\"location\"" ws ":" ws location-value ws "}"
+
+# target-value／location-value 不在這裡定義——呼叫端動態產生：
+# - target-value 依「當下視野內看得到的人」產生「null | "人名1" | ...」，保證不會幻覺人名/
+#   選到視野外的人/把「沒有對象」寫成字面字串 "null"。
+# - location-value 依「當下的角色名單」產生「公用地點 + 每人各自的家」，例如「阿蘭家」、
+#   「老周家」……取代原本單一共用的「家」，讓每人有自己專屬的住處。
+
+emotion ::= "\"excited\"" | "\"happy\"" | "\"in_love\"" | "\"terrified\"" | "\"burnout\"" | "\"angry\"" | "\"sad\"" | "\"neutral\""
+
+speech-volume ::= "\"normal\"" | "\"shout\"" | "\"whisper\""
+
+action ::= "\"說話\"" | "\"喊話\"" | "\"悄悄話\"" | "\"握手\"" | "\"擁抱\"" | "\"送禮\"" | "\"給錢\"" | "\"結婚\"" | "\"離婚\"" | "\"偷竊\"" | "\"搶劫\"" | "\"破壞樂器\"" | "\"攻擊\"" | "\"抓捕\"" | "\"舉報\"" | "\"打獵\"" | "\"採草藥\"" | "\"釣魚\"" | "\"表演\"" | "\"買東西\"" | "\"賣東西\"" | "\"治療\"" | "\"吃飯\"" | "\"喝酒\"" | "\"移動\"" | "\"奔跑\"" | "\"蹲下\"" | "\"抱頭\"" | "\"舉手\"" | "\"大叫\"" | "\"摔東西\"" | "\"飛吻\"" | "\"跟隨\"" | "\"展示物品\"" | "\"巡邏\"" | "\"自首\"" | "\"睡覺\"" | "\"發呆\""
+
+nullable-string ::= "null" | string
+string ::= "\"" ([^"\\] | "\\" ["\\/bfnrt])* "\""
+ws ::= [ \t\n]*

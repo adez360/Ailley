@@ -1,0 +1,7 @@
+{
+  "alan": {"zhou": 5, "mei": 30, "tie": 62, "aji": -15},
+  "zhou": {"alan": 10, "mei": -72, "tie": -25, "aji": 48},
+  "mei": {"alan": 35, "zhou": -40, "tie": 78, "aji": -30},
+  "tie": {"alan": 65, "zhou": -20, "mei": 25, "aji": -88},
+  "aji": {"alan": -10, "zhou": 55, "mei": -5, "tie": -60}
+}
