@@ -1,0 +1,58 @@
+# ============================================
+# Git LFS 設定（Godot 4 多人協作用）
+# 大型 / 二進位資源交給 LFS 管理，
+# 避免 repo 肥大、避免二進位檔案在合併時整包炸掉
+# ============================================
+
+# ---- 圖片 / 像素美術 ----
+*.png filter=lfs diff=lfs merge=lfs -text
+*.jpg filter=lfs diff=lfs merge=lfs -text
+*.jpeg filter=lfs diff=lfs merge=lfs -text
+*.webp filter=lfs diff=lfs merge=lfs -text
+*.tga filter=lfs diff=lfs merge=lfs -text
+*.bmp filter=lfs diff=lfs merge=lfs -text
+*.hdr filter=lfs diff=lfs merge=lfs -text
+*.exr filter=lfs diff=lfs merge=lfs -text
+
+# ---- 美術原始檔（Aseprite / Photoshop 等）----
+*.aseprite filter=lfs diff=lfs merge=lfs -text
+*.ase filter=lfs diff=lfs merge=lfs -text
+*.psd filter=lfs diff=lfs merge=lfs -text
+*.kra filter=lfs diff=lfs merge=lfs -text
+
+# ---- 音效 / 音樂 ----
+*.wav filter=lfs diff=lfs merge=lfs -text
+*.ogg filter=lfs diff=lfs merge=lfs -text
+*.mp3 filter=lfs diff=lfs merge=lfs -text
+*.flac filter=lfs diff=lfs merge=lfs -text
+
+# ---- 字型 ----
+*.ttf filter=lfs diff=lfs merge=lfs -text
+*.otf filter=lfs diff=lfs merge=lfs -text
+*.woff filter=lfs diff=lfs merge=lfs -text
+*.woff2 filter=lfs diff=lfs merge=lfs -text
+
+# ---- 3D 模型（如果之後用到）----
+*.fbx filter=lfs diff=lfs merge=lfs -text
+*.glb filter=lfs diff=lfs merge=lfs -text
+*.gltf filter=lfs diff=lfs merge=lfs -text
+*.blend filter=lfs diff=lfs merge=lfs -text
+*.obj filter=lfs diff=lfs merge=lfs -text
+
+# ---- 影片 ----
+*.mp4 filter=lfs diff=lfs merge=lfs -text
+*.webm filter=lfs diff=lfs merge=lfs -text
+
+# ---- 壓縮檔 / 打包產物 ----
+*.zip filter=lfs diff=lfs merge=lfs -text
+*.pck filter=lfs diff=lfs merge=lfs -text
+
+# ---- 保持文字檔可正常 diff（重要：不要被 LFS 吃掉）----
+*.tscn text
+*.tres text
+*.gd text
+*.gdshader text
+*.cs text
+*.import text
+*.md text
+*.json text
