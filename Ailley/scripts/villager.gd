@@ -5,14 +5,60 @@ const SPEED = 50.0
 
 var direction = Vector2.ZERO
 
-
+@onready var sprite = $AnimatedSprite2D
 @onready var state_machine = $StateMachine
-
+@onready var needs = $Needs
 
 func _ready():
-
+	sprite.play("idle_down")
 	state_machine.state_changed.connect(_on_state_changed)
+#	needs.hungry.connet(_on_hungry)
 
+func update_animation():
+
+	# 沒有移動
+	if velocity.length() < 1:
+		if sprite.animation.begins_with("walk"):
+			sprite.play(sprite.animation.replace("walk", "idle"))
+		return
+
+	var dir = velocity.normalized()
+	sprite.flip_h = false
+
+	# ↓
+	if dir.y > 0.7:
+		sprite.play("walk_down")
+
+	# ↑
+	elif dir.y < -0.7:
+		sprite.play("walk_up")
+
+	# →
+	elif dir.x > 0.7:
+		sprite.play("walk_right")
+
+	# ←
+	elif dir.x < -0.7:
+		sprite.play("walk_right")
+		sprite.flip_h = true
+
+	# ↘
+	elif dir.x > 0 and dir.y > 0:
+		sprite.play("walk_down_right")
+
+	# ↙
+	elif dir.x < 0 and dir.y > 0:
+		sprite.play("walk_down_right")
+		sprite.flip_h = true
+
+	# ↗
+	elif dir.x > 0 and dir.y < 0:
+		sprite.play("walk_up_right")
+
+	# ↖
+	else:
+		sprite.play("walk_up_right")
+		sprite.flip_h = true
 
 
 func _physics_process(delta):
@@ -27,6 +73,10 @@ func _physics_process(delta):
 
 
 	move_and_slide()
+	update_animation()
+	
+	position.x = clamp(position.x, 16, 1280)
+	position.y = clamp(position.y, 16, 720)
 
 
 
