@@ -1,0 +1,18 @@
+[gd_scene load_steps=4 format=3 uid="uid://b7jh15atkxvyq"]
+
+[ext_resource type="PackedScene" uid="uid://bpwua8hjipg04" path="res://scenes/villager.tscn" id="1_0gn7g"]
+[ext_resource type="Script" path="res://scripts/state_machine.gd" id="1_cg6vk"]
+
+[sub_resource type="TileSet" id="TileSet_pu3a1"]
+
+[node name="Village" type="Node2D"]
+position = Vector2(300, 200)
+script = ExtResource("1_cg6vk")
+
+[node name="Ground" type="TileMap" parent="."]
+tile_set = SubResource("TileSet_pu3a1")
+format = 2
+
+[node name="Villager" parent="." instance=ExtResource("1_0gn7g")]
+
+[connection signal="state_changed" from="." to="Villager" method="_on_village_state_changed"]
