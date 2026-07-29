@@ -1,9 +1,9 @@
 [gd_scene load_steps=49 format=3 uid="uid://bpwua8hjipg04"]
 
-[ext_resource type="Script" path="res://scripts/villager.gd" id="1_11qln"]
+[ext_resource type="Script" uid="uid://mtj5shbhxrm8" path="res://scripts/villager.gd" id="1_11qln"]
 [ext_resource type="Texture2D" uid="uid://pcq7ouq5pyt8" path="res://assets/characters/16x16 Idle-Sheet.png" id="2_g7inl"]
-[ext_resource type="Script" path="res://scripts/state_machine.gd" id="2_oyvfc"]
-[ext_resource type="Script" path="res://scripts/needs.gd" id="3_d3qop"]
+[ext_resource type="Script" uid="uid://bqg4toi3fmmw8" path="res://scripts/state_machine.gd" id="2_oyvfc"]
+[ext_resource type="Script" uid="uid://cvutqhe1h8q2m" path="res://scripts/needs.gd" id="3_d3qop"]
 [ext_resource type="Texture2D" uid="uid://b4byn4agp2182" path="res://assets/characters/16x16 Walk-Sheet.png" id="3_jgxhb"]
 
 [sub_resource type="NoiseTexture2D" id="NoiseTexture2D_pun4h"]
@@ -362,5 +362,7 @@ script = ExtResource("2_oyvfc")
 
 [node name="Needs" type="Node" parent="."]
 script = ExtResource("3_d3qop")
+
+[node name="NavigationAgent2D" type="NavigationAgent2D" parent="."]
 
 [connection signal="state_changed" from="StateMachine" to="." method="_on_state_machine_state_changed"]
