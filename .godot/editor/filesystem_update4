@@ -1,0 +1,5 @@
+res://scenes/village.tscn
+res://scenes/villager.tscn
+res://scripts/villager.gd
+res://scripts/state_machine.gd
+res://scripts/needs.gd

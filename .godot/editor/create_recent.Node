@@ -1,0 +1,6 @@
+Node
+Sprite2D
+Polygon2D
+AnimatedSprite2D
+CollisionShape2D
+CharacterBody2D
