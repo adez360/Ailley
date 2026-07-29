@@ -11,8 +11,17 @@ config_version=5
 [application]
 
 config/name="ailley4.3"
-config/features=PackedStringArray("4.3", "GL Compatibility")
+run/main_scene="uid://b7jh15atkxvyq"
+config/features=PackedStringArray("4.5", "GL Compatibility")
 config/icon="res://icon.svg"
+
+[autoload]
+
+GameManager="*res://scripts/game_manager.gd"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/TileMapDual/plugin.cfg")
 
 [rendering]
 

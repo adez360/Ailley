@@ -1,0 +1,34 @@
+{
+    "villagers": [
+        {
+            "id": "npc001",
+            "name": "小明",
+            "target": "farm"
+        },
+        {
+            "id": "npc002",
+            "name": "小明",
+            "target": "home"
+        },
+
+        {
+            "id": "npc003",
+            "name": "小明",
+            "target": "temple"
+        },
+
+        {
+            "id": "npc004",
+            "name": "小明",
+            "target": "farm"
+        },
+
+        {
+            "id": "npc005",
+            "name": "小明",
+            "target": "farm"
+        },
+
+
+    ]
+}
