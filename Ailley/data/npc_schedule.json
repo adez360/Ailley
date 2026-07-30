@@ -1,34 +1,129 @@
 {
-    "villagers": [
-        {
-            "id": "npc001",
-            "name": "小明",
-            "target": "farm"
-        },
-        {
-            "id": "npc002",
-            "name": "小明",
-            "target": "home"
-        },
-
-        {
-            "id": "npc003",
-            "name": "小明",
-            "target": "temple"
-        },
-
-        {
-            "id": "npc004",
-            "name": "小明",
-            "target": "farm"
-        },
-
-        {
-            "id": "npc005",
-            "name": "小明",
-            "target": "farm"
-        },
-
-
-    ]
+	"villagers": [
+		{
+			"id": "npc001",
+			"schedule": [
+				{
+					"time": "08:00",
+					"place": "home_001",
+					"state": "idle"
+				},
+				{
+					"time": "09:00",
+					"place": "farm",
+					"state": "work"
+				},
+				{
+					"time": "12:00",
+					"place": "restaurant",
+					"state": "eat"
+				},
+				{
+					"time": "18:00",
+					"place": "home_001",
+					"state": "sleep"
+				}
+			]
+		},
+		{
+			"id": "npc002",
+			"schedule": [
+				{
+					"time": "08:00",
+					"place": "home_002",
+					"state": "idle"
+				},
+				{
+					"time": "09:00",
+					"place": "shop",
+					"state": "work"
+				},
+				{
+					"time": "12:00",
+					"place": "restaurant",
+					"state": "eat"
+				},
+				{
+					"time": "18:00",
+					"place": "home_002",
+					"state": "sleep"
+				}
+			]
+		},
+		{
+			"id": "npc003",
+			"schedule": [
+				{
+					"time": "08:00",
+					"place": "home_003",
+					"state": "idle"
+				},
+				{
+					"time": "09:00",
+					"place": "temple",
+					"state": "work"
+				},
+				{
+					"time": "12:00",
+					"place": "square",
+					"state": "talk"
+				},
+				{
+					"time": "18:00",
+					"place": "home_003",
+					"state": "sleep"
+				}
+			]
+		},
+		{
+			"id": "npc004",
+			"schedule": [
+				{
+					"time": "08:00",
+					"place": "home_004",
+					"state": "idle"
+				},
+				{
+					"time": "09:00",
+					"place": "farm",
+					"state": "work"
+				},
+				{
+					"time": "12:00",
+					"place": "restaurant",
+					"state": "eat"
+				},
+				{
+					"time": "18:00",
+					"place": "home_004",
+					"state": "sleep"
+				}
+			]
+		},
+		{
+			"id": "npc005",
+			"schedule": [
+				{
+					"time": "08:00",
+					"place": "home_005",
+					"state": "idle"
+				},
+				{
+					"time": "09:00",
+					"place": "shop",
+					"state": "work"
+				},
+				{
+					"time": "12:00",
+					"place": "square",
+					"state": "talk"
+				},
+				{
+					"time": "18:00",
+					"place": "home_005",
+					"state": "sleep"
+				}
+			]
+		}
+	]
 }

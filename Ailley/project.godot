@@ -17,7 +17,8 @@ config/icon="res://icon.svg"
 
 [autoload]
 
-GameManager="*res://scripts/game_manager.gd"
+GameManager="*res://scripts/core/game_manager.gd"
+GameClock="*res://scripts/core/GameClock.gd"
 
 [editor_plugins]
 
