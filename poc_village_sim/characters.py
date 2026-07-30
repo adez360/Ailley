@@ -117,6 +117,27 @@ def _tier_adjective(value: int, low_word: str, mid_word: str, high_word: str) ->
     return low_word
 
 
+def hunger_tier_text(hunger: int) -> str:
+    """2026-07-29 補上的缺口：實測過飢餓值 90（很餓）在沒有這句提示的情況下，5 次裡
+    0 次選擇吃飯（跟角色有沒有錢無關，換有錢角色一樣不吃）；加上這句之後吃飯比例從
+    0/5 跳到 4/5——只有形容詞（「很餓」）強度不夠讓模型把它排進優先順序，要跟體力/
+    生命值一樣的明確提示句才會穩定觸發對應行為。"""
+    if hunger >= 90:
+        return "你餓得頭暈眼花，如果不趕快吃點東西，感覺會撐不下去。"
+    if hunger >= 70:
+        return "你的肚子一直叫，很想找東西吃。"
+    return ""
+
+
+def thirst_tier_text(thirst: int) -> str:
+    """跟 hunger_tier_text 同一個修復，口渴沒有單獨測過但邏輯完全對稱，一併補上。"""
+    if thirst >= 90:
+        return "你渴得嘴唇都乾裂了，得趕快找水喝。"
+    if thirst >= 70:
+        return "你的喉嚨很乾，很想喝點什麼。"
+    return ""
+
+
 def stamina_tier_text(stamina: int) -> str:
     """體力越低，提示越強烈——不強制角色去睡覺，只是把處境講得更清楚（軟性提示，不覆蓋選擇權）。"""
     if stamina <= 5:
@@ -129,11 +150,16 @@ def stamina_tier_text(stamina: int) -> str:
 
 
 def boredom_tier_text(boredom: int) -> str:
-    """原樣沿用 Specify2 §7.3 的提示語，數值早就有在算，這次補上一直漏掉的文字注入。"""
-    if boredom >= 85:
-        return "你受不了了，你必須去做點沒做過的事，或去找還沒說過話的人。"
-    if boredom >= 60:
-        return "你覺得今天很無聊，一直重複做一樣的事讓你煩躁。"
+    """原本只有 Specify2 §7.3 原文的兩級，跟體力/生命值的三級式分級（輕度/中度/危急）
+    比起來少一級，而且沒有對應「已經衝到頂」的情況——實測過好幾次無聊度卡在滿值 100
+    時，行為還是完全沒變，只靠原本 ≥85 那句顯然不夠力。這次補一個更早出現的輕度提示，
+    也把最高一級的文字寫得更急迫（2026-07-29 跟使用者討論定案）。"""
+    if boredom >= 95:
+        return "你受不了了，再這樣下去你會發瘋——不管做什麼都好，只要是還沒做過的事、還沒去過的地方、還沒說過話的人都好。"
+    if boredom >= 75:
+        return "你覺得今天很無聊，一直重複做一樣的事讓你很煩躁，很想找點不一樣的事做。"
+    if boredom >= 50:
+        return "你開始覺得有點無聊，好像該做點不一樣的事了。"
     return ""
 
 
@@ -148,6 +174,19 @@ def health_tier_text(health: int) -> str:
     return ""
 
 
+def health_decline_duration_text(health: int, streak: int) -> str:
+    """血量沒有維持在滿血附近的持續次數，用意是補上 health_tier_text 只在 ≤20 才開始講的
+    空窗期——避免「數值撞底後警示文字不再變化」導致脫敏（2026-07-30 鐵牛因為流血沒治療、
+    連續多次決策都沒有察覺自己快死，最後失血死亡的案例，見 note）。"""
+    if health >= 50 or streak <= 0:
+        return ""
+    if streak >= 20:
+        return f"你已經連續 {streak} 次決定，身體狀況都沒有真正好轉，再這樣下去恐怕撐不住。"
+    if streak >= 8:
+        return f"你已經有一段時間（連續 {streak} 次決定）覺得身體不太對勁，該認真考慮處理一下了。"
+    return "你感覺身體有點不對勁，好像哪裡受傷了還沒處理好。"
+
+
 def render_body_status_block(physiology: dict) -> str:
     hunger, thirst = physiology["hunger"], physiology["thirst"]
     stamina, boredom = physiology["stamina"], physiology["boredom"]
@@ -159,7 +198,7 @@ def render_body_status_block(physiology: dict) -> str:
         f"飢餓 {hunger}（{hunger_word}） 口渴 {thirst}（{thirst_word}） "
         f"體力 {stamina}（{stamina_word}） 無聊 {boredom}（{boredom_word}）"
     )
-    extra = [t for t in (stamina_tier_text(stamina), boredom_tier_text(boredom)) if t]
+    extra = [t for t in (hunger_tier_text(hunger), thirst_tier_text(thirst), stamina_tier_text(stamina), boredom_tier_text(boredom)) if t]
     if extra:
         line += "\n" + "".join(extra)
     return line
@@ -187,6 +226,9 @@ def render_injury_block(physiology: dict) -> str:
     tier = health_tier_text(health)
     if tier:
         text += f" {tier}"
+    duration_text = health_decline_duration_text(health, physiology.get("health_decline_streak", 0))
+    if duration_text:
+        text += f" {duration_text}"
     return text
 
 
@@ -239,10 +281,16 @@ def home_name(villager_name: str) -> str:
     return f"{villager_name}家"
 
 
+def render_today_plan_block(today_plan: str) -> str:
+    if not today_plan:
+        return "（還沒想過今天要做什麼，就照當下的心情跟直覺行動）"
+    return f"{today_plan}（這是你自己想做的事，不是任務清單，行動時可以參考，但不是非做不可）"
+
+
 def build_villager_prompt(template: str, world_lore: str, villager: dict, relationships: dict, *,
                            current_time: str, location: str, visible: list,
                            recent_event: str, last_emotion: str, last_action_result: str,
-                           recent_memory: str, location_list: str) -> str:
+                           recent_memory: str, location_list: str, today_plan: str = "") -> str:
     """沿用 poc_agent_loop/agent_loop.py 的 build_plan_prompt() 寫法：template.replace() 逐一替換。
     location_list 由呼叫端組好傳進來（要看整個角色名單才知道有哪些人的家，這裡只有單一
     villager，組不出完整清單）。"""
@@ -265,4 +313,5 @@ def build_villager_prompt(template: str, world_lore: str, villager: dict, relati
         .replace("{{LAST_EMOTION}}", last_emotion)
         .replace("{{LAST_ACTION_RESULT_BLOCK}}", last_action_result)
         .replace("{{RECENT_MEMORY_BLOCK}}", recent_memory)
+        .replace("{{TODAY_PLAN_BLOCK}}", render_today_plan_block(today_plan))
     )

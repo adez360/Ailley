@@ -1,0 +1,21 @@
+root ::= "{" ws "\"emotion\"" ws ":" ws emotion ws "," ws "\"intent\"" ws ":" ws intent ws "," ws "\"inner_monologue\"" ws ":" ws string ws "," ws "\"speech\"" ws ":" ws nullable-string ws "," ws "\"speech_volume\"" ws ":" ws speech-volume ws "}"
+
+# 離散事件模擬（DES）Stage 1 驗證專用 grammar：只多一個 intent.duration_minutes 欄位，
+# 其餘跟 turn.gbnf.template 完全一樣。目的是先驗證「AI 填的時長合不合理」，不牽涉排程
+# 引擎，所以 duration 這裡故意只做「1-999 的合法數字」這種寬鬆的結構限制，不做語意上的
+# 範圍限制（例如不強制「睡覺要 300-600 分鐘」）——範圍限制交給觀察結果之後再決定要不要
+# 做，這次要看的正是「不加限制的話 AI 自然會填出什麼」。
+
+intent ::= "{" ws "\"action\"" ws ":" ws action ws "," ws "\"duration_minutes\"" ws ":" ws duration ws "," ws "\"target\"" ws ":" ws target-value ws "," ws "\"location\"" ws ":" ws location-value ws "}"
+
+duration ::= [1-9] [0-9]? [0-9]?
+
+emotion ::= "\"excited\"" | "\"happy\"" | "\"in_love\"" | "\"terrified\"" | "\"burnout\"" | "\"angry\"" | "\"sad\"" | "\"neutral\""
+
+speech-volume ::= "\"normal\"" | "\"shout\"" | "\"whisper\""
+
+action ::= "\"說話\"" | "\"喊話\"" | "\"悄悄話\"" | "\"握手\"" | "\"擁抱\"" | "\"送禮\"" | "\"給錢\"" | "\"結婚\"" | "\"離婚\"" | "\"偷竊\"" | "\"搶劫\"" | "\"破壞樂器\"" | "\"攻擊\"" | "\"抓捕\"" | "\"舉報\"" | "\"打獵\"" | "\"採草藥\"" | "\"釣魚\"" | "\"表演\"" | "\"買東西\"" | "\"賣東西\"" | "\"治療\"" | "\"吃飯\"" | "\"喝酒\"" | "\"移動\"" | "\"奔跑\"" | "\"蹲下\"" | "\"抱頭\"" | "\"舉手\"" | "\"大叫\"" | "\"摔東西\"" | "\"飛吻\"" | "\"跟隨\"" | "\"展示物品\"" | "\"巡邏\"" | "\"自首\"" | "\"睡覺\"" | "\"發呆\""
+
+nullable-string ::= "null" | string
+string ::= "\"" ([^"\\] | "\\" ["\\/bfnrt])* "\""
+ws ::= [ \t\n]*

@@ -1,0 +1,21 @@
+root ::= "{" ws "\"emotion\"" ws ":" ws emotion ws "," ws "\"intent\"" ws ":" ws intent ws "," ws "\"inner_monologue\"" ws ":" ws string ws "," ws "\"speech\"" ws ":" ws nullable-string ws "," ws "\"speech_volume\"" ws ":" ws speech-volume ws "}"
+
+# 給 server.py（組員串接用 API）專用：duration 欄位改用「幾個 10 秒 tick」為單位，不是分鐘。
+# AI 填 2 代表這個動作要 20 秒（2 * 10），填 90 代表 900 秒（15 分鐘）。這樣不管 AI 填什麼數字，
+# 乘以 10 之後永遠是遊戲內 10 秒顆粒度的整數倍，跟 run_des_sim.py 那邊用分鐘為單位的
+# turn_duration_experiment.gbnf.template 是兩條不同的實驗線，故意分開、不共用同一份 grammar，
+# 避免動到 DES stage 1 那邊「不加語意提示、純看 AI 自然填什麼」的既有實驗設計（2026-07-30）。
+
+intent ::= "{" ws "\"action\"" ws ":" ws action ws "," ws "\"duration_ticks\"" ws ":" ws duration ws "," ws "\"target\"" ws ":" ws target-value ws "," ws "\"location\"" ws ":" ws location-value ws "}"
+
+duration ::= [1-9] [0-9]? [0-9]?
+
+emotion ::= "\"excited\"" | "\"happy\"" | "\"in_love\"" | "\"terrified\"" | "\"burnout\"" | "\"angry\"" | "\"sad\"" | "\"neutral\""
+
+speech-volume ::= "\"normal\"" | "\"shout\"" | "\"whisper\""
+
+action ::= "\"說話\"" | "\"喊話\"" | "\"悄悄話\"" | "\"握手\"" | "\"擁抱\"" | "\"送禮\"" | "\"給錢\"" | "\"結婚\"" | "\"離婚\"" | "\"偷竊\"" | "\"搶劫\"" | "\"破壞樂器\"" | "\"攻擊\"" | "\"抓捕\"" | "\"舉報\"" | "\"打獵\"" | "\"採草藥\"" | "\"釣魚\"" | "\"表演\"" | "\"買東西\"" | "\"賣東西\"" | "\"治療\"" | "\"吃飯\"" | "\"喝酒\"" | "\"移動\"" | "\"奔跑\"" | "\"蹲下\"" | "\"抱頭\"" | "\"舉手\"" | "\"大叫\"" | "\"摔東西\"" | "\"飛吻\"" | "\"跟隨\"" | "\"展示物品\"" | "\"巡邏\"" | "\"自首\"" | "\"睡覺\"" | "\"發呆\""
+
+nullable-string ::= "null" | string
+string ::= "\"" ([^"\\] | "\\" ["\\/bfnrt])* "\""
+ws ::= [ \t\n]*

@@ -1,4 +1,4 @@
-root ::= "{" ws "\"reflection\"" ws ":" ws string ws "," ws "\"personality_delta\"" ws ":" ws personality-delta ws "," ws "\"long_term_memory\"" ws ":" ws string ws "}"
+root ::= "{" ws "\"reflection\"" ws ":" ws string ws "," ws "\"personality_delta\"" ws ":" ws personality-delta ws "," ws "\"long_term_memory\"" ws ":" ws string ws "," ws "\"today_plan\"" ws ":" ws string ws "}"
 personality-delta ::= "{" ws "\"diligence\"" ws ":" ws delta ws "," ws "\"bravery\"" ws ":" ws delta ws "," ws "\"sociability\"" ws ":" ws delta ws "," ws "\"morality\"" ws ":" ws delta ws "," ws "\"emotional_stability\"" ws ":" ws delta ws "," ws "\"romance\"" ws ":" ws delta ws "}"
 delta ::= "-3" | "-2" | "-1" | "0" | "1" | "2" | "3"
 string ::= "\"" ([^"\\] | "\\" ["\\/bfnrt])* "\""

@@ -77,3 +77,6 @@ poc_archive/poc_planning/transcripts/
 
 # ── 內含機敏資訊（SSH 帳號／IP／port／遠端路徑）的私人筆記，不對外顯示 ──
 note/30-技術架構/遠端 GPU 機器連線與 llama-server 操作手冊.md
+
+# ── 第三方論文/文件（體積大、有著作權，只留本機參考）──────
+town.pdf

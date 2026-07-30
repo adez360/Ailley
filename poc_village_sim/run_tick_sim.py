@@ -83,6 +83,10 @@ STAMINA_LOW_DELTA = -1
 # 「睡滿 8 小時要能回滿」的要求）
 STAMINA_SLEEP_DELTA = 4   # 在自己家睡覺才拿得到這個值
 STAMINA_NAP_DELTA = 1     # 選了「睡覺」但不在自己家——只能打盹
+# 體力耗盡時強制昏睡的恢復量：比自願睡覺少，帶懲罰性質，用意只是保證「睡眠反思」（連帶
+# 「今天想做的事」計畫）一定會有觸發到的機會——2026-07-30 發現部分角色會長期卡在同一個
+# 非睡覺動作、幾乎永遠不會主動選擇睡覺，導致靠「選擇睡覺」觸發的反思機制形同虛設。
+STAMINA_COLLAPSE_RECOVERY = 20
 
 # 攻擊：命中判定 + 雙方各自的代價（2026-07-27 跟使用者討論定案）。命中率是固定值，
 # 不看人格數值——Specify2 §3.1「人格參數不參與任何引擎機率運算，不影響命中率」，
@@ -261,6 +265,7 @@ def run_sleep_reflection(cid: str, villager: dict, today_events_text: str,
         "personality_delta": clamp_personality_delta(out["personality_delta"]),
         "long_term_memory": out["long_term_memory"],
         "importance": importance,
+        "today_plan": out["today_plan"],
     }
 
 
@@ -319,6 +324,7 @@ def decide_for_character(cid: str, tick: int, run_index: int, current_time: str,
         last_action_result=self_state["last_action_result"],
         recent_memory=recent_memory,
         location_list=location_list_str,
+        today_plan=self_state["current_plan"],
     )
     grammar_for_call = build_grammar_for_call(
         grammar, [cast[v["id"]]["name"] for v in visible], location_names
@@ -367,6 +373,7 @@ def run_one_simulation(run_index: int, num_ticks: int, template: str, grammar: s
             "personality": copy.deepcopy(cast[cid]["personality"]),
             "personality_drifted": False,
             "memories": [],
+            "current_plan": "",
             "last_sleep_tick": 0,
             "is_sleeping": False,
             "alive": True,
@@ -532,7 +539,12 @@ def run_one_simulation(run_index: int, num_ticks: int, template: str, grammar: s
             # 不是只要這個 tick 選了睡覺就觸發——2026-07-27 跟使用者討論定案：如果每 tick
             # 都重新觸發，連續睡好幾個 tick 會重複打好幾次反思，而且中間幾乎沒新事件可反思。
             # 也只有在自己家睡才算數（在外面選睡覺只是打盹，不會真的觸發反思）。
-            if valid_sleep and not self_state["is_sleeping"]:
+            # 體力耗盡（<=0）時視為強制昏睡，一樣觸發反思——見 STAMINA_COLLAPSE_RECOVERY
+            # 定義處的說明（2026-07-30）。
+            collapsed = phys["stamina"] <= 0 and not valid_sleep and not self_state["is_sleeping"]
+            if collapsed:
+                phys["stamina"] = clamp(phys["stamina"] + STAMINA_COLLAPSE_RECOVERY)
+            if (valid_sleep and not self_state["is_sleeping"]) or collapsed:
                 today_events_text = build_today_events_text(cid, ticks_log, self_state["last_sleep_tick"], tick)
                 reflection = run_sleep_reflection(
                     cid, live_villager, today_events_text,
@@ -547,8 +559,11 @@ def run_one_simulation(run_index: int, num_ticks: int, template: str, grammar: s
                         "tick": tick, "importance": reflection["importance"],
                         "content": reflection["long_term_memory"],
                     }]
+                    state[cid]["current_plan"] = reflection["today_plan"]
                     state[cid]["last_sleep_tick"] = tick
-                    print(f"[{label}] 睡眠反思：{reflection['reflection']}｜人格變動 {reflection['personality_delta']}")
+                    tag = "（體力耗盡昏睡）" if collapsed else ""
+                    print(f"[{label}] 睡眠反思{tag}：{reflection['reflection']}｜人格變動 {reflection['personality_delta']}｜"
+                          f"今天想做：{reflection['today_plan']}")
             state[cid]["is_sleeping"] = valid_sleep
 
         # --- 換日：重置「今天」集合（Specify2 §7.3 的無聊度減免都是以「今天」為單位）---
