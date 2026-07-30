@@ -171,10 +171,14 @@ def format_time(day: int, hour: int, minute: int) -> str:
     return f"第 {day} 天 {hour:02d}:{minute:02d}（{period}）"
 
 
-def call_llm_with_retry(payload: dict, label: str) -> tuple[dict | None, bool, float]:
+def call_llm_with_retry(payload: dict, label: str) -> tuple[dict | None, bool, float, dict]:
     """沿用 poc_agent_loop/agent_loop.py 的 call_director() 精神：JSON 解析失敗重打一次；
     另外加上連線層級的重試（逾時／SSH tunnel 瞬斷）——跑 30+ tick 的長批次比短批次更容易
-    撞到這種問題，2026-07-28 實測撞過一次沒接住直接讓整支腳本崩潰，這裡補上。"""
+    撞到這種問題，2026-07-28 實測撞過一次沒接住直接讓整支腳本崩潰，這裡補上。
+
+    第四個回傳值 meta 帶 llama-server 回報的 {"truncated", "tokens_evaluated"}——
+    2026-07-30 發現這兩個欄位原本直接被丟棄，代表完全沒有機制能發現 prompt 有沒有因為
+    超過 context 上限被截斷。truncated=True 時立刻印警告，不等呼叫端自己去查。"""
     last_elapsed = 0.0
     for attempt in range(3):
         t0 = time.time()
@@ -187,21 +191,26 @@ def call_llm_with_retry(payload: dict, label: str) -> tuple[dict | None, bool, f
                 time.sleep(3)
                 continue
             print(f"[{label}] 連線錯誤，重試後仍失敗，放棄這次呼叫：{e}")
-            return None, False, last_elapsed
+            return None, False, last_elapsed, {}
         elapsed = time.time() - t0
         if not resp.ok:
             print(f"[{label}] 錯誤 {resp.status_code}: {resp.text}")
-            return None, False, elapsed
-        raw = resp.json().get("content", "")
+            return None, False, elapsed, {}
+        body = resp.json()
+        meta = {"truncated": body.get("truncated"), "tokens_evaluated": body.get("tokens_evaluated")}
+        if meta["truncated"]:
+            print(f"[{label}] ⚠️ 警告：prompt 被 llama-server 截斷了（tokens_evaluated="
+                  f"{meta['tokens_evaluated']}），模型沒有讀到完整內容")
+        raw = body.get("content", "")
         try:
-            return json.loads(raw), True, elapsed
+            return json.loads(raw), True, elapsed, meta
         except json.JSONDecodeError:
             if attempt < 2:
                 print(f"[{label}] JSON 解析失敗，重打一次")
                 continue
             print(f"[{label}] 重打後仍無法解析")
-            return {"parse_error": True, "raw": raw}, False, elapsed
-    return None, False, last_elapsed
+            return {"parse_error": True, "raw": raw}, False, elapsed, meta
+    return None, False, last_elapsed, {}
 
 
 def clamp_personality_delta(delta: dict) -> dict:
@@ -247,7 +256,7 @@ def run_sleep_reflection(cid: str, villager: dict, today_events_text: str,
         "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.0,
         "repeat_last_n": 256, "n_predict": 300, "cache_prompt": True,
     }
-    out, parse_ok, elapsed = call_llm_with_retry(payload, f"{label} 睡眠反思")
+    out, parse_ok, elapsed, _meta = call_llm_with_retry(payload, f"{label} 睡眠反思")
     if not parse_ok:
         print(f"[{label}] 睡眠反思解析失敗，跳過這次反思")
         return None
@@ -257,7 +266,7 @@ def run_sleep_reflection(cid: str, villager: dict, today_events_text: str,
         "prompt": importance_prompt, "grammar": importance_grammar, "n_predict": 20,
         "temperature": 0.7, "top_p": 0.9, "top_k": 40, "cache_prompt": True,
     }
-    imp_out, imp_ok, _ = call_llm_with_retry(importance_payload, f"{label} 重要性評分")
+    imp_out, imp_ok, _, _meta2 = call_llm_with_retry(importance_payload, f"{label} 重要性評分")
     importance = imp_out.get("importance", 5) if imp_ok else 5
 
     return {
@@ -336,11 +345,11 @@ def decide_for_character(cid: str, tick: int, run_index: int, current_time: str,
     }
 
     label = f"run{run_index} tick{tick:02d} {cid}"
-    out, parse_ok, elapsed = call_llm_with_retry(payload, label)
+    out, parse_ok, elapsed, meta = call_llm_with_retry(payload, label)
 
     return {
         "cid": cid, "alive": True, "self_state": self_state, "live_villager": live_villager,
-        "out": out, "parse_ok": parse_ok, "elapsed": elapsed, "label": label,
+        "out": out, "parse_ok": parse_ok, "elapsed": elapsed, "label": label, "meta": meta,
     }
 
 
@@ -419,6 +428,14 @@ def run_one_simulation(run_index: int, num_ticks: int, template: str, grammar: s
                 "tick": tick, "id": cid, "name": villager["name"],
                 "current_time": current_time, "location_before": self_state["location"],
                 "elapsed_sec": round(elapsed, 2), "parse_ok": parse_ok, "output": out,
+                "truncated": decision["meta"].get("truncated"),
+                "tokens_evaluated": decision["meta"].get("tokens_evaluated"),
+                "physiology_before": {
+                    "health": self_state["physiology"]["health"],
+                    "bleeding": self_state["physiology"].get("bleeding", False),
+                    "sprained_ankle": self_state["physiology"].get("sprained_ankle", False),
+                    "money": self_state["physiology"]["money"],
+                },
             }
             ticks_log.append(record)
 

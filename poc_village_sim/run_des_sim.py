@@ -164,12 +164,19 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
                    "top_k": 40, "repeat_penalty": 1.0, "repeat_last_n": 256, "n_predict": 300, "cache_prompt": True}
         tag = "⚡中斷重決" if was_interrupted else ""
         label = f"run{run_index} [{current_time}] {villager['name']}{tag}"
-        out, parse_ok, elapsed = rts.call_llm_with_retry(payload, label)
+        out, parse_ok, elapsed, meta = rts.call_llm_with_retry(payload, label)
 
         events_log.append({
             "event_index": len(events_log), "time": now, "id": cid, "name": villager["name"],
             "current_time": current_time, "location_before": me["location"], "was_interrupted": was_interrupted,
             "elapsed_sec": round(elapsed, 2), "parse_ok": parse_ok, "output": out,
+            "truncated": meta.get("truncated"), "tokens_evaluated": meta.get("tokens_evaluated"),
+            # 決策當下（做這個決定之前）的生理快照——2026-07-30 補上，讓「流血/扭到腳還
+            # 選奔跑」這種硬規則違規可以事後從 transcript 直接稽核，不用重跑一次模擬。
+            "physiology_before": {
+                "health": me["physiology"]["health"], "bleeding": me["physiology"].get("bleeding", False),
+                "sprained_ankle": me["physiology"].get("sprained_ankle", False), "money": me["physiology"]["money"],
+            },
         })
 
         if not parse_ok:

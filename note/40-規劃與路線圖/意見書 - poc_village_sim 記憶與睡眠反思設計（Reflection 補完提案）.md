@@ -1,8 +1,12 @@
 ---
 tags: [ailley, poc, village-sim, memory, reflection, proposal]
-status: draft
+status: implemented
 created: 2026-07-27
+updated: 2026-07-30
 ---
+
+> [!success] 2026-07-30 更新：方案 C 已定案並實作
+> 提案的方案 C 已採用，反思/記憶機制已大量測試（見 [[POC 紀錄 - poc_village_sim 五人整合試跑（新版 AI 架構首測）]]），並在此基礎上進一步加了「反思生成當日計畫」層（`today_plan`），見該筆記「計畫層實測結果」一節。
 
 # 意見書：poc_village_sim 記憶與睡眠反思設計（Reflection 補完提案）
 

@@ -1,8 +1,12 @@
 ---
 tags: [ailley, ai-architecture, proposal, godot-pivot]
-status: draft
+status: done
 created: 2026-07-26
+updated: 2026-07-30
 ---
+
+> [!success] 已核准並執行完畢（2026-07-26）
+> 見本文件第 5、6 節「執行紀錄」，舊 POC 已封存，新架構即 [[POC 紀錄 - poc_village_sim 五人整合試跑（新版 AI 架構首測）|poc_village_sim]]。
 
 # 意見書：新版 AI 架構修正與舊 POC 封存評估
 

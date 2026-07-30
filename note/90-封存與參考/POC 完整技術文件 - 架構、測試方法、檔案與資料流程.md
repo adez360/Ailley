@@ -1,15 +1,19 @@
 ---
-tags: [ailley, poc, architecture, testing, documentation]
-status: in-progress
+tags: [ailley, poc, architecture, testing, documentation, archived]
+status: superseded
 created: 2026-07-24
+updated: 2026-07-30
 ---
 
 # POC 完整技術文件：架構、測試方法、檔案整理、對話資料流程
 
-> [!info] 用途
-> 彙整目前所有 POC 線的架構、驗證方法、檔案組織方式、對話資料的儲存/續寫/篩選機制，作為單一入口文件。細節與逐次實驗紀錄仍以 [[POC 紀錄 - 導演模式 B]]、[[POC 紀錄 - 原 Ailley 多模型互動]]、[[POC 架構總覽與 Generative Agents 論文比對]] 為準，這份文件是「一眼看全貌」用的整理版，不重複貼實驗數據，只做索引與骨架說明。
+> [!danger] 2026-07-30：已被 poc_village_sim 取代，本文件內容為歷史紀錄
+> 本文件描述的「四條自包含的 POC 線」（`poc/`、`poc_mode_a/`、`poc_planning/`、`poc_agent_loop/`）已全部封存（`poc/`、`poc_planning/` 已刪除、搬進 `poc_archive/`；`poc_agent_loop/` 的邏輯被 `poc_village_sim/run_tick_sim.py` 重新實作並改進後取代，見 [[意見書 - 新版 AI 架構修正與舊 POC 封存評估]]）。目前主線的架構文件是 [[POC 檔案地圖 - poc_village_sim 檔案與資料流程]]，逐次實驗紀錄見 [[POC 紀錄 - poc_village_sim 五人整合試跑（新版 AI 架構首測）]]。下面內容保留作歷史參考，**目錄結構與檔案路徑已經過時，不要照著找檔案**。
 
-> [!warning] 分支狀態
+> [!info] 用途（歷史）
+> 彙整當時所有 POC 線的架構、驗證方法、檔案組織方式、對話資料的儲存/續寫/篩選機制，作為單一入口文件。細節與逐次實驗紀錄仍以 [[POC 紀錄 - 導演模式 B]]、[[POC 紀錄 - 原 Ailley 多模型互動]]、[[POC 架構總覽與 Generative Agents 論文比對]] 為準，這份文件是「一眼看全貌」用的整理版，不重複貼實驗數據，只做索引與骨架說明。
+
+> [!warning] 分支狀態（歷史，已過時）
 > 以下內容以主 checkout `/home/neon/Projects/Ailley`、分支 `agent-loop-persistent-memory`（已與 `neon-POC` 對齊）為準。目前這份筆記所在的 worktree（`worktree-lucky-doodling-cray`）是重整前的舊分支，`poc/` 目錄只剩 3 支殘留檔案，**不是**目前的真實狀態，僅供比對參考。
 
 ---
@@ -154,5 +158,5 @@ Ailley/
 - [[POC 紀錄 - 導演模式 B]]——模式 B 全部實驗的逐次紀錄與數據
 - [[POC 紀錄 - 原 Ailley 多模型互動]]——模式 A / Planning / Agent Loop 的可行性評估與擴大規模驗證
 - [[POC 架構總覽與 Generative Agents 論文比對]]——跟 Stanford Generative Agents 論文的元件級落差分析與合併風險評估
-- [[任務交接 - JSON崩潰防禦修復（n_predict 上限）]]——n_predict 修復的原始交接筆記（已完成，`3707ee3`）
+- n_predict 修復的原始交接筆記（已完成，commit `3707ee3`）——對應筆記已不存在於 vault 中，細節僅存於該次 commit
 - [[開放問題與待決策]]——遊戲設計層面的開放問題（跟本文件的技術範疇不同）

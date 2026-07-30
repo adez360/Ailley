@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 import characters as c
+import enums
 import run_tick_sim as rts
 
 POC_DIR = Path(__file__).parent
@@ -37,6 +38,7 @@ RELATIONSHIPS = c.load_relationships()
 HOME_NAMES = [c.home_name(v["name"]) for v in CAST.values()]
 LOCATION_NAMES = rts.SHARED_LOCATIONS + HOME_NAMES
 LOCATION_LIST_STR = "、".join(LOCATION_NAMES)
+NAME_TO_ID = {v["name"]: cid for cid, v in CAST.items()}
 
 # 每個角色「第一次呼叫」各自當自己的相對時間原點（0 秒）——鐵牛跟阿蘭的時間軸互不相干，
 # 不是共用同一條全域時間軸。之後每次呼叫回傳的動作開始戳記＝這個角色前面所有動作時長
@@ -136,9 +138,19 @@ def decide(req: DecideRequest):
             _character_clocks[req.character_id] = 0
         action_start_offset_seconds = _character_clocks.get(req.character_id, 0)
 
-    out, parse_ok, elapsed = rts.call_llm_with_retry(payload, label=f"api {req.character_id}")
+    out, parse_ok, elapsed, meta = rts.call_llm_with_retry(payload, label=f"api {req.character_id}")
     if not parse_ok or out is None:
         raise HTTPException(502, "llama-server 呼叫失敗或回傳內容無法解析成 JSON，請重試")
+
+    # 中文字串（grammar 保證合法）-> 英文代號，給後端/Godot 用型別化的方式驗證跟比對，
+    # 不用在那邊比對中文字串常數。理論上不會失敗（grammar 已經限制過合法值），
+    # ValueError 在這裡代表哪裡的邏輯出了漏洞，要讓它直接暴露成 502，不要悄悄放行。
+    try:
+        action_en = enums.action_to_english(out["intent"]["action"])
+        location = enums.location_to_english(out["intent"]["location"], CAST)
+    except ValueError as e:
+        raise HTTPException(502, f"模型輸出的動作/地點無法對應到已知的英文代號：{e}")
+    target_id = rts.normalize_target(out["intent"]["target"], NAME_TO_ID)
 
     duration_seconds = out["intent"]["duration_ticks"] * TICK_SECONDS
     with _clock_lock:
@@ -149,5 +161,9 @@ def decide(req: DecideRequest):
         "elapsed_seconds": round(elapsed, 2),
         "action_start_offset_seconds": action_start_offset_seconds,
         "action_duration_seconds": duration_seconds,
+        "prompt_truncated": meta.get("truncated"),
+        "action_en": action_en,
+        "location": location,
+        "target_id": target_id,
         "output": out,
     }

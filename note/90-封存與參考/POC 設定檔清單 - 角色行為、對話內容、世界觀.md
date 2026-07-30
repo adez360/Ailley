@@ -1,12 +1,16 @@
 ---
-tags: [ailley, poc, config, characters, worldbuilding, reference]
-status: done
+tags: [ailley, poc, config, characters, worldbuilding, reference, archived]
+status: superseded
 created: 2026-07-24
+updated: 2026-07-30
 ---
 
 # POC 設定檔清單：會影響角色行為、對話內容、世界觀的檔案
 
-> [!info] 用途
+> [!danger] 2026-07-30：對應的舊架構已封存
+> 下面列的 `poc/`、`poc_mode_a/`、`poc_planning/`、`poc_agent_loop/` 四條線已封存刪除（見 [[意見書 - 新版 AI 架構修正與舊 POC 封存評估]]），`FIXED_CAST_RED/BLUE`、`CORE_ENERGY_POOL`、`ALTAR_KEY_NAMES` 這些設定也隨之封存。目前主線 poc_village_sim 的設定檔清單見 [[POC 檔案地圖 - poc_village_sim 檔案與資料流程]]，內容/資料結構完全不同（六維人格＋生理狀態，非紅藍陣營獻祭博弈），本文件保留作歷史參考。
+
+> [!info] 用途（歷史）
 > 整理目前所有 POC 線裡，會實際影響「角色是誰、角色怎麼想、角色講什麼話、世界背景設定」的檔案，方便之後要調整內容時知道該改哪裡。技術架構本身見 [[POC 完整技術文件 - 架構、測試方法、檔案與資料流程]]，這份只聚焦「內容/設定」層面。
 
 ## 一、角色設定（`characters.py`）
@@ -89,7 +93,7 @@ created: 2026-07-24
 - [[世界與時間系統]]——世界觀跟時間機制的設計
 - [[世界觀素材撰寫指南（給組員）]]——世界觀素材撰寫規範，`world_lore.txt` 應該依這份指南維護
 - [[記憶與認知系統]]——記憶流設計的上位文件，對應 `retrieve_memories()` 的實作依據
-- [[資安攻防核心玩法]]——洩漏偵測、機密分層機制的設計依據
+- 洩漏偵測、機密分層機制的設計依據——對應筆記已不存在於 vault 中（可能從未建立或已被整併）
 
 ## 七、一句話總結：要改什麼找什麼
 

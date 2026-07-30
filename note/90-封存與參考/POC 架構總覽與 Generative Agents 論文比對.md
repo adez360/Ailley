@@ -1,12 +1,16 @@
 ---
-tags: [ailley, poc, generative-agents, architecture-review]
-status: in-progress
+tags: [ailley, poc, generative-agents, architecture-review, archived]
+status: superseded
 created: 2026-07-24
+updated: 2026-07-30
 ---
 
 # POC 架構總覽與 Generative Agents 論文比對
 
-> [!info] 用途
+> [!danger] 2026-07-30：分析對象（四條舊 POC 線）已被 poc_village_sim 取代
+> 本文件比對的四條 POC 線已封存（見 [[POC 完整技術文件 - 架構、測試方法、檔案與資料流程]] 的說明），目前主線是 poc_village_sim。這份文件的「跟 Generative Agents 論文比對」內容（記憶/反思/計畫元件落差分析）仍有參考價值——事實上 2026-07-30 poc_village_sim 才剛實作了論文裡的「反思生成計畫」機制（見 [[POC 紀錄 - poc_village_sim 五人整合試跑（新版 AI 架構首測）]] 的「計畫層」相關章節），可以對照著看，但下面提到的具體檔案路徑／目錄結構都已經過時。
+
+> [!info] 用途（歷史）
 > 使用者提供 `town.pdf`（Stanford *Generative Agents: Interactive Simulacra of Human Behavior*, UIST '23），要求整理目前我們手上所有 POC 的架構、跟論文原始架構比對差異，並評估風險與合併問題。背景見 [[POC 紀錄 - 導演模式 B]]、[[POC 紀錄 - 原 Ailley 多模型互動]]。
 
 ## 一、目前 POC 架構完整清單
