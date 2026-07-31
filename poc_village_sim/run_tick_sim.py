@@ -60,6 +60,16 @@ EAT_HUNGER_RELIEF = 40
 DRINK_THIRST_RELIEF = 35
 HEAL_COST = 40  # 治療固定花費，Specify1 §9 範例文字本來就用這個數字
 
+# 貨幣制度：吃飯/喝酒要花錢，表演/採草藥/打獵能賺錢或換成可販售的物品（2026-07-31，
+# 目的是測「有真實經濟代價/誘因之後，動作多樣性會不會改變」——之前吃飯喝酒完全免費、
+# 賣藝/採藥/打獵完全不會真的進帳，角色沒有任何理由要在「維生」跟「賺錢」之間切換）。
+EAT_COST = 6         # 吃飯要花的錢，錢不夠就吃不到（跟治療同邏輯：宣告了但沒效果）
+DRINK_COST = 8       # 喝酒要花的錢
+PERFORM_INCOME = 10  # 表演的賞錢，每次事件固定入帳一次，不隨時長縮放
+GATHER_ITEM = ("藥草", 1)                # 採草藥每次固定拿到的物品
+HUNT_ITEMS = [("獸皮", 1), ("獸肉", 1)]  # 打獵每次固定拿到的物品
+SELL_PRICES = {"獸皮": 15, "獸肉": 8, "藥草": 8}  # 賣東西的收購價；背包裡沒有可賣的東西就白忙一場
+
 # 生命值：流血/重傷持續扣血，藥草鋪治療是「一次性急救 + 之後被動慢慢恢復」，不是瞬間全滿
 # （2026-07-27 跟使用者討論定案）
 BLEEDING_HEALTH_DELTA = -1
@@ -128,6 +138,31 @@ def stamina_delta(action: str) -> int:
     if action in STAMINA_MID:
         return STAMINA_MID_DELTA
     return STAMINA_LOW_DELTA
+
+
+def add_inventory_item(phys: dict, item_name: str, qty: int = 1, note: str | None = None) -> None:
+    """背包裡已經有同名物品就疊加數量，沒有就新增一筆——採草藥／打獵拿到東西時用。"""
+    for entry in phys["inventory"]:
+        if entry["item"] == item_name:
+            entry["qty"] += qty
+            return
+    phys["inventory"].append({"item": item_name, "qty": qty, "note": note})
+
+
+def sell_one_item(phys: dict, sell_prices: dict) -> tuple[str | None, int]:
+    """賣掉背包裡第一個「有收購價」的物品（qty -1，見底就整筆移除），回傳
+    (賣了什麼, 賣了多少錢)；背包裡沒有可賣的東西就回傳 (None, 0)，白忙一場——
+    grammar 沒有「要賣哪一項」這個欄位，`intent.action="賣東西"` 沒有指定物品，
+    引擎自己挑第一個可賣的，符合「LLM 有意圖權、引擎有結果權」的原則。"""
+    for entry in phys["inventory"]:
+        if entry["item"] in sell_prices:
+            entry["qty"] -= 1
+            price = sell_prices[entry["item"]]
+            item_name = entry["item"]
+            if entry["qty"] <= 0:
+                phys["inventory"].remove(entry)
+            return item_name, price
+    return None, 0
 
 
 def clamp(value: int, lo: int = 0, hi: int = 100) -> int:
@@ -485,10 +520,23 @@ def run_one_simulation(run_index: int, num_ticks: int, template: str, grammar: s
             else:
                 phys["stamina"] = clamp(phys["stamina"] + stamina_delta(action))
 
-            if action == "吃飯":
+            if action == "吃飯" and phys["money"] >= EAT_COST:
+                phys["money"] -= EAT_COST
                 phys["hunger"] = clamp(phys["hunger"] - EAT_HUNGER_RELIEF)
-            if action == "喝酒":
+            if action == "喝酒" and phys["money"] >= DRINK_COST:
+                phys["money"] -= DRINK_COST
                 phys["thirst"] = clamp(phys["thirst"] - DRINK_THIRST_RELIEF)
+            if action == "表演":
+                phys["money"] += PERFORM_INCOME
+            if action == "採草藥":
+                add_inventory_item(phys, *GATHER_ITEM)
+            if action == "打獵":
+                for item_name, qty in HUNT_ITEMS:
+                    add_inventory_item(phys, item_name, qty)
+            if action == "賣東西":
+                sold_item, price = sell_one_item(phys, SELL_PRICES)
+                if sold_item:
+                    phys["money"] += price
             if action == "治療" and new_location == "藥草鋪" and phys["money"] >= HEAL_COST:
                 phys["money"] -= HEAL_COST
                 phys["health"] = clamp(phys["health"] + HEAL_IMMEDIATE_BONUS)

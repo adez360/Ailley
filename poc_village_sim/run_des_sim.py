@@ -195,7 +195,7 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
 
         print(f"[{label}] {action}（{duration}分）{f'-> {target_name}' if target_name else ''} "
               f"@{new_location} [{emotion}] 血{phys['health']:.0f} 飢{phys['hunger']:.0f} "
-              f"力{phys['stamina']:.0f} 悶{phys['boredom']:.0f} {elapsed:.2f}s")
+              f"力{phys['stamina']:.0f} 悶{phys['boredom']:.0f} 錢{phys['money']:.0f} {elapsed:.2f}s")
 
         # --- 生理數值：重用 rts 的每-tick 公式，依 duration 換算成幾個 15 分鐘份反覆套用 ---
         sub_ticks = max(1, round(duration / rts.TICK_MINUTES))
@@ -212,10 +212,45 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
                 phys["stamina"] = rts.clamp(phys["stamina"] + rts.random.randint(*rts.ATTACK_SELF_STAMINA_DELTA_RANGE))
             else:
                 phys["stamina"] = rts.clamp(phys["stamina"] + rts.stamina_delta(action))
-        if action == "吃飯":
+
+        # --- 體力耗盡：強制送回家昏睡，直到體力回到 30 為止（用「在家睡覺」的正常恢復
+        # 速率累加，不是原地打個盹）——2026-07-31 改版，取代原本「原地固定 +20」的簡化
+        # 版本。這段會整個覆蓋掉這個角色這次事件原本要做的事：他還沒撐到宣告的動作完成
+        # 就先昏過去了，所以連地點、動作、對象都改成「睡覺／在家／沒有對象」。---
+        was_collapsed = phys["stamina"] <= 0 and not valid_sleep
+        if was_collapsed:
+            ticks_needed = max(1, -(-(30 - phys["stamina"]) // rts.STAMINA_SLEEP_DELTA))  # 向上取整
+            for _ in range(ticks_needed):
+                phys["hunger"] = rts.clamp(phys["hunger"] + rts.HUNGER_PER_TICK)
+                phys["thirst"] = rts.clamp(phys["thirst"] + rts.THIRST_PER_TICK)
+                phys["stamina"] = rts.clamp(phys["stamina"] + rts.STAMINA_SLEEP_DELTA)
+            sub_ticks = ticks_needed
+            duration = ticks_needed * rts.TICK_MINUTES
+            action = "睡覺"
+            new_location = self_home
+            target_id = None
+            target_name = None
+            valid_sleep = True
+            print(f"    💤 體力耗盡昏睡：{villager['name']} 被送回{self_home}，"
+                  f"強制昏睡 {duration} 分鐘直到體力回到 {phys['stamina']}")
+
+        if action == "吃飯" and phys["money"] >= rts.EAT_COST:
+            phys["money"] -= rts.EAT_COST
             phys["hunger"] = rts.clamp(phys["hunger"] - rts.EAT_HUNGER_RELIEF)
-        if action == "喝酒":
+        if action == "喝酒" and phys["money"] >= rts.DRINK_COST:
+            phys["money"] -= rts.DRINK_COST
             phys["thirst"] = rts.clamp(phys["thirst"] - rts.DRINK_THIRST_RELIEF)
+        if action == "表演":
+            phys["money"] += rts.PERFORM_INCOME
+        if action == "採草藥":
+            rts.add_inventory_item(phys, *rts.GATHER_ITEM)
+        if action == "打獵":
+            for item_name, qty in rts.HUNT_ITEMS:
+                rts.add_inventory_item(phys, item_name, qty)
+        if action == "賣東西":
+            sold_item, price = rts.sell_one_item(phys, rts.SELL_PRICES)
+            if sold_item:
+                phys["money"] += price
         if action == "治療" and new_location == "藥草鋪" and phys["money"] >= rts.HEAL_COST:
             phys["money"] -= rts.HEAL_COST
             phys["health"] = rts.clamp(phys["health"] + rts.HEAL_IMMEDIATE_BONUS)
@@ -292,13 +327,11 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
         me["last_declaration"] = {"time": now, "action": action, "target_id": target_id, "speech": out["speech"]}
 
         # --- 睡眠反思：只在「一段連續睡眠的第一個事件」觸發一次（跟 run_tick_sim.py 同邏輯）；
-        # 體力耗盡（<=0）時視為強制昏睡，一樣觸發反思——2026-07-30 發現部分角色幾乎永遠不會
-        # 主動選擇睡覺，靠「選擇睡覺」觸發反思的機制對他們形同虛設，補這條路保底一定會有
-        # 觸發到的機會，同時給一次比自願睡覺少的體力恢復（帶懲罰性質）。---
-        collapsed = phys["stamina"] <= 0 and not valid_sleep and not me["is_sleeping"]
-        if collapsed:
-            phys["stamina"] = rts.clamp(phys["stamina"] + rts.STAMINA_COLLAPSE_RECOVERY)
-        if (valid_sleep and not me["is_sleeping"]) or collapsed:
+        # 體力耗盡強制昏睡（見上面的 was_collapsed 區塊，已經把 action/location 都改成
+        # 「睡覺／在家」，這裡的 valid_sleep 自然是 True，不用再另外判斷一次）——2026-07-30
+        # 發現部分角色幾乎永遠不會主動選擇睡覺，靠「選擇睡覺」觸發的反思機制對他們形同
+        # 虛設，補這條路保底一定會有觸發到的機會。---
+        if valid_sleep and not me["is_sleeping"]:
             today_events_text = rts.build_today_events_text(
                 cid,
                 [{"tick": e["event_index"], "id": e["id"], "current_time": e["current_time"],
@@ -320,7 +353,7 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
                 })
                 me["current_plan"] = reflection["today_plan"]
                 me["last_sleep_event"] = len(events_log) - 1
-                tag = "（體力耗盡昏睡）" if collapsed else ""
+                tag = "（體力耗盡昏睡）" if was_collapsed else ""
                 print(f"[{label}] 睡眠反思{tag}：{reflection['reflection']}｜人格變動 {reflection['personality_delta']}｜"
                       f"今天想做：{reflection['today_plan']}")
         me["is_sleeping"] = valid_sleep
