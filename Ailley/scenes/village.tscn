@@ -141,7 +141,7 @@ target_desired_distance = 4.0
 radius = 8.0
 
 [node name="Villager" parent="." instance=ExtResource("1_0gn7g")]
-position = Vector2(-54, 119)
+position = Vector2(-105, 172)
 
 [node name="Villager2" parent="." instance=ExtResource("1_0gn7g")]
 position = Vector2(790, 201)
