@@ -32,22 +32,7 @@ func load_schedule():
 		print("找不到：", villager_id)
 		return
 	schedule = npc["schedule"]
-#	var file = FileAccess.open(
-#		"res://data/npc_schedule.json",
-#		FileAccess.READ
-#	)
-#	if file == null:
-#		print("找不到 JSON")
-#		return
-#	var json_text = file.get_as_text()
-#	file.close()
-#	var data = JSON.parse_string(json_text)
-#	for npc in data["villagers"]:
-#		if npc["id"] == villager_id:
-#			print(villager_id, " 找到自己的資料")
-#			go_to(npc["target"])
-#			schedule = npc["schedule"]
-#			break
+
 
 func _ready():
 #	print("我是", villager_id)
@@ -59,6 +44,7 @@ func _ready():
 	on_time_changed(GameClock.hour, GameClock.minute)
 	add_to_group("villagers")
 	bubble.say("你好！")
+#	bubble.say("今天先去餐廳吃飯再去工作！")
 
 func update_animation():	# 控制移動時動畫的function
 	# 沒有移動

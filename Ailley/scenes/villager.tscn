@@ -5,8 +5,8 @@
 [ext_resource type="Script" uid="uid://bqg4toi3fmmw8" path="res://scripts/npc/state_machine.gd" id="2_oyvfc"]
 [ext_resource type="Script" uid="uid://cvutqhe1h8q2m" path="res://scripts/npc/needs.gd" id="3_d3qop"]
 [ext_resource type="Texture2D" uid="uid://b4byn4agp2182" path="res://assets/characters/16x16 Walk-Sheet.png" id="3_jgxhb"]
-[ext_resource type="Script" uid="uid://ckgq8iwkkonav" path="res://scripts/bubble.gd" id="6_dchh6"]
-[ext_resource type="Texture2D" uid="uid://ckr7o6b5icaq5" path="res://assets/unuse/Bubble_tail.png" id="7_dchh6"]
+[ext_resource type="Script" uid="uid://c45nacs1x4w1l" path="res://scripts/bubble.gd" id="6_dchh6"]
+[ext_resource type="Texture2D" uid="uid://c3ef6v8ucb6rg" path="res://assets/unuse/Bubble_Box (2).png" id="7_ha15j"]
 
 [sub_resource type="NoiseTexture2D" id="NoiseTexture2D_pun4h"]
 
@@ -368,21 +368,21 @@ script = ExtResource("3_d3qop")
 [node name="NavigationAgent2D" type="NavigationAgent2D" parent="."]
 
 [node name="Bubble" type="Node2D" parent="."]
-position = Vector2(0, -40)
+visible = false
+position = Vector2(0, -36)
 script = ExtResource("6_dchh6")
 
 [node name="BubbleBox" type="NinePatchRect" parent="Bubble"]
-offset_left = -60.0
-offset_top = -5.0
-offset_right = 60.0
-offset_bottom = 43.0
-texture = ExtResource("7_dchh6")
+offset_left = -32.0
+offset_right = 32.0
+offset_bottom = 36.0
+texture = ExtResource("7_ha15j")
 patch_margin_left = 4
 patch_margin_top = 4
 patch_margin_right = 4
 patch_margin_bottom = 4
 
-[node name="BubbleLabel" type="Label" parent="Bubble/BubbleBox"]
+[node name="Label" type="Label" parent="Bubble/BubbleBox"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -392,11 +392,5 @@ grow_vertical = 2
 theme_override_colors/font_color = Color(0, 0, 0, 1)
 horizontal_alignment = 1
 vertical_alignment = 1
-autowrap_mode = 2
-
-[node name="Tail" type="Sprite2D" parent="Bubble"]
-visible = false
-texture = ExtResource("7_dchh6")
-offset = Vector2(42, 37.5)
 
 [connection signal="state_changed" from="StateMachine" to="." method="_on_state_machine_state_changed"]
