@@ -127,11 +127,7 @@ def decide(req: DecideRequest):
     grammar_for_call = rts.build_grammar_for_call(
         GRAMMAR, [CAST[v.id]["name"] for v in req.visible], LOCATION_NAMES
     )
-    payload = {
-        "prompt": prompt, "grammar": grammar_for_call, "temperature": 0.7,
-        "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.0,
-        "repeat_last_n": 256, "n_predict": 300, "cache_prompt": True,
-    }
+    payload = rts.build_llm_payload(prompt, grammar_for_call)
 
     with _clock_lock:
         if req.reset_clock:

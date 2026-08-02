@@ -206,32 +206,85 @@ def format_time(day: int, hour: int, minute: int) -> str:
     return f"第 {day} 天 {hour:02d}:{minute:02d}（{period}）"
 
 
+EXTRA_SAMPLING_PARAMS: dict = {}
+# 給實驗用的採樣參數覆蓋層，預設空字典＝完全不影響現有行為。測試腳本可以在呼叫
+# run_one_simulation() 之前設定 rts.EXTRA_SAMPLING_PARAMS = {"dry_multiplier": 0.8}
+# 這種東西，call_llm_with_retry() 會在送出前 merge 進 payload。
+
+
+def build_llm_payload(prompt: str, grammar: str, **overrides) -> dict:
+    """所有跟 llama-server /completion 溝通的呼叫都用這支組 payload——之前
+    run_tick_sim.py／run_des_sim.py／server.py／睡眠反思／重要性評分五個地方各自
+    複製貼上同一組採樣參數，改一個參數（例如這次測 DRY sampler）要改五個地方，
+    這裡收成一個函式，只有一個地方要改（2026-07-31）。`overrides` 蓋掉預設值，
+    例如重要性評分要用 `n_predict=20`：`build_llm_payload(p, g, n_predict=20)`。"""
+    payload = {
+        "prompt": prompt, "grammar": grammar, "temperature": 0.7,
+        "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.0,
+        "repeat_last_n": 256, "n_predict": 300, "cache_prompt": True,
+    }
+    payload.update(overrides)
+    return payload
+
+
+CONNECTION_RETRY_MAX_BACKOFF = 30  # 秒，連線層級重試的等待上限（指數成長但封頂）
+
+
 def call_llm_with_retry(payload: dict, label: str) -> tuple[dict | None, bool, float, dict]:
     """沿用 poc_agent_loop/agent_loop.py 的 call_director() 精神：JSON 解析失敗重打一次；
     另外加上連線層級的重試（逾時／SSH tunnel 瞬斷）——跑 30+ tick 的長批次比短批次更容易
     撞到這種問題，2026-07-28 實測撞過一次沒接住直接讓整支腳本崩潰，這裡補上。
 
+    2026-07-31 修正：**連線層級的問題（連不上／HTTP 非 200）改成無限重試**，不是原本
+    的「試 3 次就放棄」——筆電會睡眠、SSH 隧道會斷線是這幾天實測撞過好幾次的真實情況，
+    隧道斷線可能要等使用者醒來手動重連，3 次重試（10 幾秒）根本撐不過這種空窗期，撞到
+    就會把整批測試燒成一堆失敗記錄。改成連線問題無限等待、指數退避封頂在
+    `CONNECTION_RETRY_MAX_BACKOFF` 秒，隧道接回來就會自動繼續跑，不用重跑整批。
+    **JSON 解析失敗維持原本「試 3 次」的有限重試**——這是模型輸出品質的問題，不是連線
+    問題，無限重試沒有意義。
+
     第四個回傳值 meta 帶 llama-server 回報的 {"truncated", "tokens_evaluated"}——
     2026-07-30 發現這兩個欄位原本直接被丟棄，代表完全沒有機制能發現 prompt 有沒有因為
     超過 context 上限被截斷。truncated=True 時立刻印警告，不等呼叫端自己去查。"""
-    last_elapsed = 0.0
-    for attempt in range(3):
-        t0 = time.time()
-        try:
-            resp = requests.post(SERVER_URL, json=payload, timeout=120)
-        except requests.exceptions.RequestException as e:
-            last_elapsed = time.time() - t0
-            if attempt < 2:
-                print(f"[{label}] 連線錯誤（{e}），3 秒後重試")
-                time.sleep(3)
+    if EXTRA_SAMPLING_PARAMS:
+        payload = {**payload, **EXTRA_SAMPLING_PARAMS}
+
+    def _post_until_connected() -> tuple[dict, float]:
+        """連線層級：無限重試、指數退避封頂，直到真的連上、拿到 HTTP 200 為止。"""
+        backoff = 3
+        connection_attempt = 0
+        while True:
+            connection_attempt += 1
+            t0 = time.time()
+            try:
+                resp = requests.post(SERVER_URL, json=payload, timeout=120)
+            except requests.exceptions.RequestException as e:
+                print(f"[{label}] 連線錯誤（第 {connection_attempt} 次，{e}），{backoff} 秒後重試")
+                time.sleep(backoff)
+                backoff = min(backoff * 2, CONNECTION_RETRY_MAX_BACKOFF)
                 continue
-            print(f"[{label}] 連線錯誤，重試後仍失敗，放棄這次呼叫：{e}")
-            return None, False, last_elapsed, {}
-        elapsed = time.time() - t0
-        if not resp.ok:
-            print(f"[{label}] 錯誤 {resp.status_code}: {resp.text}")
-            return None, False, elapsed, {}
-        body = resp.json()
+            elapsed = time.time() - t0
+            # 4xx 是請求內容本身的問題（例如 prompt 超過 n_ctx 導致 400
+            # exceed_context_size_error）——同一份 payload 重打還是會一樣的錯，2026-07-31
+            # 實測撞到「同一個必定失敗的請求被無限重試」的迴圈，這種要立刻放棄，不能
+            # 當連線問題無限等。只有 5xx（伺服器端暫時性問題）才跟連線錯誤一樣繼續重試。
+            if 400 <= resp.status_code < 500:
+                print(f"[{label}] HTTP {resp.status_code}（請求內容問題，不重試）：{resp.text[:300]}")
+                return None, elapsed
+            if not resp.ok:
+                print(f"[{label}] HTTP 錯誤 {resp.status_code}（第 {connection_attempt} 次）："
+                      f"{resp.text[:200]}，{backoff} 秒後重試")
+                time.sleep(backoff)
+                backoff = min(backoff * 2, CONNECTION_RETRY_MAX_BACKOFF)
+                continue
+            return resp.json(), elapsed
+
+    last_elapsed, meta, raw = 0.0, {}, ""
+    for attempt in range(3):
+        body, elapsed = _post_until_connected()
+        last_elapsed = elapsed
+        if body is None:
+            return {"parse_error": True, "raw": "", "http_error": True}, False, elapsed, {}
         meta = {"truncated": body.get("truncated"), "tokens_evaluated": body.get("tokens_evaluated")}
         if meta["truncated"]:
             print(f"[{label}] ⚠️ 警告：prompt 被 llama-server 截斷了（tokens_evaluated="
@@ -244,8 +297,7 @@ def call_llm_with_retry(payload: dict, label: str) -> tuple[dict | None, bool, f
                 print(f"[{label}] JSON 解析失敗，重打一次")
                 continue
             print(f"[{label}] 重打後仍無法解析")
-            return {"parse_error": True, "raw": raw}, False, elapsed, meta
-    return None, False, last_elapsed, {}
+    return {"parse_error": True, "raw": raw}, False, last_elapsed, meta
 
 
 def clamp_personality_delta(delta: dict) -> dict:
@@ -286,21 +338,14 @@ def run_sleep_reflection(cid: str, villager: dict, today_events_text: str,
         .replace("{{SELF_PERSONALITY_BLOCK}}", c.render_personality_block(villager))
         .replace("{{TODAY_EVENTS_BLOCK}}", today_events_text)
     )
-    payload = {
-        "prompt": prompt, "grammar": reflection_grammar, "temperature": 0.7,
-        "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.0,
-        "repeat_last_n": 256, "n_predict": 300, "cache_prompt": True,
-    }
+    payload = build_llm_payload(prompt, reflection_grammar)
     out, parse_ok, elapsed, _meta = call_llm_with_retry(payload, f"{label} 睡眠反思")
     if not parse_ok:
         print(f"[{label}] 睡眠反思解析失敗，跳過這次反思")
         return None
 
     importance_prompt = _IMPORTANCE_PROMPT_TEMPLATE.format(content=out["long_term_memory"])
-    importance_payload = {
-        "prompt": importance_prompt, "grammar": importance_grammar, "n_predict": 20,
-        "temperature": 0.7, "top_p": 0.9, "top_k": 40, "cache_prompt": True,
-    }
+    importance_payload = build_llm_payload(importance_prompt, importance_grammar, n_predict=20)
     imp_out, imp_ok, _, _meta2 = call_llm_with_retry(importance_payload, f"{label} 重要性評分")
     importance = imp_out.get("importance", 5) if imp_ok else 5
 
@@ -373,11 +418,7 @@ def decide_for_character(cid: str, tick: int, run_index: int, current_time: str,
     grammar_for_call = build_grammar_for_call(
         grammar, [cast[v["id"]]["name"] for v in visible], location_names
     )
-    payload = {
-        "prompt": prompt, "grammar": grammar_for_call, "temperature": 0.7,
-        "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.0,
-        "repeat_last_n": 256, "n_predict": 300, "cache_prompt": True,
-    }
+    payload = build_llm_payload(prompt, grammar_for_call)
 
     label = f"run{run_index} tick{tick:02d} {cid}"
     out, parse_ok, elapsed, meta = call_llm_with_retry(payload, label)

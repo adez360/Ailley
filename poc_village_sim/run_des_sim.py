@@ -26,6 +26,7 @@ note/40-規劃與路線圖/POC 紀錄 - poc_village_sim 五人整合試跑（新
 import copy
 import heapq
 import json
+import re
 import sys
 import time
 from datetime import datetime
@@ -34,7 +35,9 @@ from pathlib import Path
 POC_DIR = Path(__file__).parent
 sys.path.insert(0, str(POC_DIR))
 import characters as c
+import enums
 import run_tick_sim as rts  # 重用已驗證的常數與函式，不重新發明
+import requests
 
 TRANSCRIPT_DIR = POC_DIR / "transcripts"
 START_DAY, START_HOUR, START_MINUTE = 3, 19, 40
@@ -57,6 +60,131 @@ INTERRUPTIBLE_TRIGGER_ACTIONS = rts.WITNESS_WORTHY_ACTIONS
 LOCATION_CHANGING_ACTIONS = {"移動", "奔跑"}
 # 安全上限，避免卡迴圈情境下無限跑下去（DES 沒有固定 tick 數可以當終止條件）
 MAX_EVENTS_SAFETY_CAP = 400
+
+# 實驗開關：拿掉 GBNF grammar 硬約束，改用 prompt-based JSON + 事後驗證重試——
+# 2026-07-31，驗證「grammar 本身會不會強化重複鎖定」這個假設用。預設 True＝正式行為
+# 完全不受影響，只有測試腳本手動設成 False 才會切換路徑。
+USE_GRAMMAR = True
+
+_NO_GRAMMAR_JSON_INSTRUCTION = (
+    "\n\n【格式要求（這次測試不掛 grammar，靠你自己遵守，不是引擎硬約束）】\n"
+    "只能輸出一個 JSON 物件，不要有任何 JSON 以外的文字、不要用 markdown code fence。"
+    "欄位跟型別：\n"
+    '{"emotion": "8選1英文字串", "intent": {"action": "從允許清單選一個中文字串",'
+    ' "duration_minutes": 整數, "target": "字串或null", "location": "從允許清單選一個中文字串"},'
+    ' "inner_monologue": "字串", "speech": "字串或null", "speech_volume": "normal/shout/whisper"}'
+)
+_VALID_ACTIONS = {a.value for a in enums.Action}
+_VALID_EMOTIONS = {"excited","happy","in_love","terrified","burnout","angry","sad","neutral"}
+
+
+def _extract_first_json(text: str) -> str | None:
+    """手動抓「第一個大括號配對平衡」的 JSON 物件字串，不是貪婪正則——沒有 grammar
+    約束時模型可能停不下來、連續吐好幾個 JSON，貪婪正則會把好幾個黏在一起解析失敗。"""
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
+def call_llm_no_grammar_with_retry(prompt: str, label: str, location_names: list, visible_names: set) -> tuple[dict | None, bool, float]:
+    """跟 rts.call_llm_with_retry() 平行的版本，差異：不帶 grammar 欄位，額外做
+    action/location/target 的語意合法性驗證（grammar 版本靠硬約束保證合法，這裡沒有
+    這層保護，要自己檢查，不合法就當作解析失敗重試）。
+
+    2026-07-31：連線層級的問題（連不上／HTTP 非 200）改成無限重試＋指數退避封頂，理由
+    跟 rts.call_llm_with_retry() 同一節註解——筆電睡眠、隧道斷線可能要等很久才重連，
+    3 次重試撐不住，會把整批測試燒成失敗記錄。內容驗證失敗（JSON/欄位不合法）維持
+    有限重試。"""
+    payload = {
+        "prompt": prompt + _NO_GRAMMAR_JSON_INSTRUCTION, "temperature": 0.7, "top_p": 0.9,
+        "top_k": 40, "repeat_penalty": 1.0, "repeat_last_n": 256, "n_predict": 400, "cache_prompt": True,
+    }
+
+    def _post_until_connected() -> tuple[dict, float]:
+        backoff = 3
+        connection_attempt = 0
+        while True:
+            connection_attempt += 1
+            t0 = time.time()
+            try:
+                resp = requests.post(rts.SERVER_URL, json=payload, timeout=120)
+            except requests.exceptions.RequestException as e:
+                print(f"[{label}] 連線錯誤（第 {connection_attempt} 次，{e}），{backoff} 秒後重試")
+                time.sleep(backoff)
+                backoff = min(backoff * 2, rts.CONNECTION_RETRY_MAX_BACKOFF)
+                continue
+            elapsed = time.time() - t0
+            # 4xx 是請求內容本身的問題（prompt 超過 n_ctx 之類），同一份 payload 重打
+            # 還是會一樣的錯，不能當連線問題無限等——2026-07-31 實測撞到過。
+            if 400 <= resp.status_code < 500:
+                print(f"[{label}] HTTP {resp.status_code}（請求內容問題，不重試）：{resp.text[:300]}")
+                return None, elapsed
+            if not resp.ok:
+                print(f"[{label}] HTTP 錯誤 {resp.status_code}（第 {connection_attempt} 次）："
+                      f"{resp.text[:200]}，{backoff} 秒後重試")
+                time.sleep(backoff)
+                backoff = min(backoff * 2, rts.CONNECTION_RETRY_MAX_BACKOFF)
+                continue
+            return resp.json(), elapsed
+
+    last_elapsed = 0.0
+    for attempt in range(5):
+        body, elapsed = _post_until_connected()
+        last_elapsed = elapsed
+        if body is None:
+            return None, False, elapsed
+        raw = body.get("content", "")
+        if not raw:
+            print(f"[{label}] content 是空的，重試")
+            continue
+        json_str = _extract_first_json(raw)
+        if not json_str:
+            print(f"[{label}] 找不到 JSON，重試")
+            continue
+        try:
+            out = json.loads(json_str)
+        except json.JSONDecodeError:
+            print(f"[{label}] JSON 解析失敗，重試")
+            continue
+        if out.get("emotion") not in _VALID_EMOTIONS:
+            print(f"[{label}] emotion 不合法：{out.get('emotion')}，重試")
+            continue
+        intent = out.get("intent", {})
+        if intent.get("action") not in _VALID_ACTIONS:
+            print(f"[{label}] action 不合法：{intent.get('action')}，重試")
+            continue
+        if intent.get("location") not in location_names:
+            print(f"[{label}] location 不合法：{intent.get('location')}，重試")
+            continue
+        target = intent.get("target")
+        if target is not None and target not in visible_names:
+            print(f"[{label}] target 不合法（幻覺出視野外的人）：{target}，重試")
+            continue
+        return out, True, elapsed
+    return None, False, last_elapsed
 
 
 def total_minutes_to_time(total_minutes: int) -> tuple[str, int]:
@@ -157,14 +285,18 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
             recent_memory=recent_memory, location_list=location_list_str, today_plan=me["current_plan"],
         ) + DURATION_INSTRUCTION
 
-        grammar_for_call = rts.build_grammar_for_call(
-            grammar, [cast[v["id"]]["name"] for v in visible], location_names
-        )
-        payload = {"prompt": prompt, "grammar": grammar_for_call, "temperature": 0.7, "top_p": 0.9,
-                   "top_k": 40, "repeat_penalty": 1.0, "repeat_last_n": 256, "n_predict": 300, "cache_prompt": True}
         tag = "⚡中斷重決" if was_interrupted else ""
         label = f"run{run_index} [{current_time}] {villager['name']}{tag}"
-        out, parse_ok, elapsed, meta = rts.call_llm_with_retry(payload, label)
+        if USE_GRAMMAR:
+            grammar_for_call = rts.build_grammar_for_call(
+                grammar, [cast[v["id"]]["name"] for v in visible], location_names
+            )
+            payload = rts.build_llm_payload(prompt, grammar_for_call)
+            out, parse_ok, elapsed, meta = rts.call_llm_with_retry(payload, label)
+        else:
+            visible_names = {cast[v["id"]]["name"] for v in visible}
+            out, parse_ok, elapsed = call_llm_no_grammar_with_retry(prompt, label, location_names, visible_names)
+            meta = {}
 
         events_log.append({
             "event_index": len(events_log), "time": now, "id": cid, "name": villager["name"],
@@ -185,7 +317,14 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
             continue
 
         action = out["intent"]["action"]
-        duration = out["intent"]["duration_minutes"]
+        # 正常 grammar 版本靠 duration ::= [1-9][0-9]?[0-9]? 保證一定是合法整數；無grammar
+        # 模式沒有這層保護，模型可能填出 0.5 這種小數、字串、甚至漏填，一路傳到
+        # advance_time() 的除法運算會讓 format_time() 收到浮點數的 minute，":02d" 格式化
+        # 直接炸掉（2026-07-31 實測撞到）——這裡強制轉成至少 1 的整數，轉不了就當 15 分鐘。
+        try:
+            duration = max(1, round(float(out["intent"]["duration_minutes"])))
+        except (TypeError, ValueError, KeyError):
+            duration = 15
         new_location = out["intent"]["location"]
         target_name = out["intent"]["target"]
         target_id = rts.normalize_target(target_name, name_to_id)
