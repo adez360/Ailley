@@ -1,26 +1,41 @@
 extends Node2D
 
-@onready var box = $BubbleBox
-@onready var label = $BubbleBox/BubbleLabel
-@onready var tail = $Tail
+# 一行最大字數 10 個字
+const MAX_CHAR := 10
+const BOX_HEIGHT := 36
+const PADDING_X := 24
+const MIN_WIDTH := 48
 
-func say(text:String, duration:=2.5):
+@onready var box: NinePatchRect = $BubbleBox
+@onready var label: Label = $BubbleBox/Label
 
-	label.text = text
+func _ready():
+	visible = false
 
-	# 固定大小（先不要自動縮放）
-	box.size = Vector2(120, 48)
+func say(message:String, duration := 2.0):
+	if message.length() > MAX_CHAR:
+		message = message.left(MAX_CHAR) + "……"
 
-	# 讓 BubbleBox 置中在 NPC 頭上
-	box.position = Vector2(
-		-box.size.x / 2,
-		0
+	label.text = message
+
+	await get_tree().process_frame
+
+	# 取得 Label 實際需要的尺寸
+	var text_size = label.get_minimum_size()
+
+	var bubble_width = max(
+		text_size.x + PADDING_X,
+		MIN_WIDTH
 	)
 
-	# Tail 放在右下角
-	tail.position = Vector2(
-		box.position.x + box.size.x - 8,
-		box.position.y + box.size.y - 2
+	box.size = Vector2(
+		bubble_width,
+		BOX_HEIGHT
+	)
+	
+	box.position = Vector2(
+		-bubble_width / 2,
+		0
 	)
 
 	visible = true
