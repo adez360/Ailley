@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=4 uid="uid://b7jh15atkxvyq"]
+[gd_scene load_steps=12 format=4 uid="uid://b7jh15atkxvyq"]
 
 [ext_resource type="PackedScene" uid="uid://bpwua8hjipg04" path="res://scenes/villager.tscn" id="1_0gn7g"]
 [ext_resource type="Script" uid="uid://bqg4toi3fmmw8" path="res://scripts/npc/state_machine.gd" id="1_cg6vk"]
@@ -122,6 +122,9 @@ vertices = PackedVector2Array(-296.17188, 285.57813, -293.15625, 473.75, -378.60
 polygons = Array[PackedInt32Array]([PackedInt32Array(0, 1, 2, 3), PackedInt32Array(4, 0, 3, 5, 6), PackedInt32Array(6, 7, 8, 4), PackedInt32Array(9, 6, 5), PackedInt32Array(10, 11, 12, 13), PackedInt32Array(14, 15, 16, 9, 5), PackedInt32Array(14, 5, 17), PackedInt32Array(18, 14, 17, 13), PackedInt32Array(18, 13, 12, 19), PackedInt32Array(20, 21, 18, 22), PackedInt32Array(22, 18, 19), PackedInt32Array(23, 22, 19), PackedInt32Array(23, 19, 24, 25)])
 outlines = Array[PackedVector2Array]([PackedVector2Array(-389, 481.94983, -283, 483.94983, -286, 295.94983, -88, 302.94983, -90, 474.94983, 458, 477.94983, 456, 272.94983, 794, 270.94983, 794, 479.94983, 916, 480.94983, 918, -197.05017, -364, -189.05017, -365, 29.94983, -154, 30.94983, -149, -155.05017, -108, -149.05017, -106, 33.94983, 162, 33.94983, 164, -154.05017, 235, -153.05017, 232, 33.94983, 689, 35.94983, 688, -158.05017, 803, -159.05017, 797, 123.94983, -375, 121.94983)])
 
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_agvku"]
+size = Vector2(33.3125, 400.40625)
+
 [node name="Village" type="Node2D"]
 position = Vector2(300, 200)
 script = ExtResource("1_cg6vk")
@@ -135,6 +138,10 @@ script = ExtResource("5_agvku")
 godot_4_3_compatibility = false
 metadata/_custom_type_script = "uid://cjk8nronimk5r"
 
+[node name="NavigationRegion2D" type="NavigationRegion2D" parent="."]
+position = Vector2(91, 4)
+navigation_polygon = SubResource("NavigationPolygon_mv8fa")
+
 [node name="NavigationAgent2D" type="NavigationAgent2D" parent="."]
 path_desired_distance = 4.0
 target_desired_distance = 4.0
@@ -144,19 +151,19 @@ radius = 8.0
 position = Vector2(-105, 172)
 
 [node name="Villager2" parent="." instance=ExtResource("1_0gn7g")]
-position = Vector2(790, 201)
+position = Vector2(842, 159)
 villager_id = "npc002"
 
 [node name="Villager3" parent="." instance=ExtResource("1_0gn7g")]
-position = Vector2(465, 326)
+position = Vector2(460, 246)
 villager_id = "npc003"
 
 [node name="Villager4" parent="." instance=ExtResource("1_0gn7g")]
-position = Vector2(593, -4)
+position = Vector2(603, 18)
 villager_id = "npc004"
 
 [node name="Villager5" parent="." instance=ExtResource("1_0gn7g")]
-position = Vector2(231, -108)
+position = Vector2(751, 18)
 villager_id = "npc005"
 
 [node name="CanvasLayer" type="CanvasLayer" parent="."]
@@ -188,8 +195,17 @@ grow_vertical = 2
 [node name="DebugLabel" type="Label" parent="CanvasLayer/DeveloperPanel/ScrollContainer"]
 layout_mode = 2
 
-[node name="NavigationRegion2D" type="NavigationRegion2D" parent="."]
-position = Vector2(82, 1.0501709)
-navigation_polygon = SubResource("NavigationPolygon_mv8fa")
+[node name="StaticBody2D" type="StaticBody2D" parent="."]
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="StaticBody2D"]
+position = Vector2(672, 115)
+shape = SubResource("RectangleShape2D_agvku")
+
+[node name="ColorRect3" type="ColorRect" parent="StaticBody2D"]
+offset_left = 660.0
+offset_top = -83.0
+offset_right = 685.0
+offset_bottom = 316.0
+color = Color(0.39215687, 0.21568628, 0.17254902, 1)
 
 [connection signal="state_changed" from="." to="Villager" method="_on_village_state_changed"]

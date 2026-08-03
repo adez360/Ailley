@@ -1,4 +1,4 @@
-[gd_scene load_steps=51 format=3 uid="uid://bpwua8hjipg04"]
+[gd_scene load_steps=52 format=3 uid="uid://bpwua8hjipg04"]
 
 [ext_resource type="Script" uid="uid://mtj5shbhxrm8" path="res://scripts/npc/villager.gd" id="1_11qln"]
 [ext_resource type="Texture2D" uid="uid://pcq7ouq5pyt8" path="res://assets/characters/16x16 Idle-Sheet.png" id="2_g7inl"]
@@ -345,6 +345,8 @@ animations = [{
 "speed": 5.0
 }]
 
+[sub_resource type="CircleShape2D" id="CircleShape2D_ha15j"]
+
 [node name="Villager" type="CharacterBody2D"]
 script = ExtResource("1_11qln")
 
@@ -392,5 +394,12 @@ grow_vertical = 2
 theme_override_colors/font_color = Color(0, 0, 0, 1)
 horizontal_alignment = 1
 vertical_alignment = 1
+
+[node name="VisionArea" type="Area2D" parent="."]
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="VisionArea"]
+shape = SubResource("CircleShape2D_ha15j")
+
+[node name="RayCast2D" type="RayCast2D" parent="."]
 
 [connection signal="state_changed" from="StateMachine" to="." method="_on_state_machine_state_changed"]
