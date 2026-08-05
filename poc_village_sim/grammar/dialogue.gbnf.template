@@ -1,0 +1,6 @@
+root ::= "{" ws "\"turns\"" ws ":" ws "[" ws turn (ws "," ws turn){N_EXTRA_TURNS_PLACEHOLDER} ws "]" ws "}"
+turn ::= "{" ws "\"speaker\"" ws ":" ws speaker ws "," ws "\"reasoning\"" ws ":" ws string ws "," ws "\"dialogue\"" ws ":" ws string ws "," ws "\"relationship_delta\"" ws ":" ws int ws "}"
+speaker ::= "\"SPEAKER_A_ID_PLACEHOLDER\"" | "\"SPEAKER_B_ID_PLACEHOLDER\""
+int ::= "-"? [0-9] [0-9]?
+string ::= "\"" ([^"\\] | "\\" ["\\/bfnrt])* "\""
+ws ::= [ \t\n]*

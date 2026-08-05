@@ -19,7 +19,10 @@ from pydantic import BaseModel, Field
 
 import characters as c
 import enums
+import llm_backend
 import run_tick_sim as rts
+
+_VALID_ACTIONS = {a.value for a in enums.Action}
 
 POC_DIR = Path(__file__).parent
 app = FastAPI(title="poc_village_sim 決策 API")
@@ -127,16 +130,28 @@ def decide(req: DecideRequest):
     grammar_for_call = rts.build_grammar_for_call(
         GRAMMAR, [CAST[v.id]["name"] for v in req.visible], LOCATION_NAMES
     )
-    payload = rts.build_llm_payload(prompt, grammar_for_call)
+    visible_names = {CAST[v.id]["name"] for v in req.visible}
 
     with _clock_lock:
         if req.reset_clock:
             _character_clocks[req.character_id] = 0
         action_start_offset_seconds = _character_clocks.get(req.character_id, 0)
 
-    out, parse_ok, elapsed, meta = rts.call_llm_with_retry(payload, label=f"api {req.character_id}")
+    # llm_backend 統一入口：LLM_BACKEND 環境變數決定打本地 llama-server 還是雲端 API，
+    # 這裡不用關心底層是哪一個——本地路徑內部直接重用 rts.build_llm_payload()／
+    # call_llm_with_retry()，行為跟改動前完全一致；雲端路徑才會用到 location_names／
+    # visible_names／valid_actions／duration_field 做事後驗證（見 llm_backend.py 說明）。
+    out, parse_ok, elapsed, meta = llm_backend.call_llm(
+        prompt, label=f"api {req.character_id}", grammar=grammar_for_call,
+        location_names=LOCATION_NAMES, visible_names=visible_names,
+        valid_actions=_VALID_ACTIONS, duration_field="duration_ticks",
+    )
     if not parse_ok or out is None:
-        raise HTTPException(502, "llama-server 呼叫失敗或回傳內容無法解析成 JSON，請重試")
+        if out and out.get("config_error"):
+            # 設定錯誤（例如 LLM_BACKEND=cloud 但沒設 API key）——不是暫時性問題，
+            # 回 500 而不是 502，訊息要講清楚是設定沒弄好，不要讓呼叫端誤以為重試就會好。
+            raise HTTPException(500, f"伺服器端設定錯誤：{out['config_error']}")
+        raise HTTPException(502, "模型呼叫失敗或回傳內容無法解析成 JSON，請重試")
 
     # 中文字串（grammar 保證合法）-> 英文代號，給後端/Godot 用型別化的方式驗證跟比對，
     # 不用在那邊比對中文字串常數。理論上不會失敗（grammar 已經限制過合法值），

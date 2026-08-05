@@ -108,7 +108,13 @@ ATTACK_TARGET_HEALTH_DELTA_RANGE = (-3, -1) # 只有打中才套用
 ATTACK_BLEED_CHANCE = 0.15                  # 只有打中才有機會觸發，跟命中判定各自獨立擲一次
 
 # 目擊到會被記進無聊度減免的「事件類」動作（Specify2 §7.3：目擊衝突/犯罪/表演 −10）
-WITNESS_WORTHY_ACTIONS = {"表演", "攻擊", "搶劫", "偷竊", "破壞樂器", "抓捕", "舉報", "大叫"}
+WITNESS_WORTHY_ACTIONS = {"表演", "攻擊", "搶劫", "偷竊", "破壞樂器", "抓捕", "大叫"}
+# 舉報（2026-08-05）：改成「去洗心革面所投訴」的設計後，不再是當場衝突類事件，故意不放進
+# 這個集合——一來不該讓旁觀者的無聊度也跟著減免（沒有真的「目擊」到什麼戲劇性場面），
+# 二來（更重要）這個集合同時也是 run_des_sim.py 中斷觸發的基礎清單，之前拿掉之前就是
+# 因為「舉報零成本＋會觸發中斷」疊加角色背景故事的世仇設定，跑出雪崩式互相中斷迴圈
+# （見 note）。現在補了地點閘門/每日上限/累積門檻等真正的機制後果，但拿掉中斷觸發資格
+# 這個決定維持不變——投訴不是當場對峙，沒有「對方要立刻知道並反應」的急迫性。
 
 EMOTION_DECAY_TICKS = 5  # Specify2 §3.4：預設持續 5 tick 後自動衰減回 neutral
 
@@ -290,6 +296,10 @@ def call_llm_with_retry(payload: dict, label: str) -> tuple[dict | None, bool, f
             print(f"[{label}] ⚠️ 警告：prompt 被 llama-server 截斷了（tokens_evaluated="
                   f"{meta['tokens_evaluated']}），模型沒有讀到完整內容")
         raw = body.get("content", "")
+        # DPO 訓練要用模型實際生成的逐字文字去算 log-prob，重新 json.dumps(out) 序列化
+        # 出來的字串（縮排/空白）不等於模型真正吐出來的 token 序列——這裡把逐字原文另外
+        # 存住，不能只留解析後的 dict（2026-08-03 盤點 DPO 欄位缺口時發現這個洞）。
+        meta["raw_completion"] = raw
         try:
             return json.loads(raw), True, elapsed, meta
         except json.JSONDecodeError:
@@ -426,6 +436,7 @@ def decide_for_character(cid: str, tick: int, run_index: int, current_time: str,
     return {
         "cid": cid, "alive": True, "self_state": self_state, "live_villager": live_villager,
         "out": out, "parse_ok": parse_ok, "elapsed": elapsed, "label": label, "meta": meta,
+        "prompt": prompt,
     }
 
 
@@ -503,7 +514,9 @@ def run_one_simulation(run_index: int, num_ticks: int, template: str, grammar: s
             record = {
                 "tick": tick, "id": cid, "name": villager["name"],
                 "current_time": current_time, "location_before": self_state["location"],
-                "elapsed_sec": round(elapsed, 2), "parse_ok": parse_ok, "output": out,
+                "elapsed_sec": round(elapsed, 2), "parse_ok": parse_ok,
+                "prompt": decision["prompt"], "output": out,
+                "raw_completion": decision["meta"].get("raw_completion"),
                 "truncated": decision["meta"].get("truncated"),
                 "tokens_evaluated": decision["meta"].get("tokens_evaluated"),
                 "physiology_before": {
@@ -561,31 +574,57 @@ def run_one_simulation(run_index: int, num_ticks: int, template: str, grammar: s
             else:
                 phys["stamina"] = clamp(phys["stamina"] + stamina_delta(action))
 
-            if action == "吃飯" and phys["money"] >= EAT_COST:
-                phys["money"] -= EAT_COST
-                phys["hunger"] = clamp(phys["hunger"] - EAT_HUNGER_RELIEF)
-            if action == "喝酒" and phys["money"] >= DRINK_COST:
-                phys["money"] -= DRINK_COST
-                phys["thirst"] = clamp(phys["thirst"] - DRINK_THIRST_RELIEF)
+            # 2026-08-03：機制性後果（沒錢/沒東西可賣）過去只讓效果靜默失效，last_action_result
+            # 卻永遠只填「已宣告，未經 guardrail 判定」這句萬用空話——模型從來沒被明確告知
+            # 「上次那個動作到底為什麼沒用」。村民AI規格書／技術架構規格書都把「回報失敗原因」
+            # 列為硬性規定（少了這個 LLM 會一直重試同一個無效動作），這裡補上具體原因，
+            # action_result_note 有值就取代下面組 last_action_result 時的萬用句。
+            action_result_note = None
+            if action == "吃飯":
+                if phys["money"] >= EAT_COST:
+                    phys["money"] -= EAT_COST
+                    phys["hunger"] = clamp(phys["hunger"] - EAT_HUNGER_RELIEF)
+                    action_result_note = "吃飯 → 成功，花了{}元".format(EAT_COST)
+                else:
+                    action_result_note = f"吃飯 → 失敗：錢不夠（需要 {EAT_COST} 元，只有 {phys['money']:.0f} 元）"
+            if action == "喝酒":
+                if phys["money"] >= DRINK_COST:
+                    phys["money"] -= DRINK_COST
+                    phys["thirst"] = clamp(phys["thirst"] - DRINK_THIRST_RELIEF)
+                    action_result_note = "喝酒 → 成功，花了{}元".format(DRINK_COST)
+                else:
+                    action_result_note = f"喝酒 → 失敗：錢不夠（需要 {DRINK_COST} 元，只有 {phys['money']:.0f} 元）"
             if action == "表演":
                 phys["money"] += PERFORM_INCOME
+                action_result_note = f"表演 → 成功，賺了 {PERFORM_INCOME} 元"
             if action == "採草藥":
                 add_inventory_item(phys, *GATHER_ITEM)
+                action_result_note = f"採草藥 → 成功，拿到 {GATHER_ITEM[0]}"
             if action == "打獵":
                 for item_name, qty in HUNT_ITEMS:
                     add_inventory_item(phys, item_name, qty)
+                action_result_note = "打獵 → 成功，帶回獵物"
             if action == "賣東西":
                 sold_item, price = sell_one_item(phys, SELL_PRICES)
                 if sold_item:
                     phys["money"] += price
-            if action == "治療" and new_location == "藥草鋪" and phys["money"] >= HEAL_COST:
-                phys["money"] -= HEAL_COST
-                phys["health"] = clamp(phys["health"] + HEAL_IMMEDIATE_BONUS)
-                phys["bleeding"] = False
-                phys["severe_injury"] = False
-                phys["sprained_ankle"] = False
-                phys["hand_cut"] = False
-                phys["recovering"] = phys["health"] < 100
+                    action_result_note = f"賣東西 → 成功，賣了 {sold_item} 得 {price} 元"
+                else:
+                    action_result_note = "賣東西 → 失敗：背包裡沒有可以賣的東西"
+            if action == "治療":
+                if new_location != "藥草鋪":
+                    action_result_note = "治療 → 失敗：不在藥草鋪"
+                elif phys["money"] < HEAL_COST:
+                    action_result_note = f"治療 → 失敗：錢不夠（需要 {HEAL_COST} 元，只有 {phys['money']:.0f} 元）"
+                else:
+                    phys["money"] -= HEAL_COST
+                    phys["health"] = clamp(phys["health"] + HEAL_IMMEDIATE_BONUS)
+                    phys["bleeding"] = False
+                    phys["severe_injury"] = False
+                    phys["sprained_ankle"] = False
+                    phys["hand_cut"] = False
+                    phys["recovering"] = phys["health"] < 100
+                    action_result_note = f"治療 → 成功，花了{HEAL_COST}元"
 
             # --- 生命值：流血/重傷持續扣，治療中的人被動慢慢回血，滿血自動解除治療中狀態 ---
             if phys["bleeding"]:
@@ -638,6 +677,8 @@ def run_one_simulation(run_index: int, num_ticks: int, template: str, grammar: s
                 state[cid]["last_action_result"] = f"{action}{target_note} → 打中了"
             elif attack_hit is False:
                 state[cid]["last_action_result"] = f"{action}{target_note} → 揮空了"
+            elif action_result_note:
+                state[cid]["last_action_result"] = action_result_note
             else:
                 state[cid]["last_action_result"] = f"{action}{target_note} → 已宣告（此為簡化版模擬，未經完整 guardrail 判定成功與否）"
 

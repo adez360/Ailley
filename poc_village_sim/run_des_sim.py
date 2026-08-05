@@ -53,13 +53,110 @@ DURATION_INSTRUCTION = (
     "別的事做。這只是提醒，不是規定，最終還是由你自己判斷這個角色在當下真正會怎麼做。\n"
 )
 
-# 攻擊/搶劫等命中同地點目標時，若目標正在進行中的動作還沒到期，強制中斷——沿用既有的
-# WITNESS_WORTHY_ACTIONS，不另外發明一套判準（2026-07-29 跟使用者討論定案）
-INTERRUPTIBLE_TRIGGER_ACTIONS = rts.WITNESS_WORTHY_ACTIONS
+# 攻擊/搶劫等命中同地點目標時，若目標正在進行中的動作還沒到期，強制中斷——原本沿用
+# WITNESS_WORTHY_ACTIONS、刻意不含說話（2026-07-29 跟使用者討論定案：說話是非強制性的，
+# B 晚一點知道也沒差，等現有動作結束再回應即可）。2026-08-03 team 決定改成優先觀察角色
+# 互相交流，把說話／喊話／悄悄話也納入中斷觸發，讓 B 被搭話當下就能立刻重新決策、
+# 生成回應，不用乾等現有動作跑完。故意不直接改 rts.WITNESS_WORTHY_ACTIONS 本體，
+# 而是另外併一個新集合——那個集合同時也是無聊度公式的「目擊」判定用途（見
+# state[o]["last_declaration"]["action"] in rts.WITNESS_WORTHY_ACTIONS 那段），
+# 說話不該連帶影響旁觀者的無聊度衰減，兩個判準要分開，不能共用同一份清單。
+_DIALOGUE_ACTIONS = {"說話", "喊話", "悄悄話"}
+INTERRUPTIBLE_TRIGGER_ACTIONS = rts.WITNESS_WORTHY_ACTIONS | _DIALOGUE_ACTIONS
 # 被中斷時，若目標原本的動作是移動類，位置退回中斷前的位置（「先求正確不求擬真」）
 LOCATION_CHANGING_ACTIONS = {"移動", "奔跑"}
 # 安全上限，避免卡迴圈情境下無限跑下去（DES 沒有固定 tick 數可以當終止條件）
 MAX_EVENTS_SAFETY_CAP = 400
+
+# --- 執行前可行性檢查＋立即重試（2026-08-04）---
+# 原本「錢不夠」這類失敗是宣告了就照跑完整個 duration，時間白白浪費掉，下一輪決策才
+# 會看到失敗原因——跟使用者確認過，這不是想要的行為：希望的是「做不到的決策當下就被
+# 打回來，同一個時刻立刻換一個做得到的動作」，不浪費宣告的時長。這裡對四個金錢/資源
+# 閘門動作（吃飯/喝酒/治療/採草藥）在真正執行（推進時間、扣血/扣錢）之前先檢查可不
+# 可行，不可行就不消耗任何時間，同一時刻（priority 0，比正常排定的下一次決定更優先）
+# 立刻讓同一個角色重新決策，最多重試 FEASIBILITY_MAX_RETRIES 次；超過上限代表模型
+# 持續選同一個做不到的動作，強制改成安全預設動作（發呆）接手，避免模擬卡死在無限
+# 重試迴圈——這個上限本身也順便產生了 DPO 最乾淨的 rejected 樣本：同一個 context
+# 被連續問好幾次還選一樣答案，排除掉跨輪次時間流逝/生理數值變化的干擾因素。
+FEASIBILITY_GATED_ACTIONS = {"吃飯", "喝酒", "治療", "採草藥", "舉報"}
+FEASIBILITY_MAX_RETRIES = 3
+FEASIBILITY_FALLBACK_ACTION = "發呆"
+FEASIBILITY_FALLBACK_DURATION = 5
+# 軟性提示實驗（2026-08-04）：只加在「重試時看到的失敗訊息」，第一次宣告失敗維持原樣
+# 不提前暗示——這樣才能對照「第一次失敗 vs 有提示的重試」選擇會不會不一樣。之前測過
+# 7-8 種軟性提示版本（血量警示升級等）全部沒真的改變行為，這次情境不同（同一時刻立刻
+# 被打回來重問，不是跨輪次的提醒），值得用現成的重試機制便宜測一次，不預設一定沒用。
+FEASIBILITY_RETRY_SUGGESTION_TEXT = "請選其他動作。"
+
+# 藥草叢庫存/刷新——之前查證表演/採草藥/打獵在規則上結構性不會失敗，藥草叢加庫存上限
+# 之後「採草藥」才會有失敗的可能，是這批動作裡唯一真的需要世界層級狀態（不是角色個人
+# 生理值）的資源池。打獵維持原樣不動（這次只先做採草藥，見 note 的範圍討論）。
+HERB_PATCH_CAPACITY = 10
+HERB_PATCH_REFRESH_MINUTES = 1440  # 24 小時遊戲時間刷新一次，回滿到上限
+
+# 舉報制度（2026-08-05 跟使用者討論定案，改成「多人投訴累積制」，不是組員原本想像的
+# 「當場叫人抓現行犯」——這裡先照這個方向做 POC 驗證，之後可能要跟組員的版本收斂）：
+# - 一定要人在洗心革面所才算數（跟治療一樣的地點閘門）
+# - 對象不需要跟舉報者同地點（去投訴，不是當場對峙）——但這點目前只在無grammar模式下
+#   靠 Python 事後驗證放寬，grammar 硬約束模式下 target 還是被限制在「當下視野內」，
+#   這是選了「不重寫grammar」這個簡化方案後必然的技術限制，先接受這個落差。
+# - 同一人一天最多舉報 REPORT_DAILY_LIMIT 次，超過直接不受理駁回（擋濫用洗票）
+# - 累積到 REPORT_ARREST_THRESHOLD 位「不同」角色都投訴過同一人，才觸發逮捕
+#   （同一人狂舉報同一個目標不會疊加，一定要不同人）
+# - 逮捕後強制拘留 REPORT_DETENTION_MINUTES 分鐘（對齊老周背景故事「三天前...剛從
+#   洗心革面所出來」的時長設定），拘留期滿投訴記錄歸零重新算
+REPORT_DAILY_LIMIT = 3
+REPORT_ARREST_THRESHOLD = 2
+REPORT_DETENTION_MINUTES = 3 * 24 * 60  # 三天
+
+# 偷竊（2026-08-05 新增）：之前動作清單裡就有「偷竊」，但引擎端完全沒有執行邏輯，宣告了
+# 沒有任何效果——這次是為了讓低道德角色（例如阿吉）在生存危機時「考慮非法手段，但不是
+# 每次都選」這個訓練訊號有意義，才補上真正的機制。設計成有風險（不是穩賺）、且不論成功
+# 失敗都會被對象發現（POC 簡化，不做「神不知鬼不覺」的隱蔽判定）：
+# - 一定要有明確 target，且 target 執行當下人還在同一地點（跟攻擊判定同一套 target_same_
+#   location 邏輯），否則算失敗（目標不在附近，不消耗對方金錢）
+# - STEAL_SUCCESS_CHANCE 機率成功，偷到 STEAL_AMOUNT_RANGE 區間內的錢（不會超過對象身上
+#   實際有的錢）
+# - 不論成功失敗，對象都會發現，好感度重挫 STEAL_RELATIONSHIP_PENALTY——這同時也是要讓
+#   「舉報」有更明確的觸發動機（之前補強批次測到舉報完全沒被自然選到，缺的可能就是這種
+#   明確的被冒犯事件），順便把受害者這輪的 last_action_result 也記一筆，讓對象下一次
+#   決策時看得到「被偷了」這件事，不是只有內部關係分數變動、當事人毫無感知
+STEAL_SUCCESS_CHANCE = 0.5
+STEAL_AMOUNT_RANGE = (5, 20)
+STEAL_RELATIONSHIP_PENALTY = 40
+
+
+def _refill_herb_patch_if_due(world_state: dict, now: int) -> None:
+    if now - world_state["herb_patch_last_refill"] >= HERB_PATCH_REFRESH_MINUTES:
+        world_state["herb_patch_stock"] = HERB_PATCH_CAPACITY
+        world_state["herb_patch_last_refill"] = now
+
+
+def check_feasibility(action: str, phys: dict, location: str, world_state: dict, now: int,
+                       reports_filed_today: int = 0) -> tuple[bool, str | None]:
+    """執行前可行性檢查，只檢查（不扣款/不消耗庫存——真正執行時原有的 action_result_note
+    區塊會再做一次同樣的判斷並實際扣款/扣庫存，這裡只是提前擋下做不到的宣告，避免浪費
+    duration）。回傳 (是否可行, 不可行時的失敗原因文字或 None)。"""
+    if action == "吃飯" and phys["money"] < rts.EAT_COST:
+        return False, f"吃飯 → 失敗：錢不夠（需要 {rts.EAT_COST} 元，只有 {phys['money']:.0f} 元）"
+    if action == "喝酒" and phys["money"] < rts.DRINK_COST:
+        return False, f"喝酒 → 失敗：錢不夠（需要 {rts.DRINK_COST} 元，只有 {phys['money']:.0f} 元）"
+    if action == "治療":
+        if location != "藥草鋪":
+            return False, "治療 → 失敗：不在藥草鋪"
+        if phys["money"] < rts.HEAL_COST:
+            return False, f"治療 → 失敗：錢不夠（需要 {rts.HEAL_COST} 元，只有 {phys['money']:.0f} 元）"
+    if action == "採草藥" and location == "藥草叢":
+        _refill_herb_patch_if_due(world_state, now)
+        if world_state["herb_patch_stock"] <= 0:
+            wait = world_state["herb_patch_last_refill"] + HERB_PATCH_REFRESH_MINUTES - now
+            return False, f"採草藥 → 失敗：藥草叢已經採完了，還要等 {wait:.0f} 分鐘才會刷新"
+    if action == "舉報":
+        if location != "洗心革面所":
+            return False, "舉報 → 失敗：不在洗心革面所"
+        if reports_filed_today >= REPORT_DAILY_LIMIT:
+            return False, f"舉報 → 失敗：今天已經投訴滿 {REPORT_DAILY_LIMIT} 次，不受理"
+    return True, None
 
 # 實驗開關：拿掉 GBNF grammar 硬約束，改用 prompt-based JSON + 事後驗證重試——
 # 2026-07-31，驗證「grammar 本身會不會強化重複鎖定」這個假設用。預設 True＝正式行為
@@ -109,7 +206,8 @@ def _extract_first_json(text: str) -> str | None:
     return None
 
 
-def call_llm_no_grammar_with_retry(prompt: str, label: str, location_names: list, visible_names: set) -> tuple[dict | None, bool, float]:
+def call_llm_no_grammar_with_retry(prompt: str, label: str, location_names: list, visible_names: set,
+                                    all_names: set | None = None) -> tuple[dict | None, bool, float, str]:
     """跟 rts.call_llm_with_retry() 平行的版本，差異：不帶 grammar 欄位，額外做
     action/location/target 的語意合法性驗證（grammar 版本靠硬約束保證合法，這裡沒有
     這層保護，要自己檢查，不合法就當作解析失敗重試）。
@@ -155,7 +253,7 @@ def call_llm_no_grammar_with_retry(prompt: str, label: str, location_names: list
         body, elapsed = _post_until_connected()
         last_elapsed = elapsed
         if body is None:
-            return None, False, elapsed
+            return None, False, elapsed, ""
         raw = body.get("content", "")
         if not raw:
             print(f"[{label}] content 是空的，重試")
@@ -180,11 +278,19 @@ def call_llm_no_grammar_with_retry(prompt: str, label: str, location_names: list
             print(f"[{label}] location 不合法：{intent.get('location')}，重試")
             continue
         target = intent.get("target")
-        if target is not None and target not in visible_names:
+        # 舉報（2026-08-05）：對象不需要跟舉報者同地點（去洗心革面所投訴，不是當場對峙），
+        # 這裡是唯一放寬成「全村名單都算合法」的例外，其他動作維持原本的視野內限制不變——
+        # 這個放寬只在無grammar模式下有效，grammar硬約束模式下 target-value 規則是全域
+        # 共用的，沒有重寫grammar結構前，舉報的對象實際上還是被限制在視野內（見 note）。
+        allowed_targets = all_names if (intent.get("action") == "舉報" and all_names is not None) else visible_names
+        if target is not None and target not in allowed_targets:
             print(f"[{label}] target 不合法（幻覺出視野外的人）：{target}，重試")
             continue
-        return out, True, elapsed
-    return None, False, last_elapsed
+        # DPO 訓練要用逐字生成文字算 log-prob，回傳 raw（模型實際吐出的完整原文，
+        # 可能包含 JSON 前後的多餘文字），不能只回傳解析後重新序列化的 out——理由跟
+        # rts.call_llm_with_retry() 那邊補 raw_completion 的註解一致。
+        return out, True, elapsed, raw
+    return None, False, last_elapsed, ""
 
 
 def total_minutes_to_time(total_minutes: int) -> tuple[str, int]:
@@ -193,7 +299,14 @@ def total_minutes_to_time(total_minutes: int) -> tuple[str, int]:
 
 
 def run_one_simulation(run_index: int, target_game_minutes: int, template: str, grammar: str,
-                        reflection_template: str, reflection_grammar: str, importance_grammar: str) -> dict:
+                        reflection_template: str, reflection_grammar: str, importance_grammar: str,
+                        incremental_out_path=None) -> dict:
+    """incremental_out_path 有帶值時，每筆事件寫進 events_log 後就立刻把目前累積的結果整份
+    覆寫存檔一次——2026-08-03 雲端多人測試撞到 OpenRouter 每日額度用盡、行程被強制中止，
+    原本只在跑完最後一刻才寫檔，中途 kill 掉記憶體裡的 events_log（含 prompt/raw_completion）
+    就整個沒了，只能從終端機文字 log 反解析，資料損失很大。雲端呼叫比本地更容易中途失敗
+    （額度/網路/供應商限流），這裡補上增量存檔，之後不管什麼原因中斷，最多只損失最後一筆
+    還沒寫進去的事件，不會整批作廢。本地跑（不帶這個參數）行為完全不變。"""
     cast = c.load_all_characters()
     relationships = c.load_relationships()
     name_to_id = {v["name"]: cid for cid, v in cast.items()}
@@ -201,6 +314,8 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
     home_names = [c.home_name(v["name"]) for v in cast.values()]
     location_names = rts.SHARED_LOCATIONS + home_names
     location_list_str = "、".join(location_names)
+    # 房屋偷竊（2026-08-05）用：地點名稱 -> 屋主 id，判斷「我現在站的地方是不是某人的家」
+    home_name_to_owner = {c.home_name(v["name"]): cid_ for cid_, v in cast.items()}
 
     state = {}
     for cid in rts.ORDER:
@@ -226,7 +341,14 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
             "seq": 0,
             "in_progress": None,  # {"action","target","start_time","end_time","start_location"}
             "interrupt_note": None,
+            "feasibility_retries": 0,  # 可行性檢查連續失敗次數，見 FEASIBILITY_MAX_RETRIES
+            "reports_filed_today": 0,  # 這個角色今天已經舉報過幾次，見 REPORT_DAILY_LIMIT
+            "accusers": set(),  # 舉報過「這個角色」的不同角色id集合，見 REPORT_ARREST_THRESHOLD
+            "detained_until": 0,  # 被拘留到第幾分鐘（game time），0代表沒被拘留
         }
+
+    # 世界層級資源池（不屬於任何單一角色）——目前只有藥草叢，見 check_feasibility()
+    world_state = {"herb_patch_stock": HERB_PATCH_CAPACITY, "herb_patch_last_refill": 0}
 
     heap = [(0, 1, 0, cid) for cid in rts.ORDER]
     heapq.heapify(heap)
@@ -247,11 +369,56 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
         if day != me["today_day"]:
             me["today_actions"], me["today_locations"], me["today_people"] = set(), {me["location"]}, set()
             me["today_day"] = day
+            me["reports_filed_today"] = 0
+
+        # --- 被舉報累積到門檻、正在洗心革面所拘留中：不呼叫模型，直接強制過完拘留時間
+        # （跟體力耗盡強制昏睡同一種「引擎接管、角色沒有自由意志」的處理方式）---
+        if me["detained_until"] > now:
+            detained_duration = me["detained_until"] - now
+            events_log.append({
+                "event_index": len(events_log), "time": now, "id": cid, "name": villager["name"],
+                "current_time": current_time, "location_before": me["location"], "was_interrupted": False,
+                "elapsed_sec": 0.0, "parse_ok": True,
+                "prompt": None, "raw_completion": None,
+                "output": {
+                    "emotion": "sad", "intent": {"action": "睡覺", "duration_minutes": detained_duration,
+                                                  "target": None, "location": "洗心革面所"},
+                    "inner_monologue": "（正在洗心革面所服刑，沒有自由行動的餘地）", "speech": None,
+                    "speech_volume": "normal",
+                },
+                "truncated": None, "tokens_evaluated": None,
+                "physiology_before": {
+                    "health": me["physiology"]["health"], "bleeding": me["physiology"].get("bleeding", False),
+                    "sprained_ankle": me["physiology"].get("sprained_ankle", False), "money": me["physiology"]["money"],
+                },
+                "system_forced": "detained",
+            })
+            me["location"] = "洗心革面所"
+            me["last_action_result"] = f"舉報 → 累積投訴人數達標，被拘留 {REPORT_DETENTION_MINUTES} 分鐘，現在已經放出來了"
+            me["detained_until"] = 0
+            me["seq"] += 1
+            heapq.heappush(heap, (now + detained_duration, 1, me["seq"], cid))
+            continue
 
         visible = [
             {"id": o, "activity": f"在「{state[o]['location']}」"}
             for o in rts.ORDER if o != cid and state[o]["alive"] and state[o]["location"] == me["location"]
         ]
+
+        # 房屋偷竊（2026-08-05）：站在某人家、屋主本人不在家時，把屋主名字補進 target
+        # 候選名單，並在 prompt 明講「這是誰的家、他現在不在」——不然模型看到 grammar
+        # 多出一個沒被提過的名字選項，容易亂猜，重演之前 grammar 欄位重排序修過的
+        # 「敘事跟結構脫節」問題（見 note）。
+        absent_homeowner_id = home_name_to_owner.get(me["location"])
+        if (absent_homeowner_id is None or absent_homeowner_id == cid
+                or not state[absent_homeowner_id]["alive"]
+                or state[absent_homeowner_id]["location"] == me["location"]):
+            absent_homeowner_id = None
+        absent_homeowner_name = cast[absent_homeowner_id]["name"] if absent_homeowner_id else None
+        home_hint = (
+            f"\n【提示】你目前在「{me['location']}」，這是 {absent_homeowner_name} 的家，"
+            f"{absent_homeowner_name} 現在不在家。"
+        ) if absent_homeowner_name else ""
 
         was_interrupted = me["interrupt_note"] is not None
         if was_interrupted:
@@ -283,25 +450,39 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
             current_time=current_time, location=me["location"], visible=visible, recent_event=recent_event,
             last_emotion=me["last_emotion"], last_action_result=me["last_action_result"],
             recent_memory=recent_memory, location_list=location_list_str, today_plan=me["current_plan"],
-        ) + DURATION_INSTRUCTION
+        ) + home_hint + DURATION_INSTRUCTION
+
+        target_candidate_names = [cast[v["id"]]["name"] for v in visible]
+        if absent_homeowner_name:
+            target_candidate_names.append(absent_homeowner_name)
 
         tag = "⚡中斷重決" if was_interrupted else ""
         label = f"run{run_index} [{current_time}] {villager['name']}{tag}"
         if USE_GRAMMAR:
             grammar_for_call = rts.build_grammar_for_call(
-                grammar, [cast[v["id"]]["name"] for v in visible], location_names
+                grammar, target_candidate_names, location_names
             )
             payload = rts.build_llm_payload(prompt, grammar_for_call)
             out, parse_ok, elapsed, meta = rts.call_llm_with_retry(payload, label)
+            full_prompt = prompt
+            raw_completion = meta.get("raw_completion")
         else:
-            visible_names = {cast[v["id"]]["name"] for v in visible}
-            out, parse_ok, elapsed = call_llm_no_grammar_with_retry(prompt, label, location_names, visible_names)
+            visible_names = set(target_candidate_names)
+            all_names = {v["name"] for v in cast.values()}
+            out, parse_ok, elapsed, raw_completion = call_llm_no_grammar_with_retry(
+                prompt, label, location_names, visible_names, all_names
+            )
             meta = {}
+            # call_llm_no_grammar_with_retry() 內部會再接上 _NO_GRAMMAR_JSON_INSTRUCTION 才送出，
+            # 這裡存的要是模型實際看到的完整文字，不能只存 prompt 半成品——DPO 訓練資料要求
+            # prompt 跟 chosen/rejected 輸出必須對應到同一份「模型真正看到的輸入」。
+            full_prompt = prompt + _NO_GRAMMAR_JSON_INSTRUCTION
 
         events_log.append({
             "event_index": len(events_log), "time": now, "id": cid, "name": villager["name"],
             "current_time": current_time, "location_before": me["location"], "was_interrupted": was_interrupted,
-            "elapsed_sec": round(elapsed, 2), "parse_ok": parse_ok, "output": out,
+            "elapsed_sec": round(elapsed, 2), "parse_ok": parse_ok, "prompt": full_prompt, "output": out,
+            "raw_completion": raw_completion,
             "truncated": meta.get("truncated"), "tokens_evaluated": meta.get("tokens_evaluated"),
             # 決策當下（做這個決定之前）的生理快照——2026-07-30 補上，讓「流血/扭到腳還
             # 選奔跑」這種硬規則違規可以事後從 transcript 直接稽核，不用重跑一次模擬。
@@ -310,6 +491,13 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
                 "sprained_ankle": me["physiology"].get("sprained_ankle", False), "money": me["physiology"]["money"],
             },
         })
+
+        if incremental_out_path is not None:
+            incremental_out_path.write_text(json.dumps({
+                "run_index": run_index, "target_game_minutes": target_game_minutes,
+                "run_elapsed_sec": round(time.time() - run_start, 2), "num_events": len(events_log),
+                "interrupt_count": interrupt_count, "events": events_log, "in_progress": True,
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
 
         if not parse_ok:
             me["seq"] += 1
@@ -331,6 +519,45 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
         emotion = out["emotion"]
         phys = me["physiology"]
         old_location = me["location"]
+
+        # --- 執行前可行性檢查：吃飯/喝酒/治療/採草藥做不到就不消耗時間，同一時刻立刻
+        # 重新決策，見上面 FEASIBILITY_GATED_ACTIONS 定義處的完整說明 ---
+        if action in FEASIBILITY_GATED_ACTIONS:
+            feasible, infeasible_reason = check_feasibility(
+                action, phys, new_location, world_state, now,
+                reports_filed_today=me.get("reports_filed_today", 0),
+            )
+            if not feasible:
+                me["feasibility_retries"] += 1
+                if me["feasibility_retries"] < FEASIBILITY_MAX_RETRIES:
+                    # 這句話是給「下一次重試」看的，所以掛建議語——第一次宣告失敗本身
+                    # （這一輪的 last_action_result，讀者是這一輪的 prompt，不是下一輪）
+                    # 不受影響，維持原樣的中性失敗文字。
+                    me["last_action_result"] = f"{infeasible_reason}。{FEASIBILITY_RETRY_SUGGESTION_TEXT}"
+                    print(f"[{label}] 可行性檢查失敗（第 {me['feasibility_retries']} 次）："
+                          f"{infeasible_reason}，同一時刻立刻重新決策")
+                    me["seq"] += 1
+                    heapq.heappush(heap, (now, 0, me["seq"], cid))
+                    continue
+                me["last_action_result"] = infeasible_reason
+                print(f"[{label}] 可行性檢查連續失敗 {FEASIBILITY_MAX_RETRIES} 次，"
+                      f"強制改成「{FEASIBILITY_FALLBACK_ACTION}」接手，避免卡死")
+                action = FEASIBILITY_FALLBACK_ACTION
+                duration = FEASIBILITY_FALLBACK_DURATION
+                new_location = old_location
+                target_name = None
+                target_id = None
+                # 用 forced_fallback_note 而不是直接寫 me["last_action_result"]——下面
+                # action_result_note 那個區塊（吃飯/喝酒/…/治療判定）跑完後，最終組裝
+                # last_action_result 時的 else 分支會直接覆蓋掉，一定要透過同一套組裝
+                # 邏輯才能保留這句話（見下面 target_note/last_action_result 組裝處）。
+                forced_fallback_note = f"{infeasible_reason}（已連續失敗 {FEASIBILITY_MAX_RETRIES} 次，強制改成發呆）"
+                me["feasibility_retries"] = 0
+            else:
+                me["feasibility_retries"] = 0
+                forced_fallback_note = None
+        else:
+            forced_fallback_note = None
 
         print(f"[{label}] {action}（{duration}分）{f'-> {target_name}' if target_name else ''} "
               f"@{new_location} [{emotion}] 血{phys['health']:.0f} 飢{phys['hunger']:.0f} "
@@ -373,32 +600,126 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
             print(f"    💤 體力耗盡昏睡：{villager['name']} 被送回{self_home}，"
                   f"強制昏睡 {duration} 分鐘直到體力回到 {phys['stamina']}")
 
-        if action == "吃飯" and phys["money"] >= rts.EAT_COST:
-            phys["money"] -= rts.EAT_COST
-            phys["hunger"] = rts.clamp(phys["hunger"] - rts.EAT_HUNGER_RELIEF)
-        if action == "喝酒" and phys["money"] >= rts.DRINK_COST:
-            phys["money"] -= rts.DRINK_COST
-            phys["thirst"] = rts.clamp(phys["thirst"] - rts.DRINK_THIRST_RELIEF)
+        # 2026-08-03：理由跟 run_tick_sim.py 同一段註解——機制性後果過去只讓效果靜默失效，
+        # last_action_result 永遠只填萬用空話，模型從沒被告知具體失敗原因，違反村民AI規格書／
+        # 技術架構規格書的硬性規定，這裡補上。
+        action_result_note = None
+        if action == "吃飯":
+            if phys["money"] >= rts.EAT_COST:
+                phys["money"] -= rts.EAT_COST
+                phys["hunger"] = rts.clamp(phys["hunger"] - rts.EAT_HUNGER_RELIEF)
+                action_result_note = f"吃飯 → 成功，花了{rts.EAT_COST}元"
+            else:
+                action_result_note = f"吃飯 → 失敗：錢不夠（需要 {rts.EAT_COST} 元，只有 {phys['money']:.0f} 元）"
+        if action == "喝酒":
+            if phys["money"] >= rts.DRINK_COST:
+                phys["money"] -= rts.DRINK_COST
+                phys["thirst"] = rts.clamp(phys["thirst"] - rts.DRINK_THIRST_RELIEF)
+                action_result_note = f"喝酒 → 成功，花了{rts.DRINK_COST}元"
+            else:
+                action_result_note = f"喝酒 → 失敗：錢不夠（需要 {rts.DRINK_COST} 元，只有 {phys['money']:.0f} 元）"
         if action == "表演":
             phys["money"] += rts.PERFORM_INCOME
+            action_result_note = f"表演 → 成功，賺了 {rts.PERFORM_INCOME} 元"
         if action == "採草藥":
             rts.add_inventory_item(phys, *rts.GATHER_ITEM)
+            action_result_note = f"採草藥 → 成功，拿到 {rts.GATHER_ITEM[0]}"
+            if new_location == "藥草叢":
+                # 可行性檢查那邊只查不扣，這裡才是真正執行、真的把庫存扣掉的地方——
+                # 兩邊都要判斷同一個 location 條件（不在藥草叢採草藥不受庫存限制，
+                # 維持原本「地點寬鬆」的既有行為，這次範圍只加庫存機制，不修這個）。
+                world_state["herb_patch_stock"] = max(0, world_state["herb_patch_stock"] - 1)
         if action == "打獵":
             for item_name, qty in rts.HUNT_ITEMS:
                 rts.add_inventory_item(phys, item_name, qty)
+            action_result_note = "打獵 → 成功，帶回獵物"
         if action == "賣東西":
             sold_item, price = rts.sell_one_item(phys, rts.SELL_PRICES)
             if sold_item:
                 phys["money"] += price
-        if action == "治療" and new_location == "藥草鋪" and phys["money"] >= rts.HEAL_COST:
-            phys["money"] -= rts.HEAL_COST
-            phys["health"] = rts.clamp(phys["health"] + rts.HEAL_IMMEDIATE_BONUS)
-            phys["bleeding"] = False
-            phys["severe_injury"] = False
-            phys["recovering"] = phys["health"] < 100
+                action_result_note = f"賣東西 → 成功，賣了 {sold_item} 得 {price} 元"
+            else:
+                action_result_note = "賣東西 → 失敗：背包裡沒有可以賣的東西"
+        if action == "治療":
+            if new_location != "藥草鋪":
+                action_result_note = "治療 → 失敗：不在藥草鋪"
+            elif phys["money"] < rts.HEAL_COST:
+                action_result_note = f"治療 → 失敗：錢不夠（需要 {rts.HEAL_COST} 元，只有 {phys['money']:.0f} 元）"
+            else:
+                phys["money"] -= rts.HEAL_COST
+                phys["health"] = rts.clamp(phys["health"] + rts.HEAL_IMMEDIATE_BONUS)
+                phys["bleeding"] = False
+                phys["severe_injury"] = False
+                phys["recovering"] = phys["health"] < 100
+                action_result_note = f"治療 → 成功，花了{rts.HEAL_COST}元"
+        if action == "舉報":
+            # 可行性檢查已經擋過地點/每日上限，這裡進來的一定是可以真的執行的——這裡只
+            # 負責記錄投訴人數、判斷要不要觸發逮捕，不重複判斷地點/上限。
+            if not target_id or target_id == cid:
+                action_result_note = "舉報 → 失敗：沒有指定明確的投訴對象"
+            else:
+                me["reports_filed_today"] = me.get("reports_filed_today", 0) + 1
+                target_state = state[target_id]
+                target_state["accusers"].add(cid)
+                num_accusers = len(target_state["accusers"])
+                if num_accusers >= REPORT_ARREST_THRESHOLD:
+                    target_state["detained_until"] = now + duration + REPORT_DETENTION_MINUTES
+                    target_state["accusers"] = set()
+                    action_result_note = (
+                        f"舉報 → 成功，{cast[target_id]['name']} 累積被 {num_accusers} 人投訴，"
+                        f"已經被抓進洗心革面所"
+                    )
+                else:
+                    action_result_note = (
+                        f"舉報 → 成功，{cast[target_id]['name']} 目前累積被 {num_accusers} 人投訴"
+                        f"（滿 {REPORT_ARREST_THRESHOLD} 人會被抓）"
+                    )
 
         # --- 攻擊命中判定：只有目標在同地點才會真的打中（跟中斷機制共用同地點前提）---
         target_same_location = target_id and state[target_id]["alive"] and state[target_id]["location"] == old_location
+        # 房屋偷竊（2026-08-05）：小偷站在目標的家、目標本人不在場，一樣算合法偷竊對象——
+        # 跟 target_same_location 分開判斷，不影響攻擊/舉報等其他動作沿用 target_same_location。
+        target_is_absent_from_home = (
+            target_id and state[target_id]["alive"]
+            and old_location == c.home_name(cast[target_id]["name"])
+            and state[target_id]["location"] != old_location
+        )
+
+        if action == "偷竊":
+            is_house_steal = (not target_same_location) and target_is_absent_from_home
+            if not target_same_location and not is_house_steal:
+                action_result_note = (
+                    f"偷竊 → 失敗：{cast[target_id]['name'] if target_id else '目標'}不在附近"
+                )
+            else:
+                target_phys = state[target_id]["physiology"]
+                stole_success = target_phys["money"] > 0 and rts.random.random() < STEAL_SUCCESS_CHANCE
+                if stole_success:
+                    stolen = min(target_phys["money"], rts.random.randint(*STEAL_AMOUNT_RANGE))
+                    target_phys["money"] -= stolen
+                    phys["money"] += stolen
+                    if is_house_steal:
+                        action_result_note = f"偷竊 → 成功，闖入{cast[target_id]['name']}家中偷到{stolen:.0f}元"
+                        victim_note = f"你發現家裡被翻過，少了{stolen:.0f}元，看起來是{cast[cid]['name']}幹的"
+                    else:
+                        action_result_note = f"偷竊 → 成功，從{cast[target_id]['name']}身上偷到{stolen:.0f}元"
+                        victim_note = f"{cast[cid]['name']}偷了你{stolen:.0f}元，被你發現了"
+                else:
+                    if is_house_steal:
+                        action_result_note = f"偷竊 → 失敗：闖入{cast[target_id]['name']}家中沒找到值錢的東西"
+                        victim_note = f"你發現家裡被翻過，但{cast[cid]['name']}好像沒找到什麼值錢的東西"
+                    else:
+                        action_result_note = f"偷竊 → 失敗：被{cast[target_id]['name']}發現，沒偷到"
+                        victim_note = f"{cast[cid]['name']}想偷你的錢，被你發現了，沒得手"
+                # 不論成功失敗都被發現（POC 簡化，不做隱蔽判定）——對象好感度重挫，
+                # 且讓對象下一輪看得到「被偷了」這件事，不是只有背後的關係分數變動，
+                # 這同時也是要給「舉報」更明確的觸發動機（見上面 STEAL_RELATIONSHIP_PENALTY 註解）。
+                relationships.setdefault(target_id, {})
+                relationships[target_id][cid] = max(
+                    -100, relationships[target_id].get(cid, 0) - STEAL_RELATIONSHIP_PENALTY
+                )
+                state[target_id]["last_action_result"] = victim_note
+
         if action == "攻擊" and target_same_location:
             attack_hit = rts.random.random() < rts.ATTACK_HIT_CHANCE
             if attack_hit:
@@ -449,10 +770,14 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
         phys["boredom"] = rts.clamp(phys["boredom"] + boredom_delta)
 
         target_note = f"（對 {cast[target_id]['name']}）" if target_id else ""
-        if attack_hit is True:
+        if forced_fallback_note:
+            me["last_action_result"] = forced_fallback_note
+        elif attack_hit is True:
             me["last_action_result"] = f"{action}{target_note} → 打中了"
         elif attack_hit is False:
             me["last_action_result"] = f"{action}{target_note} → 揮空了"
+        elif action_result_note:
+            me["last_action_result"] = action_result_note
         else:
             me["last_action_result"] = f"{action}{target_note} → 已宣告（DES 引擎，未經完整 guardrail 判定）"
 
@@ -497,12 +822,19 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
                       f"今天想做：{reflection['today_plan']}")
         me["is_sleeping"] = valid_sleep
 
-        # --- 中斷機制：命中同地點目標、且動作屬於 WITNESS_WORTHY_ACTIONS，
+        # --- 中斷機制：命中同地點目標、且動作屬於 INTERRUPTIBLE_TRIGGER_ACTIONS，
         # 若目標正在進行中的動作尚未到期，強制作廢並提前重新決定 ---
+        # 2026-08-04：說話類加進中斷觸發後，腳本化測試發現兩人對話會互相打斷對方還沒講完
+        # 的話，變成來回插話的迴圈，不像正常對話。排除「說話類打斷說話類」這一種組合——
+        # 攻擊之類還是可以正常打斷正在講話的人（被打斷講話敘事上合理），只有雙方都是
+        # 說話類的時候才不觸發，讓一輪對話至少能講完。
         if target_id and action in INTERRUPTIBLE_TRIGGER_ACTIONS and target_same_location:
             victim = state[target_id]
             vip = victim["in_progress"]
-            if victim["alive"] and vip and vip["end_time"] > now:
+            is_dialogue_vs_dialogue = (
+                vip and action in _DIALOGUE_ACTIONS and vip["action"] in _DIALOGUE_ACTIONS
+            )
+            if victim["alive"] and vip and vip["end_time"] > now and not is_dialogue_vs_dialogue:
                 if vip["action"] in LOCATION_CHANGING_ACTIONS:
                     victim["location"] = vip["start_location"]
                 victim["interrupt_note"] = (
@@ -530,6 +862,7 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
         "final_memories": {cid: state[cid]["memories"] for cid in rts.ORDER},
         "final_personality": {cid: state[cid]["personality"] for cid in rts.ORDER},
         "death_times": {cid: state[cid]["death_time"] for cid in rts.ORDER if not state[cid]["alive"]},
+        "final_world_state": world_state,
     }
 
 
