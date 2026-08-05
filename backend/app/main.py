@@ -1,19 +1,23 @@
 from fastapi import FastAPI
+
+import app.models
+
+from app.api.npc import router as npc_router
+from app.database.base import Base
 from app.database.database import engine
 
+Base.metadata.create_all(bind=engine)
+
 app = FastAPI(
-    title="AI Town Backend",
-    version="0.1.0"
+    title="Ailley Backend",
+    version="1.0.0",
 )
 
+app.include_router(npc_router)
+
+
 @app.get("/")
-async def root():
+def root():
     return {
-        "message": "Backend Running"
-    }
-    
-@app.get("/database")
-async def database():
-    return {
-        "database": str(engine.url)
+        "message": "Ailley Backend Running"
     }
