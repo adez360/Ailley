@@ -18,7 +18,7 @@ class NPCIdentity(BaseModel):
     )
     # 姓名
     name: Mapped[str] = mapped_column(
-        String(30),
+        String(24),
         unique=True,
         index=True,
         nullable=False,

@@ -8,6 +8,7 @@ from app.models.npc_state import NPCState
 from app.models.npc_values import NPCValues
 from app.repositories.counter_repository import CounterRepository
 from app.schemas.npc_identity import NPCIdentityCreate
+from app.factories.npc_factory import NPCFactory
 
 
 class NPCService:
@@ -35,48 +36,29 @@ class NPCService:
 
         try:
 
-            npc = NPCIdentity(
-                id=npc_id,
-                **data.model_dump(),
+            npc_bundle = NPCFactory.create(
+                npc_id=npc_id,
+                data=data,
             )
 
-            self.db.add(npc)
-
-            self.db.add(
-                NPCHexaco(
-                    npc_id=npc_id,
-                )
-            )
-
-            self.db.add(
-                NPCPersonality(
-                    npc_id=npc_id,
-                )
-            )
-
-            self.db.add(
-                NPCValues(
-                    npc_id=npc_id,
-                )
-            )
-
-            self.db.add(
-                NPCSocial(
-                    npc_id=npc_id,
-                )
-            )
-
-            self.db.add(
-                NPCState(
-                    npc_id=npc_id,
-                )
+            self.db.add_all(
+                [
+                    npc_bundle["identity"],
+                    npc_bundle["hexaco"],
+                    npc_bundle["personality"],
+                    npc_bundle["values"],
+                    npc_bundle["social"],
+                    npc_bundle["state"],
+                ]
             )
 
             self.db.commit()
 
-            self.db.refresh(npc)
+            self.db.refresh(
+                npc_bundle["identity"]
+            )
 
-            return npc
+            return npc_bundle["identity"]
 
         except Exception:
 
