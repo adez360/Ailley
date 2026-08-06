@@ -2657,8 +2657,50 @@ RANGE`／好感度重挫／下一輪通知這一整套簡化邏輯，只是觸�
 
 **使用者決定先擱置**，不繼續往「調整 prompt 措辭」的方向深入，留待之後有想法再說。
 
+## 巢狀動作分類實驗：假設「先選類別再選動作」能降低選錯/target=null（2026-08-06，準備中）
+
+**動機**：使用者提問「動作清單改成巢狀編成（生理>吃飯/喝酒/睡覺、社交>聊天/攻擊/舉報、
+工作>表演/打獵/採藥…）會不會讓模型更知道要選什麼」。判斷：grammar 是嚴格左到右逐 token
+生成，先讓模型 commit 一個大類別，等於在結構上做了一次隱性 chain-of-thought，再從類別
+底下的清單選具體動作，跟之前「intent 欄位順序調整解決敘事脫節」是同一個機制，值得先做
+小規模對照實驗再決定要不要正式採用。
+
+**分類方式**：採需求導向（而非現行 prompt 裡機制導向的五分法），跟人物「當下最需要
+處理什麼」對齊：
+- 生理：吃飯、喝酒、治療、睡覺
+- 社交：說話、喊話、悄悄話、握手、擁抱、送禮、給錢、結婚、離婚、跟隨、展示物品、飛吻、
+  偷竊、搶劫、破壞樂器、攻擊、抓捕、舉報
+- 工作：打獵、採草藥、釣魚、表演、買東西、賣東西、巡邏
+- 動作：移動、奔跑、蹲下、抱頭、舉手、大叫、摔東西、自首、發呆
+
+**實作**（已完成，尚未實跑驗證，因為 llama-server 連線當下不可用）：
+- 新 grammar：`grammar/turn_nested_experiment.gbnf.template`——`intent` 改成
+  `physio-intent | social-intent | work-intent | move-intent` 四選一，用
+  category+action 配對成獨立規則（而非兩個各自任填的欄位），讓 grammar 結構上就
+  保證 category 跟 action 一致，不需要引擎事後核對。新增 `action_category` 欄位，
+  對執行邏輯無影響（`json.loads` 純字典存取，多一個欄位不會壞任何東西）。
+- 新 prompt：`prompts/villager_system_prompt_nested_experiment.txt`——只改
+  「【你現在可以做的事】」這一段成需求導向四類清單＋要求先選類別再選動作，其餘
+  跟主線 `villager_system_prompt.txt` 完全一致，方便乾淨對照。
+- 對照腳本：`test_nested_action.py`——`python test_nested_action.py [baseline|nested|both] [分鐘數] [重複次數]`，
+  預設兩組都跑（各 300 分鐘×4 次），比較 `same_rate`（相鄰同動作率）、`cycle2_rate`
+  （隔一格重複率）之外，新增 `null_target_rate`（偷竊/搶劫/破壞樂器/攻擊/抓捕/舉報
+  這類理當要有對象的動作裡 target 填 null 的比例，呼應上一節「房屋偷竊」發現的
+  target=null 診斷），最後印 baseline vs nested 逐角色對照表。
+
+**附帶副議題（同一次討論提出，尚未實作）**：地點限縮動作候選——現行 `target-value`／
+`location-value` 已經是「grammar 結構上鎖死視野內的人/合法地點清單」，同樣手法可以
+套用在 action 上（依當下地點動態產生允許的動作清單），把現在 `FEASIBILITY_GATED_
+ACTIONS`（`run_des_sim.py:81`，吃飯/喝酒/治療/採草藥/舉報）「先生成、引擎再打回去
+重新決策」的模式，改成結構上就不可能選到當下地點做不到的動作，減少無效嘗試/重新
+決策的往返。代價是要維護一份地點→允許動作對照表，且無法取代「有沒有帶夠錢」這種
+還是得留給引擎判斷的條件。可以跟巢狀分類疊加（先選類別，類別內再依地點過濾）。
+
 ## 待辦（下一步方向，尚未執行）
 
+- **跑巢狀動作分類對照實驗**（`python test_nested_action.py both 300 4`，需要 llama-server
+  連線可用）：確認 same_rate/cycle2_rate/null_target_rate 是否真的改善，再決定要不要
+  把巢狀分類併入主線 grammar/prompt
 - **決定精簡版身體狀態格式要不要換成主線正式格式**（效益大但要處理跟既有資料
   格式不相容的問題）
 - 偷竊機制真實模型驗證結果待回報（進行中）；**新方向**：驗證看看在 prompt 明確要求
