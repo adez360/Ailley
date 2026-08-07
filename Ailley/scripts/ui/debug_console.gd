@@ -1,6 +1,13 @@
 extends CanvasLayer
 
 ## 遊戲中的 debug 指令輸入框。按 ` 開關，Esc 關閉，上下鍵翻指令歷史。
+##
+## 輸出的文字在 res://locale/console.csv（CON_* 與 HELP_*）。指令名稱、參數語法、
+## 失敗代碼這些是識別字，不進翻譯表 —— 玩家打的字不能隨語系變。
+
+## 同一行裡並排欄位用的分隔符。不用全形空格：那是 CJK 專用的，
+## 在 Latin 語系底下會變成一個突兀的大洞
+const SEP := "   "
 
 @onready var root: Control = $Root
 @onready var output: RichTextLabel = $Root/VBoxContainer/Output
@@ -21,12 +28,13 @@ func _ready() -> void:
 		"debug": _cmd_debug,
 		"nav": _cmd_nav,
 		"ai": _cmd_ai,
+		"locale": _cmd_locale,
 		"help": _cmd_help,
 		"clear": _cmd_clear,
 	}
 	input.text_submitted.connect(_on_text_submitted)
 	_set_open(false)
-	_print("[color=888888]按 ` 開關主控台，打 help 看指令[/color]")
+	_print("[color=888888]%s[/color]" % L10n.t("CON_HINT"))
 
 # 在 _input 攔截，LineEdit 才不會先把這些鍵吃掉（例如把 ` 打進輸入框）
 func _input(event: InputEvent) -> void:
@@ -83,7 +91,7 @@ func _on_text_submitted(text: String) -> void:
 	var parts := line.split(" ", false)
 	var command := parts[0].to_lower()
 	if not _commands.has(command):
-		_error("未知指令：%s（打 help 看清單）" % command)
+		_error(L10n.tf("CON_UNKNOWN_COMMAND", {"cmd": command}))
 		return
 
 	_commands[command].call(parts.slice(1))
@@ -94,13 +102,13 @@ func _error(line: String) -> void:
 func _get_player() -> Character:
 	var player := get_tree().get_first_node_in_group("player")
 	if player == null:
-		_error("場景裡找不到 player group 的節點")
+		_error(L10n.t("CON_NO_PLAYER"))
 	return player
 
 func _get_nav() -> Node:
 	var nav := get_tree().get_first_node_in_group("nav_grid")
 	if nav == null:
-		_error("場景裡找不到 NavGrid")
+		_error(L10n.t("CON_NO_NAVGRID"))
 	return nav
 
 # 指令一律用玩家取的 name 指名角色。name 可以撞名，撞到才需要改用 character_id，
@@ -121,7 +129,9 @@ func _get_character(token: String) -> Character:
 		var ids: Array[String] = []
 		for character in matched:
 			ids.append(character.character_id)
-		_error("有 %d 個角色都叫 %s，改用 id 指定：%s" % [matched.size(), token, ", ".join(ids)])
+		_error(L10n.tf("CON_AMBIGUOUS_NAME", {
+			"count": matched.size(), "name": token, "ids": ", ".join(ids)
+		}))
 		return null
 
 	for node in characters:
@@ -132,12 +142,12 @@ func _get_character(token: String) -> Character:
 	for node in characters:
 		known.append("%s (%s)" % [node.character_name, node.character_id])
 
-	_error("找不到角色 %s（現有：%s）" % [token, ", ".join(known)])
+	_error(L10n.tf("CON_CHARACTER_NOT_FOUND", {"name": token, "known": ", ".join(known)}))
 	return null
 
 func _cmd_goto(args: PackedStringArray) -> void:
 	if args.size() != 3 or not args[1].is_valid_int() or not args[2].is_valid_int():
-		_error("用法：goto <name> <x> <y>（x y 是格座標，可為負）")
+		_error(L10n.t("CON_USAGE_GOTO"))
 		return
 
 	var character := _get_character(args[0])
@@ -153,15 +163,18 @@ func _cmd_goto(args: PackedStringArray) -> void:
 
 	# 目標格不可走時 NavGrid 會自己吸附到最近的可走格，先講清楚免得以為指令沒生效
 	if not nav.is_cell_free(cell):
-		_print("[color=ffcc66]格 %s 不可走，將走到最近的可走格[/color]" % cell)
+		_print("[color=ffcc66]%s[/color]" % L10n.tf("CON_CELL_BLOCKED", {"cell": cell}))
 
 	if not character.move_to(target):
-		_error("找不到 %s 到格 %s 的路徑" % [character.character_name, cell])
+		_error(L10n.tf("CON_NO_PATH", {"name": character.character_name, "cell": cell}))
 		return
 
-	_print("%s 前往格 %s = %s（路徑 %d 點）" % [
-		character.character_name, cell, target, character.get_path_points().size()
-	])
+	_print(L10n.tf("CON_MOVING_TO", {
+		"name": character.character_name,
+		"cell": cell,
+		"pos": target,
+		"points": character.get_path_points().size(),
+	}))
 
 	# 綁上角色本身，抵達訊息才會報對人；重複 goto 同一角色不會疊接
 	var on_finished := _on_move_finished.bind(character)
@@ -170,34 +183,37 @@ func _cmd_goto(args: PackedStringArray) -> void:
 
 func _on_move_finished(reached: bool, character: Character) -> void:
 	if reached:
-		_print("%s 已抵達 %s" % [character.character_name, character.get_body_position()])
+		_print(L10n.tf("CON_ARRIVED", {
+			"name": character.character_name, "pos": character.get_body_position()
+		}))
 	else:
-		_error("%s 移動中止於 %s（被地形卡住）" % [
-			character.character_name, character.get_body_position()
-		])
+		_error(L10n.tf("CON_MOVE_ABORTED", {
+			"name": character.character_name, "pos": character.get_body_position()
+		}))
 
 func _cmd_stop(_args: PackedStringArray) -> void:
 	var player := _get_player()
 	if player == null:
 		return
 	player.stop_moving()
-	_print("已停止移動")
+	_print(L10n.t("CON_STOPPED"))
 
 func _cmd_pos(_args: PackedStringArray) -> void:
 	var player := _get_player()
 	if player == null:
 		return
 
+	# pos / cell 是指令名跟資料欄位，不翻
 	var line := "pos = %s" % player.get_body_position()
 	var nav := get_tree().get_first_node_in_group("nav_grid")
 	if nav != null:
-		line += "   cell = %s" % nav.world_to_cell(player.get_body_position())
+		line += SEP + "cell = %s" % nav.world_to_cell(player.get_body_position())
 	_print(line)
 
 # 一個參數是玩家對誰搭話；兩個參數是指定發起方，Phase 2 測 Agent 對 Agent 用
 func _cmd_talk(args: PackedStringArray) -> void:
 	if args.is_empty() or args.size() > 2:
-		_error("用法：talk <name>（玩家搭話）或 talk <from> <to>")
+		_error(L10n.t("CON_USAGE_TALK"))
 		return
 
 	var speaker: Character
@@ -215,17 +231,22 @@ func _cmd_talk(args: PackedStringArray) -> void:
 
 	var failure: String = speaker.talk_to(listener)
 	if failure != Character.TALK_OK:
-		_error("%s 搭話 %s 失敗：%s" % [
-			speaker.character_name, listener.character_name, failure
-		])
+		# failure 是 TALK_* 代碼，原樣印出。要人話得另做代碼→翻譯 key 的對照
+		_error(L10n.tf("CON_TALK_FAILED", {
+			"speaker": speaker.character_name,
+			"listener": listener.character_name,
+			"reason": failure,
+		}))
 		return
 
-	_print("%s 對 %s 搭話" % [speaker.character_name, listener.character_name])
+	_print(L10n.tf("CON_TALK_OK", {
+		"speaker": speaker.character_name, "listener": listener.character_name
+	}))
 
 # 省略 id 就看玩家自己
 func _cmd_status(args: PackedStringArray) -> void:
 	if args.size() > 1:
-		_error("用法：status [name]（省略就看玩家自己）")
+		_error(L10n.t("CON_USAGE_STATUS"))
 		return
 
 	var character: Character = _get_player() if args.is_empty() else _get_character(args[0])
@@ -237,56 +258,75 @@ func _cmd_status(args: PackedStringArray) -> void:
 		character.character_name, character.character_id
 	])
 
-	var where := "  位置 %s" % body
+	var where := "%s" % body
 	var nav := get_tree().get_first_node_in_group("nav_grid")
 	if nav != null:
-		where += "   格 %s" % nav.world_to_cell(body)
-	_print(where)
+		where += SEP + "%s %s" % [L10n.t("CON_FIELD_CELL"), nav.world_to_cell(body)]
+	_field("CON_FIELD_POS", where)
 
 	if character.is_moving():
 		var path := character.get_path_points()
-		_print("  移動  前往 %s（路徑 %d 點）" % [path[path.size() - 1], path.size()])
+		_field("CON_FIELD_MOVE", L10n.tf("CON_MOVE_TOWARD", {
+			"pos": path[path.size() - 1], "points": path.size()
+		}))
 	else:
-		_print("  移動  靜止")
+		_field("CON_FIELD_MOVE", L10n.t("CON_MOVE_IDLE"))
 
-	_print("  外觀  面向 %s／動畫 %s" % [character.facing, character.sprite.animation])
+	_field("CON_FIELD_LOOK", L10n.tf("CON_LOOK_BODY", {
+		"facing": character.facing, "anim": character.sprite.animation
+	}))
 
 	if character.is_in_conversation():
-		_print("  對話  進行中")
+		_field("CON_FIELD_TALK", L10n.t("CON_TALK_ACTIVE"))
 
-	# 直接掃 Stats.SPEC，所以之後加數值不用回來改這裡
+	# 直接掃 Stats.SPEC，所以之後加數值不用回來改這裡。
+	# SPEC 的 label 存的是翻譯 key，翻譯在這個顯示端做
 	if character.stats != null:
 		var needs: Array[String] = []
 		var others: Array[String] = []
 
 		for key in Stats.SPEC:
-			var text := "%s %d" % [Stats.SPEC[key]["label"], int(character.stats.get_value(key))]
+			var text := "%s %d" % [
+				L10n.t(Stats.SPEC[key]["label"]), int(character.stats.get_value(key))
+			]
 			if character.stats.is_need(key):
 				needs.append(text)
 			else:
 				others.append(text)
 
-		_print("  需求  %s" % "　".join(needs))
+		_field("CON_FIELD_NEEDS", SEP.join(needs))
 		if not others.is_empty():
-			_print("  狀態  %s" % "　".join(others))
+			_field("CON_FIELD_STATE", SEP.join(others))
 
 	if character.relationships != null and not character.relationships.known_ids().is_empty():
 		var lines: Array[String] = []
 		for other_id in character.relationships.known_ids():
 			var record: Dictionary = character.relationships.get_record(other_id)
-			lines.append("%s %.1f（%d 次）" % [other_id, record["affinity"], record["met_count"]])
-		_print("  好感  %s" % "　".join(lines))
+			lines.append(L10n.tf("CON_AFFINITY_ENTRY", {
+				"id": other_id,
+				"affinity": "%.1f" % record["affinity"],
+				"count": record["met_count"],
+			}))
+		_field("CON_FIELD_AFFINITY", SEP.join(lines))
 
 	# 行程表是 Agent 才有的東西，Player 沒有這一段
 	if character.is_in_group("agents"):
-		_print("  行程  %s／%s（共 %d 筆）" % [
-			character.current_place, character.current_state, character.schedule.size()
-		])
+		_field("CON_FIELD_SCHEDULE", L10n.tf("CON_SCHEDULE_BODY", {
+			"place": character.current_place,
+			"state": character.current_state,
+			"count": character.schedule.size(),
+		}))
+
+# status 的一列。欄名寬度不補空白對齊 —— 主控台用的是預設比例字型，
+# 補空白只在中文那種等寬的情況下看起來像對齊，換成英文就散掉，
+# 不如老實地讓欄名靠左、用顏色區分
+func _field(label_key: String, body: String) -> void:
+	_print("  [color=888888]%s[/color]  %s" % [L10n.t(label_key), body])
 
 func _get_overlay() -> Node:
 	var overlay := get_tree().get_first_node_in_group("debug_overlay")
 	if overlay == null:
-		_error("場景裡找不到 debug_overlay group 的節點")
+		_error(L10n.t("CON_NO_OVERLAY"))
 	return overlay
 
 # debug            列出所有項目與開關狀態
@@ -307,11 +347,11 @@ func _cmd_debug(args: PackedStringArray) -> void:
 	if layer == "off":
 		for name in overlay.layers.keys():
 			overlay.set_layer(name, false)
-		_print("已關閉全部 debug 疊圖")
+		_print(L10n.t("CON_OVERLAY_ALL_OFF"))
 		return
 
 	if not overlay.layers.has(layer):
-		_error("沒有這個項目：%s" % layer)
+		_error(L10n.tf("CON_OVERLAY_NO_LAYER", {"layer": layer}))
 		_print_overlay_states(overlay)
 		return
 
@@ -330,12 +370,12 @@ func _print_overlay_states(overlay: Node) -> void:
 		var on: bool = overlay.layers[name]
 		parts.append("[color=%s]%s[/color]" % ["88ff88" if on else "888888", name])
 
-	_print("疊圖：%s" % "　".join(parts))
-	_print("[color=888888]debug <項目> [on|off]　debug off 全關[/color]")
+	_print(L10n.tf("CON_OVERLAY_STATES", {"layers": SEP.join(parts)}))
+	_print("[color=888888]%s[/color]" % L10n.t("CON_OVERLAY_USAGE"))
 
 func _cmd_nav(args: PackedStringArray) -> void:
 	if args.size() != 1 or args[0] != "rebuild":
-		_error("用法：nav rebuild")
+		_error(L10n.t("CON_USAGE_NAV"))
 		return
 
 	var nav := _get_nav()
@@ -343,7 +383,7 @@ func _cmd_nav(args: PackedStringArray) -> void:
 		return
 
 	nav.rebuild()
-	_print("NavGrid 已重建：region = %s，障礙格 %d" % [nav.astar.region, nav.solid_count])
+	_print(L10n.tf("CON_NAV_REBUILT", {"region": nav.astar.region, "solid": nav.solid_count}))
 
 # 主控台自己算一個呼叫方，用固定 id 才吃得到 AIService 的速率限制 ——
 # 手動測試如果不受限，就測不出正式呼叫端會遇到的行為
@@ -367,7 +407,7 @@ func _cmd_ai(args: PackedStringArray) -> void:
 	_print("[color=88ccff]%s[/color]" % config)
 
 	if not config.enabled:
-		_print("[color=ffcc66]AI 未啟用：%s[/color]" % config.status_reason)
+		_print("[color=ffcc66]%s[/color]" % L10n.tf("CON_AI_DISABLED", {"reason": config.status_reason}))
 		return
 
 	# 第一個參數是 dialogue 就切成對話政策，其餘參數仍然是探針句
@@ -378,11 +418,16 @@ func _cmd_ai(args: PackedStringArray) -> void:
 		rest = args.slice(1)
 
 	var usage: Dictionary = AIService.get_usage(AI_REQUESTER_ID)
-	_print("[color=888888]  第 %d 遊戲日　行程 %d/%d 次　對話 %d 次（%s）　冷卻剩 %.0fs　佇列 %d　飛行中 %d[/color]" % [
-		usage["game_day"], usage["calls_today"], usage["max_calls"],
-		usage["dialogue_today"], "豁免" if usage["dialogue_exempt"] else "不豁免",
-		usage["cooldown_left"], usage["queued"], usage["in_flight"],
-	])
+	_print("[color=888888]  %s[/color]" % L10n.tf("CON_AI_USAGE", {
+		"day": usage["game_day"],
+		"calls": usage["calls_today"],
+		"max": usage["max_calls"],
+		"dialogue": usage["dialogue_today"],
+		"exempt": L10n.t("CON_AI_EXEMPT" if usage["dialogue_exempt"] else "CON_AI_NOT_EXEMPT"),
+		"cooldown": "%.0f" % usage["cooldown_left"],
+		"queued": usage["queued"],
+		"inflight": usage["in_flight"],
+	}))
 
 	var text := " ".join(rest) if not rest.is_empty() else AI_PROBE_TEXT
 	var envelope := {
@@ -391,13 +436,13 @@ func _cmd_ai(args: PackedStringArray) -> void:
 	}
 
 	_print("[color=888888]→ [%s] %s[/color]" % [
-		"對話" if policy == AIService.Policy.CONVERSATION else "行程",
+		L10n.t("CON_POLICY_CONVERSATION" if policy == AIService.Policy.CONVERSATION else "CON_POLICY_SCHEDULED"),
 		JSON.stringify(envelope["payload"]),
 	])
 
 	var result: Dictionary = await AIService.request(envelope, AI_REQUESTER_ID, policy)
 	if not result["ok"]:
-		_error("← 失敗：%s" % result["error"])
+		_error("← " + L10n.tf("CON_AI_FAILED", {"error": result["error"]}))
 		return
 
 	_print("[color=888888]← %s[/color]" % JSON.stringify(result["data"]))
@@ -405,21 +450,64 @@ func _cmd_ai(args: PackedStringArray) -> void:
 	# 走一次 AISchema，確認防注入那層真的擋得住／放得過
 	var parsed: Dictionary = AISchema.parse_completion(result["data"])
 	if parsed["ok"]:
-		_print("[color=88ff88]  內容 %s[/color]" % JSON.stringify(parsed["data"]))
+		_print("[color=88ff88]  %s %s[/color]" % [L10n.t("CON_AI_CONTENT"), JSON.stringify(parsed["data"])])
 	else:
-		_print("[color=ffcc66]  內容未通過驗證：%s[/color]" % parsed["error"])
+		_print("[color=ffcc66]  %s[/color]" % L10n.tf("CON_AI_INVALID", {"error": parsed["error"]}))
 
+# locale        顯示目前語系與可用清單
+# locale <code> 切換（zh_TW / en）
+#
+# 有這個指令才驗證得了翻譯，不然要換語系得改 project settings 重開遊戲
+func _cmd_locale(args: PackedStringArray) -> void:
+	var available := TranslationServer.get_loaded_locales()
+
+	if args.is_empty():
+		_print(L10n.tf("CON_LOCALE_CURRENT", {
+			"locale": TranslationServer.get_locale(), "available": SEP.join(available)
+		}))
+		return
+
+	if args.size() > 1:
+		_error(L10n.t("CON_USAGE_LOCALE"))
+		return
+
+	# 比對 loaded locales 而不是直接吞下去：set_locale() 對不存在的語系不會抱怨，
+	# 只會靜靜地全部 fallback，看起來就像指令沒生效
+	var wanted := args[0]
+	if not available.has(wanted):
+		_error(L10n.tf("CON_LOCALE_UNKNOWN", {"locale": wanted}))
+		_print(L10n.tf("CON_LOCALE_CURRENT", {
+			"locale": TranslationServer.get_locale(), "available": SEP.join(available)
+		}))
+		return
+
+	TranslationServer.set_locale(wanted)
+	_print(L10n.tf("CON_LOCALE_SWITCHED", {"locale": wanted}))
+
+# 指令語法那一欄是識別字，不翻；說明另起一行 ——
+# 舊版靠字面空格把說明對齊成一欄，但主控台用的是比例字型，
+# 那個對齊本來就只是近似，換成英文說明就整排歪掉
 func _cmd_help(_args: PackedStringArray) -> void:
-	_print("goto <name> <x> <y>           指定角色走到該格（格座標，A* 尋徑）")
-	_print("talk <name> / talk <a> <b>    搭話。單一參數是玩家對誰講")
-	_print("status [name]                 顯示角色狀態（省略就看玩家自己）")
-	_print("debug [項目] [on|off]         疊圖開關：grid coord solid path vision collision")
-	_print("stop                          停止玩家目前的移動")
-	_print("pos                           顯示玩家座標與所在格")
-	_print("nav rebuild                   重建尋徑網格（改完地圖用）")
-	_print("ai [文字]                     對 LLM 打一次測試請求（行程政策，吃冷卻）")
-	_print("ai dialogue [文字]            同上但走對話政策（豁免冷卻與每日配額）")
-	_print("clear                         清空輸出")
+	_help_line("goto <name> <x> <y>", "HELP_GOTO")
+	_help_line("talk <name> / talk <a> <b>", "HELP_TALK")
+	_help_line("status [name]", "HELP_STATUS")
+	_help_line("debug [layer] [on|off]", "HELP_DEBUG")
+	_help_line("stop", "HELP_STOP")
+	_help_line("pos", "HELP_POS")
+	_help_line("nav rebuild", "HELP_NAV")
+	_help_line("ai [text]", "HELP_AI")
+	_help_line("ai dialogue [text]", "HELP_AI_DIALOGUE")
+	_help_line("locale [code]", "HELP_LOCALE")
+	_help_line("clear", "HELP_CLEAR")
+
+# usage 欄的方括號要轉義成 [lb]，否則會被當成 BBCode 標籤吃掉 ——
+# 「locale [code]」裡的 [code] 剛好是 RichTextLabel 真的認得的標籤，
+# 不轉義的話整行會渲染成「locale [/color]」。這裡一律轉義，
+# 之後加指令就不必去記哪些字剛好撞名
+func _help_line(usage: String, key: String) -> void:
+	_print("[color=88ccff]%s[/color]\n  [color=888888]%s[/color]" % [
+		usage.replace("[", "[lb]"), L10n.t(key)
+	])
 
 func _cmd_clear(_args: PackedStringArray) -> void:
 	output.clear()

@@ -47,7 +47,7 @@ var enabled := false
 var base_url := DEFAULT_BASE_URL
 var model := DEFAULT_MODEL
 var timeout := DEFAULT_TIMEOUT
-var status_reason := "尚未載入設定"
+var status_reason := L10n.t("AI_STATUS_NOT_LOADED")
 
 var min_interval_sec := DEFAULT_MIN_INTERVAL_SEC
 var max_calls_per_game_day := DEFAULT_MAX_CALLS_PER_GAME_DAY
@@ -62,14 +62,14 @@ static func load_from_user() -> AIConfig:
 	var config := AIConfig.new()
 
 	if not FileAccess.file_exists(CONFIG_PATH):
-		config.status_reason = "找不到 %s（可從 %s 複製一份過去）" % [CONFIG_PATH, EXAMPLE_PATH]
+		config.status_reason = L10n.tf("AI_STATUS_NO_FILE", {"path": CONFIG_PATH, "example": EXAMPLE_PATH})
 		return config
 
 	var file := FileAccess.open(CONFIG_PATH, FileAccess.READ)
 	if file == null:
 		# 檔案在卻開不起來是權限之類的真問題，值得吵一下 —— 但訊息裡只有路徑沒有內容
 		push_error("AIConfig: 開不了 %s（錯誤碼 %d）" % [CONFIG_PATH, FileAccess.get_open_error()])
-		config.status_reason = "開不了 %s，請檢查檔案權限" % CONFIG_PATH
+		config.status_reason = L10n.tf("AI_STATUS_CANNOT_OPEN", {"path": CONFIG_PATH})
 		return config
 
 	var text := file.get_as_text()
@@ -80,7 +80,7 @@ static func load_from_user() -> AIConfig:
 	var json := JSON.new()
 	if json.parse(text) != OK or not json.data is Dictionary:
 		push_error("AIConfig: %s 不是合法的 JSON 物件" % CONFIG_PATH)
-		config.status_reason = "%s 格式錯誤，請對照 %s" % [CONFIG_PATH, EXAMPLE_PATH]
+		config.status_reason = L10n.tf("AI_STATUS_BAD_JSON", {"path": CONFIG_PATH, "example": EXAMPLE_PATH})
 		return config
 
 	config._apply(json.data as Dictionary)
@@ -105,27 +105,27 @@ func _apply(data: Dictionary) -> void:
 	var wants_enabled := bool(data.get("enabled", false))
 	if not wants_enabled:
 		enabled = false
-		status_reason = "%s 裡 enabled = false" % CONFIG_PATH
+		status_reason = L10n.tf("AI_STATUS_DISABLED", {"path": CONFIG_PATH})
 		return
 
 	if api_key.is_empty():
 		enabled = false
-		status_reason = "%s 裡沒有填 api_key" % CONFIG_PATH
+		status_reason = L10n.tf("AI_STATUS_NO_KEY", {"path": CONFIG_PATH})
 		return
 
 	if base_url.is_empty() or model.is_empty():
 		enabled = false
-		status_reason = "%s 裡 base_url 或 model 是空的" % CONFIG_PATH
+		status_reason = L10n.tf("AI_STATUS_NO_ENDPOINT", {"path": CONFIG_PATH})
 		return
 
 	enabled = true
-	status_reason = "已啟用"
+	status_reason = L10n.t("AI_STATUS_ENABLED")
 
 
 # 唯一准許把金鑰帶進輸出的路徑。頭尾各留 MASK_KEEP 碼，中間一律省略
 func masked_key() -> String:
 	if api_key.is_empty():
-		return "(未設定)"
+		return L10n.t("AI_KEY_UNSET")
 	if api_key.length() < MASK_KEEP * 2:
 		return "*".repeat(api_key.length())
 	return "%s…%s" % [api_key.substr(0, MASK_KEEP), api_key.substr(api_key.length() - MASK_KEEP)]
@@ -139,7 +139,15 @@ func completions_url() -> String:
 # 印出去給人看的一行摘要。刻意覆寫 _to_string，讓「不小心 print(config)」
 # 也印不出金鑰 —— 靠自律不夠，要靠這條路本身就是安全的
 func _to_string() -> String:
-	return "AIConfig(enabled=%s, base_url=%s, model=%s, timeout=%.1f, key=%s, 冷卻=%.0fs, 每日=%d, 對話豁免=%s)" % [
-		enabled, base_url, model, timeout, masked_key(),
-		min_interval_sec, max_calls_per_game_day, dialogue_exempt
-	]
+	# 小數位數在這裡先格式化成字串再交給 format()：format() 沒有格式規格，
+	# 而把 %.1f 留在翻譯字串裡等於要譯者處理格式碼
+	return L10n.tf("AI_CONFIG_SUMMARY", {
+		"enabled": enabled,
+		"base_url": base_url,
+		"model": model,
+		"timeout": "%.1f" % timeout,
+		"key": masked_key(),
+		"cooldown": "%.0f" % min_interval_sec,
+		"daily": max_calls_per_game_day,
+		"exempt": dialogue_exempt,
+	})

@@ -5,7 +5,8 @@ extends Node
 ## 每加一項就要改 _process、needs_attention、get_lowest_need 三個地方）。
 ##
 ## 要加一項數值只要在 SPEC 加一列，其餘程式都不用動（連 debug 主控台的顯示也是）：
-##   label    顯示名稱
+##   label    顯示名稱的翻譯 key（res://locale/game.csv 的 STAT_*）。
+##            這裡刻意存 key 不存字：SPEC 是純資料，翻譯留給顯示端做
 ##   drift    每現實秒往 toward 靠近多少，0 表示不會自然變化
 ##   toward   數值自然漂向哪裡。需求類漂向 0（會餓、會累），心情漂回平常值
 ##   is_need  是不是「低了就該去解決」的東西。心情不是，所以不會被
@@ -23,11 +24,11 @@ const MAX := 100.0
 const CRITICAL := 30.0		# 低於這個值算「該處理了」
 
 const SPEC := {
-	"hunger": {"label": "飢餓", "drift": 3.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "restaurant"},
-	"energy": {"label": "精力", "drift": 1.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "home_001"},
-	"social": {"label": "社交", "drift": 0.5, "toward": 0.0, "start": 100.0, "is_need": true, "place": "square"},
-	"fun": {"label": "娛樂", "drift": 0.2, "toward": 0.0, "start": 100.0, "is_need": true, "place": "square"},
-	"mood": {"label": "心情", "drift": 0.5, "toward": 50.0, "start": 50.0, "is_need": false, "place": ""},
+	"hunger": {"label": "STAT_HUNGER", "drift": 3.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "restaurant"},
+	"energy": {"label": "STAT_ENERGY", "drift": 1.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "home_001"},
+	"social": {"label": "STAT_SOCIAL", "drift": 0.5, "toward": 0.0, "start": 100.0, "is_need": true, "place": "square"},
+	"fun": {"label": "STAT_FUN", "drift": 0.2, "toward": 0.0, "start": 100.0, "is_need": true, "place": "square"},
+	"mood": {"label": "STAT_MOOD", "drift": 0.5, "toward": 50.0, "start": 50.0, "is_need": false, "place": ""},
 }
 
 var values := {}
