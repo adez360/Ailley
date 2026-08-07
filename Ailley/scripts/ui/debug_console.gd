@@ -351,8 +351,12 @@ const AI_REQUESTER_ID := "debug_console"
 const AI_PROBE_SYSTEM := "You are a connection probe. Reply with JSON only, no prose, no code fence: {\"ok\": true, \"echo\": \"<the text field you were given>\"}"
 const AI_PROBE_TEXT := "hello from ailley"
 
-# ai            用預設探針句打一次，印出往返內容
-# ai <文字>     改用這段文字當探針
+# ai                    用預設探針句打一次（走 SCHEDULED，吃 30 秒冷卻）
+# ai <文字>             改用這段文字當探針
+# ai dialogue [<文字>]  走 CONVERSATION，驗證對話輪次確實豁免冷卻與配額
+#
+# 兩種都留著才測得出差別：連打兩次 ai 第二次應該被擋，
+# 連打兩次 ai dialogue 應該兩次都過
 #
 # 每次都先 reload_config()，玩家剛寫完 user://ai_config.json 不用重開遊戲
 func _cmd_ai(args: PackedStringArray) -> void:
@@ -366,21 +370,32 @@ func _cmd_ai(args: PackedStringArray) -> void:
 		_print("[color=ffcc66]AI 未啟用：%s[/color]" % config.status_reason)
 		return
 
+	# 第一個參數是 dialogue 就切成對話政策，其餘參數仍然是探針句
+	var policy := AIService.Policy.SCHEDULED
+	var rest := args
+	if args.size() > 0 and args[0].to_lower() == "dialogue":
+		policy = AIService.Policy.CONVERSATION
+		rest = args.slice(1)
+
 	var usage: Dictionary = AIService.get_usage(AI_REQUESTER_ID)
-	_print("[color=888888]  第 %d 遊戲日 已用 %d/%d 次　佇列 %d　飛行中 %d[/color]" % [
+	_print("[color=888888]  第 %d 遊戲日　行程 %d/%d 次　對話 %d 次（%s）　冷卻剩 %.0fs　佇列 %d　飛行中 %d[/color]" % [
 		usage["game_day"], usage["calls_today"], usage["max_calls"],
-		usage["queued"], usage["in_flight"],
+		usage["dialogue_today"], "豁免" if usage["dialogue_exempt"] else "不豁免",
+		usage["cooldown_left"], usage["queued"], usage["in_flight"],
 	])
 
-	var text := " ".join(args) if not args.is_empty() else AI_PROBE_TEXT
+	var text := " ".join(rest) if not rest.is_empty() else AI_PROBE_TEXT
 	var envelope := {
 		"system": AI_PROBE_SYSTEM,
 		"payload": {"type": "ping", "text": text},
 	}
 
-	_print("[color=888888]→ %s[/color]" % JSON.stringify(envelope["payload"]))
+	_print("[color=888888]→ [%s] %s[/color]" % [
+		"對話" if policy == AIService.Policy.CONVERSATION else "行程",
+		JSON.stringify(envelope["payload"]),
+	])
 
-	var result: Dictionary = await AIService.request(envelope, AI_REQUESTER_ID)
+	var result: Dictionary = await AIService.request(envelope, AI_REQUESTER_ID, policy)
 	if not result["ok"]:
 		_error("← 失敗：%s" % result["error"])
 		return
@@ -402,7 +417,8 @@ func _cmd_help(_args: PackedStringArray) -> void:
 	_print("stop                          停止玩家目前的移動")
 	_print("pos                           顯示玩家座標與所在格")
 	_print("nav rebuild                   重建尋徑網格（改完地圖用）")
-	_print("ai [文字]                     對 LLM 打一次測試請求（同 id 30 秒內只准一次）")
+	_print("ai [文字]                     對 LLM 打一次測試請求（行程政策，吃冷卻）")
+	_print("ai dialogue [文字]            同上但走對話政策（豁免冷卻與每日配額）")
 	_print("clear                         清空輸出")
 
 func _cmd_clear(_args: PackedStringArray) -> void:

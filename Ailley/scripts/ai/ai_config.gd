@@ -26,6 +26,19 @@ const DEFAULT_MODEL := "openai/gpt-4o-mini"
 # 10 秒是 HTTPRequest.timeout 的值，不是自寫的計時器 —— 引擎原生支援逾時
 const DEFAULT_TIMEOUT := 10.0
 
+## 速率限制的預設值。放在設定檔而不是寫死在 ai_service.gd，是因為這兩個數字
+## 是「花多少錢」的旋鈕，屬於玩家的決定，不是程式的常數（決策裡它們也標著「暫定」）
+const DEFAULT_MIN_INTERVAL_SEC := 30.0
+const DEFAULT_MAX_CALLS_PER_GAME_DAY := 20
+
+## 對話輪次要不要豁免上面兩條限制。預設豁免 ——
+## MIN_INTERVAL_SEC 是為「行程重排」訂的，而對話輪次是秒級間隔，
+## 套上去會從第二輪起全部回 rate_limited，等於對話根本接不起來。
+##
+## 留成開關而不是寫死，是因為代價是真的：豁免之後對話成本沒有上限。
+## 想先保住帳單的人可以把它關掉，代價是 LLM 對話大多會退回模板句
+const DEFAULT_DIALOGUE_EXEMPT := true
+
 # 遮蔽後保留的頭尾碼數。金鑰短於這個長度的兩倍就整條蓋掉，
 # 免得「遮蔽」反而把一條短金鑰幾乎完整印出來
 const MASK_KEEP := 4
@@ -35,6 +48,10 @@ var base_url := DEFAULT_BASE_URL
 var model := DEFAULT_MODEL
 var timeout := DEFAULT_TIMEOUT
 var status_reason := "尚未載入設定"
+
+var min_interval_sec := DEFAULT_MIN_INTERVAL_SEC
+var max_calls_per_game_day := DEFAULT_MAX_CALLS_PER_GAME_DAY
+var dialogue_exempt := DEFAULT_DIALOGUE_EXEMPT
 
 # 不給預設值以外的任何存取糖衣：想印它的人只能拿到 masked_key()
 var api_key := ""
@@ -77,6 +94,12 @@ func _apply(data: Dictionary) -> void:
 	timeout = float(data.get("timeout", DEFAULT_TIMEOUT))
 	api_key = str(data.get("api_key", "")).strip_edges()
 
+	# 速率限制在 enabled 的判斷之前就先讀，不然「設定檔在、但 enabled = false」
+	# 的路徑會提早 return，留下一組沒套用過的預設值。負數視為 0（不限）
+	min_interval_sec = maxf(0.0, float(data.get("min_interval_sec", DEFAULT_MIN_INTERVAL_SEC)))
+	max_calls_per_game_day = maxi(0, int(data.get("max_calls_per_game_day", DEFAULT_MAX_CALLS_PER_GAME_DAY)))
+	dialogue_exempt = bool(data.get("dialogue_exempt", DEFAULT_DIALOGUE_EXEMPT))
+
 	# enabled 是「算出來的結果」不是「照抄設定檔」：設定檔寫 true 但沒填金鑰時
 	# 仍然要 false，否則每次呼叫都會撞 401，錯誤訊息還離真正的原因很遠
 	var wants_enabled := bool(data.get("enabled", false))
@@ -116,6 +139,7 @@ func completions_url() -> String:
 # 印出去給人看的一行摘要。刻意覆寫 _to_string，讓「不小心 print(config)」
 # 也印不出金鑰 —— 靠自律不夠，要靠這條路本身就是安全的
 func _to_string() -> String:
-	return "AIConfig(enabled=%s, base_url=%s, model=%s, timeout=%.1f, key=%s)" % [
-		enabled, base_url, model, timeout, masked_key()
+	return "AIConfig(enabled=%s, base_url=%s, model=%s, timeout=%.1f, key=%s, 冷卻=%.0fs, 每日=%d, 對話豁免=%s)" % [
+		enabled, base_url, model, timeout, masked_key(),
+		min_interval_sec, max_calls_per_game_day, dialogue_exempt
 	]
