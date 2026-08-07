@@ -179,3 +179,8 @@ grammar／prompt 零影響）：
 使用者確認 Godot 端跟 AI 決策後端的通訊協議走 **HTTP**（不是 WebSocket／gRPC／
 其他）。**這條不需要額外動作**——現有 `server.py` 本來就是 FastAPI 寫的 HTTP
 API（`POST /decide`，走 Tailscale 網段），架構已經對上，不用改。
+
+**確認過的前提**：HTTP 是「一問一答」模式，AI 後端沒辦法主動推事件給 Godot
+（規格書04提到的`witnessed_death`／`corpse_found`／`stone_message`這類事件廣播）
+——已跟使用者確認**這些事件廣播全部是 Godot 自己內部處理**，AI 後端只負責
+「這個角色現在要做什麼決策」，不涉及廣播，所以 HTTP 完全夠用，沒有隱藏風險。
