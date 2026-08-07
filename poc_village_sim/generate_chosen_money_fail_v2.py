@@ -27,9 +27,11 @@ POC_DIR = Path(__file__).parent
 SRC_PATH = POC_DIR / "transcripts" / "dpo_chosen_money_fail_v1.json"
 OUT_PATH = POC_DIR / "transcripts" / "dpo_chosen_money_fail_v2.json"
 
-# 跟 run_tick_sim.py 的 SELL_PRICES 完全一致——只有這幾樣物品引擎才會真的收購，
-# 用別的名字（例如角色背景設定裡的「狼皮」「野雞」）去賣會直接失敗，不能教這個。
-SELL_PRICES = {"獸皮": 15, "獸肉": 8, "藥草": 8}
+import sys  # noqa: E402
+sys.path.insert(0, str(POC_DIR))
+import run_tick_sim as rts  # noqa: E402  只有這幾樣物品引擎才會真的收購，直接引用
+# 單一事實來源，不要另外複製一份常數，避免兩邊之後改了其中一邊就對不上
+SELL_PRICES = rts.SELL_PRICES
 
 AJI_STEAL_PROBABILITY = 0.35
 random.seed(20260807)  # 固定種子，重跑結果可重現，方便之後對照/除錯
