@@ -87,7 +87,7 @@ func _on_spotted(other: Character) -> void:
 	if relationships != null and relationships.has_met(other.character_id):
 		return
 
-	say("！")
+	say(L10n.t("DLG_SURPRISE"))
 	stop_moving()
 	await get_tree().create_timer(NOTICE_PAUSE).timeout
 

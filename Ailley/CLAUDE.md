@@ -104,14 +104,20 @@ MCP 兩邊都**沒有**搬檔的 op，所以只能用 `git mv`。流程固定，
 
 ## Headless 驗證
 
-`~/Applications/Godot-4.5.1.x86_64`（不在 PATH，`mcp__godot__launch_editor`
-因此也用不了）。不需要編輯器連線就能驗兩件事：
+`/usr/share/godot/Godot_v4.5.1-stable_linux.x86_64`（不在 PATH，
+`mcp__godot__launch_editor` 因此也用不了）。不需要編輯器連線就能驗兩件事：
 
 ```bash
-G=~/Applications/Godot-4.5.1.x86_64
+G=/usr/share/godot/Godot_v4.5.1-stable_linux.x86_64
 $G --headless --path . --check-only --script scripts/<領域>/x.gd   # 語法
 $G --headless --path . --quit-after 300                            # 開得起來嗎
 ```
+
+> [!warning] `--check-only` 認不得 autoload 與新註冊的 class
+> 它只 parse 單一檔案，所以引用 `GameManager`／`GameClock`／`AIService` 的檔案
+> 一定會報 `Identifier not found`，那是模式限制不是程式錯誤。
+> 剛加了新的 `class_name` 也一樣 —— 要先 `filesystem_manage(op="scan")`
+> 讓編輯器把它註冊進 global class 快取，否則整個檔案都是 Parse Error。
 
 結尾的 `RID allocations ... leaked at exit` / `ObjectDB instances leaked`
 是 `--quit-after` 強制結束的正常雜訊，不是專案錯誤。

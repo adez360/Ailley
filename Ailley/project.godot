@@ -69,6 +69,11 @@ chat={
 ]
 }
 
+[internationalization]
+
+locale/translations=["res://locale/game.zh_TW.translation", "res://locale/game.en.translation", "res://locale/console.zh_TW.translation", "res://locale/console.en.translation"]
+locale/fallback="zh_TW"
+
 [layer_names]
 
 2d_physics/layer_1="terrain"

@@ -40,4 +40,4 @@ scroll_following = true
 [node name="Input" type="LineEdit" parent="Root/VBoxContainer"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 7
-placeholder_text = "指令…（help）"
+placeholder_text = "UI_CONSOLE_PLACEHOLDER"

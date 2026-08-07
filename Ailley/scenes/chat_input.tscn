@@ -25,4 +25,4 @@ offset_top = -24.0
 offset_right = 88.0
 offset_bottom = -10.0
 theme_override_font_sizes/font_size = 7
-placeholder_text = "說點什麼…（Enter 送出，Esc 取消）"
+placeholder_text = "UI_CHAT_PLACEHOLDER"
