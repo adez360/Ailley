@@ -173,3 +173,9 @@ grammar／prompt 零影響）：
 六級優先權佇列、死亡系統——這些欄位規格書要求但 POC 資料模型裡不存在，要先
 補齊資料模型（characters.py／characters/*.json／run_des_sim.py）才能真的串進
 `server.py`，不是這次「小範圍」能一起做的。
+
+## 九、通訊協議決定：HTTP（2026-08-07）
+
+使用者確認 Godot 端跟 AI 決策後端的通訊協議走 **HTTP**（不是 WebSocket／gRPC／
+其他）。**這條不需要額外動作**——現有 `server.py` 本來就是 FastAPI 寫的 HTTP
+API（`POST /decide`，走 Tailscale 網段），架構已經對上，不用改。
