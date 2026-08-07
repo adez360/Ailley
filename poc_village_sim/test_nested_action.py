@@ -26,14 +26,23 @@ TRANSCRIPT_DIR = POC_DIR / "transcripts"
 
 
 def analyze_run(events: list) -> dict:
-    """回傳 {角色名: {"n", "same_rate", "cycle2_rate", "null_target_rate"}}。
-    null_target_rate 額外統計「偷竊/搶劫/攻擊/抓捕/舉報」這類理當要有對象的動作裡
-    target 填 null 的比例，沿用房屋偷竊實驗發現的診斷方式（見 note）。"""
+    """回傳 {角色名: {"n", "same_rate", "cycle2_rate", "null_target_rate", "attempt_rate"}}。
+
+    2026-08-07：原本只有 null_target_rate 一個指標，8/6-8/7 那次巢狀分類對照發現
+    這個指標會混淆兩件不同的事——baseline 裡老周/小梅幾乎不會嘗試偷竊/攻擊這類
+    動作（分母是0），nested 版一換分類框架卻突然嘗試了幾十次，null_target_rate
+    從 0% 跳到 30-40%，看起來像「變差」，但其實是「嘗試頻率暴增、順便帶出填
+    target不準」兩件事疊在一起，不能只看一個數字。這裡拆成兩個獨立指標：
+    - attempt_rate：這類需對象動作佔「總決策次數」的比例（是不是變得更常嘗試）
+    - null_target_rate：嘗試了之後，target 填 null 的比例（嘗試時填得準不準）
+    分開看才能判斷 baseline/nested 的差異到底是「更常選」還是「選了填不準」。"""
     NEEDS_TARGET_ACTIONS = {"偷竊", "搶劫", "破壞樂器", "攻擊", "抓捕", "舉報"}
     by_char = defaultdict(list)
     target_stats = defaultdict(lambda: [0, 0])  # name -> [null次數, 該類動作總數]
     for ev in events:
-        if ev.get("system_forced"):
+        # feasibility_rejected：模型宣告的動作被引擎打回票（重試中）或最後被強制改成發呆，
+        # 不管哪一種，模型宣告的原始動作實際上都沒有真的執行，不能算進「他自己選了什麼」。
+        if ev.get("system_forced") or ev.get("feasibility_rejected"):
             continue
         intent = ev.get("output", {}).get("intent", {})
         action = intent.get("action")
@@ -60,17 +69,23 @@ def analyze_run(events: list) -> dict:
             else:
                 cycle2_rate = None
             result[name] = {"n": n, "same_rate": same_rate, "cycle2_rate": cycle2_rate}
-        null_n, total_n = target_stats[name]
-        result[name]["null_target_rate"] = (null_n / total_n) if total_n else None
-        result[name]["needs_target_n"] = total_n
+        null_n, total_needs_target = target_stats[name]
+        result[name]["null_target_rate"] = (null_n / total_needs_target) if total_needs_target else None
+        result[name]["needs_target_n"] = total_needs_target
+        result[name]["attempt_rate"] = (total_needs_target / n) if n else None
     return result
 
 
 def aggregate(all_analyses: list) -> dict:
-    agg = defaultdict(lambda: {"n": 0, "same": 0, "cyc": 0, "cyc_n": 0, "null_n": 0, "needs_target_n": 0})
+    agg = defaultdict(lambda: {
+        "n": 0, "same": 0, "cyc": 0, "cyc_n": 0,
+        "null_n": 0, "needs_target_n": 0, "total_decisions": 0,
+    })
     for analysis in all_analyses:
         for name, stats in analysis.items():
             a = agg[name]
+            if stats["n"] is not None:
+                a["total_decisions"] += stats["n"]
             if stats["n"] is not None and stats["n"] >= 2:
                 a["n"] += stats["n"] - 1
                 a["same"] += round(stats["same_rate"] * (stats["n"] - 1))
@@ -106,7 +121,8 @@ def run_mode(mode: str, template_path: Path, grammar_path: Path, target_game_min
         print(f"第 {run_index} 次完成，{result['num_events']} 個事件，已存到 {out_path}")
         for name, stats in analysis.items():
             print(f"  {name}: n={stats['n']} same_rate={stats['same_rate']} cycle2_rate={stats['cycle2_rate']} "
-                  f"null_target_rate={stats['null_target_rate']}（需對象動作共 {stats['needs_target_n']} 次）")
+                  f"attempt_rate={stats['attempt_rate']} null_target_rate={stats['null_target_rate']}"
+                  f"（需對象動作共 {stats['needs_target_n']} 次）")
 
     agg = aggregate(all_analyses)
     print(f"\n========== [{mode}] 彙整（跨輪次，依決策次數加權）==========")
@@ -114,9 +130,11 @@ def run_mode(mode: str, template_path: Path, grammar_path: Path, target_game_min
         same_rate = a["same"] / a["n"] if a["n"] else None
         cyc_rate = a["cyc"] / a["cyc_n"] if a["cyc_n"] else None
         null_rate = a["null_n"] / a["needs_target_n"] if a["needs_target_n"] else None
+        attempt_rate = a["needs_target_n"] / a["total_decisions"] if a["total_decisions"] else None
         print(f"  {name}: 決策數(n-1)={a['n']} same_rate={(same_rate or 0):.2%} "
-              f"cycle2_rate={(cyc_rate or 0):.2%} null_target_rate={(null_rate or 0):.2%}"
-              f"（需對象動作共 {a['needs_target_n']} 次）")
+              f"cycle2_rate={(cyc_rate or 0):.2%} attempt_rate={(attempt_rate or 0):.2%} "
+              f"null_target_rate={(null_rate or 0):.2%}"
+              f"（需對象動作共 {a['needs_target_n']} 次／總決策 {a['total_decisions']} 次）")
     return agg
 
 
@@ -146,9 +164,12 @@ def main() -> None:
                 continue
             b_same = b["same"] / b["n"] if b["n"] else 0
             n_same = n["same"] / n["n"] if n["n"] else 0
+            b_attempt = b["needs_target_n"] / b["total_decisions"] if b["total_decisions"] else 0
+            n_attempt = n["needs_target_n"] / n["total_decisions"] if n["total_decisions"] else 0
             b_null = b["null_n"] / b["needs_target_n"] if b["needs_target_n"] else 0
             n_null = n["null_n"] / n["needs_target_n"] if n["needs_target_n"] else 0
             print(f"  {name}: same_rate {b_same:.2%} -> {n_same:.2%}　"
+                  f"attempt_rate {b_attempt:.2%}（{b['needs_target_n']}次） -> {n_attempt:.2%}（{n['needs_target_n']}次）　"
                   f"null_target_rate {b_null:.2%} -> {n_null:.2%}")
 
 

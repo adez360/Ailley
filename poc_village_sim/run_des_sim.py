@@ -537,6 +537,13 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
                 reports_filed_today=me.get("reports_filed_today", 0),
             )
             if not feasible:
+                # 2026-08-07：這個事件已經在上面 events_log.append() 記錄過模型的原始宣告，
+                # 但這裡不管是「重試」還是最後「強制改成發呆」，模型宣告的動作實際上都沒有
+                # 真的執行（不消耗時間、不產生效果）——回頭在已經寫入的事件上補一個標記，
+                # 讓分析腳本（例如 test_nested_action.py 的重複鎖定統計）可以排除掉這些
+                # 「宣告了但沒真的發生」的事件，不然同一個角色連續打回票好幾次會被誤算成
+                # 他自己選了好幾次重複動作，8/7 那次巢狀分類實驗阿吉的樣本就是被這個污染的。
+                events_log[-1]["feasibility_rejected"] = True
                 me["feasibility_retries"] += 1
                 if me["feasibility_retries"] < FEASIBILITY_MAX_RETRIES:
                     # 這句話是給「下一次重試」看的，所以掛建議語——第一次宣告失敗本身
@@ -565,6 +572,8 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
                 # last_action_result 時的 else 分支會直接覆蓋掉，一定要透過同一套組裝
                 # 邏輯才能保留這句話（見下面 target_note/last_action_result 組裝處）。
                 forced_fallback_note = f"{infeasible_reason}（已連續失敗 {FEASIBILITY_MAX_RETRIES} 次，強制改成發呆）"
+                events_log[-1]["feasibility_forced_fallback"] = True
+                events_log[-1]["executed_action"] = FEASIBILITY_FALLBACK_ACTION
                 me["feasibility_retries"] = 0
             else:
                 me["feasibility_retries"] = 0
