@@ -167,8 +167,15 @@ def decide(req: DecideRequest):
     with _clock_lock:
         _character_clocks[req.character_id] = action_start_offset_seconds + duration_seconds
 
+    # 2026-08-07：補上 npc_ 前綴欄位，對齊 Ru 的正式規格書（00 §3 命名約定：角色
+    # id 一律 npc_ 前綴）。新舊欄位並存——不拿掉 character_id／target_id，組員可以
+    # 先用舊欄位串接，之後正式切過去用 npc_id／target_npc_id 再拔掉舊的，過渡期
+    # 兩邊都能用，不會突然斷。location 的 owner_id（HOME 地點才有）也一併補。
+    if location["owner_id"] is not None:
+        location = {**location, "owner_npc_id": f"npc_{location['owner_id']}"}
     return {
         "character_id": req.character_id,
+        "npc_id": f"npc_{req.character_id}",
         "elapsed_seconds": round(elapsed, 2),
         "action_start_offset_seconds": action_start_offset_seconds,
         "action_duration_seconds": duration_seconds,
@@ -176,5 +183,6 @@ def decide(req: DecideRequest):
         "action_en": action_en,
         "location": location,
         "target_id": target_id,
+        "target_npc_id": f"npc_{target_id}" if target_id else None,
         "output": out,
     }

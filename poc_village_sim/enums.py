@@ -24,62 +24,78 @@ class LocationKind(str, Enum):
 class Action(str, Enum):
     """member 名稱是英文代號，value 是 grammar 裡實際會出現的中文字串。
     跟 grammar/turn.gbnf.template 等檔案的 action 清單必須保持一致——新增/刪除動作
-    時兩邊都要改。"""
-    SPEAK = "說話"
-    ANNOUNCE = "喊話"
-    WHISPER = "悄悄話"
-    HANDSHAKE = "握手"
-    HUG = "擁抱"
-    GIVE_GIFT = "送禮"
-    GIVE_MONEY = "給錢"
-    MARRY = "結婚"
-    DIVORCE = "離婚"
-    STEAL = "偷竊"
-    ROB = "搶劫"
-    SABOTAGE_INSTRUMENT = "破壞樂器"
-    ATTACK = "攻擊"
-    CAPTURE = "抓捕"
-    REPORT = "舉報"
-    HUNT = "打獵"
-    GATHER_HERBS = "採草藥"
-    FISH = "釣魚"
-    PERFORM = "表演"
-    BUY = "買東西"
-    SELL = "賣東西"
-    HEAL = "治療"
-    EAT = "吃飯"
-    DRINK = "喝酒"
-    MOVE = "移動"
-    RUN = "奔跑"
-    CROUCH = "蹲下"
-    HOLD_HEAD = "抱頭"
-    RAISE_HAND = "舉手"
-    SCREAM = "大叫"
-    THROW_ITEM = "摔東西"
-    BLOW_KISS = "飛吻"
-    FOLLOW = "跟隨"
-    SHOW_ITEM = "展示物品"
-    PATROL = "巡邏"
-    SURRENDER = "自首"
-    SLEEP = "睡覺"
-    ZONE_OUT = "發呆"
+    時兩邊都要改。
+
+    2026-08-07：member 名稱改成對齊隊友 Ru 的正式規格書（07 地點與行動規格書 §4）
+    的英文動詞（例如 CAPTURE→arrest、ANNOUNCE→shout、ZONE_OUT→idle），只改左邊的
+    識別字，value（中文字串，grammar 實際比對用）完全不動。`hunt` 是唯一沒有精確
+    對應的一個——規格書把打獵拆成 hunt_small／hunt_large 兩種，POC 目前的「打獵」
+    沒有這個區分，先保留單一 `hunt`，等 POC 這邊也拆分大小型獵物再對齊。"""
+    speak = "說話"
+    shout = "喊話"
+    whisper = "悄悄話"
+    handshake = "握手"
+    hug = "擁抱"
+    give_item = "送禮"
+    give_money = "給錢"
+    marry = "結婚"
+    divorce = "離婚"
+    steal = "偷竊"
+    rob = "搶劫"
+    break_item = "破壞樂器"
+    attack = "攻擊"
+    arrest = "抓捕"
+    report = "舉報"
+    hunt = "打獵"  # 規格書拆 hunt_small/hunt_large，POC 尚未區分，見上方說明
+    gather = "採草藥"
+    fish = "釣魚"
+    perform = "表演"
+    buy = "買東西"
+    sell = "賣東西"
+    heal = "治療"
+    eat = "吃飯"
+    drink = "喝酒"
+    move_to = "移動"
+    run_to = "奔跑"
+    crouch = "蹲下"
+    cover_head = "抱頭"
+    raise_hand = "舉手"
+    scream = "大叫"
+    throw_item = "摔東西"
+    blow_kiss = "飛吻"
+    follow = "跟隨"
+    show_item = "展示物品"
+    patrol = "巡邏"
+    surrender = "自首"
+    sleep = "睡覺"
+    idle = "發呆"
 
 
 class SharedLocation(str, Enum):
     """跟 run_tick_sim.SHARED_LOCATIONS 保持一致——只涵蓋公用地點，不含「家」，
-    家的部分見 location_to_english()。"""
-    TAVERN = "餐酒館"
-    PAVILION = "涼亭"
-    LAKE = "湖泊"
-    BENCH = "長椅"
-    FOREST = "森林"
-    HERB_PATCH = "藥草叢"
-    CLOTHING_SHOP = "服裝鋪"
-    HERBALIST = "藥草鋪"
-    REFORM_HOUSE = "洗心革面所"
-    WEDDING_HALL = "結婚禮堂"
-    GANDALF_STONE = "甘道夫石"
-    VILLAGE_SQUARE = "村莊廣場"
+    家的部分見 location_to_english()。
+
+    2026-08-07：member 名稱全部改小寫，對齊 Ru 的正式規格書（07 §1）的
+    `location_id`（拿掉 `loc_` 前綴，前綴留給之後真的要組回 `loc_xxx` 格式的地方
+    再加，理由同 Action 那邊的說明）：REFORM_HOUSE→jail（規格書 `loc_jail` 就是
+    洗心革面所）、WEDDING_HALL→chapel（`loc_chapel`）、HERB_PATCH→herb_field
+    （`loc_herb_field`）、HERBALIST→herb_shop（`loc_herb_shop`）、
+    VILLAGE_SQUARE→square（`loc_square`）。`divine_stone`（甘道夫石）沿用舊名但
+    改英文——規格書 07 §1-1 說這其實**不是地點，是可移動物件**
+    （`obj_divine_stone`），正式要拆出 SharedLocation 之外自成一類，這次範圍只
+    處理命名，不動資料結構，先照舊放在這裡，拆分留待之後。"""
+    tavern = "餐酒館"
+    pavilion = "涼亭"
+    lake = "湖泊"
+    bench = "長椅"
+    forest = "森林"
+    herb_field = "藥草叢"
+    clothing_shop = "服裝鋪"
+    herb_shop = "藥草鋪"
+    jail = "洗心革面所"
+    chapel = "結婚禮堂"
+    divine_stone = "甘道夫石"
+    square = "村莊廣場"
 
 
 def action_to_english(action_cn: str) -> str:
@@ -97,7 +113,7 @@ def build_home_lookup(cast: dict) -> dict[str, str]:
 
 def location_to_english(location_cn: str, cast: dict) -> dict:
     """中文地點字串 -> 結構化英文資料，不是單一扁平字串：
-        {"kind": "SHARED", "shared_location": "HERBALIST", "owner_id": None}
+        {"kind": "SHARED", "shared_location": "herb_shop", "owner_id": None}
         {"kind": "HOME", "shared_location": None, "owner_id": "alan"}
     `kind` 永遠是固定的封閉集合（驗證用 LocationKind）；`shared_location` 命中時驗證
     用 SharedLocation（固定 12 個）；`owner_id` 命中時驗證交給角色資料表自己的機制
