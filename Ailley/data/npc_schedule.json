@@ -1,4 +1,8 @@
 {
+	"assignments": {
+		"agent": "npc001",
+		"agent2": "npc006"
+	},
 	"villagers": [
 		{
 			"id": "npc001",
@@ -121,6 +125,36 @@
 				{
 					"time": "18:00",
 					"place": "home_005",
+					"state": "sleep"
+				}
+			]
+		},
+		{
+			"id": "npc006",
+			"schedule": [
+				{
+					"time": "08:00",
+					"place": "home_001",
+					"state": "idle"
+				},
+				{
+					"time": "09:00",
+					"place": "square",
+					"state": "talk"
+				},
+				{
+					"time": "12:00",
+					"place": "restaurant",
+					"state": "eat"
+				},
+				{
+					"time": "15:00",
+					"place": "farm",
+					"state": "work"
+				},
+				{
+					"time": "18:00",
+					"place": "home_001",
 					"state": "sleep"
 				}
 			]

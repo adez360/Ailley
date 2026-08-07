@@ -8,6 +8,11 @@ extends Character
 ## 這是「用哪份資料」而不是「我是誰」，所以刻意不共用 character_id ——
 ## id 是全遊戲唯一的身分，不可能同時等於一個手寫的模板名。
 ##
+## 這個 @export 是**後備值**，優先權低於 npc_schedule.json 的 assignments：
+## 場景裡的預設值是所有 instance 共用的，只靠它的話同一份 agent.tscn 生出來的
+## 每一隻 Agent 都會拿到同一份行程、在同一分鐘走去同一個地點。
+## 誰用哪份行程是資料，寫在資料檔裡才有辦法逐隻不同。
+##
 ## 暫時性欄位：行程改由 AI 逐一維護後（見計畫 §5.1）就會消失
 @export var schedule_template := ""
 
@@ -39,9 +44,15 @@ func _ready() -> void:
 
 	_apply_current_entry()
 
+# 先問資料檔這隻角色被指派了哪份行程，沒有指派才用場景裡的 @export 後備值。
+# 順序不能反過來：@export 一定有值（agent.tscn 的預設），反過來的話 assignments 永遠不生效
 func _load_schedule() -> void:
+	var assigned := GameManager.get_schedule_template(character_id)
+	if not assigned.is_empty():
+		schedule_template = assigned
+
 	if schedule_template.is_empty():
-		push_error("Agent %s: 沒有指定 schedule_template" % character_id)
+		push_error("Agent %s: 沒有指定 schedule_template（可在 npc_schedule.json 的 assignments 指派）" % character_id)
 		return
 
 	var data = GameManager.get_npc(schedule_template)

@@ -7,7 +7,15 @@ extends Node
 ## 狀態分散在兩個節點很容易漏掉一邊。
 ##
 ## 生命週期：Character.talk_to() 設好 initiator / target 後加進場景，
-## 講完自己 queue_free()。內容從 DialogueLines 拿，換成 LLM 時這個檔不用動。
+## 講完自己 queue_free()。內容目前從 DialogueLines 拿。
+##
+## > 這裡曾經寫著「換成 LLM 時這個檔不用動」。**那是錯的**：
+## > _speak() 直接拿回傳字串的長度算出下一輪的計時器，是徹底同步的寫法，
+## > 非同步的 LLM 塞不進去。talk 動作設計的五層分層仍然成立，
+## > 但「內容層換掉、會話層不動」只對**同步**的內容來源成立。
+## > Step 1 要把這裡改成：向某個角色「要下一句」（await），等待期間顯示「…」氣泡，
+## > 且不阻塞 _process() 的距離檢查與中斷判定。
+## > 見 note/技術/LLM 串接與 AI 服務層。
 
 signal finished(reason: String)
 

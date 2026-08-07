@@ -82,6 +82,21 @@ key 用對方的 `character_id` 而不是 name —— name 會改，用它當 ke
 每筆存成 Dictionary 而不是單一浮點數，之後加熟悉度、最後見面時間、印象標籤
 都不用改結構。
 
+> [!important] 查詢不可以建立紀錄
+> `Relationships` 的讀寫是分開的：`get_affinity()` / `get_record()` / `has_met()`
+> 全部唯讀，`get_record()` 甚至回的是副本；只有 `add_affinity()` 與 `note_meeting()`
+> 會走私有的 `_ensure_record()` 建立紀錄。
+>
+> 這條是踩出來的：原本 `get_affinity()` 走「沒有就當場建一筆」的 `get_record()`，
+> 而 `conversation.gd` 開場就會問一次好感度 ——
+> 於是**只要對話開始過，`has_met()` 就永遠為真，而 `met_count` 還是 0**。
+> 症狀是 [[視覺感測]] 那個「第一次看到陌生人才愣一下」再也不會發生
+> （搭話後立刻走開就足以觸發），而主控台會印出「好感 player 0.0（0 次）」這種自相矛盾的東西。
+>
+> 「認識」的唯一來源是 `note_meeting()`，也就是**好好講完一場話**。
+> 這件事接 LLM 之後更要緊：`met_count` 與「認不認識」是要送進 payload 的事實，
+> 不能被自己的讀取行為改寫。
+
 ## 已定案的參數
 
 | 項目 | 值 | 備註 |

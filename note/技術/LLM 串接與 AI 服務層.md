@@ -60,7 +60,7 @@ WebSocket 在本專案有位置，但是**另一條線**：
 
 | 檔案 | 職責 |
 | --- | --- |
-| `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback |
+| `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。也放速率限制的三個旋鈕 |
 | `ai_service.gd` | **唯一碰網路的地方**。autoload。節點池、佇列、逾時、速率限制、重試 |
 | `ai_schema.gd` | 回應驗證：`JSON.parse_string` → null 檢查 → 逐欄位型別檢查 → `action` 白名單 |
 | `prompt_builder.gd` | 由 Character 組出請求信封 |
@@ -281,6 +281,49 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 `rate_limited` / `no_requester_id` / `disabled` 三條防線正確；
 無設定檔時遊戲完全正常；Agent 講完話自行走到 farm `(-62,99)`，行為零變化。
 
+#### Step 0 增補 —— 速率限制的豁免介面（2026-08-07）
+
+Step 1 開工前補上的，因為原本的 `request()` **沒有任何地方能表達「這次豁免」**，
+逐輪對話會從第二輪起全部回 `rate_limited`。
+
+```gdscript
+enum Policy { SCHEDULED, CONVERSATION }
+func request(envelope, requester_id, policy := Policy.SCHEDULED) -> Dictionary
+```
+
+> [!important] 豁免的是「限制」，不是「帳」
+> `Policy.CONVERSATION` 跳過冷卻與每日配額，但**照樣計數**，走一份獨立的
+> `_dialogue_calls_today`，`get_usage()` 也照樣報。
+> 決策裡「LLM 成本上限」還沒有防護 —— 在訂得出上限之前，至少要看得見花了多少。
+
+> [!important] 豁免是雙向的
+> 對話輪次不動 `_last_call_msec` 也不動 `_calls_today`。
+> 動了的話，一輪對話就會把行程重排的冷卻往後推 30 秒、或把它的每日配額吃光 ——
+> 「不受限」同時也要「不佔別人的額度」。
+
+預設值 `Policy.SCHEDULED`：忘了指定的呼叫端會落在比較保守的那一邊，
+而不是意外拿到無限額度。
+
+三個數字搬進 `user://ai_config.json`，因為它們是「花多少錢」的旋鈕，
+是玩家的決定，不是程式的常數（決策裡它們本來就標著「暫定」）：
+
+| 欄位 | 預設 | 意義 |
+| --- | --- | --- |
+| `min_interval_sec` | 30.0 | 同 requester 的最短真實間隔，**0 = 不限** |
+| `max_calls_per_game_day` | 20 | 每遊戲日上限，**0 = 不限** |
+| `dialogue_exempt` | true | 對話輪次要不要豁免上面兩條 |
+
+`dialogue_exempt` 留成開關而不是寫死，是因為代價是真的：豁免之後對話成本沒有上限。
+想先保住帳單的人可以關掉它，代價是 LLM 對話大多會退回模板句。
+
+驗證方式（主控台）：`ai` 走 SCHEDULED，連打兩次第二次應該被擋；
+`ai dialogue` 走 CONVERSATION，連打兩次應該兩次都過。
+兩條指令的用量會分開印。
+
+> [!warning] 尚未執行期驗證
+> 這一輪改動是在沒有 Godot 執行檔、也沒有 godot-ai session 的環境做的，
+> 只做過靜態檢查。合併前要補：`project_run` → `ai` ×2 → `ai dialogue` ×2 → `logs_read`。
+
 
 
 1. `ai_config.gd` ＋ `ai_config.example.json`（真檔在 `user://`，不進 repo）
@@ -309,11 +352,18 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 4. `character.gd` 加 `signal spoke(line)`
 5. `chat_input.gd` 改為：玩家在對話中 → 文字成為玩家這一輪的台詞；否則維持 `say()`
 
-> [!important] 對話輪次豁免速率限制
-> Step 0 的 `MIN_INTERVAL_SEC = 30` 是為**行程重排**訂的，
-> 套到逐輪對話上會直接擋死（輪次是秒級間隔）。
+> [!success] 對話輪次豁免速率限制 —— 介面已完成（2026-08-07）
+> `MIN_INTERVAL_SEC = 30` 是為**行程重排**訂的，套到逐輪對話上會直接擋死。
 > 依 2026-08-05 決定：**對話輪次完全豁免冷卻與每日配額**，行程重排照原規則。
-> 成本上限等實跑過再訂。
+>
+> 已落地成 `AIService.Policy`，見上方「Step 0 增補」。
+> 對話這邊只要記得帶 `Policy.CONVERSATION`：
+>
+> ```gdscript
+> var result := await AIService.request(envelope, character_id, AIService.Policy.CONVERSATION)
+> ```
+>
+> 成本上限仍未訂，等實跑過再說。
 
 **驗收**：走到 Agent 旁按 E → 講出 LLM 產的台詞；聊天框打字 → Agent 針對內容回應；
 關掉 `enabled` → 自動回到模板句，無錯誤。
@@ -356,8 +406,11 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 > （距離 0.9 / 2.0，都在 `ARRIVE_DISTANCE = 2.0` 內），
 > 正是 `agent.gd:88` 註解講的「走不到」與「早就到了」無法區分那個已知情況，不是 bug。
 
-- [ ] `Agent` 與 `Agent2` 都是 `schedule_template = "npc001"` 且無 `character_id` 覆寫
-  （id 靠節點名小寫產生，實測為 `agent` / `agent2`）。要接人格就得先給兩隻不同的 `persona_id`
+- [x] ~~`Agent` 與 `Agent2` 都是 `schedule_template = "npc001"`~~ ——
+  已改由 `npc_schedule.json` 的 `assignments` 逐隻指派（2026-08-07），
+  `agent` → npc001、`agent2` → npc006。做法見 [[Character 基底與 Agent]]
+- [ ] 兩隻仍然沒有 `persona_id`，也沒有 `character_name` 覆寫（顯示名就是 id）。
+  接人格時一起處理
 
 ## 不在這一版
 
@@ -375,7 +428,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 - [ ] `response_format` 的 json_schema 在選定模型上到底支不支援（要實測）
 - [ ] 逐輪之後每輪都有一次網路延遲，「…」氣泡的等待體感要實跑才知道能不能接受
 - [x] `MIN_INTERVAL_SEC = 30` 擋死逐輪對話 —— **對話輪次豁免冷卻與配額**，
-      行程重排照原規則（2026-08-05 決定）
+      行程重排照原規則（2026-08-05 決定，2026-08-07 實作為 `AIService.Policy`）
 - [ ] **LLM 成本上限完全沒有防護**（拿掉硬上限、對話又豁免配額的直接後果）。
       要先實跑量出「一場對話平均幾輪」才有辦法訂。
       在那之前，跑 LLM 對話時留意 provider 後台的用量

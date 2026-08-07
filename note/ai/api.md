@@ -192,17 +192,26 @@ const AFFINITY_MIN := -100.0 · AFFINITY_MAX := 100.0
 const DEFAULT_RECORD := {"affinity": 0.0, "met_count": 0}
 var records := {}                            # other_id -> record
 
-func has_met(other_id) -> bool
-func get_record(other_id) -> Dictionary      # 沒有就當場建一筆
-func get_affinity(other_id) -> float
-func add_affinity(other_id, delta) -> float  # 回夾限後的新值
-func note_meeting(other_id) -> void
+# 唯讀 — 不會建立紀錄
+func has_met(other_id) -> bool               # met_count > 0，只認 note_meeting()
+func has_record(other_id) -> bool            # 有沒有任何紀錄（見過但沒講完 = true/false）
+func get_record(other_id) -> Dictionary      # 副本，改它不會動到內部
+func get_affinity(other_id) -> float         # 沒紀錄回 0.0
+func get_met_count(other_id) -> int
 func known_ids() -> Array
+
+# 寫入 — 走私有的 _ensure_record()
+func add_affinity(other_id, delta) -> float  # 回夾限後的新值
+func note_meeting(other_id) -> void          # has_met() 為真的唯一來源
 ```
 
 ```
 † key 用 character_id 不用 character_name — name 可改，用它當 key = 改名即失憶
 † 每筆是 Dictionary 不是單一 float，加欄位時呼叫端不用改
+⚠ 讀寫必須分開：get_affinity() 曾經走「沒有就當場建一筆」，於是 conversation.gd
+  開場問一次好感度就讓 has_met() 永遠為真而 met_count 還是 0
+  → agent.gd 的「第一次看到陌生人」永遠不成立
+→ 技術/talk 動作設計
 ```
 
 ## Vision — scripts/character/vision.gd · class_name · Area2D

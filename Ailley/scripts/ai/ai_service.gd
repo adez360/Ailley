@@ -8,8 +8,17 @@ extends Node
 ## 集中成一個服務之後，成本上限、金鑰處理、防注入入口都只有一個地方要顧。
 ##
 ## 對外只有一個函式，呼叫端一律 await：
-##     var result := await AIService.request(envelope, requester_id)
+##     var result := await AIService.request(envelope, requester_id)                     # 行程重排
+##     var result := await AIService.request(envelope, requester_id, Policy.CONVERSATION) # 對話輪次
 ##     # result = {"ok": bool, "data": Dictionary, "error": String}
+##
+## 為什麼要有 Policy 而不是所有呼叫一視同仁：速率限制的兩個數字是為
+## **行程重排**訂的（同一隻 Agent 最短 30 秒、每遊戲日 20 次），而對話是逐輪產生、
+## 輪與輪之間只隔幾秒。同一組限制套到對話上，第二輪起就會全部回 rate_limited。
+##
+## 豁免的是**限制**，不是**帳**：對話輪次照樣計數（走 _dialogue_calls_today），
+## get_usage() 也照樣報出來。這是刻意的 —— 決策裡「LLM 成本上限」還沒有防護，
+## 在訂出上限之前，至少要看得見花了多少。
 ##
 ## envelope 的欄位（Step 1 的 prompt_builder.gd 負責組出來）：
 ##     system          String      系統提示。人格、規則、輸出 schema、動作白名單
@@ -26,13 +35,20 @@ extends Node
 
 const POOL_SIZE := 3
 
-# 同一個 requester_id 兩次呼叫的最短真實間隔。用真實秒不用遊戲時間，
-# 因為要擋的是 API 帳單與 provider 的 rate limit，那兩者都活在真實時間裡
-const MIN_INTERVAL_SEC := 30.0
+## 這次呼叫屬於哪一種，決定要不要吃速率限制。
+##
+## SCHEDULED   —— 行程重排等由系統自己發動的呼叫。吃冷卻與每日配額
+## CONVERSATION —— 對話輪次。玩家等在螢幕前面，而且輪次是秒級間隔，
+##                 依 2026-08-05 的決定豁免冷卻與配額（可在設定檔關掉）
+enum Policy { SCHEDULED, CONVERSATION }
 
-# 每個 requester_id 每遊戲日的上限。掛在 requester 而不是全域，
-# 是因為多人版的帳單是逐個 Agent 擁有者分開算的
-const MAX_CALLS_PER_GAME_DAY := 20
+# 速率限制的兩個數字（同 requester_id 的最短真實間隔、每遊戲日上限）住在
+# AIConfig，不在這裡：它們是「花多少錢」的旋鈕，玩家改得到。
+# 預設值見 AIConfig.DEFAULT_MIN_INTERVAL_SEC / DEFAULT_MAX_CALLS_PER_GAME_DAY。
+#
+# 用真實秒不用遊戲時間，因為要擋的是 API 帳單與 provider 的 rate limit，
+# 那兩者都活在真實時間裡；掛 requester_id 不掛全域，因為多人版的帳單
+# 是逐個 Agent 擁有者分開算的
 
 # 只重試一次。網路抖動一次就好，抖到第二次代表對面真的壞了，
 # 這時候讓 Agent 走 fallback 比讓玩家多等一輪好
@@ -57,8 +73,9 @@ var _pool: Array[HTTPRequest] = []
 var _busy := {}					# HTTPRequest -> _Job，沒有 key 就代表這個節點閒著
 var _queue: Array = []			# 等節點的 _Job，先進先出
 
-var _last_call_msec := {}		# requester_id -> Time.get_ticks_msec()
-var _calls_today := {}			# requester_id -> 今天已用次數
+var _last_call_msec := {}			# requester_id -> Time.get_ticks_msec()，只記受限的呼叫
+var _calls_today := {}				# requester_id -> 今天已用的「受限」次數，吃配額
+var _dialogue_calls_today := {}		# requester_id -> 今天的對話輪次，只計帳不設限
 var _game_day := 0
 var _last_hour := 0
 
@@ -91,7 +108,14 @@ func reload_config() -> void:
 
 
 # 唯一的對外入口。呼叫端：var result := await AIService.request(envelope, "agent")
-func request(envelope: Dictionary, requester_id: String) -> Dictionary:
+#
+# policy 決定要不要吃速率限制，預設是「吃」—— 忘了指定的呼叫端會落在比較保守的
+# 那一邊，而不是意外地拿到無限額度
+func request(
+	envelope: Dictionary,
+	requester_id: String,
+	policy: Policy = Policy.SCHEDULED
+) -> Dictionary:
 	if not config.enabled:
 		# 沒設定金鑰是預設狀態不是錯誤，所以安靜地回，不 push_error
 		return _fail(ERROR_DISABLED)
@@ -101,13 +125,13 @@ func request(envelope: Dictionary, requester_id: String) -> Dictionary:
 		push_error("AIService: request() 的 requester_id 不可為空")
 		return _fail(ERROR_NO_REQUESTER)
 
-	var limit_error := _check_rate_limit(requester_id)
+	var limit_error := _check_rate_limit(requester_id, policy)
 	if not limit_error.is_empty():
 		return _fail(limit_error)
 
 	# 配額在「接受」時就扣，不是送出成功才扣。否則同一幀連呼叫 20 次會在
 	# 任何一次回來之前全部通過檢查，限制形同虛設
-	_note_call(requester_id)
+	_note_call(requester_id, policy)
 
 	var job := _Job.new()
 	job.envelope = envelope
@@ -122,29 +146,52 @@ func request(envelope: Dictionary, requester_id: String) -> Dictionary:
 # 給 debug 主控台看用量。回傳值刻意都是原始數字，格式化交給呼叫端
 func get_usage(requester_id: String) -> Dictionary:
 	var elapsed := Time.get_ticks_msec() - int(_last_call_msec.get(requester_id, -999999))
+	var calls := int(_calls_today.get(requester_id, 0))
+	var dialogue := int(_dialogue_calls_today.get(requester_id, 0))
 	return {
 		"game_day": _game_day,
-		"calls_today": int(_calls_today.get(requester_id, 0)),
-		"max_calls": MAX_CALLS_PER_GAME_DAY,
-		"cooldown_left": maxf(0.0, MIN_INTERVAL_SEC - elapsed / 1000.0),
+		"calls_today": calls,
+		"max_calls": config.max_calls_per_game_day,
+		# 對話輪次不佔配額，但一樣是錢，所以分開報而不是不報
+		"dialogue_today": dialogue,
+		"total_today": calls + dialogue,
+		"dialogue_exempt": config.dialogue_exempt,
+		"cooldown_left": maxf(0.0, config.min_interval_sec - elapsed / 1000.0),
 		"queued": _queue.size(),
 		"in_flight": _busy.size(),
 	}
 
 
-func _check_rate_limit(requester_id: String) -> String:
-	if _last_call_msec.has(requester_id):
+# 對話輪次豁免的實作點。豁免的是這裡的檢查，不是 _note_call() 的計數
+func _is_exempt(policy: Policy) -> bool:
+	return policy == Policy.CONVERSATION and config.dialogue_exempt
+
+
+func _check_rate_limit(requester_id: String, policy: Policy) -> String:
+	if _is_exempt(policy):
+		return ""
+
+	# 0 代表不限。設定檔可以把兩條限制各自關掉
+	if config.min_interval_sec > 0.0 and _last_call_msec.has(requester_id):
 		var elapsed := Time.get_ticks_msec() - int(_last_call_msec[requester_id])
-		if elapsed < int(MIN_INTERVAL_SEC * 1000.0):
+		if elapsed < int(config.min_interval_sec * 1000.0):
 			return ERROR_RATE_LIMITED
 
-	if int(_calls_today.get(requester_id, 0)) >= MAX_CALLS_PER_GAME_DAY:
-		return ERROR_DAILY_QUOTA
+	if config.max_calls_per_game_day > 0:
+		if int(_calls_today.get(requester_id, 0)) >= config.max_calls_per_game_day:
+			return ERROR_DAILY_QUOTA
 
 	return ""
 
 
-func _note_call(requester_id: String) -> void:
+# 豁免的呼叫只計數，不動 _last_call_msec 也不動 _calls_today ——
+# 動了的話一輪對話就會把行程重排的冷卻往後推 30 秒，或把它的每日配額吃光。
+# 「豁免」要是雙向的：不受限，也不佔別人的額度
+func _note_call(requester_id: String, policy: Policy) -> void:
+	if _is_exempt(policy):
+		_dialogue_calls_today[requester_id] = int(_dialogue_calls_today.get(requester_id, 0)) + 1
+		return
+
 	_last_call_msec[requester_id] = Time.get_ticks_msec()
 	_calls_today[requester_id] = int(_calls_today.get(requester_id, 0)) + 1
 
@@ -156,6 +203,7 @@ func _on_time_changed(hour: int, _minute: int) -> void:
 	if hour < _last_hour:
 		_game_day += 1
 		_calls_today.clear()
+		_dialogue_calls_today.clear()
 	_last_hour = hour
 
 

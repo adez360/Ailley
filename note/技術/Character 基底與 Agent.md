@@ -50,6 +50,36 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 >
 > 這是暫時欄位 —— 行程改由 AI 逐一維護之後就會消失。
 
+## 誰用哪份行程寫在資料檔，不寫在場景
+
+`npc_schedule.json` 的 `assignments` 把 `character_id` 對到模板名：
+
+```json
+"assignments": { "agent": "npc001", "agent2": "npc006" }
+```
+
+`agent.gd` 先問 `GameManager.get_schedule_template(character_id)`，
+沒有指派才退回 `@export var schedule_template`。順序不能反過來 ——
+`@export` 一定有值（場景的預設），先看它的話 `assignments` 永遠不會生效。
+
+> [!important] `@export` 的預設值是 instance 之間共用的
+> `Agent` 與 `Agent2` 是同一份 `agent.tscn` 的 instance，
+> 兩者都沒有在 `main.tscn` 覆寫 `schedule_template`，所以都吃到場景預設的 `npc001`：
+> **同一分鐘、同一個地點、同一件事**，兩隻等於一隻。
+>
+> 要逐隻不同，除了在 `main.tscn` 逐個 instance 覆寫（得動場景），
+> 就是把對應關係當成資料。選後者：
+> 「誰用哪份行程」本來就是資料，而且改資料不必開編輯器。
+
+`npc006` 是為現在這張地圖寫的：整份行程只用 `PlaceAnchors` 真的有的四個錨點
+（`home_001` / `farm` / `restaurant` / `square`），時段刻意跟 `npc001` 錯開，
+兩隻才走得出不同的軌跡 —— 接 LLM 對話時需要這個對照組。
+
+> [!warning] `npc002`~`npc005` 仍然指向不存在的地點
+> 它們用 `shop` / `temple` / `home_002`… 這些**沒有錨點**，
+> 會退回 `places.json` 那組已經失效的座標。目前沒有任何角色被指派到它們，
+> 但 `assignments` 一旦指過去就會踩到。要用之前得先補錨點或改寫那幾份行程。
+
 > [!warning] id 唯一性目前只是「偵測」，不是「保證」
 > `_ready()` 會掃 `characters` group，撞 id 就 `push_error`。
 > 真正的唯一性要等存檔做起來才能改成建立角色時生成一次並持久化；
@@ -116,3 +146,6 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
   但沒有任何呼叫端 —— 接上它就是 [[決策]] 說的 AI 逾時 fallback
 - `main.tscn` 是測試方塊圖，四個錨點擺在外圍空地，不是真的地點
 - 行程表是靜態 JSON，之後換成 AI 維護的版本，見 [[行程佇列與任務仲裁]]
+- 兩隻 Agent 的行程已經不同，但**人格還沒有**：沒有 `persona_id`，
+  也沒有覆寫 `character_name`（顯示名就是 `agent` / `agent2`）
+- 兩隻的家都是 `home_001` —— 「家在哪」還不是角色的屬性，見 [[決策]]

@@ -4,8 +4,13 @@ extends RefCounted
 ## 內容層：決定角色這一輪要講什麼。
 ##
 ## Phase 1 是依角色數值組模板句。重點不是台詞好看，而是證明
-## 「台詞來自角色狀態」這條管線是通的 —— 接 LLM 時整個換掉這個檔，
-## conversation.gd 的狀態機與 bubble 的呈現都不用動。
+## 「台詞來自角色狀態」這條管線是通的。
+##
+## > 這裡曾經寫著「接 LLM 時整個換掉這個檔」。**那是錯的**：這個檔要
+## > **留下來當 fallback**。逾時、未設定金鑰、驗證失敗三種情況都需要一條
+## > 保證有台詞的路徑，而它正好就是那條路徑 —— 尤其 fallback 一定要能終止對話
+## > （LLM 版由回傳的 end 欄位決定，fallback 沒有，所以直接說一句 closing() 就收）。
+## > 見 note/技術/LLM 串接與 AI 服務層。
 ##
 ## 刻意只收 String / Stats / float，不收 Character：
 ## 一來避免 character.gd -> conversation.gd -> dialogue_lines.gd -> character.gd 的循環相依，
