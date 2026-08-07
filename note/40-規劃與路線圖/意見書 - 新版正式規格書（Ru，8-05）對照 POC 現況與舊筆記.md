@@ -135,6 +135,41 @@ llama-server）是概念驗證，是分開的兩條線。
 
 1. **最優先**：把上面「記憶檢索例外」的決定＋實測依據找 Ru/夏 對過，達成團隊共識
 2. 決定 DPO 微調的目標是現在的 POC schema，還是等 Godot 版正式 schema 定案後才做
-3. 開始擴充 `server.py`/`enums.py`（已有雛形，不是重寫）去對接規格書的英文命名慣例，
-   其餘系統（人格/物品/行動/死亡）依「整體採用 Ru 版」原則逐一對齊
-4. 甘道夫石→天神之石屬於零成本立即可改的命名修正，可以先做
+3. ~~開始擴充 `server.py`/`enums.py` 去對接規格書的英文命名慣例~~：**第一階段
+   已完成（2026-08-07）**，見下方新章節。人格/物品/行動/死亡這幾個大系統的對齊
+   還沒開始，依「整體採用 Ru 版」原則之後逐一排
+4. ~~甘道夫石→天神之石~~：**已隨第一階段一起改完**（`enums.py` 的
+   `GANDALF_STONE`→`divine_stone`）
+
+## 八、`server.py`/`enums.py` 對接第一階段（2026-08-07，範圍：命名，不動資料模型）
+
+跟使用者確認過範圍：只做「不依賴大改資料模型、對接風險最小」的部分，人格/物品/
+關係這幾個規格書要求但 POC 資料模型裡根本不存在的欄位，這階段不塞假資料進去
+（會誤導組員以為串接完整了）。
+
+**`enums.py`**：`Action`／`SharedLocation` 的英文 member 名稱全部改成對齊規格書
+07§4／§1 的精確動詞與 `location_id`（只改左邊識別字，右邊中文 value 完全不動，
+grammar／prompt 零影響）：
+- `CAPTURE`→`arrest`、`ANNOUNCE`→`shout`、`ZONE_OUT`→`idle`、`HOLD_HEAD`→
+  `cover_head`、`GIVE_GIFT`→`give_item`、`SABOTAGE_INSTRUMENT`→`break_item`、
+  `MOVE`→`move_to`、`RUN`→`run_to` 等，其餘動作同步小寫化
+- `REFORM_HOUSE`→`jail`、`WEDDING_HALL`→`chapel`、`HERB_PATCH`→`herb_field`、
+  `HERBALIST`→`herb_shop`、`VILLAGE_SQUARE`→`square`
+- `GANDALF_STONE`→`divine_stone`（甘道夫石→天神之石的命名修正），順手在註解記錄
+  規格書 07§1-1 說這其實不是地點、是可移動物件，這次只改名，資料結構拆分留待之後
+- `HUNT` 保留單一值——規格書拆 `hunt_small`／`hunt_large`，POC 目前打獵沒有大小型
+  區分，等 POC 這邊也拆分再對齊，不能硬套
+
+**`server.py`**：`/decide` 回應新增 `npc_id`／`target_npc_id`／`owner_npc_id`
+（`npc_` 前綴），跟舊欄位（`character_id`／`target_id`）並存，過渡期組員兩種都
+能用，之後正式切過去再拔舊的。
+
+**驗證**：`python3 run_des_sim.py 20 1` 正常跑完；啟動 `uvicorn server:app` 打
+`POST /decide` 端到端測試，正確回傳 `action_en: "eat"`、
+`location: {"shared_location": "tavern", ...}`、`npc_id: "npc_aji"`。
+
+**還沒做（下一步，屬於「大範圍」對接，需要先擴充 POC 資料模型才能動）**：
+10維人格＋HEXACO轉換層、8項values、4維關係、item_id+decay+durability物件、
+六級優先權佇列、死亡系統——這些欄位規格書要求但 POC 資料模型裡不存在，要先
+補齊資料模型（characters.py／characters/*.json／run_des_sim.py）才能真的串進
+`server.py`，不是這次「小範圍」能一起做的。
