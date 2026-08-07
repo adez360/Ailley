@@ -1,0 +1,7 @@
+{
+	"enabled": true,
+	"base_url": "https://openrouter.ai/api/v1",
+	"api_key": "sk-or-v1-REPLACE_ME",
+	"model": "openai/gpt-4o-mini",
+	"timeout": 10.0
+}

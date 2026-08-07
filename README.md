@@ -1,53 +1,95 @@
-# 專案企劃書：AI 驅動的虛擬村莊 (專案名稱：Ailley)
+# Ailley
 
-## 1. 專案摘要
-打造一個基於 Web 的 2D 像素風格（類似 Stardew Valley 星露谷物語）微型村莊。與傳統遊戲不同，村莊內的 NPC 並非由固定腳本控制，而是全由大語言模型 (LLM) 與代理框架 (Agent Framework) 驅動。NPC 擁有自己的性格、記憶與日常作息，能自主決定行動、與環境互動，並能與玩家及其他 NPC 進行自然的對話與社交。
+由 LLM 驅動的 2D 像素村莊。角色（Agent）不是靠固定腳本走，
+而是有自己的人格、記憶與作息，自己決定要做什麼、跟誰講話。
 
-## 2. 核心特色
-- **自主思考的 NPC**：NPC 具備內在驅動力，會根據時間、自身需求與性格決定下一步行動（例如：早上 8 點去農田工作、晚上去酒館放鬆）。
-- **長期記憶系統**：NPC 能記住過去發生的事件、玩家的對話內容，以及與其他 NPC 的人際關係。
-- **動態環境互動**：NPC 的行為會改變世界狀態，且能觀察並意識到環境的改變（例如發現農作物熟了而去採收）。
-- **Web 即時互動**：玩家只需打開瀏覽器，即可以上帝視角或第一人稱視角觀察村莊生態，並隨時介入與 NPC 互動。
+**Godot 4.5.1-stable**，桌面單機為主，俯視 2D 像素風（對標星露谷 × AI 夥伴）。
 
-## 3. 技術架構
-- **前端 (Frontend)**：
-  - **遊戲核心**：Phaser.js (負責 2D 像素渲染、角色移動、動畫與地圖碰撞)
-  - **地圖編輯**：Tiled (匯出 JSON 地圖檔供 Phaser 讀取)
-  - **UI 框架**：React 或 Vue.js (負責對話框、NPC 狀態面板等 UI 介面)
-- **後端 (Backend)**：
-  - **伺服器**：Python (FastAPI) 或 Node.js
-  - **即時通訊**：WebSockets (確保 NPC 移動與對話能即時推播給前端)
-- **AI 與資料層 (AI & Data)**：
-  - **大腦 (LLM)**：OpenAI API (GPT-4o-mini 或 GPT-4o) / Claude 3.5 Sonnet
-  - **記憶與檢索**：向量資料庫 (Pinecone, ChromaDB 或 PostgreSQL + pgvector)
-  - **世界狀態儲存**：PostgreSQL (儲存物件座標、時間、NPC 基礎設定檔)
+## 現在能跑什麼
 
-## 4. 開發階段規劃 (Roadmap)
+```
+Ailley/scenes/main.tscn
+```
 
-### Phase 1: 基礎環境建置 (視覺與移動)
-- 搭建前端框架與 Phaser.js 遊戲畫布。
-- 載入基本的像素地圖（一間房子、戶外草地）。
-- 實現一個可以由鍵盤控制移動的角色，以及基本的碰撞偵測。
+- 一個 Player（WASD 移動）與兩隻 Agent，在一張測試方塊迷宮地圖上
+- **A\* 尋徑**：可走性用角色大小的圓做物理查詢逐格量出來，不是讀 tile data
+- **行程表**：Agent 依 `data/npc_schedule.json` 到點切換地點（08:00 家、09:00 農田…）
+- **搭話**：走近按 `E`，或用主控台 `talk`。台詞目前來自模板，依數值與好感度變化
+- **視覺感測**：Agent 看到沒見過的人會停下來反應一次（含視線遮蔽判定）
+- **LLM 服務層**：可以連線、送出、驗證回應 —— 但**還沒接上對話與行程**
+- **除錯主控台**：按 `` ` ``，`help` 看指令
 
-### Phase 2: 單一 AI 靈魂注入 (對話系統)
-- 建立後端伺服器並串接 LLM API。
-- 放置一個固定的 NPC 在地圖上。
-- 實作前端點擊 NPC 觸發對話框，並能與其進行符合角色設定（Persona）的對話。
+還沒有的：存檔、物品/經濟、線上交誼區、記憶系統、AI 產生的台詞與行程。
 
-### Phase 3: 自主行動與物理映射 (行動系統)
-- 實作 NPC 的「思考 -> 行動」迴圈。
-- 讓後端 AI 定期運算 NPC 的下一步，並將文字決策（例如：「走到桌子旁」）轉化為遊戲座標（X, Y）。
-- 透過 WebSocket 將座標傳給前端，前端 Phaser 接收後播放 NPC 走路動畫。
+## 跑起來
 
-### Phase 4: 多 Agent 互動與記憶 (完整生態)
-- 導入向量資料庫實作長期記憶。
-- 加入多個 NPC，實作「視覺機制」（當 NPC A 走近 NPC B 時觸發互動）。
-- 讓 NPC 之間能自動發起對話，並在對話後更新彼此的記憶。
+需要 Godot 4.5.1-stable。用編輯器開 `Ailley/` 這個資料夾（專案根是它，不是 repo 根）。
 
-## 5. 潛在挑戰與解決方案
-1. **API 成本過高**：NPC 的每個決定都需要呼叫 LLM，成本消耗極快。
-   - *解法*：在日常移動等低智力需求的決策上使用較小型的模型（如 GPT-4o-mini）或傳統程式邏輯，僅在複雜對話時使用大型模型。
-2. **LLM 輸出格式不穩定**：AI 可能無法完美回傳前端需要的 JSON 座標格式。
-   - *解法*：嚴格利用 LLM 的 Function Calling (Tool Use) 功能，確保輸出結構化資料。
-3. **記憶檢索不精準**：隨時間推移，記憶累積過多導致 AI "忘記" 重點。
-   - *解法*：建立雙層記憶系統（短期 Working Memory + 長期 Vector Retrieval），並定期讓 AI 對記憶進行「總結與反思」(Reflection)。
+命令列：
+
+```bash
+godot --path Ailley                        # 開編輯器
+godot --headless --path Ailley --quit-after 300   # 只確認開得起來
+```
+
+### 接 LLM（選用，不設定也能玩）
+
+複製範本到 Godot 的 user 目錄，填入自己的金鑰：
+
+```bash
+cp Ailley/data/ai_config.example.json \
+   ~/.local/share/godot/app_userdata/ailley4.3/ai_config.json
+```
+
+金鑰放 `user://` 而不是 repo 裡，所以**天然不會被 commit**。
+沒有這個檔時整個 AI 層停用、遊戲照常跑。
+
+設定好之後在主控台打 `ai` 可以打一次測試請求，會印出往返內容與用量。
+預設 provider 是 OpenRouter，換成本機 Ollama 只要改設定檔的 `base_url`，程式不用動。
+
+## 目錄
+
+```
+Ailley/            Godot 專案根
+  scenes/          全部 .tscn
+  scripts/
+    core/          autoload：GameClock、GameManager
+    character/     Character 基底、Player/Agent、Stats/Relationships/Vision
+    world/         NavGrid（A*）、FollowCamera
+    dialogue/      Conversation 狀態機、DialogueLines
+    ai/            LLM 服務層 —— 全專案唯一碰網路的地方
+    ui/            氣泡、聊天框、除錯主控台與疊圖、時鐘
+  data/            NPC 排程、地點、AI 設定範本
+note/              Obsidian 筆記庫 —— 專案所有文件都在這
+```
+
+## 文件
+
+**所有文件都在 `note/`**（Obsidian vault，也可以當一般 Markdown 讀）。
+入口是 `note/Ailley.md`。筆記依「誰讀」分三層：
+
+| 想知道 | 看哪裡 |
+| --- | --- |
+| 現在做到哪、還缺什麼 | `note/交流/專案現況.md` |
+| 這遊戲要做成什麼樣、有什麼待決定 | `note/交流/決策.md` |
+| 某個系統怎麼運作、為什麼這樣設計 | `note/技術/` |
+| 某個腳本的公開介面（密集格式，寫給 AI 讀） | `note/ai/api.md` |
+| 在這個 repo 裡怎麼工作（給 AI 助手的規則） | `Ailley/CLAUDE.md` |
+
+`note/交流/` 是給人讀寫的，不寫技術細節 —— 那是人跟 AI 助手交流的地方。
+
+## 幾條貫穿整個專案的原則
+
+- **Player 能做到的，Agent 也必須能做到。** 兩者共用同一個 `Character` 基底
+  與同一份移動實作，差別只在「誰決定往哪走」—— Player 讀輸入，Agent 讀行程表。
+- **外來文字一律視為資料，不視為指令。** 玩家打字、其他玩家的 Agent 台詞、
+  LLM 自己吐回來的東西，全部都要過 `AISchema` 的白名單硬驗證才能執行。
+  少了這層，任何人都能用一句「忽略上面的指示」拿走 Agent 的控制權。
+- **正常結束與失敗是兩種東西。** 每個動作都有失敗原因碼，而「講完了」不是失敗 ——
+  混為一談的話 AI 會把成功的動作當成錯誤而反覆重試。
+- **AI 不可用時遊戲照常跑。** 沒設定檔、逾時、驗證不過，一律走 fallback，
+  不是卡住也不是報錯。
+
+## 授權
+
+未定。

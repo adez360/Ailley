@@ -45,7 +45,23 @@ func update_properties(parent: TileMapDual) -> void:
 	self.x_draw_order_reversed = parent.x_draw_order_reversed
 	self.rendering_quadrant_size = parent.rendering_quadrant_size
 	# Physics
-	self.collision_enabled = parent.collision_enabled
+	# LOCAL PATCH (Ailley): deliberately NOT copying collision_enabled.
+	#
+	# Upstream puts collision on this DisplayLayer, which sits half a tile offset
+	# from the world grid. That is fine for a normal platformer, but this project
+	# pathfinds on a cell-based A* grid aligned to the WORLD layer -- probing a
+	# world-cell centre lands on a display-tile corner, so an agent-sized circle
+	# touches up to 4 display tiles at once. Measured: 25 open cells wrongly
+	# reported as blocked.
+	#
+	# Collision therefore comes from the world layer only, whose footprint was
+	# measured to match the painted walls exactly (177 wall cells, 0 gaps,
+	# 0 false obstacles). See note/30-技術架構/TileMapDual 雙層碰撞.md
+	#
+	# Trade-off: this assumes the world layer's terrain marker tiles carry the
+	# collision polygons. Move collision to display-only tiles and there will be
+	# none at all.
+	self.collision_enabled = false
 	self.use_kinematic_bodies = parent.use_kinematic_bodies
 	self.collision_visibility_mode = parent.collision_visibility_mode
 	# Navigation

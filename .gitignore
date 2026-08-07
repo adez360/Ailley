@@ -3,3 +3,7 @@ note/.obsidian/workspace.json
 note/.obsidian/workspace-mobile.json
 note/.obsidian/graph.json
 note/.obsidian/cache
+
+# Editor settings — machine-local absolute paths (Ailley/.gitignore only covers
+# the Godot project subdir, not the repo root)
+.vscode/

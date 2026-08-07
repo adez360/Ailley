@@ -1,0 +1,43 @@
+[gd_scene load_steps=3 format=3 uid="uid://cyrnw30ddh16r"]
+
+[ext_resource type="Script" uid="uid://cqjpu27qgmkxk" path="res://scripts/ui/debug_console.gd" id="1_ykox0"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_1yrt7"]
+content_margin_left = 6.0
+content_margin_top = 4.0
+content_margin_right = 6.0
+content_margin_bottom = 4.0
+bg_color = Color(0.05, 0.05, 0.07, 0.85)
+
+[node name="DebugConsole" type="CanvasLayer"]
+script = ExtResource("1_ykox0")
+
+[node name="Root" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 10
+anchor_right = 1.0
+offset_left = 4.0
+offset_top = 4.0
+offset_right = -4.0
+offset_bottom = 96.0
+grow_horizontal = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Root"]
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Output" type="RichTextLabel" parent="Root/VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_font_sizes/normal_font_size = 7
+theme_override_styles/normal = SubResource("StyleBoxFlat_1yrt7")
+bbcode_enabled = true
+scroll_following = true
+
+[node name="Input" type="LineEdit" parent="Root/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 7
+placeholder_text = "指令…（help）"

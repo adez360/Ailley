@@ -80,7 +80,7 @@
 			"schedule": [
 				{
 					"time": "08:00",
-					"place": "temple",
+					"place": "home_004",
 					"state": "idle"
 				},
 				{
@@ -105,7 +105,7 @@
 			"schedule": [
 				{
 					"time": "08:00",
-					"place": "temple",
+					"place": "home_005",
 					"state": "idle"
 				},
 				{
