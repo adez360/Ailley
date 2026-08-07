@@ -87,6 +87,15 @@ FEASIBILITY_FALLBACK_DURATION = 5
 # 7-8 種軟性提示版本（血量警示升級等）全部沒真的改變行為，這次情境不同（同一時刻立刻
 # 被打回來重問，不是跨輪次的提醒），值得用現成的重試機制便宜測一次，不預設一定沒用。
 FEASIBILITY_RETRY_SUGGESTION_TEXT = "請選其他動作。"
+# 2026-08-07：缺錢是最常見的可行性失敗原因，但「請選其他動作」太籠統，觀察到模型會
+# 反覆重選同一個做不到的動作直到被強制發呆，從沒主動切去打獵/賣東西這類工作動作賺錢
+# （見 note）。這裡只在失敗原因明確是「錢不夠」時換成列出多個工作選項的提示，不用
+# 祈使句、不指定單一動作——之前「維生方式提示句 v1」用祈使句「應該去表演」讓老周
+# 100%鎖死在表演，這次刻意用列舉措辭避免重蹈覆轍。非缺錢原因（地點不對／庫存耗盡／
+# 投訴額滿）維持原本的通用提示，這些情境通常只有一種解法，不需要额外提示。
+FEASIBILITY_MONEY_SHORTAGE_SUGGESTION_TEXT = (
+    "村子裡有幾種方式能賺到錢：打獵、採草藥、賣東西、表演，看你想怎麼處理。"
+)
 
 # 藥草叢庫存/刷新——之前查證表演/採草藥/打獵在規則上結構性不會失敗，藥草叢加庫存上限
 # 之後「採草藥」才會有失敗的可能，是這批動作裡唯一真的需要世界層級狀態（不是角色個人
@@ -533,7 +542,11 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
                     # 這句話是給「下一次重試」看的，所以掛建議語——第一次宣告失敗本身
                     # （這一輪的 last_action_result，讀者是這一輪的 prompt，不是下一輪）
                     # 不受影響，維持原樣的中性失敗文字。
-                    me["last_action_result"] = f"{infeasible_reason}。{FEASIBILITY_RETRY_SUGGESTION_TEXT}"
+                    suggestion = (
+                        FEASIBILITY_MONEY_SHORTAGE_SUGGESTION_TEXT if "錢不夠" in infeasible_reason
+                        else FEASIBILITY_RETRY_SUGGESTION_TEXT
+                    )
+                    me["last_action_result"] = f"{infeasible_reason}。{suggestion}"
                     print(f"[{label}] 可行性檢查失敗（第 {me['feasibility_retries']} 次）："
                           f"{infeasible_reason}，同一時刻立刻重新決策")
                     me["seq"] += 1
