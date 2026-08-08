@@ -76,8 +76,6 @@ var _queue: Array = []			# 等節點的 _Job，先進先出
 var _last_call_msec := {}			# requester_id -> Time.get_ticks_msec()，只記受限的呼叫
 var _calls_today := {}				# requester_id -> 今天已用的「受限」次數，吃配額
 var _dialogue_calls_today := {}		# requester_id -> 今天的對話輪次，只計帳不設限
-var _game_day := 0
-var _last_hour := 0
 
 
 func _ready() -> void:
@@ -94,8 +92,7 @@ func _ready() -> void:
 		http.request_completed.connect(_on_request_completed.bind(http))
 		_pool.append(http)
 
-	_last_hour = GameClock.hour
-	GameClock.time_changed.connect(_on_time_changed)
+	GameClock.day_changed.connect(_on_day_changed)
 
 
 # 玩家寫好 user://ai_config.json 之後不必重開遊戲，debug 主控台的 ai 指令會先叫這個
@@ -149,7 +146,7 @@ func get_usage(requester_id: String) -> Dictionary:
 	var calls := int(_calls_today.get(requester_id, 0))
 	var dialogue := int(_dialogue_calls_today.get(requester_id, 0))
 	return {
-		"game_day": _game_day,
+		"game_day": GameClock.day,
 		"calls_today": calls,
 		"max_calls": config.max_calls_per_game_day,
 		# 對話輪次不佔配額，但一樣是錢，所以分開報而不是不報
@@ -196,15 +193,11 @@ func _note_call(requester_id: String, policy: Policy) -> void:
 	_calls_today[requester_id] = int(_calls_today.get(requester_id, 0)) + 1
 
 
-# GameClock 只有 hour/minute，沒有日計數。hour 只會遞增或從 23 繞回 0，
-# 所以「hour 變小」就是跨日。在這裡自己數而不是去 GameClock 加一個 day，
-# 是因為 Step 0 的規則是不改變任何既有遊戲行為
-func _on_time_changed(hour: int, _minute: int) -> void:
-	if hour < _last_hour:
-		_game_day += 1
-		_calls_today.clear()
-		_dialogue_calls_today.clear()
-	_last_hour = hour
+# 跨日就把兩本帳清掉。日計數在 GameClock，這裡不自己數 ——
+# 私有計數重開遊戲會歸零，每日配額就能靠重開遊戲繞過
+func _on_day_changed(_day: int) -> void:
+	_calls_today.clear()
+	_dialogue_calls_today.clear()
 
 
 # 有閒節點就派工。每次有節點空出來都要再叫一次，佇列才不會卡住
