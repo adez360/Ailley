@@ -140,6 +140,11 @@ llama-server）是概念驗證，是分開的兩條線。
    還沒開始，依「整體採用 Ru 版」原則之後逐一排
 4. ~~甘道夫石→天神之石~~：**已隨第一階段一起改完**（`enums.py` 的
    `GANDALF_STONE`→`divine_stone`）
+5. **待開 GitHub issue**：Godot 角色資料模型缺少 `/decide` 需要的輸入欄位
+   （`recent_event`／`last_emotion`／`last_action_result`／`recent_memory`／
+   同場景可見角色清單），內容已草擬（英文標題`Agent envelope missing fields
+   required by POC decision prompt`，中文內文，範圍界定只談欄位缺失，不含
+   外殼格式/動作白名單/呼叫顆粒度），還沒實際開到 repo 上，等使用者確認
 
 ## 八、`server.py`/`enums.py` 對接第一階段（2026-08-07，範圍：命名，不動資料模型）
 
