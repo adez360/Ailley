@@ -19,18 +19,20 @@ var _history_index := 0
 
 
 func _ready() -> void:
+	# 一個指令的 run／usage／help 放同一列，help 留空代表不列進 `help` 指令的輸出
+	# （目前只有 help 自己是這樣）。順序就是 `help` 印出來的順序。
 	_commands = {
-		"goto": _cmd_goto,
-		"talk": _cmd_talk,
-		"stop": _cmd_stop,
-		"pos": _cmd_pos,
-		"status": _cmd_status,
-		"debug": _cmd_debug,
-		"nav": _cmd_nav,
-		"ai": _cmd_ai,
-		"locale": _cmd_locale,
-		"help": _cmd_help,
-		"clear": _cmd_clear,
+		"goto": {"run": _cmd_goto, "usage": "goto <name> <x> <y>", "help": "HELP_GOTO"},
+		"talk": {"run": _cmd_talk, "usage": "talk <name> / talk <a> <b>", "help": "HELP_TALK"},
+		"status": {"run": _cmd_status, "usage": "status [name]", "help": "HELP_STATUS"},
+		"debug": {"run": _cmd_debug, "usage": "debug [layer] [on|off]", "help": "HELP_DEBUG"},
+		"stop": {"run": _cmd_stop, "usage": "stop", "help": "HELP_STOP"},
+		"pos": {"run": _cmd_pos, "usage": "pos", "help": "HELP_POS"},
+		"nav": {"run": _cmd_nav, "usage": "nav rebuild", "help": "HELP_NAV"},
+		"ai": {"run": _cmd_ai, "usage": "ai [text]", "help": "HELP_AI"},
+		"locale": {"run": _cmd_locale, "usage": "locale [code]", "help": "HELP_LOCALE"},
+		"help": {"run": _cmd_help, "usage": "help", "help": ""},
+		"clear": {"run": _cmd_clear, "usage": "clear", "help": "HELP_CLEAR"},
 	}
 	input.text_submitted.connect(_on_text_submitted)
 	_set_open(false)
@@ -94,7 +96,7 @@ func _on_text_submitted(text: String) -> void:
 		_error(L10n.tf("CON_UNKNOWN_COMMAND", {"cmd": command}))
 		return
 
-	_commands[command].call(parts.slice(1))
+	_commands[command]["run"].call(parts.slice(1))
 
 func _error(line: String) -> void:
 	_print("[color=ff6666]%s[/color]" % line)
@@ -487,18 +489,16 @@ func _cmd_locale(args: PackedStringArray) -> void:
 # 指令語法那一欄是識別字，不翻；說明另起一行 ——
 # 舊版靠字面空格把說明對齊成一欄，但主控台用的是比例字型，
 # 那個對齊本來就只是近似，換成英文說明就整排歪掉
+#
+# 直接照 _commands 的順序印，help 欄留空的（目前只有 help 自己）跳過不印。
+# ai dialogue 是 ai 底下的子指令，_commands 沒有它自己的 entry，緊接在 ai 後面手動補一行
 func _cmd_help(_args: PackedStringArray) -> void:
-	_help_line("goto <name> <x> <y>", "HELP_GOTO")
-	_help_line("talk <name> / talk <a> <b>", "HELP_TALK")
-	_help_line("status [name]", "HELP_STATUS")
-	_help_line("debug [layer] [on|off]", "HELP_DEBUG")
-	_help_line("stop", "HELP_STOP")
-	_help_line("pos", "HELP_POS")
-	_help_line("nav rebuild", "HELP_NAV")
-	_help_line("ai [text]", "HELP_AI")
-	_help_line("ai dialogue [text]", "HELP_AI_DIALOGUE")
-	_help_line("locale [code]", "HELP_LOCALE")
-	_help_line("clear", "HELP_CLEAR")
+	for name in _commands:
+		var entry: Dictionary = _commands[name]
+		if entry["help"] != "":
+			_help_line(entry["usage"], entry["help"])
+		if name == "ai":
+			_help_line("ai dialogue [text]", "HELP_AI_DIALOGUE")
 
 # usage 欄的方括號要轉義成 [lb]，否則會被當成 BBCode 標籤吃掉 ——
 # 「locale [code]」裡的 [code] 剛好是 RichTextLabel 真的認得的標籤，
