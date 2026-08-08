@@ -1,4 +1,4 @@
-[gd_scene load_steps=14 format=4 uid="uid://bianwxowjctjk"]
+[gd_scene load_steps=15 format=4 uid="uid://bianwxowjctjk"]
 
 [ext_resource type="PackedScene" uid="uid://v21qv1icuh5m" path="res://scenes/player.tscn" id="1_ljsu2"]
 [ext_resource type="Script" uid="uid://bhds0h8vwl2g5" path="res://scripts/world/follow_camera.gd" id="2_a52xk"]
@@ -11,6 +11,7 @@
 [ext_resource type="Script" uid="uid://uf54btbn8mry" path="res://scripts/ui/debug_overlay.gd" id="7_hkfri"]
 [ext_resource type="PackedScene" uid="uid://q38st5oy2nj" path="res://scenes/chat_input.tscn" id="8_nnngi"]
 [ext_resource type="Script" uid="uid://dm8733qx3w3uk" path="res://scripts/ui/time_label.gd" id="11_7bo0c"]
+[ext_resource type="Script" uid="uid://bnxsowwm2cpvd" path="res://scripts/world/places.gd" id="12_sc7p8"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_pl1ev"]
 texture = ExtResource("3_y8peb")
@@ -163,6 +164,7 @@ metadata/_custom_type_script = "uid://cjk8nronimk5r"
 script = ExtResource("5_y1037")
 
 [node name="PlaceAnchors" type="Node2D" parent="Node2D" groups=["place_anchors"]]
+script = ExtResource("12_sc7p8")
 
 [node name="home_001" type="Marker2D" parent="Node2D/PlaceAnchors"]
 position = Vector2(77, -20)

@@ -11,8 +11,8 @@ extends Node
 ##   toward   數值自然漂向哪裡。需求類漂向 0（會餓、會累），心情漂回平常值
 ##   is_need  是不是「低了就該去解決」的東西。心情不是，所以不會被
 ##            get_lowest_need() 選中，也不算進 needs_attention()
-##   place    去哪裡能解決這項需求。只是地點「名稱」，座標由 agent.gd 的
-##            _resolve_place() 解析 —— Stats 不可以依賴場景，否則就沒辦法
+##   place    去哪裡能解決這項需求。只是地點「名稱」，座標由 scripts/world/places.gd
+##            的 PlaceAnchors 解析 —— Stats 不可以依賴場景，否則就沒辦法
 ##            在沒有場景的情況下（例如日後的存檔／單元測試）使用
 ##
 ## energy 的 place 是寫死的 home_001，這是從舊 villager.gd 照搬過來的。
@@ -81,7 +81,7 @@ func get_lowest_need() -> String:
 
 # 去哪裡能解決這項需求。不是需求（心情）或沒有這項數值都回空字串
 #
-# 只回名稱，不回座標。呼叫端拿到之後走 agent.gd 的 _resolve_place()，
+# 只回名稱，不回座標。呼叫端拿到之後走 scripts/world/places.gd 的 PlaceAnchors，
 # 那裡才知道現在是哪張地圖、錨點擺在哪
 func get_place_for_need(key: String) -> String:
 	if not SPEC.has(key):

@@ -1,62 +1,42 @@
 {
 	"places": {
 		"home_001": {
-			"x": 160,
-			"y": 160,
 			"type": "home",
 			"capacity": 1
 		},
 		"home_002": {
-			"x": 1120,
-			"y": 160,
 			"type": "home",
 			"capacity": 1
 		},
 		"home_003": {
-			"x": 640,
-			"y": 80,
 			"type": "home",
 			"capacity": 1
 		},
 		"home_004": {
-			"x": 160,
-			"y": 640,
 			"type": "home",
 			"capacity": 1
 		},
 		"home_005": {
-			"x": 1120,
-			"y": 640,
 			"type": "home",
 			"capacity": 1
 		},
 		"farm": {
-			"x": 160,
-			"y": 400,
 			"type": "work",
 			"capacity": 2
 		},
 		"shop": {
-			"x": 1120,
-			"y": 400,
 			"type": "work",
 			"capacity": 2
 		},
 		"restaurant": {
-			"x": 640,
-			"y": 640,
 			"type": "eat",
 			"capacity": 4
 		},
 		"temple": {
-			"x": 640,
-			"y": 80,
 			"type": "pray",
 			"capacity": 10
 		},
 		"square": {
-			"x": 640,
-			"y": 360,
 			"type": "social",
 			"capacity": 20
 		}

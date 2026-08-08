@@ -3,15 +3,11 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://pcq7ouq5pyt8"
-path="res://.godot/imported/16x16 Idle-Sheet.png-b9dc4221ce01852ebab3b992cdfe03b7.ctex"
-metadata={
-"vram_texture": false
-}
+valid=false
 
 [deps]
 
 source_file="res://assets/characters/16x16 Idle-Sheet.png"
-dest_files=["res://.godot/imported/16x16 Idle-Sheet.png-b9dc4221ce01852ebab3b992cdfe03b7.ctex"]
 
 [params]
 
