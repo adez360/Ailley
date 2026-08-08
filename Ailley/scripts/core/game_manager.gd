@@ -25,17 +25,6 @@ func load_places():
 	file.close()
 	places = data["places"]
 
-func get_place(place_name:String)->Vector2:
-	if !places.has(place_name):
-		return Vector2.ZERO
-		
-	var p = places[place_name]
-
-	return Vector2(
-		p["x"],
-		p["y"]
-	)
-
 # 讀取NPC行程
 func load_npc_data():
 	var file = FileAccess.open(

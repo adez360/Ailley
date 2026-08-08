@@ -125,7 +125,12 @@ func _start_entry(entry: Dictionary) -> void:
 	if is_in_conversation():
 		return
 
-	var target := _resolve_place(current_place)
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null or not anchors.has(current_place):
+		push_error("Agent %s: 沒有這個地點 %s" % [character_id, current_place])
+		return
+
+	var target: Vector2 = anchors.resolve(current_place)
 
 	# 已經在目的地就沒事要做。這一步不做的話，「早就到了」會被誤報成「走不到」：
 	# move_to() 對「路徑不足兩點」一律回傳 false，而站在原地正好就是這種情形
@@ -151,15 +156,3 @@ func _has_arrived_at(target: Vector2) -> bool:
 		return false
 
 	return nav.world_to_cell(get_body_position()) == nav.world_to_cell(target)
-
-# 地點座標優先取場景裡的 Marker2D 錨點，沒有錨點才退回 GameManager 的全域座標。
-# places.json 的座標綁死在舊 village 場景的尺寸上，換一張地圖就落到界外；
-# 錨點讓同一份行程表能在不同場景重用
-func _resolve_place(place_name: String) -> Vector2:
-	var anchors := get_tree().get_first_node_in_group("place_anchors")
-	if anchors != null:
-		var marker: Node2D = anchors.get_node_or_null(NodePath(place_name))
-		if marker != null:
-			return marker.global_position
-
-	return GameManager.get_place(place_name)
