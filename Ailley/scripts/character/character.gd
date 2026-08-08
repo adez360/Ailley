@@ -58,9 +58,8 @@ func _ready() -> void:
 		character_id = generate_id()
 
 	if character_name.is_empty():
-		character_name = str(name).to_lower()
+		character_name = name.to_lower()
 
-	# 要在自己進 group 之前檢查，否則一定會掃到自己
 	_ensure_unique_id()
 	add_to_group("characters")
 
@@ -82,16 +81,25 @@ static func generate_id() -> String:
 # 所以這裡換掉一個，而不是印完錯誤照樣讓兩隻共用。
 # 生成的 id 不會撞，會走到這裡的是場景裡手寫重複，或日後讀進壞掉的存檔
 func _ensure_unique_id() -> void:
-	while _id_taken(character_id):
+	var holder := _find_id_holder(character_id)
+	while holder != null:
 		var taken := character_id
 		character_id = generate_id()
-		push_error("Character id 重複：%s 已被佔用，%s 改用 %s" % [taken, name, character_id])
+		push_error("Character id 重複：%s 已被 %s 用掉，%s 改用 %s" % [
+			taken, holder.name, name, character_id
+		])
+		holder = _find_id_holder(character_id)
 
-func _id_taken(id: String) -> bool:
+# 佔用這個 id 的節點，沒人用回 null。回節點而不是 bool 是為了讓訊息講得出
+# 「被誰佔走」—— 撞到的是手寫 id，得知道去改哪一隻才有意義。
+#
+# 一定要排除自己：讀存檔會在自己進 group 之後才修 id，掃得到自己的話，
+# 換幾次新 id 都還是掃得到自己，上面那個 while 就永遠停不下來
+func _find_id_holder(id: String) -> Character:
 	for other in get_tree().get_nodes_in_group("characters"):
-		if other.character_id == id:
-			return true
-	return false
+		if other != self and other.character_id == id:
+			return other as Character
+	return null
 
 
 # ---- 移動 ----

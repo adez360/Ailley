@@ -5,6 +5,7 @@ CON_NO_PLAYER,"場景裡找不到 player group 的節點","No node in the player
 CON_NO_NAVGRID,"場景裡找不到 NavGrid","No NavGrid found in the scene"
 CON_NO_OVERLAY,"場景裡找不到 debug_overlay group 的節點","No node in the debug_overlay group found in the scene"
 CON_AMBIGUOUS_NAME,"有 {count} 個角色都叫 {name}，改用 id 指定：{ids}","{count} characters are named {name} — specify one by id: {ids}"
+CON_AMBIGUOUS_ID,"有 {count} 個角色的 id 以 {id} 開頭，打長一點","{count} characters have ids starting with {id} — type a longer prefix"
 CON_CHARACTER_NOT_FOUND,"找不到角色 {name}（現有：{known}）","No character named {name} (known: {known})"
 CON_USAGE_GOTO,"用法：goto <name> <x> <y>（x y 是格座標，可為負）","Usage: goto <name> <x> <y> (x y are cell coords, may be negative)"
 CON_USAGE_TALK,"用法：talk <name>（玩家搭話）或 talk <from> <to>","Usage: talk <name> (player speaks) or talk <from> <to>"

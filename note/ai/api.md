@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-07
+updated: 2026-08-08
 ---
 
 # api
@@ -147,7 +147,7 @@ func exit_conversation() -> void             # 覆寫：講完重算行程
 _ready: await nav.grid_built 才出發（NavGrid 非同步建置，太早→空路徑）
 到點切換：只在 "%02d:%02d" 吻合的那一分鐘換目標
 開場套用「已經開始的最後一筆」，不空等到下一個整點
-地點解析：place_anchors 的同名 Marker2D 優先，退回 GameManager.get_place()
+地點解析：只認 place_anchors 底下的同名 Marker2D，沒有就 push_error 且不動
 spotted 且 !relationships.has_met() → say("！") + stop_moving() + 2s + 重算行程
   _noticed 表確保每個對象只觸發一次
 ⚠ 抵達判定 = 距離 ≤ ARRIVE_DISTANCE(2px) OR 已在目標格內(16px)
@@ -155,6 +155,8 @@ spotted 且 !relationships.has_met() → say("！") + stop_moving() + 2s + 重�
   → move_to() false → 假的「走不到」。每次重算行程都會噴
 † schedule_template ≠ character_id：前者是「用哪份資料」，後者是「我是誰」
 † assignments 的 key 是節點名不是 character_id（id 是 UUID，json 裡手寫不出來）
+  查不到 → 退回 @export 並 push_warning（預設值 instance 共用，靜默退回會兩隻同行程）
+  節點名只在同一層唯一，不同父節點下撞名 → push_error（兩隻會查到同一筆）
 ```
 
 ## Stats — scripts/character/stats.gd · class_name · Node
@@ -494,7 +496,8 @@ nav rebuild              重建尋徑網格
 ai [文字]                 對 LLM 打一次測試請求
 help | clear
 
-角色查找：character_name(不分大小寫) → 撞名列候選 id → character_id → 報錯列全部
+角色查找：character_name(不分大小寫) → 撞名列候選 id 前 8 碼 → character_id 前綴
+  → 報錯列全部。id 一律只顯示前 8 碼：整串 UUID 沒人打得完，且每次開遊戲都不一樣
 † ai 指令用固定 requester_id="debug_console" ⇒ 吃得到 30s 冷卻
   手動測試不受限就測不出正式呼叫端的行為
 † ai 每次先 reload_config()，改完 user://ai_config.json 不用重開遊戲
@@ -541,10 +544,11 @@ solid  NavGrid 障礙格     collision  碰撞形狀（Godot 原生除錯繪製�
 ```gdscript
 var places = {}                              # places.json 的 places 區塊
 var npc_data = {}                            # NPC 模板 id -> 資料
+var schedule_assignments = {}                # 節點名 -> schedule_template
 
-func get_place(place_name: String) -> Vector2    # 查不到 → Vector2.ZERO
 func get_place_data(place_name: String)          # 查不到 → null
 func get_npc(id: String)                         # 查不到 → null
+func get_schedule_template(node_name: String) -> String   # 沒指派 → ""
 func load_places()
 func load_npc_data()
 ```

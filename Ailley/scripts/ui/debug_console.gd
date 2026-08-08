@@ -130,22 +130,37 @@ func _get_character(token: String) -> Character:
 	if matched.size() > 1:
 		var ids: Array[String] = []
 		for character in matched:
-			ids.append(character.character_id)
+			ids.append(_short_id(character.character_id))
 		_error(L10n.tf("CON_AMBIGUOUS_NAME", {
 			"count": matched.size(), "name": token, "ids": ", ".join(ids)
 		}))
 		return null
 
-	for node in characters:
-		if node.character_id == token:
-			return node
+	# id 是 36 個字元的 UUID，而且每次開遊戲都不一樣，要人整串打完不切實際 ——
+	# 接受前綴。前綴太短撞到多隻就要求打長一點，不要替他猜是哪一隻
+	var by_id: Array[Character] = []
+	if not token.is_empty():
+		for node in characters:
+			if node.character_id.begins_with(token):
+				by_id.append(node as Character)
+
+	if by_id.size() == 1:
+		return by_id[0]
+
+	if by_id.size() > 1:
+		_error(L10n.tf("CON_AMBIGUOUS_ID", {"count": by_id.size(), "id": token}))
+		return null
 
 	var known: Array[String] = []
 	for node in characters:
-		known.append("%s (%s)" % [node.character_name, node.character_id])
+		known.append("%s (%s)" % [node.character_name, _short_id(node.character_id)])
 
 	_error(L10n.tf("CON_CHARACTER_NOT_FOUND", {"name": token, "known": ", ".join(known)}))
 	return null
+
+# UUID 的前 8 碼。足以分辨同一場裡的幾隻，又短到人願意動手打
+func _short_id(id: String) -> String:
+	return id.substr(0, 8)
 
 func _cmd_goto(args: PackedStringArray) -> void:
 	if args.size() != 3 or not args[1].is_valid_int() or not args[2].is_valid_int():

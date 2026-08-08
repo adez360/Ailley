@@ -48,10 +48,18 @@ func _ready() -> void:
 # 順序不能反過來：@export 一定有值（agent.tscn 的預設），反過來的話 assignments 永遠不生效
 #
 # 查表用的是**節點名**不是 character_id：id 是生成的 UUID，手寫不出來，
-# 而 assignments 是人在編輯的資料檔。節點名在場景裡本來就唯一，正好是「哪一隻」的穩定代號
+# 而 assignments 是人在編輯的資料檔
 func _load_schedule() -> void:
-	var assigned := GameManager.get_schedule_template(str(name))
-	if not assigned.is_empty():
+	_warn_if_node_name_shared()
+
+	var assigned := GameManager.get_schedule_template(name)
+	if assigned.is_empty():
+		# 退回 @export 是允許的，但那個預設值是所有 instance 共用的，靜默退回
+		# 等於兩隻走同一份行程。漏寫 assignments 遠比刻意不指派常見，所以要講出來
+		push_warning("Agent %s: assignments 裡沒有這個節點名，退回場景預設值 %s" % [
+			name, schedule_template
+		])
+	else:
 		schedule_template = assigned
 
 	if schedule_template.is_empty():
@@ -64,6 +72,18 @@ func _load_schedule() -> void:
 		return
 
 	schedule = data["schedule"]
+
+# 節點名只在**同一層**唯一 —— 引擎只會把撞名的兄弟節點改名，不同父節點底下
+# 兩隻都叫 Agent 是合法的。那樣它們會查到同一筆 assignment，靜默共用一份行程。
+#
+# 只有後進 group 的那隻掃得到先進的（_ready() 由上而下跑），所以撞名只印一則
+func _warn_if_node_name_shared() -> void:
+	for other in get_tree().get_nodes_in_group("agents"):
+		if other != self and other.name == name:
+			push_error("Agent %s: 節點名和 %s 撞了，assignments 分不出是哪一隻" % [
+				get_path(), other.get_path()
+			])
+			return
 
 # 睡覺中的 Agent 不接受搭話。行程插槽之後會有 interruptible 欄位（計畫 §5.1），
 # 現在先用 state 判斷
