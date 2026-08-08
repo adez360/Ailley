@@ -369,7 +369,7 @@ envelope  system:String          人格/規則/輸出 schema/動作白名單
           payload:Dictionary     字串化成 user 訊息
           model:String           選填，覆寫設定
           response_format:Dict   選填 json_schema；各模型支援度不一，預設不帶
-get_usage -> {game_day, calls_today, max_calls, queued, in_flight}
+get_usage -> {game_day, calls_today, max_calls, queued, in_flight}   # game_day 讀 GameClock.day
 
 † 全專案唯一碰網路的地方 ⇒ 成本上限/金鑰/防注入入口只有一處要顧
 † system 與 payload 分開是成本問題：system 幾乎不變吃得到 prompt cache
@@ -550,12 +550,16 @@ func load_npc_data()
 
 ```gdscript
 signal time_changed(hour: int, minute: int)  # 每遊戲分鐘
+signal day_changed(day: int)                 # 跨日，在同一次 time_changed 之前發
 @export var seconds_per_game_minute := 1.0
-var hour := 8 · var minute := 0
+var hour := 8 · var minute := 0 · var day := 1
 ```
 
 ```
-24:00 回捲成 0:00。無暫停/加速 API；撥錶只能直接寫欄位再手動 emit
+24:00 回捲成 0:00，day += 1。無暫停/加速 API；撥錶只能直接寫欄位再手動 emit
+† 要「第幾天」一律讀 day / 訂 day_changed，不要自己比對 hour 有沒有變小 ——
+  私有計數重開遊戲歸零，靠它擋的東西（每日配額）等於沒擋
+⚠ day 還沒持久化，重開仍從 1 開始 —— 要等世界存檔（#21）
 ```
 
 ## data/
