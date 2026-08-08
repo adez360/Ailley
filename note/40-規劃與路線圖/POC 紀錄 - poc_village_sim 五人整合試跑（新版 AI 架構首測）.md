@@ -2891,3 +2891,77 @@ chosen_money_fail_v2.json`，1875筆，跟v1同筆數）：
 **還沒做的**：這批還沒人工抽查完整品質（只抽了6筆看類別代表性），治療/
 採草藥/舉報這三個小眾類型還是老樣子（9/7/5筆，樣本太少），這兩件事都還在
 待辦清單裡，Phase 1只解決了「money_fail這個大宗類型的人格分流」這一項。
+
+## DPO 第一輪訓練：驗證「有沒有效」，不求最佳解（2026-08-09）
+
+**目的**：不是調到最好，是回答是非題——DPO 訓練這條路對「模型不會主動從
+生理需求切到工作賺錢」這個已經測過7、8種軟性提示句都無效的問題，到底有沒有
+用。當天（8/9）要出結論。
+
+**訓練前備份**（動手練之前先做）：
+- 遠端 `~/Ailley/Qwen2.5-7B-Instruct-Q4_K_M.gguf` 複製一份存成
+  `Qwen2.5-7B-Instruct-Q4_K_M.gguf.backup_20260809`，新模型另存新檔名，
+  不覆蓋原檔
+- 現有 `llama-server` 啟動參數存證：
+  `./llama.cpp/build/bin/llama-server -m Qwen2.5-7B-Instruct-Q4_K_M.gguf
+  -ngl 99 -c 8192 -fa on --host 127.0.0.1 --port 8080`（port 8080，
+  process 從 8/6 開始一直活著）
+
+**訓練前先定案的評估標準**（避免練完才回頭想怎麼評）：
+
+主要指標：沿用已有基準的 `test_money_hint.py`（阿吉強制貧窮情境，
+money=3/hunger=90，120遊戲分鐘，43次決策，訓練前基準是0次選表演/偷竊）。
+訓練後只要出現≥1次表演或偷竊，判定「有效」；仍是0次，判定「無效」。
+門檻刻意訂低，因為這輪是「這條路有沒有打穿」的是非題。
+
+次要指標（防止練壞其他東西）：訓練資料只涵蓋money_fail情境，練完額外跑一次
+一般情境的`run_des_sim.py`，檢查有沒有變笨（重複率飆升）、grammar解析失敗率
+異常升高、沒被這批資料覆蓋的動作（治療/採草藥/舉報）行為有沒有荒腔走板。
+只要有一項明顯惡化，即使主要指標有效，也要記錄「有效但有副作用」。
+
+**訓練資料**：`transcripts/dpo_chosen_money_fail_v2.json`，1875筆，
+`prompt`/`chosen_output`/`rejected_output` 已經是現成的 DPO triplet 格式，
+不用再整理。
+
+**順手清了遠端硬碟**：訓練前發現遠端`~/Ailley/`底下堆了11個之前選型比較
+階段下載、後來沒選中的模型檔案（gemma-4-12b/gemma-2-9b/Yi-1.5-9B/
+gemma-4-E4B/Qwen3-8B/Llama-3.1-8B/Llama-3-8B/internlm2.5-7b/
+DeepSeek-R1-Distill-Qwen-7B/Mistral-7B/Phi-3.5-mini），共約57GB，跟
+使用者確認後刪除其中9個（Qwen3-8B跟glm-4-9b先留著），釋放約45GB
+（`/dev/sdd`已用80G→35G）。這件事跟訓練本身無關，是使用者提到桌機硬碟
+空間有點滿時順便查到、順便處理的。
+
+**環境架設過程（2026-08-09）**：遠端沒有現成訓練環境，從零裝。
+`python3 -m venv dpo_venv`，套件版本踩了兩輪坑：
+1. 一開始裝`unsloth`附帶把`trl`拉到太新版本（需要`torch.distributed.fsdp.
+   FSDPModule`，我們裝的`torch 2.5.1+cu121`沒有這個API），`import trl`直接
+   炸掉。腳本本身沒真的用到unsloth，改成只裝`transformers==4.46.3`／
+   `trl==0.12.2`／`peft==0.13.2`／`accelerate==1.0.1`／`bitsandbytes==0.44.1`
+   這組互相驗證過相容的版本，import才過。
+2. 訓練腳本`train_dpo_money_fail_v2.py`原本`max_prompt_length=1536`，實測
+   `dpo_chosen_money_fail_v2.json`的prompt平均2041 token、最長2145——原設定
+   等於靜默截斷掉大部分角色人格/世界觀描述，餵進去的資料本身是殘缺的。
+   改成`max_prompt_length=2200`／`max_length=2300`。
+
+**訓練資料抽樣**：1875筆全量在8GB VRAM（RTX 3070）上跑，第一次smoke test
+量出單一範例前後端要約120秒，全量換算超過60小時，今天出不了結論。改成
+依`name×category`分層抽樣，第一輪抓200筆，後來為了確保時間內跑完再降到
+120筆（不吃全量，但保留人格分流的代表性，`random.seed(20260809)`可重現）。
+
+**踩到的效能/記憶體取捨**：關掉`gradient_checkpointing`換速度，結果訓練
+第一步就OOM（`Tried to allocate 156.00 MiB, 0 bytes free`）——8GB卡在
+`max_length`拉長之後，沒有gradient checkpointing真的塞不下，改回開啟。
+
+**卡住的地方，需要人工介入**：OOM那次崩潰之後，後續每次啟動訓練都在
+`DPOTrainer`初始化階段（`prepare_model_for_kbit_training`裡把非4bit參數
+轉fp32那一步）撞`RuntimeError: CUDA driver error: device not ready`，
+連續5次。逐一排除過：改`device_map`（`"auto"`↔`{"":0}`都試過）、加
+`torch.cuda.synchronize()`、加`CUDA_LAUNCH_BLOCKING=1`、降bitsandbytes版本
+（0.44.1→0.43.1）、單獨隔離重現同一段cast邏輯（在乾淨的獨立python
+process裡跑，143個參數全部轉換成功，不會重現這個錯）——都排除不了，
+且改回「已經成功跑過一次」的原始設定組合，一樣還是同一個錯誤。判斷是
+那次OOM把WSL2的GPU虛擬化層弄壞了，不是設定問題，`nvidia-smi`看起來
+乾淨（沒有殘留process、記憶體是空的）但底層狀態顯然沒有真的清乾淨。
+**需要在Windows主機（不是SSH進WSL2內部）執行`wsl --shutdown`才能重置**，
+這件事SSH連線進去的權限做不到，需要使用者本人操作。訓練腳本本身這階段
+已經是修好的版本，GPU恢復後可以直接接著跑，不用重新debug。
