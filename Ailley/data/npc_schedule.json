@@ -1,7 +1,7 @@
 {
 	"assignments": {
-		"agent": "npc001",
-		"agent2": "npc006"
+		"Agent": "npc001",
+		"Agent2": "npc006"
 	},
 	"villagers": [
 		{

@@ -60,7 +60,7 @@ func _ready() -> void:
 
 	_shape = get_node_or_null("CollisionShape2D")
 	if _shape == null or _shape.shape == null:
-		push_error("Vision %s: 缺少帶 CircleShape2D 的 CollisionShape2D 子節點" % _character.character_id)
+		push_error("Vision %s: 缺少帶 CircleShape2D 的 CollisionShape2D 子節點" % _character.name)
 		set_process(false)
 		return
 

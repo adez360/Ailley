@@ -27,14 +27,14 @@ const TALK_TARGET_BUSY := "TARGET_BUSY"
 const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 
 ## 角色的身分，全遊戲唯一且不隨改名而變：存檔、記憶連結、交誼區都靠它指人。
-## 是內部識別字，不拿來顯示。留空就用節點名的小寫當預設
+## 是內部識別字，不拿來顯示，也**不要去解析它** —— 格式只有 generate_id() 說了算。
 ##
-## 現階段是手動指定 + 開場偵測重複。等存檔做起來（見計畫 §10）才會改成
-## 建立角色時生成一次並持久化，那時跨玩家的唯一性也要一併處理
+## 留空就生成一個，這是正常路徑；`@export` 只留給場景裡手擺的測試角色。
+## 目前每次開遊戲都重新生成，要跨場次接續得等存檔把它寫下來
 @export var character_id := ""
 
 ## 玩家給角色取的名字，是拿來顯示與被指令指名的那一個，可以改、可以撞名。
-## 留空就沿用 character_id
+## 留空就沿用節點名 —— 不能退回 character_id，那是一串沒人讀得懂的 UUID
 @export var character_name := ""
 
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
@@ -55,24 +55,43 @@ var _conversation: Node = null
 
 func _ready() -> void:
 	if character_id.is_empty():
-		character_id = name.to_lower()
+		character_id = generate_id()
 
 	if character_name.is_empty():
-		character_name = character_id
+		character_name = str(name).to_lower()
 
 	# 要在自己進 group 之前檢查，否則一定會掃到自己
-	_warn_if_id_taken()
+	_ensure_unique_id()
 	add_to_group("characters")
 
 	sprite.play("idle_" + facing)
 
-# id 重複不會讓任何東西報錯，只會讓依 id 查角色的地方靜靜指到同一隻，
-# 所以寧可開場就吵
-func _warn_if_id_taken() -> void:
+# 隨機的 UUID v4。刻意不帶任何語意 —— 擁有者、名字、行程都不編進去，
+# 那些各自是欄位。把 owner 寫進 id 的話，帳號系統一改就得替所有存檔寫遷移
+static func generate_id() -> String:
+	var bytes := Crypto.new().generate_random_bytes(16)
+	bytes[6] = (bytes[6] & 0x0F) | 0x40		# version 4
+	bytes[8] = (bytes[8] & 0x3F) | 0x80		# variant 10
+	var hex := bytes.hex_encode()
+	return "%s-%s-%s-%s-%s" % [
+		hex.substr(0, 8), hex.substr(8, 4), hex.substr(12, 4),
+		hex.substr(16, 4), hex.substr(20, 12),
+	]
+
+# 撞 id 的兩隻會共用同一份關係與記憶（relationships.gd 拿 id 當 key），
+# 所以這裡換掉一個，而不是印完錯誤照樣讓兩隻共用。
+# 生成的 id 不會撞，會走到這裡的是場景裡手寫重複，或日後讀進壞掉的存檔
+func _ensure_unique_id() -> void:
+	while _id_taken(character_id):
+		var taken := character_id
+		character_id = generate_id()
+		push_error("Character id 重複：%s 已被佔用，%s 改用 %s" % [taken, name, character_id])
+
+func _id_taken(id: String) -> bool:
 	for other in get_tree().get_nodes_in_group("characters"):
-		if other.character_id == character_id:
-			push_error("Character id 重複：%s 已經被 %s 用掉了" % [character_id, other.name])
-			return
+		if other.character_id == id:
+			return true
+	return false
 
 
 # ---- 移動 ----
@@ -246,7 +265,7 @@ func _check_stuck(delta: float) -> void:
 
 	_stuck_timer += delta
 	if _stuck_timer >= STUCK_TIME:
-		push_warning("%s: 路徑走不動，於 %s 中止" % [character_id, global_position])
+		push_warning("%s: 路徑走不動，於 %s 中止" % [character_name, global_position])
 		stop_moving()
 		move_finished.emit(false)
 

@@ -46,18 +46,21 @@ func _ready() -> void:
 
 # 先問資料檔這隻角色被指派了哪份行程，沒有指派才用場景裡的 @export 後備值。
 # 順序不能反過來：@export 一定有值（agent.tscn 的預設），反過來的話 assignments 永遠不生效
+#
+# 查表用的是**節點名**不是 character_id：id 是生成的 UUID，手寫不出來，
+# 而 assignments 是人在編輯的資料檔。節點名在場景裡本來就唯一，正好是「哪一隻」的穩定代號
 func _load_schedule() -> void:
-	var assigned := GameManager.get_schedule_template(character_id)
+	var assigned := GameManager.get_schedule_template(str(name))
 	if not assigned.is_empty():
 		schedule_template = assigned
 
 	if schedule_template.is_empty():
-		push_error("Agent %s: 沒有指定 schedule_template（可在 npc_schedule.json 的 assignments 指派）" % character_id)
+		push_error("Agent %s: 沒有指定 schedule_template（可在 npc_schedule.json 的 assignments 指派）" % name)
 		return
 
 	var data = GameManager.get_npc(schedule_template)
 	if data == null:
-		push_error("Agent %s: npc_schedule.json 裡沒有模板 %s" % [character_id, schedule_template])
+		push_error("Agent %s: npc_schedule.json 裡沒有模板 %s" % [name, schedule_template])
 		return
 
 	schedule = data["schedule"]
@@ -127,7 +130,7 @@ func _start_entry(entry: Dictionary) -> void:
 
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
 	if anchors == null or not anchors.has(current_place):
-		push_error("Agent %s: 沒有這個地點 %s" % [character_id, current_place])
+		push_error("Agent %s: 沒有這個地點 %s" % [character_name, current_place])
 		return
 
 	var target: Vector2 = anchors.resolve(current_place)
@@ -139,7 +142,7 @@ func _start_entry(entry: Dictionary) -> void:
 		return
 
 	if not move_to(target):
-		push_warning("Agent %s: 走不到 %s" % [character_id, current_place])
+		push_warning("Agent %s: 走不到 %s" % [character_name, current_place])
 
 # 站得夠近，或者已經站在目標所在的那一格。
 #
