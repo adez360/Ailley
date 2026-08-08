@@ -2,9 +2,10 @@
 tags:
   - 尋徑
   - debug
+  - 外掛修改
 scene: scenes/main.tscn
 status: 已實作
-updated: 2026-08-03
+updated: 2026-08-08
 ---
 
 # 尋徑與 Debug 主控台
@@ -41,9 +42,21 @@ signal player.move_finished(reached: bool)
 ## 設計決策與踩過的坑
 
 > [!important] 可走性用物理查詢量，不讀 tile data
-> [[TileMapDual 雙層碰撞|TileMapDual]] 是 dual-grid：畫的是「世界層」，實際貼圖與碰撞在執行時生成的子
+> TileMapDual 是 dual-grid：畫的是「世界層」，實際貼圖與碰撞在執行時生成的子
 > TileMapLayer 上。改用 `intersect_shape()` 逐格丟一個玩家大小的圓去試，
 > 就不必碰 addon 內部，之後手動放進場景的 `StaticBody2D` 也會自動變成障礙。
+
+> [!warning] TileMapDual 外掛被改過一行：碰撞只取世界層
+> 外掛會生出**兩個都有碰撞**的圖層，而生成的顯示層偏移半格。
+> 碰撞留在顯示層的話，NavGrid 的格中心會落在圖磚角落、探測圓同時碰到周圍四塊，
+> 實測掃出 25 格偽障礙。
+> `addons/TileMapDual/display_layer.gd:48` 因此把 `collision_enabled` 改成恆為 false，
+> 碰撞只由世界層提供，與 NavGrid 完全對齊（偽障礙 0 格）。
+>
+> **前提：碰撞必須來自世界層的標記圖磚。** 哪天改成只在轉場圖上畫碰撞、
+> 世界層不畫，就會變成完全沒有碰撞。理由已寫在改動處的註解裡。
+>
+> `addons/` 有進版控，所以外掛更新蓋掉這一行時 git 會顯示衝突讓你發現。
 
 > [!warning] 地形碰撞不會在第一幀就位
 > `_ready` 後等一個物理幀去掃，結果 `solid=0` —— TileMapDual 的顯示層還沒生成完。
