@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="ailley4.3"
-run/main_scene="uid://bianwxowjctjk"
+run/main_scene="uid://dc5itq8cjoira"
 config/features=PackedStringArray("4.5", "GL Compatibility")
 config/icon="res://icon.svg"
 
@@ -19,8 +19,9 @@ config/icon="res://icon.svg"
 
 GameManager="*res://scripts/core/game_manager.gd"
 GameClock="*res://scripts/core/GameClock.gd"
-_mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
 AIService="*res://scripts/ai/ai_service.gd"
+_mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
+Global="*res://scripts/core/Global.gd"
 
 [display]
 

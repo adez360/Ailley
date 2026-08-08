@@ -1,0 +1,63 @@
+[gd_scene load_steps=2 format=3 uid="uid://dc5itq8cjoira"]
+
+[ext_resource type="Script" uid="uid://bip7dcuwn8jxe" path="res://scripts/ui/main_menu.gd" id="1_yqorp"]
+
+[node name="MainMenu" type="Control"]
+layout_mode = 3
+anchor_right = 0.9991319
+anchor_bottom = 1.0
+offset_left = 32.0
+offset_right = 30.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 1
+script = ExtResource("1_yqorp")
+metadata/_edit_use_anchors_ = true
+metadata/_edit_horizontal_guides_ = [426.0, 165.0, 314.0]
+metadata/_edit_vertical_guides_ = [344.0, 802.0, -406.0]
+
+[node name="MOD1" type="Button" parent="."]
+layout_mode = 1
+anchors_preset = -1
+anchor_left = 0.272
+anchor_top = 0.42800003
+anchor_right = 0.44700003
+anchor_bottom = 0.569
+offset_left = 0.47198486
+offset_top = -0.07803345
+offset_right = 0.068374634
+offset_bottom = -0.28100586
+grow_horizontal = 2
+grow_vertical = 2
+text = "MOD1"
+
+[node name="MOD2" type="Button" parent="."]
+layout_mode = 1
+anchors_preset = -1
+anchor_left = 0.48200002
+anchor_top = 0.42200002
+anchor_right = 0.65500003
+anchor_bottom = 0.56700003
+offset_left = -0.19517517
+offset_top = 0.05999756
+offset_right = 0.18292236
+offset_bottom = -0.0900116
+text = "MOD2
+"
+
+[node name="LOADING" type="Button" parent="."]
+layout_mode = 1
+anchors_preset = -1
+anchor_left = 0.35000002
+anchor_top = 0.646
+anchor_right = 0.58000004
+anchor_bottom = 0.75600004
+offset_left = -0.1541748
+offset_top = -1.0660095
+offset_right = -0.08135986
+offset_bottom = 0.12399292
+text = "LOADING "
+
+[connection signal="pressed" from="MOD1" to="." method="_on_mod_1_pressed"]
+[connection signal="pressed" from="MOD2" to="." method="_on_mod_2_pressed"]
+[connection signal="pressed" from="LOADING" to="." method="_on_loading_pressed"]

@@ -12,6 +12,7 @@
 [ext_resource type="PackedScene" uid="uid://q38st5oy2nj" path="res://scenes/chat_input.tscn" id="8_nnngi"]
 [ext_resource type="Script" uid="uid://dm8733qx3w3uk" path="res://scripts/ui/time_label.gd" id="11_7bo0c"]
 [ext_resource type="Script" uid="uid://bnxsowwm2cpvd" path="res://scripts/world/places.gd" id="12_sc7p8"]
+[ext_resource type="Script" uid="uid://drhsdsxhnlanp" path="res://scripts/ui/pause_menu.gd" id="12_eb6dy"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_pl1ev"]
 texture = ExtResource("3_y8peb")
@@ -203,3 +204,40 @@ theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
 theme_override_constants/outline_size = 4
 theme_override_font_sizes/font_size = 8
 script = ExtResource("11_7bo0c")
+
+[node name="PauseMenu" type="CanvasLayer" parent="."]
+script = ExtResource("12_eb6dy")
+
+[node name="Root" type="Control" parent="PauseMenu"]
+visible = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+mouse_filter = 1
+
+[node name="Dim" type="ColorRect" parent="PauseMenu/Root"]
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0, 0, 0, 0.6)
+
+[node name="SaveAndExit" type="Button" parent="PauseMenu/Root"]
+layout_mode = 0
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -90.0
+offset_top = 108.0
+offset_right = 90.0
+offset_bottom = 140.0
+text = "儲存並回選單"
+
+[node name="Resume" type="Button" parent="PauseMenu/Root"]
+layout_mode = 0
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -90.0
+offset_top = 152.0
+offset_right = 90.0
+offset_bottom = 184.0
+text = "返回遊戲"
