@@ -1,4 +1,4 @@
-[gd_scene load_steps=15 format=4 uid="uid://bianwxowjctjk"]
+[gd_scene load_steps=17 format=4 uid="uid://bianwxowjctjk"]
 
 [ext_resource type="PackedScene" uid="uid://v21qv1icuh5m" path="res://scenes/player.tscn" id="1_ljsu2"]
 [ext_resource type="Script" uid="uid://bhds0h8vwl2g5" path="res://scripts/world/follow_camera.gd" id="2_a52xk"]
@@ -11,8 +11,9 @@
 [ext_resource type="Script" uid="uid://uf54btbn8mry" path="res://scripts/ui/debug_overlay.gd" id="7_hkfri"]
 [ext_resource type="PackedScene" uid="uid://q38st5oy2nj" path="res://scenes/chat_input.tscn" id="8_nnngi"]
 [ext_resource type="Script" uid="uid://dm8733qx3w3uk" path="res://scripts/ui/time_label.gd" id="11_7bo0c"]
-[ext_resource type="Script" uid="uid://bnxsowwm2cpvd" path="res://scripts/world/places.gd" id="12_sc7p8"]
 [ext_resource type="Script" uid="uid://drhsdsxhnlanp" path="res://scripts/ui/pause_menu.gd" id="12_eb6dy"]
+[ext_resource type="Script" uid="uid://bnxsowwm2cpvd" path="res://scripts/world/places.gd" id="12_sc7p8"]
+[ext_resource type="Script" uid="uid://tw6svbgleds4" path="res://scripts/ui/status_panel.gd" id="14_a8y0u"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_pl1ev"]
 texture = ExtResource("3_y8peb")
@@ -214,6 +215,8 @@ layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 mouse_filter = 1
 
 [node name="Dim" type="ColorRect" parent="PauseMenu/Root"]
@@ -241,3 +244,37 @@ offset_top = 152.0
 offset_right = 90.0
 offset_bottom = 184.0
 text = "返回遊戲"
+
+[node name="StatusPanel" type="CanvasLayer" parent="."]
+script = ExtResource("14_a8y0u")
+
+[node name="Panel" type="Panel" parent="StatusPanel"]
+offset_left = 130.0
+offset_top = 45.0
+offset_right = 350.0
+offset_bottom = 225.0
+
+[node name="VBox" type="VBoxContainer" parent="StatusPanel/Panel"]
+layout_mode = 0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = 212.0
+offset_bottom = 172.0
+
+[node name="NameLabel" type="Label" parent="StatusPanel/Panel/VBox"]
+layout_mode = 2
+
+[node name="AgeLabel" type="Label" parent="StatusPanel/Panel/VBox"]
+layout_mode = 2
+
+[node name="HungerLabel" type="Label" parent="StatusPanel/Panel/VBox"]
+layout_mode = 2
+
+[node name="ThirstLabel" type="Label" parent="StatusPanel/Panel/VBox"]
+layout_mode = 2
+
+[node name="EnergyLabel" type="Label" parent="StatusPanel/Panel/VBox"]
+layout_mode = 2
+
+[node name="HintLabel" type="Label" parent="StatusPanel/Panel/VBox"]
+layout_mode = 2

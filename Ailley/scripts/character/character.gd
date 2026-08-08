@@ -7,6 +7,7 @@ extends CharacterBody2D
 ## 子類別只負責決定「往哪走」：Player 讀輸入，Agent 讀行程表。
 
 signal move_finished(reached: bool)
+signal noise_heard(source: Character)		# 收到的那一方會發，見 make_noise()
 
 const SPEED = 80.0
 const ARRIVE_DISTANCE = 2.0		# 距離 waypoint 多近算抵達
@@ -36,6 +37,9 @@ const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 ## 玩家給角色取的名字，是拿來顯示與被指令指名的那一個，可以改、可以撞名。
 ## 留空就沿用節點名 —— 不能退回 character_id，那是一串沒人讀得懂的 UUID
 @export var character_name := ""
+
+## 角色年齡，純顯示用（狀態表），不影響任何遊戲邏輯
+@export var age := 20
 
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
@@ -178,6 +182,8 @@ func find_nearest_character() -> Character:
 
 	return nearest
 
+# ---- 對話 ----
+
 func enter_conversation(conversation: Node) -> void:
 	_conversation = conversation
 	stop_moving()
@@ -211,6 +217,22 @@ func face_towards(other: Character) -> void:
 		sprite.flip_h = offset.x < 0
 
 	sprite.play("idle_" + facing)
+
+
+# ---- 聲音 ----
+
+## 廣播半徑（像素），8 格。跟 Vision 刻意不同：聲音不判定視線遮蔽，穿牆照樣聽得到
+const NOISE_RADIUS := 128.0
+
+## 對外廣播「這裡發出聲音」。範圍內每個角色都會收到 noise_heard 訊號，
+## 要不要有反應（例如冒出 !?）由收到的那一方決定——跟 Vision 的
+## spotted/反應分離是同一種分工，這裡只負責喊，不管誰在乎
+func make_noise(radius: float = NOISE_RADIUS) -> void:
+	for other in get_tree().get_nodes_in_group("characters"):
+		if other == self:
+			continue
+		if get_body_position().distance_to(other.get_body_position()) <= radius:
+			other.noise_heard.emit(self)
 
 
 # ---- 每幀 ----

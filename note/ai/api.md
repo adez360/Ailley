@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-07
+updated: 2026-08-09
 ---
 
 # api
@@ -61,11 +61,13 @@ scenes/debug_console.tscn               CanvasLayer
 
 ```gdscript
 signal move_finished(reached: bool)          # 走完 true / 卡住放棄 false
+signal noise_heard(source: Character)        # 收到方會發，見 make_noise()
 
 const SPEED = 80.0
 const ARRIVE_DISTANCE = 2.0
 const STUCK_TIME = 1.0
 const TALK_RANGE := 32.0                     # 2 格
+const NOISE_RADIUS := 128.0                  # 8 格，make_noise() 的預設半徑
 
 const TALK_OK := ""                          # 以下為 talk_to() 回傳值
 const TALK_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
@@ -76,6 +78,7 @@ const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 
 @export var character_id := ""               # 唯一身分，留空→生成 UUID v4（正常路徑）
 @export var character_name := ""             # 顯示名，可改可撞，留空→節點名小寫
+@export var age := 20                        # 純顯示用，不影響邏輯
 static func generate_id() -> String           # RFC 4122 v4，不帶語意，別解析它
 var facing := "front"                        # front|back|right
 
@@ -99,6 +102,7 @@ func say(line: String) -> void
 func speech_duration(line: String) -> float
 func face_towards(other: Character) -> void
 func update_animation() -> void
+func make_noise(radius: float = NOISE_RADIUS) -> void   # 廣播 noise_heard 給範圍內每個角色
 
 func _decide_velocity() -> Vector2           # 子類覆寫點：這一幀往哪走
 ```
@@ -112,7 +116,8 @@ func _decide_velocity() -> Vector2           # 子類覆寫點：這一幀往哪
 † character_id 撞到就換一個新的 + push_error，不是只偵測。共用 id = 共用關係與記憶
 † character_id 未持久化：每次開遊戲重新生成，關係紀錄一重開就指向不存在的人
 † 動畫只有 front/back/right 三向，往左用 flip_h 翻轉 right
-→ 技術/Character 基底與 Agent
+† make_noise() 不查視線遮蔽，聲音穿牆，跟 Vision 刻意不同
+→ 技術/Character 基底與 Agent、技術/聽覺感測
 ```
 
 ## Player — scripts/character/player.gd · extends Character
@@ -124,6 +129,7 @@ func get_input_direction() -> Vector2        # WASD 正規化
 ```
 輸入優先：一按方向鍵就 stop_moving() 中斷 A*
 interact(E)：對話中→leave_conversation()；否則→talk_to(find_nearest_character())
+make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不會冒 !?
 † gui_get_focus_owner() != null 時 get_input_direction() 回 ZERO
   Input.get_axis() 讀全域狀態，LineEdit 攔不住
 搭話失敗對玩家靜默，只有主控台印原因碼
@@ -150,6 +156,7 @@ _ready: await nav.grid_built 才出發（NavGrid 非同步建置，太早→空�
 地點解析：place_anchors 的同名 Marker2D 優先，退回 GameManager.get_place()
 spotted 且 !relationships.has_met() → say("！") + stop_moving() + 2s + 重算行程
   _noticed 表確保每個對象只觸發一次
+noise_heard 且 !is_in_conversation() → say("!?")，無去重，每次都會反應
 ⚠ 抵達判定 = 距離 ≤ ARRIVE_DISTANCE(2px) OR 已在目標格內(16px)
   只比距離的話 2..11px 是死角：距離說沒到，find_path() 卻因同格只回一個點
   → move_to() false → 假的「走不到」。每次重算行程都會噴
@@ -177,7 +184,8 @@ func get_lowest_need_place() -> String
 ```
 key      label  drift  toward  start  is_need  place
 hunger   飢餓    3.0    0       100    ✓        restaurant
-energy   精力    1.0    0       100    ✓        home_001
+thirst   口渴    4.0    0       100    ✓        restaurant
+energy   體力    1.0    0       100    ✓        home_001
 social   社交    0.5    0       100    ✓        square
 fun      娛樂    0.2    0       100    ✓        square
 mood     心情    0.5    50      50     ✗        ""
@@ -486,7 +494,7 @@ chat 鍵(Enter/KpEnter)開關；Esc 取消；送出 → player.say()
 
 goto <name> <x> <y>      走到該格（格座標，可負，A*）
 talk <name> | <a> <b>    搭話；單一參數=玩家對誰講
-status [name]            角色狀態；數值直接掃 Stats.SPEC
+status [name]            角色狀態（含 age）；數值直接掃 Stats.SPEC
 debug [項目] [on|off]     疊圖開關；debug off 全關
 stop                     停止玩家移動
 pos                      玩家座標與所在格
@@ -499,6 +507,25 @@ help | clear
   手動測試不受限就測不出正式呼叫端的行為
 † ai 每次先 reload_config()，改完 user://ai_config.json 不用重開遊戲
 ⚠ _cmd_help 的疊圖清單是寫死字串，加圖層要手動同步（其餘會自動跟上）
+```
+
+## StatusPanel — scripts/ui/status_panel.gd · class_name · CanvasLayer
+
+```gdscript
+const CHARACTER_MASK := 2                    # collision layer「character」
+
+func open(character: Character) -> void
+func close() -> void
+```
+
+```
+滑鼠左鍵點角色本體開啟；再點空白處或 Esc 關閉
+顯示：character_name、age、Stats 的 hunger/thirst/energy（無 Stats 就只顯示前兩項）
+點擊偵測：get_viewport().world_2d.direct_space_state.intersect_point()，
+  mask=2，跟 nav_grid.gd／vision.gd 同一種手法，不另掛 Area2D
+† event.position 是螢幕座標，用 canvas_transform 的反矩陣還原世界座標
+  （CanvasLayer 沒有 global_position，鏡頭跟隨時不能直接拿螢幕座標當世界座標用）
+  → 技術/角色狀態表
 ```
 
 ## DebugOverlay — scripts/ui/debug_overlay.gd · Node2D · group debug_overlay
@@ -587,6 +614,7 @@ schedule 插槽現為 {time, place, state}，是計畫結構的子集
 ```
 Vision 圓形無朝向；lost 無呼叫端
 Agent 不對 Stats 反應（get_lowest_need_place() 可用但無呼叫端）
+noise_heard 對話中會被吞掉；睡覺中的 Agent 沒有排除，一樣會冒 !?
 無存檔機制（全專案無 user:// 存檔/ConfigFile）
 character_id 與 GameClock.day 都未持久化，重開就重來
 LLM 未接對話與行程（服務層可用，無呼叫端）

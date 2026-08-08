@@ -37,6 +37,8 @@ func _ready() -> void:
 	if vision != null:
 		vision.spotted.connect(_on_spotted)
 
+	noise_heard.connect(_on_noise_heard)
+
 	# NavGrid 開場是非同步建的，不等它建完就出發只會拿到空路徑
 	var nav = get_tree().get_first_node_in_group("nav_grid")
 	if nav != null and not nav.built:
@@ -98,6 +100,15 @@ func _on_spotted(other: Character) -> void:
 	# 與 exit_conversation() 同一個理由
 	if not is_in_conversation():
 		_apply_current_entry()
+
+# 範圍內有人發出聲音（見 character.gd 的 make_noise()）。
+# 跟 _on_spotted 不同，這裡不記錄「已經反應過」——聲音是一次性事件，
+# 每次都該有反應，不是像陌生人那樣「見過一次就不再驚訝」
+func _on_noise_heard(_source: Character) -> void:
+	if is_in_conversation():
+		return
+
+	say(L10n.t("DLG_NOISE_ALERT"))
 
 # 行程表是「到點切換」，所以只在時間字串剛好吻合的那一分鐘換目標
 func _on_time_changed(hour: int, minute: int) -> void:

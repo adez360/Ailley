@@ -257,6 +257,7 @@ func _cmd_status(args: PackedStringArray) -> void:
 	_print("[color=88ccff]%s[/color][color=888888]  id %s[/color]" % [
 		character.character_name, character.character_id
 	])
+	_field("CON_FIELD_AGE", str(character.age))
 
 	var where := "%s" % body
 	var nav := get_tree().get_first_node_in_group("nav_grid")

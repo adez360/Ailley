@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-07
+updated: 2026-08-09
 ---
 
 # Character 基底與 Agent
@@ -40,9 +40,10 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 | --- | --- | --- | --- |
 | `character_id` | 全遊戲唯一身分。存檔、記憶連結、交誼區靠它指人，內部用不顯示 | 否 | 否 |
 | `character_name` | 玩家取的名字，顯示用，指令也用它指名 | 是 | 是 |
+| `age` | 年齡，純顯示用（狀態表），不影響任何邏輯 | 是 | — |
 | `schedule_template`（僅 Agent） | 用哪份行程資料，對應 `npc_schedule.json` 的鍵 | — | 是 |
 
-留空時：`character_id` 生成一個 UUID，`character_name` 退回節點名小寫。
+留空時：`character_id` 生成一個 UUID，`character_name` 退回節點名小寫。`age` 預設 20。
 
 ## `character_id` 是生成的 UUID，不帶任何語意
 

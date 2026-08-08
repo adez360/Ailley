@@ -19,6 +19,7 @@ CON_MOVE_ABORTED,"{name} 移動中止於 {pos}（被地形卡住）","{name} sto
 CON_STOPPED,"已停止移動","Movement stopped"
 CON_TALK_FAILED,"{speaker} 搭話 {listener} 失敗：{reason}","{speaker} failed to talk to {listener}: {reason}"
 CON_TALK_OK,"{speaker} 對 {listener} 搭話","{speaker} talks to {listener}"
+CON_FIELD_AGE,"年齡","Age"
 CON_FIELD_POS,"位置","Position"
 CON_FIELD_CELL,"格","Cell"
 CON_FIELD_MOVE,"移動","Movement"
