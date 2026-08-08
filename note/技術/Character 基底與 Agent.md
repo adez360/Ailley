@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-07
+updated: 2026-08-08
 ---
 
 # Character 基底與 Agent
@@ -36,13 +36,17 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 
 ## 身分、名字、行程模板是三件事
 
-| 欄位 | 用途 | 可變 | 可撞名 |
+| 欄位 | 用途 | 玩家可改 | 可撞名 |
 | --- | --- | --- | --- |
 | `character_id` | 全遊戲唯一身分。存檔、記憶連結、交誼區靠它指人，內部用不顯示 | 否 | 否 |
 | `character_name` | 玩家取的名字，顯示用，指令也用它指名 | 是 | 是 |
 | `schedule_template`（僅 Agent） | 用哪份行程資料，對應 `npc_schedule.json` 的鍵 | — | 是 |
 
 留空時：`character_id` 生成一個 UUID，`character_name` 退回節點名小寫。
+
+「玩家可改」不等於「這一場不會變」：`character_id` 玩家碰不到，但撞號時
+`_ensure_unique_id()` 會就地換掉一個，而且目前每次開遊戲都重新生成。
+別把它快取在 `_ready()` 之外，也別假設它跨場次還是同一個。
 
 ## `character_id` 是生成的 UUID，不帶任何語意
 
@@ -79,13 +83,23 @@ id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存
 "assignments": { "Agent": "npc001", "Agent2": "npc006" }
 ```
 
-`agent.gd` 先問 `GameManager.get_schedule_template(str(name))`，
+`agent.gd` 先問 `GameManager.get_schedule_template(name)`，
 沒有指派才退回 `@export var schedule_template`。順序不能反過來 ——
 `@export` 一定有值（場景的預設），先看它的話 `assignments` 永遠不會生效。
 
+退回時會 `push_warning`。退回本身是允許的，但因為 `agent.tscn` 的預設值
+所有 instance 共用，靜默退回的結果就是兩隻走同一份行程 —— 正是這個機制要防的事。
+漏寫 `assignments` 遠比刻意不指派常見，所以寧可吵。
+
 > [!important] key 用節點名，不用 `character_id`
-> id 是生成的 UUID，人在 json 裡手寫不出來。節點名在場景裡本來就唯一，
+> id 是生成的 UUID，人在 json 裡手寫不出來。
 > 而 `assignments` 問的正是「場景裡哪一隻用哪份資料」，不是「哪個身分」。
+
+> [!warning] 節點名只在同一層唯一
+> 引擎只保證兄弟節點不撞名（撞了會自動改成 `@Agent@2`），
+> `HouseA/Agent` 與 `HouseB/Agent` 則是合法的，而它們會查到同一筆 assignment。
+> `_warn_if_node_name_shared()` 掃 group `agents` 抓這種撞名並 `push_error` ——
+> 擋不住，但至少不是靜默的。
 
 > [!important] `@export` 的預設值是 instance 之間共用的
 > `Agent` 與 `Agent2` 是同一份 `agent.tscn` 的 instance，
@@ -102,7 +116,7 @@ id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存
 
 > [!warning] `npc002`~`npc005` 仍然指向不存在的地點
 > 它們用 `shop` / `temple` / `home_002`… 這些**沒有錨點**，
-> 會退回 `places.json` 那組已經失效的座標。目前沒有任何角色被指派到它們，
+> 到點時只會 `push_error` 然後原地不動。目前沒有任何角色被指派到它們，
 > 但 `assignments` 一旦指過去就會踩到。要用之前得先補錨點或改寫那幾份行程。
 
 ## 決策
@@ -117,7 +131,7 @@ id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存
 > 而現在的可走區只有 18 格寬 —— 所有地點都落在界外。
 >
 > 改成在 `Node2D/PlaceAnchors`（group `place_anchors`）底下放與地點同名的 Marker2D，
-> `agent.gd` 優先讀錨點、找不到才退回 `GameManager.get_place()`。
+> 那是座標的唯一事實來源：`agent.gd` 只認錨點，沒有就 `push_error` 且不動身。
 >
 > 這也是多場景（家園／交誼區）本來就需要的：全域絕對座標在多張地圖下必然是錯的。
 
