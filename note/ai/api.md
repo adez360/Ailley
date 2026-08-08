@@ -74,8 +74,9 @@ const TALK_TOO_FAR := "TOO_FAR"
 const TALK_TARGET_BUSY := "TARGET_BUSY"
 const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 
-@export var character_id := ""               # 唯一身分，留空→節點名小寫
-@export var character_name := ""             # 顯示名，可改可撞，留空→character_id
+@export var character_id := ""               # 唯一身分，留空→生成 UUID v4（正常路徑）
+@export var character_name := ""             # 顯示名，可改可撞，留空→節點名小寫
+static func generate_id() -> String           # RFC 4122 v4，不帶語意，別解析它
 var facing := "front"                        # front|back|right
 
 # 元件（子節點，皆 get_node_or_null，沒掛不會壞）
@@ -108,7 +109,8 @@ func _decide_velocity() -> Vector2           # 子類覆寫點：這一幀往哪
 † move_to() 需場景有 nav_grid group，否則 push_error + false
 † TALK_* ≠ Conversation.REASON_*
   前者=搭話失敗，後者=對話正常結束。混用會讓 AI 反覆重試成功的動作
-† character_id 唯一性只是開場偵測(push_error)，不是保證
+† character_id 撞到就換一個新的 + push_error，不是只偵測。共用 id = 共用關係與記憶
+† character_id 未持久化：每次開遊戲重新生成，關係紀錄一重開就指向不存在的人
 † 動畫只有 front/back/right 三向，往左用 flip_h 翻轉 right
 → 技術/Character 基底與 Agent
 ```
@@ -152,6 +154,7 @@ spotted 且 !relationships.has_met() → say("！") + stop_moving() + 2s + 重�
   只比距離的話 2..11px 是死角：距離說沒到，find_path() 卻因同格只回一個點
   → move_to() false → 假的「走不到」。每次重算行程都會噴
 † schedule_template ≠ character_id：前者是「用哪份資料」，後者是「我是誰」
+† assignments 的 key 是節點名不是 character_id（id 是 UUID，json 裡手寫不出來）
 ```
 
 ## Stats — scripts/character/stats.gd · class_name · Node
@@ -585,6 +588,6 @@ schedule 插槽現為 {time, place, state}，是計畫結構的子集
 Vision 圓形無朝向；lost 無呼叫端
 Agent 不對 Stats 反應（get_lowest_need_place() 可用但無呼叫端）
 無存檔機制（全專案無 user:// 存檔/ConfigFile）
-character_id 唯一性只是開場偵測
+character_id 與 GameClock.day 都未持久化，重開就重來
 LLM 未接對話與行程（服務層可用，無呼叫端）
 ```

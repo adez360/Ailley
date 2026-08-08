@@ -42,7 +42,28 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 | `character_name` | 玩家取的名字，顯示用，指令也用它指名 | 是 | 是 |
 | `schedule_template`（僅 Agent） | 用哪份行程資料，對應 `npc_schedule.json` 的鍵 | — | 是 |
 
-兩個 id 欄位留空時分別退回節點名小寫、退回 `character_id`。
+留空時：`character_id` 生成一個 UUID，`character_name` 退回節點名小寫。
+
+## `character_id` 是生成的 UUID，不帶任何語意
+
+`Character.generate_id()` 用 `Crypto.generate_random_bytes(16)` 產生 RFC 4122 v4。
+`@export var character_id` 留著只是給場景裡手擺的測試角色用，**留空才是正常路徑**。
+
+> [!important] 不要解析 id，也不要把東西編進去
+> 擁有者、名字、行程都不在 id 裡，那些各自是欄位。
+> 選 UUID 而不是 `<owner>/<local_id>` 命名空間，理由是唯一性的**來源**：
+> 命名空間把唯一性押在一個現在還不存在、日後幾乎一定會被真實帳號系統取代的
+> `<owner>` 上，那時所有既有 id 都要遷移。UUID 不押任何東西。
+>
+> 附帶一個硬性理由：Godot 的節點名不接受 `/`，會靜默換成 `_`。
+> `character.gd` 拿兩個 id 組 `Conversation_%s_%s`，
+> `adez360/agent` + `bob/agent2` 與 `adez360/agent_bob` + `agent2` 會撞成同一個名字。
+
+唯一性是**保證**不是偵測：`_ensure_unique_id()` 撞到就換一個新的並 `push_error`，
+而不是印完錯誤讓兩隻共用。共用 id 等於共用一份關係與記憶
+（`relationships.gd` 拿 id 當 key）。生成的 id 不會撞，會走到這條的是場景裡手寫重複。
+
+id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存檔]]。
 
 > [!important] 為什麼 `schedule_template` 不共用 `character_id`
 > 它是「用哪份資料」不是「我是誰」。id 既然是全遊戲唯一身分，
@@ -52,15 +73,19 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 
 ## 誰用哪份行程寫在資料檔，不寫在場景
 
-`npc_schedule.json` 的 `assignments` 把 `character_id` 對到模板名：
+`npc_schedule.json` 的 `assignments` 把**節點名**對到模板名：
 
 ```json
-"assignments": { "agent": "npc001", "agent2": "npc006" }
+"assignments": { "Agent": "npc001", "Agent2": "npc006" }
 ```
 
-`agent.gd` 先問 `GameManager.get_schedule_template(character_id)`，
+`agent.gd` 先問 `GameManager.get_schedule_template(str(name))`，
 沒有指派才退回 `@export var schedule_template`。順序不能反過來 ——
 `@export` 一定有值（場景的預設），先看它的話 `assignments` 永遠不會生效。
+
+> [!important] key 用節點名，不用 `character_id`
+> id 是生成的 UUID，人在 json 裡手寫不出來。節點名在場景裡本來就唯一，
+> 而 `assignments` 問的正是「場景裡哪一隻用哪份資料」，不是「哪個身分」。
 
 > [!important] `@export` 的預設值是 instance 之間共用的
 > `Agent` 與 `Agent2` 是同一份 `agent.tscn` 的 instance，
@@ -79,11 +104,6 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 > 它們用 `shop` / `temple` / `home_002`… 這些**沒有錨點**，
 > 會退回 `places.json` 那組已經失效的座標。目前沒有任何角色被指派到它們，
 > 但 `assignments` 一旦指過去就會踩到。要用之前得先補錨點或改寫那幾份行程。
-
-> [!warning] id 唯一性目前只是「偵測」，不是「保證」
-> `_ready()` 會掃 `characters` group，撞 id 就 `push_error`。
-> 真正的唯一性要等存檔做起來才能改成建立角色時生成一次並持久化；
-> 跨玩家的唯一性（交誼區）另需命名空間或 UUID，都還沒做。
 
 ## 決策
 
