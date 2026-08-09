@@ -1,0 +1,22 @@
+root ::= "{" ws "\"reasoning\"" ws ":" ws string ws "," ws "\"emotion\"" ws ":" ws emotion ws "," ws "\"intent\"" ws ":" ws intent ws "," ws "\"inner_monologue\"" ws ":" ws string ws "," ws "\"speech\"" ws ":" ws nullable-string ws "," ws "\"speech_volume\"" ws ":" ws speech-volume ws "}"
+
+# 推理鷹架實驗（2026-08-09）：在turn_duration_experiment.gbnf.template基礎上，
+# 新增一個「reasoning」欄位，放在intent之前——grammar硬約束逐token生成，
+# 欄位順序=生成順序，原本intent排在inner_monologue前面，代表模型是先憑直覺
+# 選好動作、獨白只是事後補的台詞。這次故意讓它被迫先寫一段「現在最大的問題
+# 是什麼、要怎麼解決」的分析，再根據這段分析選動作，測試這樣會不會讓
+# means-end推理表現變好（不改訓練，純粹改欄位順序）。
+
+intent ::= "{" ws "\"action\"" ws ":" ws action ws "," ws "\"duration_minutes\"" ws ":" ws duration ws "," ws "\"target\"" ws ":" ws target-value ws "," ws "\"location\"" ws ":" ws location-value ws "}"
+
+duration ::= [1-9] [0-9]? [0-9]?
+
+emotion ::= "\"excited\"" | "\"happy\"" | "\"in_love\"" | "\"terrified\"" | "\"burnout\"" | "\"angry\"" | "\"sad\"" | "\"neutral\""
+
+speech-volume ::= "\"normal\"" | "\"shout\"" | "\"whisper\""
+
+action ::= "\"說話\"" | "\"喊話\"" | "\"悄悄話\"" | "\"握手\"" | "\"擁抱\"" | "\"送禮\"" | "\"給錢\"" | "\"結婚\"" | "\"離婚\"" | "\"偷竊\"" | "\"搶劫\"" | "\"破壞樂器\"" | "\"攻擊\"" | "\"抓捕\"" | "\"舉報\"" | "\"打獵\"" | "\"採草藥\"" | "\"釣魚\"" | "\"表演\"" | "\"買東西\"" | "\"賣東西\"" | "\"治療\"" | "\"吃飯\"" | "\"喝酒\"" | "\"移動\"" | "\"奔跑\"" | "\"蹲下\"" | "\"抱頭\"" | "\"舉手\"" | "\"大叫\"" | "\"摔東西\"" | "\"飛吻\"" | "\"跟隨\"" | "\"展示物品\"" | "\"巡邏\"" | "\"自首\"" | "\"睡覺\"" | "\"發呆\""
+
+nullable-string ::= "null" | string
+string ::= "\"" ([^"\\] | "\\" ["\\/bfnrt])* "\""
+ws ::= [ \t\n]*
