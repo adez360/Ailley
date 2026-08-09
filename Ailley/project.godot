@@ -21,6 +21,7 @@ GameManager="*res://scripts/core/game_manager.gd"
 GameClock="*res://scripts/core/GameClock.gd"
 _mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
 AIService="*res://scripts/ai/ai_service.gd"
+DatabaseManager="*res://database/DatabaseManager.gd"
 
 [display]
 
