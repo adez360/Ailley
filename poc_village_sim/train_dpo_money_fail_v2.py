@@ -16,8 +16,11 @@ from trl import DPOConfig, DPOTrainer
 import torch
 
 MODEL_PATH = "Qwen/Qwen2.5-7B-Instruct"
-DATA_PATH = "transcripts/dpo_chosen_money_fail_v2.json"
-OUTPUT_DIR = "dpo_output_money_fail_v1"
+# 2026-08-09：換成v3——v2是無grammar模式收集的，跟正式決策路徑不一致，已因果驗證
+# 確認是v1訓練「不符預期」的真正原因（見note）。v3改用grammar模式重新收集，
+# 資料量刻意維持跟上次同規模（60筆），只換資料來源這一個變因，做乾淨對照。
+DATA_PATH = "transcripts/dpo_chosen_money_fail_v3.json"
+OUTPUT_DIR = "dpo_output_money_fail_v3"
 
 with open(DATA_PATH, encoding="utf-8") as f:
     raw = json.load(f)
