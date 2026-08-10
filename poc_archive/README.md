@@ -74,7 +74,9 @@
   這兩個檔案原本留在 `poc_agent_loop/` 裡不容易找到，搬來這裡並改成一望即知用途的資料夾名。
   `run_multiday.py` 依賴已封存的 `characters.py`，目前 import 會失敗，純參考用。
 - `poc_mode_a_multimodel_reference/`（2026-08-10 封存）——`dialogue_ping_pong_multimodel.py`
-  ＋依賴的 `grammar/importance.gbnf.template`。一村民一模型（依角色動態切換 llama-server
-  背後模型）的驗證實作，見 [[POC 紀錄 - 多模型輪替啟動測試（10 顆 7-9B 模型）]]。**地端確認
-  不採用**這個方向；雲端如果要做類似效果會走 OpenRouter 選模型的邏輯，不會直接沿用這份地端
-  `subprocess` 熱切換實作，純供歷史參考。
+  ＋依賴的 `grammar/importance.gbnf.template`＋驗證跑出來的
+  `transcripts/20260724-180748_multimodel.json`（原本沒進版控，一起搬過來後已加進 git）。
+  一村民一模型（依角色動態切換 llama-server 背後模型）的驗證實作，見
+  [[POC 紀錄 - 多模型輪替啟動測試（10 顆 7-9B 模型）]]。**地端確認不採用**這個方向；雲端
+  如果要做類似效果會走 OpenRouter 選模型的邏輯，不會直接沿用這份地端 `subprocess` 熱切換
+  實作，純供歷史參考。`poc_mode_a/` 資料夾清空後已一併移除。
