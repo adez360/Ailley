@@ -92,7 +92,7 @@ static func generate_id() -> String           # RFC 4122 v4，不帶語意，別
 var facing := "front"                        # front|back|right
 
 # 元件（子節點，皆 get_node_or_null，沒掛不會壞）
-stats: Stats · relationships: Relationships · bubble: Node2D · vision: Vision
+stats: Stats · relationships: Relationships · bubble: Node2D · vision: Vision · inventory: Inventory
 
 func move_to(target: Vector2) -> bool        # A*；無路徑 false
 func stop_moving() -> void
@@ -238,6 +238,43 @@ func note_meeting(other_id) -> void          # has_met() 為真的唯一來源
   開場問一次好感度就讓 has_met() 永遠為真而 met_count 還是 0
   → agent.gd 的「第一次看到陌生人」永遠不成立
 → 技術/talk 動作設計
+```
+
+## Inventory — scripts/character/inventory.gd · class_name · Node
+
+```gdscript
+const HOTBAR_SIZE := 9 · MAIN_SIZE := 27 · SIZE := 36    # 0..8 快捷欄，9..35 主背包
+const STACK_DECAY_TOLERANCE := 10
+
+const ADD_OK := "" · ADD_NO_SPACE := "NO_SPACE"              # add_item() 回傳值
+const REMOVE_OK := "" · REMOVE_NOT_FOUND := "NOT_FOUND"      # remove_item() 回傳值
+
+var slots: Array[Dictionary]                 # 每格 {item_id, count, decay, durability} 或 {}
+
+func get_slot(index) -> Dictionary            # 副本；越界回 {}
+func count_item(item_id) -> int
+func has_item(item_id, count := 1) -> bool
+func find_first_empty() -> int                # 無空格回 -1
+
+func add_item(item_id, count := 1, decay := 0, durability := -1) -> String
+func remove_item(item_id, count := 1) -> String
+func move_slot(from, to) -> bool              # 目的地需為空格，否則 false
+func swap_slot(a, b) -> bool                  # 交換兩個已佔用的格
+
+func get_selected_index() -> int
+func set_selected_index(index) -> void        # clamp 0..HOTBAR_SIZE-1
+
+func get_summary() -> Array[Dictionary]       # 不含空格，每筆補 slot 索引；給 AI payload 用
+```
+
+```
+† durability 傳 -1（預設）= decay 類，嘗試疊進相容既有格；傳 >=0 = carry 類，一件佔一格不可疊
+  物品定義檔未做，呼叫端目前得自己講清楚是哪一種
+† add_item/remove_item 失敗是原子的 — 沒位置/數量不夠時不動任何格，不會半途占一部分
+† 快捷欄與主背包是同一個陣列，不是兩個容器 — 搬進/出快捷欄 = move_slot() 搬 index
+† 選格是資料層狀態（get/set_selected_index），不是 UI 狀態 — Agent 沒 UI 也要有「手上拿著什麼」
+⚠ durability=-1 是本實作的哨兵值，不在規格書 0–100 範圍內；物品定義檔進來後要對齊
+→ 技術/物品欄
 ```
 
 ## Vision — scripts/character/vision.gd · class_name · Area2D
@@ -557,6 +594,7 @@ debug [項目] [on|off]     疊圖開關；debug off 全關
 stop                     停止玩家移動
 pos                      玩家座標與所在格
 nav rebuild              重建尋徑網格
+inv [name]               列出背包；inv give <item_id> [count] 塞測試物品給玩家
 ai [文字]                 對 LLM 打一次測試請求
 help | clear
 

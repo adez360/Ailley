@@ -1,4 +1,4 @@
-[gd_scene load_steps=35 format=3 uid="uid://v21qv1icuh5m"]
+[gd_scene load_steps=36 format=3 uid="uid://v21qv1icuh5m"]
 
 [ext_resource type="Script" uid="uid://oen8wb64hv4w" path="res://scripts/character/player.gd" id="1_mbysm"]
 [ext_resource type="Texture2D" uid="uid://pcq7ouq5pyt8" path="res://assets/characters/16x16 Idle-Sheet.png" id="2_cl37t"]
@@ -7,6 +7,7 @@
 [ext_resource type="Script" uid="uid://b4eisddipih7n" path="res://scripts/character/relationships.gd" id="5_4t2tf"]
 [ext_resource type="PackedScene" uid="uid://bu84ty6ven6ig" path="res://scenes/bubble.tscn" id="6_6u2qc"]
 [ext_resource type="Script" uid="uid://xne7q5cyfgre" path="res://scripts/character/vision.gd" id="7_4t2tf"]
+[ext_resource type="Script" uid="uid://rojhhinafyq2" path="res://scripts/character/inventory.gd" id="8_smehm"]
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_bolw2"]
 atlas = ExtResource("2_cl37t")
@@ -245,3 +246,6 @@ script = ExtResource("7_4t2tf")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="Vision"]
 shape = SubResource("CircleShape2D_6u2qc")
+
+[node name="Inventory" type="Node" parent="."]
+script = ExtResource("8_smehm")

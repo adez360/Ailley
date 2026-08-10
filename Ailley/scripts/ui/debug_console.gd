@@ -29,6 +29,7 @@ func _ready() -> void:
 		"stop": {"run": _cmd_stop, "usage": "stop", "help": "HELP_STOP"},
 		"pos": {"run": _cmd_pos, "usage": "pos", "help": "HELP_POS"},
 		"nav": {"run": _cmd_nav, "usage": "nav rebuild", "help": "HELP_NAV"},
+		"inv": {"run": _cmd_inv, "usage": "inv [name] / inv give <item_id> [count]", "help": "HELP_INV"},
 		"ai": {"run": _cmd_ai, "usage": "ai [text]", "help": "HELP_AI"},
 		"locale": {"run": _cmd_locale, "usage": "locale [code]", "help": "HELP_LOCALE"},
 		"help": {"run": _cmd_help, "usage": "help", "help": ""},
@@ -401,6 +402,77 @@ func _cmd_nav(args: PackedStringArray) -> void:
 
 	nav.rebuild()
 	_print(L10n.tf("CON_NAV_REBUILT", {"region": nav.astar.region, "solid": nav.solid_count}))
+
+# inv [name]                  列出背包，省略就看玩家自己
+# inv give <item_id> [count]  塞測試物品給玩家（decay 類，見下方 add_item 呼叫）
+func _cmd_inv(args: PackedStringArray) -> void:
+	if not args.is_empty() and args[0].to_lower() == "give":
+		_cmd_inv_give(args.slice(1))
+		return
+
+	if args.size() > 1:
+		_error(L10n.t("CON_USAGE_INV"))
+		return
+
+	var character: Character = _get_player() if args.is_empty() else _get_character(args[0])
+	if character == null:
+		return
+
+	if character.inventory == null:
+		_error(L10n.tf("CON_NO_INVENTORY", {"name": character.character_name}))
+		return
+
+	_print("[color=88ccff]%s[/color][color=888888]  %s[/color]" % [
+		character.character_name,
+		L10n.tf("CON_INV_SELECTED", {"index": character.inventory.get_selected_index()}),
+	])
+
+	var entries := character.inventory.get_summary()
+	if entries.is_empty():
+		_print("  " + L10n.t("CON_INV_EMPTY"))
+		return
+
+	for entry in entries:
+		var durability: int = entry["durability"]
+		var detail := (
+			L10n.tf("CON_INV_DURABILITY", {"durability": durability}) if durability >= 0
+			else L10n.tf("CON_INV_DECAY", {"decay": entry["decay"]})
+		)
+		_print("  [color=888888][%02d][/color]  %s x%d%s%s" % [
+			entry["slot"], entry["item_id"], entry["count"], SEP, detail
+		])
+
+# 一律塞給玩家，測試用不需要指名角色。塞出來的是 decay 類（durability 用預設 -1）——
+# 要測 carry 類不可疊的行為得直接呼叫 Inventory.add_item()，這條指令先求夠用
+func _cmd_inv_give(args: PackedStringArray) -> void:
+	if args.is_empty() or args.size() > 2:
+		_error(L10n.t("CON_USAGE_INV_GIVE"))
+		return
+
+	var player := _get_player()
+	if player == null:
+		return
+
+	if player.inventory == null:
+		_error(L10n.tf("CON_NO_INVENTORY", {"name": player.character_name}))
+		return
+
+	var item_id := args[0]
+	var count := 1
+	if args.size() == 2:
+		if not args[1].is_valid_int():
+			_error(L10n.t("CON_USAGE_INV_GIVE"))
+			return
+		count = args[1].to_int()
+
+	var reason := player.inventory.add_item(item_id, count)
+	if reason != Inventory.ADD_OK:
+		_error(L10n.tf("CON_INV_GIVE_FAILED", {"item": item_id, "reason": reason}))
+		return
+
+	_print(L10n.tf("CON_INV_GIVE_OK", {
+		"name": player.character_name, "count": count, "item": item_id
+	}))
 
 # 主控台自己算一個呼叫方，用固定 id 才吃得到 AIService 的速率限制 ——
 # 手動測試如果不受限，就測不出正式呼叫端會遇到的行為

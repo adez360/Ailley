@@ -46,6 +46,7 @@ const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader
 @onready var relationships: Relationships = get_node_or_null("Relationships")
 @onready var bubble: Node2D = get_node_or_null("Bubble")
 @onready var vision: Vision = get_node_or_null("Vision")
+@onready var inventory: Inventory = get_node_or_null("Inventory")
 
 # 最後一次的面向：front / back / right，停下時用來挑 idle 動畫
 var facing := "front"
