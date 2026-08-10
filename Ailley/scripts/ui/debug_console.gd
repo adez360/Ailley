@@ -261,7 +261,8 @@ func _cmd_talk(args: PackedStringArray) -> void:
 		"speaker": speaker.character_name, "listener": listener.character_name
 	}))
 
-# 省略 id 就看玩家自己
+# 省略 id 就看玩家自己。蒐集資料交給 Character.get_state_snapshot()——
+# 這裡只負責把那份純資料的 Dictionary 排版成 BBCode，不重新蒐集一次
 func _cmd_status(args: PackedStringArray) -> void:
 	if args.size() > 1:
 		_error(L10n.t("CON_USAGE_STATUS"))
@@ -271,18 +272,21 @@ func _cmd_status(args: PackedStringArray) -> void:
 	if character == null:
 		return
 
-	var body := character.get_body_position()
+	var snapshot := character.get_state_snapshot()
+
 	_print("[color=88ccff]%s[/color][color=888888]  id %s[/color]" % [
-		character.character_name, character.character_id
+		snapshot["name"], snapshot["id"]
 	])
 
-	var where := "%s" % body
+	var where := "%s" % snapshot["position"]
 	var nav := get_tree().get_first_node_in_group("nav_grid")
 	if nav != null:
-		where += SEP + "%s %s" % [L10n.t("CON_FIELD_CELL"), nav.world_to_cell(body)]
+		where += SEP + "%s %s" % [L10n.t("CON_FIELD_CELL"), nav.world_to_cell(snapshot["position"])]
 	_field("CON_FIELD_POS", where)
 
-	if character.is_moving():
+	if snapshot["moving"]:
+		# 完整路徑點不進 snapshot（那批資料要進 LLM payload，路徑點太瑣碎）——
+		# 這裡是主控台自己的顯示需求，直接問 character
 		var path := character.get_path_points()
 		_field("CON_FIELD_MOVE", L10n.tf("CON_MOVE_TOWARD", {
 			"pos": path[path.size() - 1], "points": path.size()
@@ -291,22 +295,20 @@ func _cmd_status(args: PackedStringArray) -> void:
 		_field("CON_FIELD_MOVE", L10n.t("CON_MOVE_IDLE"))
 
 	_field("CON_FIELD_LOOK", L10n.tf("CON_LOOK_BODY", {
-		"facing": character.facing, "anim": character.sprite.animation
+		"facing": snapshot["facing"], "anim": snapshot["animation"]
 	}))
 
-	if character.is_in_conversation():
+	if snapshot["in_conversation"]:
 		_field("CON_FIELD_TALK", L10n.t("CON_TALK_ACTIVE"))
 
 	# 直接掃 Stats.SPEC，所以之後加數值不用回來改這裡。
 	# SPEC 的 label 存的是翻譯 key，翻譯在這個顯示端做
-	if character.stats != null:
+	if snapshot.has("stats"):
 		var needs: Array[String] = []
 		var others: Array[String] = []
 
 		for key in Stats.SPEC:
-			var text := "%s %d" % [
-				L10n.t(Stats.SPEC[key]["label"]), int(character.stats.get_value(key))
-			]
+			var text := "%s %d" % [L10n.t(Stats.SPEC[key]["label"]), int(snapshot["stats"][key])]
 			if character.stats.is_need(key):
 				needs.append(text)
 			else:
@@ -316,10 +318,10 @@ func _cmd_status(args: PackedStringArray) -> void:
 		if not others.is_empty():
 			_field("CON_FIELD_STATE", SEP.join(others))
 
-	if character.relationships != null and not character.relationships.known_ids().is_empty():
+	if snapshot.has("affinity"):
 		var lines: Array[String] = []
-		for other_id in character.relationships.known_ids():
-			var record: Dictionary = character.relationships.get_record(other_id)
+		for other_id in snapshot["affinity"]:
+			var record: Dictionary = snapshot["affinity"][other_id]
 			lines.append(L10n.tf("CON_AFFINITY_ENTRY", {
 				"id": other_id,
 				"affinity": "%.1f" % record["affinity"],
@@ -327,12 +329,11 @@ func _cmd_status(args: PackedStringArray) -> void:
 			}))
 		_field("CON_FIELD_AFFINITY", SEP.join(lines))
 
-	# 行程表是 Agent 才有的東西，Player 沒有這一段
-	if character.is_in_group("agents"):
+	if snapshot.has("schedule"):
 		_field("CON_FIELD_SCHEDULE", L10n.tf("CON_SCHEDULE_BODY", {
-			"place": character.current_place,
-			"state": character.current_state,
-			"count": character.schedule.size(),
+			"place": snapshot["schedule"]["place"],
+			"state": snapshot["schedule"]["state"],
+			"count": snapshot["schedule"]["size"],
 		}))
 
 # status 的一列。欄名寬度不補空白對齊 —— 主控台用的是預設比例字型，
