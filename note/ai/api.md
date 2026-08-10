@@ -598,6 +598,8 @@ chat 鍵(Enter/KpEnter)開關；Esc 取消；送出 → player.say()
 無公開函式
 † 與主控台都吃 Enter：開啟前檢查 gui_get_focus_owner()，有人拿焦點就不動作
   反向不用處理（LineEdit 有焦點時 Enter 先走 text_submitted 不會冒到 _unhandled_input）
+† Esc 攔在 _input：開著時 LineEdit 有焦點，按鍵在 GUI 階段就被吃掉，到不了
+  _unhandled_input。沒開時不攔，Esc 留給暫停
 ```
 
 ## DebugConsole — scripts/ui/debug_console.gd · CanvasLayer
@@ -669,7 +671,7 @@ Esc(ui_cancel) 切換暫停。main.tscn 的 Pause，子節點 Dim(ColorRect) / T
 † 必須是 main.tscn 的第一個子節點：_unhandled_input 反序傳遞，
   排最前面才最後收到 ⇒ 面板開著時 Esc 關面板不暫停
 † layer=10 蓋在 HUD/ChatInput/DebugConsole(layer 1) 之上
-† Esc 優先序：debug_console(_input) > chat_input / character_create(_unhandled_input) > pause
+† Esc 優先序：chat_input / debug_console(_input) > character_create(_unhandled_input) > pause
 † autoload 繼承 root 的 process_mode ⇒ 暫停時 GameClock 停；AIService 已送出的請求不會中止
 ```
 
