@@ -7,8 +7,9 @@ extends Node2D
 ##   2. say() 是 await + 固定 2 秒，連續呼叫會蓋掉前一句 ——
 ##      這裡改成佇列，一句播完才播下一句
 
-## 超過這個寬度就折行。角色只有 16px，氣泡再寬會整個蓋掉畫面
-const MAX_LINE_WIDTH := 72.0
+## 超過這個寬度就折行。角色只有 16px，氣泡再寬會整個蓋掉畫面。
+## 132px 是 640 寬的 20%，11px 字型下一行約 12 個中文字
+const MAX_LINE_WIDTH := 132.0
 const SECONDS_PER_CHAR := 0.14		# 句子越長顯示越久
 const MIN_DURATION := 1.2
 const MAX_DURATION := 5.0

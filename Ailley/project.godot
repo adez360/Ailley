@@ -24,8 +24,8 @@ AIService="*res://scripts/ai/ai_service.gd"
 
 [display]
 
-window/size/viewport_width=480
-window/size/viewport_height=270
+window/size/viewport_width=640
+window/size/viewport_height=360
 window/size/window_width_override=1920
 window/size/window_height_override=1080
 window/stretch/mode="canvas_items"
@@ -34,6 +34,11 @@ window/stretch/scale_mode="integer"
 [editor_plugins]
 
 enabled=PackedStringArray("res://addons/TileMapDual/plugin.cfg", "res://addons/godot_ai/plugin.cfg")
+
+[gui]
+
+theme/custom="res://assets/ui/ailley_theme.tres"
+theme/custom_font="res://assets/fonts/Cubic_11.ttf"
 
 [input]
 

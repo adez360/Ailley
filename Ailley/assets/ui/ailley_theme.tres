@@ -1,0 +1,20 @@
+[gd_resource type="Theme" load_steps=2 format=3 uid="uid://dktke2k785jv0"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_snxus"]
+content_margin_left = 6.0
+content_margin_top = 4.0
+content_margin_right = 6.0
+content_margin_bottom = 4.0
+bg_color = Color(0.05, 0.05, 0.07, 0.85)
+
+[resource]
+BubbleLabel/base_type = &"Label"
+BubbleLabel/colors/font_color = Color(0.13333334, 0.13333334, 0.13333334, 1)
+ConsoleOutput/base_type = &"RichTextLabel"
+ConsoleOutput/styles/normal = SubResource("StyleBoxFlat_snxus")
+HUDLabel/base_type = &"Label"
+HUDLabel/colors/font_outline_color = Color(0, 0, 0, 1)
+HUDLabel/constants/outline_size = 4
+Label/font_sizes/font_size = 11
+LineEdit/font_sizes/font_size = 11
+RichTextLabel/font_sizes/normal_font_size = 11
