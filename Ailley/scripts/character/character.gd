@@ -26,6 +26,9 @@ const TALK_TOO_FAR := "TOO_FAR"
 const TALK_TARGET_BUSY := "TARGET_BUSY"
 const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 
+## 滑鼠指到時套在 sprite 上的描邊
+const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
+
 ## 角色的身分，全遊戲唯一且不隨改名而變：存檔、記憶連結、交誼區都靠它指人。
 ## 是內部識別字，不拿來顯示，也**不要去解析它** —— 格式只有 generate_id() 說了算。
 ##
@@ -51,6 +54,8 @@ var _path := PackedVector2Array()
 var _path_index := 0
 var _stuck_timer := 0.0
 var _conversation: Node = null
+var _highlighted := false
+var _outline: ShaderMaterial = null
 
 
 func _ready() -> void:
@@ -219,6 +224,73 @@ func face_towards(other: Character) -> void:
 		sprite.flip_h = offset.x < 0
 
 	sprite.play("idle_" + facing)
+
+
+# ---- 滑鼠選取 ----
+
+# 滑鼠點得到的範圍，世界座標。用目前影格的圖去量而不是碰撞形狀 ——
+# 碰撞形狀只有腳下那一個小圓，照它算的話點頭部會點不到
+func get_pick_rect() -> Rect2:
+	var texture := _current_frame_texture()
+	if texture == null:
+		return Rect2(sprite.global_position, Vector2.ZERO)
+
+	var size := Vector2(texture.get_size())
+	var origin := sprite.global_position + sprite.offset
+	if sprite.centered:
+		origin -= size * 0.5
+
+	return Rect2(origin, size)
+
+func is_highlighted() -> bool:
+	return _highlighted
+
+# 描一圈邊表示滑鼠正指著這個角色。
+# 材質是第一次要用才建，沒被指到過的角色不會多背一份
+func set_highlighted(on: bool) -> void:
+	if on == _highlighted:
+		return
+
+	_highlighted = on
+
+	if not on:
+		sprite.material = null
+		sprite.frame_changed.disconnect(_sync_outline_frame)
+		sprite.animation_changed.disconnect(_sync_outline_frame)
+		return
+
+	if _outline == null:
+		_outline = ShaderMaterial.new()
+		_outline.shader = OUTLINE_SHADER
+
+	sprite.material = _outline
+	# 換影格與換動畫都會換到圖集的另一塊，不同步的話描邊會停在上一格的輪廓
+	sprite.frame_changed.connect(_sync_outline_frame)
+	sprite.animation_changed.connect(_sync_outline_frame)
+	_sync_outline_frame()
+
+# 告訴描邊 shader 目前這一格在圖集裡佔哪個 UV 範圍，
+# 它才不會取樣到緊鄰的下一格
+func _sync_outline_frame() -> void:
+	var atlas := _current_frame_texture() as AtlasTexture
+	if atlas == null or atlas.atlas == null:
+		_outline.set_shader_parameter("region", Vector4(0.0, 0.0, 1.0, 1.0))
+		return
+
+	var full := Vector2(atlas.atlas.get_size())
+	var used := atlas.region
+	_outline.set_shader_parameter("region", Vector4(
+		used.position.x / full.x, used.position.y / full.y,
+		used.end.x / full.x, used.end.y / full.y
+	))
+
+func _current_frame_texture() -> Texture2D:
+	if sprite.sprite_frames == null:
+		return null
+	if not sprite.sprite_frames.has_animation(sprite.animation):
+		return null
+
+	return sprite.sprite_frames.get_frame_texture(sprite.animation, sprite.frame)
 
 
 # ---- 每幀 ----
