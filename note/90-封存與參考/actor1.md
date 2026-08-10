@@ -1,3 +1,16 @@
+---
+tags: [ailley, poc, village-sim, character, reference]
+status: reference
+created: 2026-07-28
+moved: 2026-08-10
+---
+
+> [!info] 設計來源，仍在引用
+> 這是 `poc_village_sim` 五人整合試跑目前使用的初始角色設定原型，被
+> 〈[[意見書 - 新版 AI 架構修正與舊 POC 封存評估]]〉直接點名引用。原本放在
+> 專案根目錄的 `neon/` 資料夾（不屬於 note vault），2026-08-10 搬進來歸位，
+> 符合 CLAUDE.md「所有想法都要進 note/」的規則。內容本身未變動。
+
 # 初始村民設定（5 人）
 
 時間點：**第 3 天 19:40（夜晚）**

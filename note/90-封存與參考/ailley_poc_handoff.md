@@ -1,3 +1,19 @@
+---
+tags: [ailley, poc, archived, superseded]
+status: superseded
+created: 2026-07-16
+moved: 2026-08-10
+---
+
+> [!danger] 已封存：描述的是最早的紅藍村社交工程對戰（Director Mode）方向
+> 這份文件描述的「紅藍兩村各持機密 Flag、靠社交工程互套、湊齊雙方 Flag 送神廟」
+> 的玩法（`suspicion_level`/`trust_dict`/單次生成整場對話劇本的 Director Mode），
+> 已經被正式取代——對應的舊程式碼已封存於 `poc_archive/`（`poc_agent_loop_flag_scenario`、
+> `poc_mode_a_flag_scenario` 等），封存決策見〈[[意見書 - 新版 AI 架構修正與舊 POC 封存評估]]〉。
+> 現行方向是 `poc_village_sim` 的 tick-based 開放世界村莊生活模擬，跟這份文件描述的
+> 遊戲內容完全不同。原本放在專案根目錄的 `neon/` 資料夾（不屬於 note vault），
+> 2026-08-10 搬進來歸位並標記為過時，純供歷史追溯，不再是任何現行工作的依據。
+
 # Ailley MVP — AI 對話引擎 POC 驗證交接文件
 
 > 用途：帶到 CLI（終端機 / Claude Code 等）進行早期可行性驗證。

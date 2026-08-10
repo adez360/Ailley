@@ -1,3 +1,16 @@
+---
+tags: [ailley, poc, village-sim, spec, reference]
+status: reference
+created: 2026-07-28
+moved: 2026-08-10
+---
+
+> [!info] 設計來源，仍在引用
+> 這份是現行 `poc_village_sim` tick-based 村莊模擬架構的設計來源之一（v2，取代
+> [[Specify1]]），被〈[[意見書 - 新版 AI 架構修正與舊 POC 封存評估]]〉直接點名引用。
+> 原本放在專案根目錄的 `neon/` 資料夾（不屬於 note vault），2026-08-10 搬進來歸位，
+> 符合 CLAUDE.md「所有想法都要進 note/」的規則。內容本身未變動。
+
 # 村莊模擬 — 村民系統設計文件 v2
 
 > **v1 → v2 的核心變更**：指標不再是「行為決策表」，而是拆成 **感官 / 裁決 / 儀表** 三種角色。
