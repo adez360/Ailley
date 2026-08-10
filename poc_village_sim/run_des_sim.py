@@ -377,6 +377,12 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
     heap = [(0, 1, 0, cid) for cid in rts.ORDER]
     heapq.heapify(heap)
     events_log = []
+    # 對話追蹤（2026-08-10）：2026-08-10長時間驗證量到「有明確對象的說話類動作」裡只有
+    # 4.6%會被對方接話、而且接話常常答非所問——因為原本只有last_declaration這種一次性
+    # 「上一刻對你做了什麼」的敘述，沒有真正的「這是進行中第幾輪對話」的追蹤，模型看不出
+    # 自己正處在一場對話裡、該不該接話。key用frozenset({id_a,id_b})，同一對角色不分
+    # 誰是發話者，值是這對角色目前這場對話的狀態；沒有進行中的對話就不會有這個key。
+    conversation_sessions = {}
     interrupt_count = 0
     run_start = time.time()
 
@@ -445,6 +451,17 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
         ) if absent_homeowner_name else ""
 
         was_interrupted = me["interrupt_note"] is not None
+        # 對話追蹤：不管有沒有被中斷，都要先查「有沒有人剛剛對我說話、我還沒接話」——
+        # 中斷重決跟正常決策都可能是在回應一場進行中的對話，兩種情況都要能看到對話狀態。
+        incoming_speaker_id = None
+        for o in rts.ORDER:
+            if o == cid:
+                continue
+            od = state[o]["last_declaration"]
+            if od and od["target_id"] == cid and od["action"] in _DIALOGUE_ACTIONS and od["speech"]:
+                incoming_speaker_id = o
+                break
+
         if was_interrupted:
             recent_event = me["interrupt_note"]
             me["interrupt_note"] = None
@@ -462,6 +479,23 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
                         recent_event = f"上一刻，{speaker_name}對你做了「{od['action']}」的動作"
                     break
 
+        # 對話追蹤：如果剛剛有人對我說話（incoming_speaker_id），而且這對角色有進行中的
+        # session、最後一句是對方講的（還沒輪到我講）——組一段明確的「你正在對話中」提示，
+        # 附上輪數跟原句，逼模型意識到這是一場交流而不是孤立事件，由它自己決定接不接話。
+        conversation_block = ""
+        if incoming_speaker_id is not None:
+            key = frozenset((cid, incoming_speaker_id))
+            session = conversation_sessions.get(key)
+            if session and session["last_speaker_id"] == incoming_speaker_id:
+                speaker_name = cast[incoming_speaker_id]["name"]
+                conversation_block = (
+                    f"\n\n【對話中】你正在跟{speaker_name}對話，這是這場對話的第{session['turns']}輪。"
+                    f"對方剛才對你「{session['last_action']}」，說：「{session['last_utterance']}」\n"
+                    f"你可以選擇回話延續對話（`intent.action`一樣選說話/喊話/悄悄話，`intent.target`"
+                    f"設為{speaker_name}），也可以選擇不回話、去做別的事——如果你選擇不回話，這場"
+                    f"對話就算結束了。要不要接話、接了要講什麼，由你自己判斷。"
+                )
+
         live_villager = {**villager, "physiology": me["physiology"], "personality": me["personality"]}
         if me["personality_drifted"]:
             live_villager["personality_text"] = None
@@ -474,7 +508,7 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
             current_time=current_time, location=me["location"], visible=visible, recent_event=recent_event,
             last_emotion=me["last_emotion"], last_action_result=me["last_action_result"],
             recent_memory=recent_memory, location_list=location_list_str, today_plan=me["current_plan"],
-        ) + home_hint + DURATION_INSTRUCTION
+        ) + home_hint + conversation_block + DURATION_INSTRUCTION
 
         target_candidate_names = [cast[v["id"]]["name"] for v in visible]
         if absent_homeowner_name:
@@ -826,6 +860,26 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
         me["location"] = new_location
         me["last_emotion"] = emotion
         me["last_declaration"] = {"time": now, "action": action, "target_id": target_id, "speech": out["speech"]}
+
+        # 對話追蹤：更新/結束session。這一刻cid實際做的事才是真相，跟prompt階段查到的
+        # incoming_speaker_id分開處理——incoming_speaker_id只代表「決策前有沒有人在等我
+        # 接話」，不代表這一輪cid真的接了。
+        if action in _DIALOGUE_ACTIONS and target_id and out["speech"]:
+            key = frozenset((cid, target_id))
+            existing = conversation_sessions.get(key)
+            turns = existing["turns"] + 1 if existing else 1
+            conversation_sessions[key] = {
+                "turns": turns, "last_speaker_id": cid, "last_utterance": out["speech"],
+                "last_action": action, "last_time": now,
+            }
+            # cid開了一場新對話，但手上還積著另一個人剛剛的話沒回——那場算是被cid晾掉了，
+            # 清掉避免之後對方查詢時看到一場其實已經被cid拋下的對話還顯示「輪到我」。
+            if incoming_speaker_id is not None and incoming_speaker_id != target_id:
+                conversation_sessions.pop(frozenset((cid, incoming_speaker_id)), None)
+        elif incoming_speaker_id is not None:
+            # cid這輪決策沒有回話給正在等待的人（選了別的動作，或說話對象換成別人但已經在
+            # 上面那個分支處理過）——對話到這裡算結束，不留著讓對方以後誤以為還在進行中。
+            conversation_sessions.pop(frozenset((cid, incoming_speaker_id)), None)
 
         # --- 睡眠反思：只在「一段連續睡眠的第一個事件」觸發一次（跟 run_tick_sim.py 同邏輯）；
         # 體力耗盡強制昏睡（見上面的 was_collapsed 區塊，已經把 action/location 都改成
