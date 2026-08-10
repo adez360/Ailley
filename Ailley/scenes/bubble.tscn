@@ -16,8 +16,7 @@ patch_margin_bottom = 12
 
 [node name="Label" type="Label" parent="Box"]
 layout_mode = 0
-theme_override_colors/font_color = Color(0.13333334, 0.13333334, 0.13333334, 1)
-theme_override_font_sizes/font_size = 8
+theme_type_variation = &"BubbleLabel"
 horizontal_alignment = 1
 autowrap_mode = 3
 clip_text = true
