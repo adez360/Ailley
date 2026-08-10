@@ -1,10 +1,18 @@
-root ::= "{" ws "\"emotion\"" ws ":" ws emotion ws "," ws "\"intent\"" ws ":" ws intent ws "," ws "\"inner_monologue\"" ws ":" ws string ws "," ws "\"speech\"" ws ":" ws nullable-string ws "," ws "\"speech_volume\"" ws ":" ws speech-volume ws "}"
+root ::= "{" ws "\"reasoning\"" ws ":" ws string ws "," ws "\"emotion\"" ws ":" ws emotion ws "," ws "\"intent\"" ws ":" ws intent ws "," ws "\"inner_monologue\"" ws ":" ws string ws "," ws "\"speech\"" ws ":" ws nullable-string ws "," ws "\"speech_volume\"" ws ":" ws speech-volume ws "}"
 
 # 離散事件模擬（DES）Stage 1 驗證專用 grammar：只多一個 intent.duration_minutes 欄位，
 # 其餘跟 turn.gbnf.template 完全一樣。目的是先驗證「AI 填的時長合不合理」，不牽涉排程
 # 引擎，所以 duration 這裡故意只做「1-999 的合法數字」這種寬鬆的結構限制，不做語意上的
 # 範圍限制（例如不強制「睡覺要 300-600 分鐘」）——範圍限制交給觀察結果之後再決定要不要
 # 做，這次要看的正是「不加限制的話 AI 自然會填出什麼」。
+#
+# 2026-08-10：正式併入推理鷹架——`reasoning` 欄位放在 `intent` 之前，grammar 逐 token
+# 由左到右生成，欄位順序=生成順序，逼模型先寫一段分析再決定動作，不是先選好動作再回頭
+# 補理由。跟 `inner_monologue`（決定動作之後才寫、給敘事/台詞用）是兩個不同用途的欄位，
+# 不要合併。經過對照實驗驗證有效（見 note 2026-08-09/10：base 模型不訓練、只改欄位順序，
+# 強制貧窮情境下从0/43次選工作類動作變成4/4輪測試都有轉向），也跑過7小時、跨36遊戲日
+# 的長時間驗證確認不會退化。字數上限（100字）純粹是 prompt 指示，grammar 結構本身沒有
+# 字數限制，模型仍可能寫超過，只是機率低。
 
 intent ::= "{" ws "\"action\"" ws ":" ws action ws "," ws "\"duration_minutes\"" ws ":" ws duration ws "," ws "\"target\"" ws ":" ws target-value ws "," ws "\"location\"" ws ":" ws location-value ws "}"
 

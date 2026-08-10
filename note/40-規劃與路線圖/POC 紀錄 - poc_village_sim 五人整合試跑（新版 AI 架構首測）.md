@@ -3245,4 +3245,37 @@ tunnel監控撐到結束。**教訓**：之後長時間（數小時等級）背�
 去做了完全不相干的事。**這是現有對話機制的既有限制，不是這次推理
 鷹架實驗造成的退化**，但如果之後要認真做角色間的社交互動深度，這塊
 值得單獨列一個題目來看。
-社交都要正常運作）的情境下會不會退化。結果待補，正在跑。
+
+## 推理鷹架正式併入主線（2026-08-10）
+
+長時間驗證乾淨過關後，直接把100字版推理鷹架從實驗腳本（
+`test_money_hint_reasoning_100.py`／`run_reasoning_long_validation.py`
+裡的monkeypatch）併進正式程式碼，不再是外掛式的測試腳本：
+
+- **`grammar/turn_duration_experiment.gbnf.template`**（`run_des_sim.py`
+  的`main()`實際在用的grammar，儘管檔名還留著`_experiment`）：`root`規則
+  加上`reasoning`欄位，放在`intent`之前
+- **`grammar/turn_duration_ticks.gbnf.template`**（`server.py`用）：
+  同步加上同一個欄位
+- **`run_des_sim.py`**：新增`REASONING_INSTRUCTION`常數，併進
+  `DURATION_INSTRUCTION`（`REASONING_INSTRUCTION + 原本的duration說明`），
+  兩者原本就是動態附加在prompt尾端，不用改呼叫端程式碼。無grammar
+  對照模式用的`_NO_GRAMMAR_JSON_INSTRUCTION`也同步加上`reasoning`欄位，
+  保持兩條路徑的schema一致
+- **`prompts/villager_system_prompt_server.txt`**／
+  **`prompts/villager_system_prompt.txt`**：原本「先決定intent再寫獨白」
+  那句改成「先寫reasoning，再決定intent，最後寫獨白」，跟grammar欄位
+  順序對齊，避免prompt文字跟grammar實際生成順序互相矛盾
+- **`events_log`／`server.py`回應**：都不用額外改程式碼——`output`欄位
+  本來就是完整存模型輸出的dict，grammar多了`reasoning`之後自動包含
+  進去，下游（transcript、API回應）自然拿得到
+
+**驗證**：`python3 run_des_sim.py 20 1`跑完無錯誤，transcript確認
+`output.reasoning`有正確存進去；另外起一個`uvicorn server:app`測試
+`POST /decide`（阿吉錢=3/飢餓=90情境），回應的`output`也正確包含
+`reasoning`欄位，兩條路徑都測過。
+
+**還沒做**：DPO訓練資料生成腳本（`generate_chosen_money_fail_v3.py`
+那類）目前沒有把`reasoning`欄位一起處理——如果之後要繼續走DPO訓練這
+條路，要decide chosen/rejected的`output`要不要也帶reasoning一起訓練，
+這次沒有動這塊。

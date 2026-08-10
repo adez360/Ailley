@@ -42,7 +42,22 @@ import requests
 TRANSCRIPT_DIR = POC_DIR / "transcripts"
 START_DAY, START_HOUR, START_MINUTE = 3, 19, 40
 
-DURATION_INSTRUCTION = (
+# 2026-08-10：推理鷹架正式併入主線。原本是test_money_hint_reasoning_100.py裡的
+# monkeypatch，經過對照實驗（base模型不訓練、強制貧窮情境0/43→4/4輪都轉向）跟7小時
+# 長時間驗證（跨36遊戲日、7391筆決策、parse_ok全程100%、動作分布健康分散）驗證有效
+# 才併進來，不是隨手加的——見note 2026-08-09/10。
+REASONING_INSTRUCTION = (
+    "\n\n【新增欄位：reasoning，必須寫在最前面，上限100字】\n"
+    "在你決定 intent 之前，先用 `reasoning` 欄位寫一段分析：現在最大的問題是什麼、"
+    "有哪些辦法可以解決、你打算選哪一個、為什麼。**不超過100字**，把因果關係講完整"
+    "（例如「A做不到 → 所以需要B」），但不用鉅細靡遺列出每一個考慮過的選項。\n"
+    "這段要先想清楚再寫 intent，不能寫完 intent 之後才回頭補理由。\n"
+    "如果最大的問題是「身上沒錢，好幾件事都做不了」，記得：再試一次原本做不到的事"
+    "解決不了缺錢問題，需要的是「能換到錢」的辦法（打獵/採草藥/賣東西/表演這類），"
+    "但最終還是由你自己的個性跟處境判斷。\n"
+)
+
+DURATION_INSTRUCTION = REASONING_INSTRUCTION + (
     "\n\n【新增欄位：intent.duration_minutes】\n"
     "這次多一個欄位：`intent.duration_minutes`，代表你決定要花多少分鐘做這件事——"
     "喝口水可能 1-2 分鐘、跟人聊幾句可能 5-15 分鐘、採草藥或打獵可能 60-180 分鐘、"
@@ -175,8 +190,8 @@ USE_GRAMMAR = True
 _NO_GRAMMAR_JSON_INSTRUCTION = (
     "\n\n【格式要求（這次測試不掛 grammar，靠你自己遵守，不是引擎硬約束）】\n"
     "只能輸出一個 JSON 物件，不要有任何 JSON 以外的文字、不要用 markdown code fence。"
-    "欄位跟型別：\n"
-    '{"emotion": "8選1英文字串", "intent": {"action": "從允許清單選一個中文字串",'
+    "欄位跟型別（reasoning 必須是第一個欄位，先分析再決定 intent，不能先決定再回頭補理由）：\n"
+    '{"reasoning": "字串，上限100字", "emotion": "8選1英文字串", "intent": {"action": "從允許清單選一個中文字串",'
     ' "duration_minutes": 整數, "target": "字串或null", "location": "從允許清單選一個中文字串"},'
     ' "inner_monologue": "字串", "speech": "字串或null", "speech_volume": "normal/shout/whisper"}'
 )
