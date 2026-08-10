@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-08
+updated: 2026-08-10
 ---
 
 # api
@@ -32,6 +32,7 @@ _mcp_game_helper  addons/godot_ai/runtime/game_helper.gd   † 勿移除
 characters   全部 Character        nav_grid       NavGrid
 player       玩家                  place_anchors  main.tscn 的 Node2D/PlaceAnchors
 agents       全部 Agent            debug_overlay  DebugOverlay
+selection    Selection             follow_camera  FollowCamera
 ```
 
 ## collision layers
@@ -53,6 +54,17 @@ scenes/agent.tscn         Agent         CharacterBody2D
 scenes/bubble.tscn        Bubble        Node2D
 scenes/chat_input.tscn                  CanvasLayer
 scenes/debug_console.tscn               CanvasLayer
+
+assets/shaders/character_outline.gdshader   hover 描邊
+```
+
+## input actions
+
+```
+move_up/down/left/right  WASD
+interact                 E
+chat                     Enter / KpEnter
+select                   滑鼠左鍵
 ```
 
 ---
@@ -100,6 +112,11 @@ func speech_duration(line: String) -> float
 func face_towards(other: Character) -> void
 func update_animation() -> void
 
+const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
+func get_pick_rect() -> Rect2                # 目前影格的矩形，世界座標
+func set_highlighted(on: bool) -> void
+func is_highlighted() -> bool
+
 func _decide_velocity() -> Vector2           # 子類覆寫點：這一幀往哪走
 ```
 
@@ -112,7 +129,11 @@ func _decide_velocity() -> Vector2           # 子類覆寫點：這一幀往哪
 † character_id 撞到就換一個新的 + push_error，不是只偵測。共用 id = 共用關係與記憶
 † character_id 未持久化：每次開遊戲重新生成，關係紀錄一重開就指向不存在的人
 † 動畫只有 front/back/right 三向，往左用 flip_h 翻轉 right
-→ 技術/Character 基底與 Agent
+† get_pick_rect 用 sprite 影格不用碰撞形狀：後者只有腳下小圓，點頭部會落空
+⚠ set_highlighted 訂 frame_changed **與** animation_changed 兩個訊號
+  換動畫時影格編號可能沒變（都是 0），只有後者會發 —— 少訂就會拿舊 region 描邊
+  材質延遲建立，關掉時 material=null 並解除兩個連接
+→ 技術/Character 基底與 Agent · 技術/滑鼠選取與鏡頭
 ```
 
 ## Player — scripts/character/player.gd · extends Character
@@ -284,17 +305,60 @@ DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES 避免斜切穿牆
 → 技術/尋徑與 Debug 主控台
 ```
 
-## FollowCamera — scripts/world/follow_camera.gd · Camera2D
+## FollowCamera — scripts/world/follow_camera.gd · Camera2D · group follow_camera
 
 ```gdscript
 @export var margin_cells := 0
+
+func follow(target: Node2D) -> void
+func follow_player() -> void                 # group player 的第一個
+func get_target() -> Node2D
 ```
 
 ```
-_ready 依 tile_map.get_used_rect().grow(margin_cells) 算 limit_*
-找不到 TileMapLayer → push_warning 不設邊界
+main.tscn 的 Node2D/Camera2D（世界層，不是 Player 的子節點）
+_physics_process 每幀 global_position = _target.global_position
+  角色也在物理幀移動，用 _process 會永遠慢一幀
+_target 失效（is_instance_valid false）→ follow_player()；null → 不動作
+  掛父子關係的話鏡頭會跟著對象一起被移除，所以改成持有參照
+換對象的平滑是 Camera2D 自己的 position_smoothing(速度 8)，腳本不插值
+_ready 依 tile_map.get_used_rect().grow(margin_cells) 算 limit_*，
+  找不到 TileMapLayer → push_warning 不設邊界
+  開場對齊玩家後 reset_smoothing()，否則第一幀從地圖原點滑過來
 † 只認 TileMapDual 那層；生成的顯示層偏移半格，拿它算會差半格
-跟隨靠父子關係（Camera2D 掛在 Player 底下），不用每幀腳本
+→ 技術/滑鼠選取與鏡頭
+```
+
+## Selection — scripts/world/selection.gd · Node2D · group selection
+
+```gdscript
+const RIPPLE_DURATION := 0.35
+const RIPPLE_START_RADIUS := 2.0 · RIPPLE_END_RADIUS := 12.0
+const RIPPLE_COLOR := Color(1, 1, 1, 0.9) · RIPPLE_SEGMENTS := 24
+
+func select(character: Character) -> void    # 鏡頭改跟著他
+func deselect() -> void                      # 鏡頭平滑移回玩家
+func get_selected() -> Character
+func get_hovered() -> Character
+func character_at(point: Vector2) -> Character   # 世界座標；無→null
+```
+
+```
+main.tscn 的 Node2D/Selection，Node2D 未開 y_sort ⇒ 排最後 = 漣漪畫在最上層
+_process   每幀更新 hover（游標移動、鏡頭移動、角色走動都要重算）
+_unhandled_input  action "select"(左鍵) → 冒漣漪 → 有人 select / 沒人 deselect
+                  用 _unhandled_input：主控台或聊天框蓋著時那一下算 UI 的
+
+† 不用 physics object picking：
+  角色碰撞形狀只有腳下小圓(r=6, y+6)，點頭部落空；
+  且 Vision 的 Area2D input_pickable 預設 true，那一大圈會先吃掉游標
+† 點擊座標取自事件：get_canvas_transform().affine_inverse() * event.position
+  不用 get_global_mouse_position() —— 事件被餵進來時後者讀的是「游標現在在哪」
+  hover 相反，問的就是當下游標，照樣用 get_global_mouse_position()
+⚠ Input.parse_input_event() 餵的是**視窗**座標不是 viewport 座標
+  自動驗證要先 tree.root.get_final_transform() * viewport_point 換算
+兩人矩形重疊時取中心離游標最近的那個
+→ 技術/滑鼠選取與鏡頭
 ```
 
 ## Conversation — scripts/dialogue/conversation.gd · Node
