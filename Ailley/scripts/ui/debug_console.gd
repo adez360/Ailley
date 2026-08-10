@@ -439,7 +439,7 @@ func _cmd_inv(args: PackedStringArray) -> void:
 			else L10n.tf("CON_INV_DECAY", {"decay": entry["decay"]})
 		)
 		_print("  [color=888888][%02d][/color]  %s x%d%s%s" % [
-			entry["slot"], entry["item_id"], entry["count"], SEP, detail
+			entry["slot"], _escape_bbcode(entry["item_id"]), entry["count"], SEP, detail
 		])
 
 # 一律塞給玩家，測試用不需要指名角色。塞出來的是 decay 類（durability 用預設 -1）——
@@ -460,18 +460,22 @@ func _cmd_inv_give(args: PackedStringArray) -> void:
 	var item_id := args[0]
 	var count := 1
 	if args.size() == 2:
-		if not args[1].is_valid_int():
+		# is_valid_int() 對 "0" 和 "-5" 都成立，數量還要自己驗正數
+		if not args[1].is_valid_int() or args[1].to_int() <= 0:
 			_error(L10n.t("CON_USAGE_INV_GIVE"))
 			return
 		count = args[1].to_int()
 
+	# 顯示用的 item_id 要轉義，傳給 add_item() 的那份保持原樣
+	var shown_id := _escape_bbcode(item_id)
+
 	var reason := player.inventory.add_item(item_id, count)
 	if reason != Inventory.ADD_OK:
-		_error(L10n.tf("CON_INV_GIVE_FAILED", {"item": item_id, "reason": reason}))
+		_error(L10n.tf("CON_INV_GIVE_FAILED", {"item": shown_id, "reason": reason}))
 		return
 
 	_print(L10n.tf("CON_INV_GIVE_OK", {
-		"name": player.character_name, "count": count, "item": item_id
+		"name": player.character_name, "count": count, "item": shown_id
 	}))
 
 # 主控台自己算一個呼叫方，用固定 id 才吃得到 AIService 的速率限制 ——
@@ -587,13 +591,17 @@ func _cmd_help(_args: PackedStringArray) -> void:
 		if name == "ai":
 			_help_line("ai dialogue [text]", "HELP_AI_DIALOGUE")
 
-# usage 欄的方括號要轉義成 [lb]，否則會被當成 BBCode 標籤吃掉 ——
+# 方括號要轉義成 [lb]，否則會被當成 BBCode 標籤吃掉 ——
 # 「locale [code]」裡的 [code] 剛好是 RichTextLabel 真的認得的標籤，
-# 不轉義的話整行會渲染成「locale [/color]」。這裡一律轉義，
-# 之後加指令就不必去記哪些字剛好撞名
+# 不轉義的話整行會渲染成「locale [/color]」。凡是要進 _print() 的
+# 非固定字串（usage 欄、使用者打進來的參數）都經過這裡，
+# 就不必去記哪些字剛好撞名
+func _escape_bbcode(text: String) -> String:
+	return text.replace("[", "[lb]")
+
 func _help_line(usage: String, key: String) -> void:
 	_print("[color=88ccff]%s[/color]\n  [color=888888]%s[/color]" % [
-		usage.replace("[", "[lb]"), L10n.t(key)
+		_escape_bbcode(usage), L10n.t(key)
 	])
 
 func _cmd_clear(_args: PackedStringArray) -> void:

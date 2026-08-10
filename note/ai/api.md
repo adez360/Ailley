@@ -246,8 +246,8 @@ func note_meeting(other_id) -> void          # has_met() 為真的唯一來源
 const HOTBAR_SIZE := 9 · MAIN_SIZE := 27 · SIZE := 36    # 0..8 快捷欄，9..35 主背包
 const STACK_DECAY_TOLERANCE := 10
 
-const ADD_OK := "" · ADD_NO_SPACE := "NO_SPACE"              # add_item() 回傳值
-const REMOVE_OK := "" · REMOVE_NOT_FOUND := "NOT_FOUND"      # remove_item() 回傳值
+const ADD_OK := "" · ADD_NO_SPACE := "NO_SPACE" · ADD_INVALID_COUNT := "INVALID_COUNT"
+const REMOVE_OK := "" · REMOVE_NOT_FOUND := "NOT_FOUND" · REMOVE_INVALID_COUNT := "INVALID_COUNT"
 
 var slots: Array[Dictionary]                 # 每格 {item_id, count, decay, durability} 或 {}
 
@@ -271,6 +271,9 @@ func get_summary() -> Array[Dictionary]       # 不含空格，每筆補 slot �
 † durability 傳 -1（預設）= decay 類，嘗試疊進相容既有格；傳 >=0 = carry 類，一件佔一格不可疊
   物品定義檔未做，呼叫端目前得自己講清楚是哪一種
 † add_item/remove_item 失敗是原子的 — 沒位置/數量不夠時不動任何格，不會半途占一部分
+† count 必須是正整數 — add/remove 對 <= 0 回 *_INVALID_COUNT，has_item(id, 0) 回 false
+  （不擋的話 count=0 會建出清不掉的空堆疊，carry 類那條路徑還會把整個背包填滿）
+† slots 在 _init() 就配置好 — Inventory.new() 出來還沒入樹也是合法容器
 † 快捷欄與主背包是同一個陣列，不是兩個容器 — 搬進/出快捷欄 = move_slot() 搬 index
 † 選格是資料層狀態（get/set_selected_index），不是 UI 狀態 — Agent 沒 UI 也要有「手上拿著什麼」
 ⚠ durability=-1 是本實作的哨兵值，不在規格書 0–100 範圍內；物品定義檔進來後要對齊

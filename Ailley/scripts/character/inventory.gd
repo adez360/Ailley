@@ -19,10 +19,12 @@ const STACK_DECAY_TOLERANCE := 10
 ## 計畫 §5.3 要求每個動作都要能講出為什麼失敗，AI 才有辦法重排行程
 const ADD_OK := ""
 const ADD_NO_SPACE := "NO_SPACE"
+const ADD_INVALID_COUNT := "INVALID_COUNT"
 
 ## remove_item() 的失敗原因碼
 const REMOVE_OK := ""
 const REMOVE_NOT_FOUND := "NOT_FOUND"
+const REMOVE_INVALID_COUNT := "INVALID_COUNT"
 
 var slots: Array[Dictionary] = []
 
@@ -31,7 +33,9 @@ var slots: Array[Dictionary] = []
 var _selected_index := 0
 
 
-func _ready() -> void:
+# 在 _init() 而不是 _ready() 配置，這樣 Inventory.new() 出來的實例還沒進場景樹
+# 就已經是合法容器。Agent 沒有 UI 也要查得到背包，查詢時機不該綁在入樹之後
+func _init() -> void:
 	slots.resize(SIZE)
 	for i in SIZE:
 		slots[i] = {}
@@ -46,14 +50,23 @@ func get_slot(index: int) -> Dictionary:
 		return {}
 	return slots[index].duplicate()
 
+# 空格要先跳過再比對 item_id——空格的 get("item_id", "") 回空字串，
+# 拿 "" 來查會match到每一個空格，然後存取它們沒有的 count 鍵
 func count_item(item_id: String) -> int:
 	var total := 0
 	for slot in slots:
-		if slot.get("item_id", "") == item_id:
+		if slot.is_empty():
+			continue
+		if slot["item_id"] == item_id:
 			total += int(slot["count"])
 	return total
 
+# count 非正數一律回 false，跟 remove_item() 的驗證對齊——
+# 呼叫端常寫成 if has_item(id, n): remove_item(id, n)，
+# 這裡若對 n <= 0 回 true，就會走進一個必定失敗的 remove
 func has_item(item_id: String, count: int = 1) -> bool:
+	if count <= 0:
+		return false
 	return count_item(item_id) >= count
 
 func find_first_empty() -> int:
@@ -70,8 +83,15 @@ func find_first_empty() -> int:
 #
 # durability 留 -1（預設）代表這批物品用 decay 追蹤，會嘗試疊進相容的既有格；
 # 傳 0 以上代表 carry 類，08 §4 規則 #2 一件佔一格、不可疊。
-# 物品定義檔不在這則範圍內，呼叫端目前得自己講清楚這批是哪一種
+# 物品定義檔不在這則範圍內，呼叫端目前得自己講清楚這批是哪一種。
+#
+# count 非正數擋在這裡而不是各自的 _add_*()：放行的話 _add_stackable() 會建出
+# count 為 0 的格子（非空所以 find_first_empty() 跳過，count_item() 又算成 0，
+# 於是 remove_item() 清不掉它），_add_unstackable() 的蒐集迴圈則永遠比不到
+# empties.size() == count，把整個背包填滿
 func add_item(item_id: String, count: int = 1, decay: int = 0, durability: int = -1) -> String:
+	if count <= 0:
+		return ADD_INVALID_COUNT
 	if durability >= 0:
 		return _add_unstackable(item_id, count, decay, durability)
 	return _add_stackable(item_id, count, decay)
@@ -119,8 +139,11 @@ func _find_stackable_slot(item_id: String, decay: int) -> int:
 	return -1
 
 # 移除物品，成功回傳 REMOVE_OK，數量不足回傳 REMOVE_NOT_FOUND 且不動任何格——
-# 同樣是原子的，不會先扣掉一部分才發現不夠
+# 同樣是原子的，不會先扣掉一部分才發現不夠。
+# count 非正數是呼叫端的錯，不是「拿掉 0 個成功了」，所以回原因碼而不是 REMOVE_OK
 func remove_item(item_id: String, count: int = 1) -> String:
+	if count <= 0:
+		return REMOVE_INVALID_COUNT
 	if count_item(item_id) < count:
 		return REMOVE_NOT_FOUND
 
