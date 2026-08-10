@@ -54,15 +54,18 @@
   （一村民一模型切換機制）留在原地未動，跟場景內容無關，不在封存範圍。同樣注意：
   `dialogue_ping_pong_multimodel.py` 目前 import `characters.py` 會失敗，暫時只當
   參考程式碼用，功能還沒被 `poc_village_sim` 重新實作。
-- `poc_agent_loop_superseded/`（2026-07-28 封存）——`agent_loop.py`。呼叫 llama-server 的
-  HTTP／JSON 崩潰防禦重試邏輯、`template.replace()` 組 prompt 的寫法，已經被
-  `poc_village_sim/run_tick_sim.py` 重新實作且做得更完整（多了連線層級重試、平行呼叫），
-  這個檔案本身也已經因為 `characters.py` 被搬走而跑不動，繼續留在 `poc_agent_loop/` 沒有
-  意義。`poc_agent_loop/prompts/plan_system_prompt.txt`／`inner_monologue_system_prompt.txt`
-  跟 `grammar/plan.gbnf.template`／`thought.gbnf.template`（規劃／內心獨白，`poc_village_sim`
-  目前是純反應式、沒有獨立的規劃 LLM 呼叫）**沒有被封存**——這些功能還沒被 `poc_village_sim`
-  重新實作，繼續留在 `poc_agent_loop/` 原地當參考。詳見
-  [[poc_village_sim 驗證引擎邏輯總覽]] 的「已知限制」一節。
+- `poc_agent_loop_superseded/`（2026-07-28 封存 `agent_loop.py`，2026-08-10 補上剩餘四份）——
+  `agent_loop.py`：呼叫 llama-server 的 HTTP／JSON 崩潰防禦重試邏輯、`template.replace()`
+  組 prompt 的寫法，已經被 `poc_village_sim/run_tick_sim.py` 重新實作且做得更完整（多了
+  連線層級重試、平行呼叫），這個檔案本身也已經因為 `characters.py` 被搬走而跑不動。
+  `prompts/plan_system_prompt.txt`／`inner_monologue_system_prompt.txt`／
+  `grammar/plan.gbnf.template`／`thought.gbnf.template`／`importance.gbnf.template`：
+  2026-08-10 確認全專案已經沒有任何現行程式碼 import 這五個檔案（`grep` 全 repo，只有
+  已封存檔案還在引用），一併搬進來——規劃／內心獨白／重要性評分這三個概念，現在都已經被
+  `poc_village_sim` 自己的 `reasoning`／`inner_monologue` 欄位跟獨立的
+  `poc_village_sim/grammar/importance.gbnf.template`（睡眠反思機制的一部分）取代掉了，
+  不是「還沒重新實作」的曖昧狀態，是真的已經有新版本在跑。`poc_agent_loop/` 資料夾搬完後
+  已經完全清空並移除，不再存在。詳見 [[poc_village_sim 驗證引擎邏輯總覽]] 的「已知限制」一節。
 - `reference_cross_run_persistence/`（2026-08-10 搬移，非封存——只是換位置方便找）——
   `poc_agent_loop/memory_store.py`／`run_multiday.py`，跨行程硬碟存檔接續機制（`roster.json`／
   `state.json`／`memory_*.json` 都寫在同一個 `memory_store/` 目錄，關掉程式重開會自動接續讀取

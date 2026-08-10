@@ -69,7 +69,7 @@ updated: 2026-07-30
 | --- | --- |
 | `poc_agent_loop/agent_loop.py` 裡呼叫 llama-server 的部分（`SERVER_URL`、`requests.post`、JSON 重試邏輯） | 跟場景無關的通用呼叫模式，新架構原封不動沿用 |
 | `poc_agent_loop/memory_store.py`（2026-08-10 更新：連同 `run_multiday.py` 一起搬進 `poc_archive/reference_cross_run_persistence/`，因為 `poc_village_sim` 至今仍未實作跨行程存檔接續，先當參考擺著） | 跨天持久化的資料結構與讀寫模式，可直接套用在新角色的長期記憶上 |
-| `poc_agent_loop/grammar/importance.gbnf.template`、`thought.gbnf.template` | 意識流／重要性評分的呼叫模式，概念上對應新架構「內心獨白」的需求，格式需要調整但邏輯可沿用 |
+| `poc_agent_loop/grammar/importance.gbnf.template`、`thought.gbnf.template`（2026-08-10 更新：連同 `plan.gbnf.template`／`prompts/plan_system_prompt.txt`／`inner_monologue_system_prompt.txt` 一起搬進 `poc_archive/poc_agent_loop_superseded/`——確認全 repo 已無程式碼引用，且概念已被 `poc_village_sim` 自己的 `reasoning`／`inner_monologue` 欄位跟獨立的 `poc_village_sim/grammar/importance.gbnf.template` 取代） | 意識流／重要性評分的呼叫模式，概念上對應新架構「內心獨白」的需求，格式需要調整但邏輯可沿用 |
 
 ### 保持原樣、不動
 
