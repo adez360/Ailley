@@ -125,8 +125,8 @@ func _decide_velocity() -> Vector2           # 子類覆寫點：這一幀往哪
 get_state_snapshot() -> {
   id, name, position, moving, facing, animation, in_conversation,   # 一定有
   stats: {key: value, ...},                     # 有掛 Stats 才有，key 是 SPEC 的 key
-  affinity: {other_id: {value, met_count}, ...}, # 有認識的人才有
-  schedule: {place, state, size},                # 只有 Agent 才有
+  affinity: {other_id: {affinity, met_count}, ...}, # 有記錄的人才有，欄名同 relationships
+  schedule: {place, state, size},                # agent.gd override 補上，Player 沒有
 }
 
 † 尋徑一律 get_body_position()，不用 global_position
@@ -143,9 +143,10 @@ get_state_snapshot() -> {
   材質延遲建立，關掉時 material=null 並解除兩個連接
 † get_state_snapshot() 的 key/value 一律是識別字，不可以是翻譯過的字——
   這批資料要進 LLM 的 prompt，不該隨玩家介面語系跑掉
-⚠ schedule 欄位靠 get("current_place") 動態讀，不是靜態成員存取——
-  那三個識別字宣告在 agent.gd，Character 自己的作用域裡沒有，
-  寫成 current_place 會直接 Parse Error
+† schedule 由 agent.gd override get_state_snapshot()（super() 後補一段）加上，
+  不是基底用 is_in_group("agents") 嗅探 —— 子類別的欄位由子類別自己放
+† affinity 的欄名跟 relationships.gd 的 record 一致，不要改名成 value
+  同一個數值兩個名字，讀過 relationships.gd 的人會在 snapshot 上找不到它
 → 技術/Character 基底與 Agent · 技術/滑鼠選取與鏡頭
 ```
 

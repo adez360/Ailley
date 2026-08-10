@@ -233,8 +233,11 @@ func face_towards(other: Character) -> void:
 # （見 note/技術/LLM 串接與 AI 服務層.md）要的也是同一批資料。
 #
 # key/value 一律是識別字，不可以是翻譯過的字 —— Stats.SPEC 的 label 存的是
-# 翻譯 key，這裡照樣只放 key，翻譯留給顯示端做。stats/affinity/schedule
-# 只有掛了對應元件、或本身是 Agent，才會出現在回傳值裡，呼叫端用 has() 判斷
+# 翻譯 key，這裡照樣只放 key，翻譯留給顯示端做。stats/affinity 只有掛了對應
+# 元件才會出現在回傳值裡，呼叫端用 has() 判斷。
+#
+# 子類別自己的欄位由子類別 override 這個方法補上（agent.gd 補 schedule），
+# 基底不去猜誰是什麼
 func get_state_snapshot() -> Dictionary:
 	var snapshot := {
 		"id": character_id,
@@ -252,23 +255,20 @@ func get_state_snapshot() -> Dictionary:
 			values[key] = stats.get_value(key)
 		snapshot["stats"] = values
 
-	if relationships != null and not relationships.known_ids().is_empty():
-		var affinity := {}
-		for other_id in relationships.known_ids():
-			var record := relationships.get_record(other_id)
-			affinity[other_id] = {"value": record["affinity"], "met_count": record["met_count"]}
-		snapshot["affinity"] = affinity
-
-	# 行程表是 Agent 才有的東西（current_place/current_state/schedule 宣告在
-	# agent.gd，不在這個基底），Player 沒有這一段。用 get() 動態讀取，不用
-	# 靜態成員存取——那三個識別字在 Character 自己的作用域裡不存在，會直接
-	# Parse Error，不是留到執行期才發現
-	if is_in_group("agents"):
-		snapshot["schedule"] = {
-			"place": get("current_place"),
-			"state": get("current_state"),
-			"size": (get("schedule") as Array).size(),
-		}
+	# 欄名跟 relationships.gd 的 record 一致（affinity / met_count），
+	# 不要在這裡改名——同一個數值有兩個名字，讀過 relationships.gd 的人
+	# 會在 snapshot 上找不到 affinity。用純量 accessor 不用 get_record()，
+	# 後者每筆都 duplicate(true) 深拷一份只為了讀兩個數字
+	if relationships != null:
+		var known := relationships.known_ids()
+		if not known.is_empty():
+			var affinity := {}
+			for other_id in known:
+				affinity[other_id] = {
+					"affinity": relationships.get_affinity(other_id),
+					"met_count": relationships.get_met_count(other_id),
+				}
+			snapshot["affinity"] = affinity
 
 	return snapshot
 

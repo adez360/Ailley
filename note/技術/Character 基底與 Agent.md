@@ -159,9 +159,18 @@ id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存
 > key 不放翻譯後的文字。這批資料以後會直接進 LLM 的 prompt
 > （見 [[LLM 串接與 AI 服務層]] 的 payload 設計），不該隨玩家介面語系跑掉。
 
-`schedule` 欄位（`place`/`state`/`size`）只有 Agent 才有，用
-`get("current_place")` 之類的動態存取讀，不是宣告成員：那三個識別字
-宣告在 `agent.gd`，寫在 `Character` 自己的作用域裡引用會直接 Parse Error。
+`schedule` 欄位（`place`/`state`/`size`）只有 Agent 才有。它由 `agent.gd`
+override `get_state_snapshot()`、`super()` 之後補上去，**不是**基底自己去嗅探
+誰是 Agent —— `schedule`/`current_place`/`current_state` 宣告在 `agent.gd`，
+就由 `agent.gd` 負責放進快照。基底若改用 `is_in_group("agents")` 加
+`get("current_place")` 動態讀，group 成員資格跟「有沒有這個欄位」是兩件事，
+不吻合時會拿到 `null`（或在 `as Array` 那步直接崩）。
+
+`affinity` 每筆是 `{affinity, met_count}`，欄名跟 `relationships.gd` 的 record
+一致，不要在快照裡改名 —— 同一個數值兩個名字，讀過 `relationships.gd` 的人
+會在快照上找不到它。取值走 `get_affinity()` / `get_met_count()` 這兩個純量
+accessor，不用 `get_record()`：後者每筆都 `duplicate(true)` 深拷一份，
+只為了讀兩個數字。
 
 ## 碰撞分層
 

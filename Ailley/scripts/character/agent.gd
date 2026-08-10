@@ -96,6 +96,17 @@ func exit_conversation() -> void:
 	super()
 	_apply_current_entry()
 
+# 基底的快照加上行程表這一段。schedule/current_place/current_state 宣告在這裡，
+# 所以是這裡負責放進去 —— 基底不必去猜誰有行程表
+func get_state_snapshot() -> Dictionary:
+	var snapshot := super()
+	snapshot["schedule"] = {
+		"place": current_place,
+		"state": current_state,
+		"size": schedule.size(),
+	}
+	return snapshot
+
 # 第一次看到某個陌生人就停下來愣一下。
 #
 # 認識的人不算 —— 每天上班都會遇到的同事不會讓人「！」。
