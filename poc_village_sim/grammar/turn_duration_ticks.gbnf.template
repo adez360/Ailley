@@ -1,4 +1,4 @@
-root ::= "{" ws "\"reasoning\"" ws ":" ws string ws "," ws "\"emotion\"" ws ":" ws emotion ws "," ws "\"intent\"" ws ":" ws intent ws "," ws "\"inner_monologue\"" ws ":" ws string ws "," ws "\"speech\"" ws ":" ws nullable-string ws "," ws "\"speech_volume\"" ws ":" ws speech-volume ws "}"
+root ::= "{" ws "\"reasoning\"" ws ":" ws string ws "," ws "\"emotion\"" ws ":" ws emotion ws "," ws "\"intent\"" ws ":" ws intent ws "," ws "\"inner_monologue\"" ws ":" ws string ws "," ws "\"speech_target\"" ws ":" ws target-value ws "," ws "\"speech\"" ws ":" ws nullable-string ws "," ws "\"speech_volume\"" ws ":" ws speech-volume ws "}"
 
 # 給 server.py（組員串接用 API）專用：duration 欄位改用「幾個 10 秒 tick」為單位，不是分鐘。
 # AI 填 2 代表這個動作要 20 秒（2 * 10），填 90 代表 900 秒（15 分鐘）。這樣不管 AI 填什麼數字，
@@ -8,6 +8,11 @@ root ::= "{" ws "\"reasoning\"" ws ":" ws string ws "," ws "\"emotion\"" ws ":" 
 #
 # 2026-08-10：跟主線 turn_duration_experiment.gbnf.template 同步加上 `reasoning` 欄位
 # （放在 intent 之前，逼模型先分析再決定），對照實驗＋7小時長時間驗證證實有效，見note。
+#
+# 2026-08-10：同步加上 `speech_target`——`intent.target`是動作對象，喝酒/吃飯這類
+# 動作本身沒有對象，沒有欄位能表達「做A的同時在跟B說話」。沿用同一份`target-value`
+# 動態候選名單，跟intent.target互相獨立，放在inner_monologue之後、speech之前。
+# 詳細診斷理由見主線 turn_duration_experiment.gbnf.template 的註解。
 
 intent ::= "{" ws "\"action\"" ws ":" ws action ws "," ws "\"duration_ticks\"" ws ":" ws duration ws "," ws "\"target\"" ws ":" ws target-value ws "," ws "\"location\"" ws ":" ws location-value ws "}"
 

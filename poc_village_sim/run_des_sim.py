@@ -193,7 +193,8 @@ _NO_GRAMMAR_JSON_INSTRUCTION = (
     "欄位跟型別（reasoning 必須是第一個欄位，先分析再決定 intent，不能先決定再回頭補理由）：\n"
     '{"reasoning": "字串，上限100字", "emotion": "8選1英文字串", "intent": {"action": "從允許清單選一個中文字串",'
     ' "duration_minutes": 整數, "target": "字串或null", "location": "從允許清單選一個中文字串"},'
-    ' "inner_monologue": "字串", "speech": "字串或null", "speech_volume": "normal/shout/whisper"}'
+    ' "inner_monologue": "字串", "speech_target": "字串或null，這句話說給誰聽，跟intent.target互相獨立",'
+    ' "speech": "字串或null", "speech_volume": "normal/shout/whisper"}'
 )
 _VALID_ACTIONS = {a.value for a in enums.Action}
 _VALID_EMOTIONS = {"excited","happy","in_love","terrified","burnout","angry","sad","neutral"}
@@ -458,7 +459,10 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
             if o == cid:
                 continue
             od = state[o]["last_declaration"]
-            if od and od["target_id"] == cid and od["action"] in _DIALOGUE_ACTIONS and od["speech"]:
+            if not od or not od["speech"]:
+                continue
+            spoke_to_me = (od["action"] in _DIALOGUE_ACTIONS and od["target_id"] == cid) or od.get("speech_target_id") == cid
+            if spoke_to_me:
                 incoming_speaker_id = o
                 break
 
@@ -471,7 +475,7 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
                 if o == cid:
                     continue
                 od = state[o]["last_declaration"]
-                if od and od["target_id"] == cid:
+                if od and (od["target_id"] == cid or od.get("speech_target_id") == cid):
                     speaker_name = cast[o]["name"]
                     if od["speech"]:
                         recent_event = f"上一刻，{speaker_name}對你「{od['action']}」，說：「{od['speech']}」"
@@ -574,6 +578,7 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
         new_location = out["intent"]["location"]
         target_name = out["intent"]["target"]
         target_id = rts.normalize_target(target_name, name_to_id)
+        speech_target_id = rts.normalize_target(out.get("speech_target"), name_to_id)
         emotion = out["emotion"]
         phys = me["physiology"]
         old_location = me["location"]
@@ -859,13 +864,20 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
         me["last_action"] = action
         me["location"] = new_location
         me["last_emotion"] = emotion
-        me["last_declaration"] = {"time": now, "action": action, "target_id": target_id, "speech": out["speech"]}
+        me["last_declaration"] = {
+            "time": now, "action": action, "target_id": target_id,
+            "speech_target_id": speech_target_id, "speech": out["speech"],
+        }
 
         # 對話追蹤：更新/結束session。這一刻cid實際做的事才是真相，跟prompt階段查到的
         # incoming_speaker_id分開處理——incoming_speaker_id只代表「決策前有沒有人在等我
         # 接話」，不代表這一輪cid真的接了。
-        if action in _DIALOGUE_ACTIONS and target_id and out["speech"]:
-            key = frozenset((cid, target_id))
+        # 2026-08-10：「這句話說給誰聽」不再只看 intent.target——喝酒/吃飯這類本身沒有
+        # 對象的動作，也可能同時填了 speech_target（見grammar註解），這裡一併當作有效
+        # 的對話對象，不然這種「邊喝酒邊聊天」的交流會被漏掉，繼續量不到。
+        conversation_target_id = target_id if (action in _DIALOGUE_ACTIONS and target_id) else speech_target_id
+        if conversation_target_id and out["speech"]:
+            key = frozenset((cid, conversation_target_id))
             existing = conversation_sessions.get(key)
             turns = existing["turns"] + 1 if existing else 1
             conversation_sessions[key] = {
@@ -874,7 +886,7 @@ def run_one_simulation(run_index: int, target_game_minutes: int, template: str, 
             }
             # cid開了一場新對話，但手上還積著另一個人剛剛的話沒回——那場算是被cid晾掉了，
             # 清掉避免之後對方查詢時看到一場其實已經被cid拋下的對話還顯示「輪到我」。
-            if incoming_speaker_id is not None and incoming_speaker_id != target_id:
+            if incoming_speaker_id is not None and incoming_speaker_id != conversation_target_id:
                 conversation_sessions.pop(frozenset((cid, incoming_speaker_id)), None)
         elif incoming_speaker_id is not None:
             # cid這輪決策沒有回話給正在等待的人（選了別的動作，或說話對象換成別人但已經在

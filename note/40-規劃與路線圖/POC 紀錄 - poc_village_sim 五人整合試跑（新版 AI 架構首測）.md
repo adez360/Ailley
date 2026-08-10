@@ -3334,3 +3334,55 @@ parse_ok全程100%）**：說話類（有明確對象）事件9次，其中**6�
 判斷邏輯：這裡也是給模型一個明確的「狀態感知」（「我正處在一場對話裡，
 這是第幾輪」），而不是強迫它做什麼，模型自己會根據這個狀態感知做出
 更合理的判斷。
+
+## speech_target 欄位：修正 target 欄位混淆「動作對象」跟「說話對象」的schema缺口（2026-08-10）
+
+**背景**：上一節提到「target 偶爾跟 speech 內容對不上」的既有小問題，
+後續針對57份transcript全面掃描，找到322筆（在2101筆有speech的決策中）
+`speech`明確稱呼視野內某個人、但`intent.target`卻是null。逐一檢查後
+確認**不是模型不遵守指示**——這322筆100%都是喝酒/吃飯這類本身沒有
+「動作對象」的非對話類動作（喝酒佔71%），schema原本就沒有欄位能表達
+「我在喝酒，但同時想跟旁邊的人聊兩句」這種「動作」跟「說話對象」分開
+的情境。原本設計裡`intent.target`身兼二職（動作對象＋說話對象），
+喝酒這類動作結構上就不需要對象，講話的對象自然沒地方填。
+
+**修正**：新增獨立的`speech_target`欄位，沿用跟`intent.target`同一份
+動態`target-value`grammar規則（同一份視野內候選名單+null，一樣不可能
+幻覺出視野外的人），放在`inner_monologue`之後、`speech`之前——逼模型
+先決定「說給誰聽」再寫台詞內容。跟`intent.target`完全獨立，兩者可以
+不同（例如喝酒時`target=null`但`speech_target=某人`）也可以相同
+（例如「說話」這種本身就有對象的動作，通常兩者一致）。
+
+**改動範圍**：
+- `grammar/turn_duration_experiment.gbnf.template`（DES主線）／
+  `grammar/turn_duration_ticks.gbnf.template`（server.py主線）：
+  root規則加`speech_target`欄位
+- `prompts/villager_system_prompt.txt`／`villager_system_prompt_server.txt`：
+  【說話】段落說明新欄位的用途跟填法
+- `run_des_sim.py`：`_NO_GRAMMAR_JSON_INSTRUCTION`同步加欄位；
+  `conversation_sessions`的判斷邏輯（決策前查`incoming_speaker_id`、
+  決策後更新/結束session）改成同時看`intent.target`跟`speech_target`
+  兩個欄位，只要任一個指向對方就算是有效的對話對象，`last_declaration`
+  也一併存`speech_target_id`
+
+**前端未確認事項**：這次改動的前提是「動作」跟「說話」可以同時發生——
+這其實是POC既有的設計原則（`villager_system_prompt.txt`裡本來就寫了
+「說話跟`intent.action`是兩件事、可以同時發生」），不是這次新加的假設。
+但**Godot前端目前有沒有真的把「動作」跟「說話」同步渲染出來，這件事
+還沒跟組員確認過**，需要列入待跟組員同步的清單——如果前端目前只會
+顯示其中一個，這個欄位在POC這邊驗證有效，不代表最終呈現效果會如預期。
+
+**驗證**：`python3 run_des_sim.py 60 1`（5人、35個事件、3次中斷），
+無crash，`speech_target`欄位正確填出：
+- 對話類動作（說話/跟隨+說話）→`target`跟`speech_target`一致，例如
+  老周對小梅說話，兩個欄位都填「小梅」
+- 買東西（有交易對象但非對話類）→`speech`裡稱呼交易對象時，
+  `speech_target`正確跟著填上，跟`target`一致
+- 喝酒（無動作對象）＋`speech`內容沒有明確稱呼任何人→`target`跟
+  `speech_target`都正確填null，沒有亂填
+
+這次樣本沒有剛好抓到「喝酒同時點名旁邊的人聊天」這種目標情境的案例
+（樣本量小），但機制本身（欄位獨立生成、grammar不會幻覺、跟
+conversation_sessions邏輯整合）驗證正確無誤。**還沒做**：規模更大的
+長時間驗證，確認這個欄位上線後接話率是否比66.7%更高（理論上應該會，
+因為之前「邊做事邊聊天」這種對話完全沒被`conversation_sessions`捕捉到）。

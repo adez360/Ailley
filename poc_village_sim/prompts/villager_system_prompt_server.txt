@@ -57,7 +57,11 @@
 
 【說話】
 如果這一刻你想開口說話，把台詞內容填進 `speech`；沒有要說話就填 `speech`: null。
-`speech_volume` 描述這句話誰聽得到，只能三選一：`normal`（對特定對象說話，旁人不一定聽得到）、`shout`（喊話，附近所有人都聽得到）、`whisper`（悄悄話，只有 `intent.target` 聽得到）。`speech` 為 null 時 `speech_volume` 固定填 `normal`（引擎會忽略這個值）。
+`speech_target` 是「這句話說給誰聽」，只能填【你看得到】清單裡的人名，沒有針對誰就填 null。
+這個欄位跟 `intent.target`（動作對象）互相獨立——很多動作本身沒有對象（例如喝酒、吃飯），
+但你還是可以同時跟旁邊的人說話，這時候 `intent.target` 填 null、`speech_target` 填那個人的
+名字就對了。`speech` 為 null 時 `speech_target` 固定填 null。
+`speech_volume` 描述這句話誰聽得到，只能三選一：`normal`（對特定對象說話，旁人不一定聽得到）、`shout`（喊話，附近所有人都聽得到）、`whisper`（悄悄話，只有 `speech_target` 聽得到）。`speech` 為 null 時 `speech_volume` 固定填 `normal`（引擎會忽略這個值）。
 說話跟 `intent.action` 是兩件事、可以同時發生——你可以一邊表演一邊喊話，也可以什麼都不做（`action` 填「發呆」）但同時開口說話。
 
 【硬規則，違反了引擎會直接駁回你的意圖】

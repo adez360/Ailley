@@ -1,4 +1,4 @@
-root ::= "{" ws "\"reasoning\"" ws ":" ws string ws "," ws "\"emotion\"" ws ":" ws emotion ws "," ws "\"intent\"" ws ":" ws intent ws "," ws "\"inner_monologue\"" ws ":" ws string ws "," ws "\"speech\"" ws ":" ws nullable-string ws "," ws "\"speech_volume\"" ws ":" ws speech-volume ws "}"
+root ::= "{" ws "\"reasoning\"" ws ":" ws string ws "," ws "\"emotion\"" ws ":" ws emotion ws "," ws "\"intent\"" ws ":" ws intent ws "," ws "\"inner_monologue\"" ws ":" ws string ws "," ws "\"speech_target\"" ws ":" ws target-value ws "," ws "\"speech\"" ws ":" ws nullable-string ws "," ws "\"speech_volume\"" ws ":" ws speech-volume ws "}"
 
 # 離散事件模擬（DES）Stage 1 驗證專用 grammar：只多一個 intent.duration_minutes 欄位，
 # 其餘跟 turn.gbnf.template 完全一樣。目的是先驗證「AI 填的時長合不合理」，不牽涉排程
@@ -13,6 +13,15 @@ root ::= "{" ws "\"reasoning\"" ws ":" ws string ws "," ws "\"emotion\"" ws ":" 
 # 強制貧窮情境下从0/43次選工作類動作變成4/4輪測試都有轉向），也跑過7小時、跨36遊戲日
 # 的長時間驗證確認不會退化。字數上限（100字）純粹是 prompt 指示，grammar 結構本身沒有
 # 字數限制，模型仍可能寫超過，只是機率低。
+#
+# 2026-08-10：新增 `speech_target`——`intent.target`是「動作對象」，喝酒/吃飯這類
+# 動作本身沒有對象，就算角色同時想跟旁邊的人聊兩句，target也只能留null，沒有欄位能
+# 表達「我在做A，同時在跟B說話」。實測57份transcript，322筆speech明確指名視野內某人
+# 卻target=null，100%都是這種非說話類動作（喝酒佔71%）——不是模型不遵守指示，是schema
+# 沒給它欄位可以填。`speech_target`沿用同一份`target-value`規則（跟intent.target同一份
+# 動態候選名單，一樣不可能選到視野外的人），跟intent.target互相獨立，讓「動作」跟「說話
+# 對象」可以分開表達。放在inner_monologue之後、speech之前，逼模型先決定說給誰聽、
+# 再寫台詞內容。
 
 intent ::= "{" ws "\"action\"" ws ":" ws action ws "," ws "\"duration_minutes\"" ws ":" ws duration ws "," ws "\"target\"" ws ":" ws target-value ws "," ws "\"location\"" ws ":" ws location-value ws "}"
 
