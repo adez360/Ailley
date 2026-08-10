@@ -1,5 +1,6 @@
-[gd_scene load_steps=16 format=4 uid="uid://bianwxowjctjk"]
+[gd_scene load_steps=17 format=4 uid="uid://bianwxowjctjk"]
 
+[ext_resource type="Script" path="res://scripts/ui/pause.gd" id="1_a8y0u"]
 [ext_resource type="PackedScene" uid="uid://v21qv1icuh5m" path="res://scenes/player.tscn" id="1_ljsu2"]
 [ext_resource type="Script" uid="uid://bhds0h8vwl2g5" path="res://scripts/world/follow_camera.gd" id="2_a52xk"]
 [ext_resource type="Material" uid="uid://cmbcfxlkxxnwq" path="res://addons/TileMapDual/ghost_material.tres" id="2_kvyyq"]
@@ -140,6 +141,27 @@ terrain_set_0/terrain_1/color = Color(0.5, 0.4375, 0.25, 1)
 sources/0 = SubResource("TileSetAtlasSource_pl1ev")
 
 [node name="Node" type="Node"]
+
+[node name="Pause" type="CanvasLayer" parent="."]
+process_mode = 3
+layer = 10
+visible = false
+script = ExtResource("1_a8y0u")
+
+[node name="Dim" type="ColorRect" parent="Pause"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0.10196, 0.08235, 0.07059, 0.6)
+
+[node name="Text" type="Label" parent="Pause"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme_type_variation = &"HUDLabel"
+text = "UI_PAUSED"
+horizontal_alignment = 1
+vertical_alignment = 1
 
 [node name="Node2D" type="Node2D" parent="."]
 

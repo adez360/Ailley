@@ -65,6 +65,7 @@ move_up/down/left/right  WASD
 interact                 E
 chat                     Enter / KpEnter
 select                   滑鼠左鍵
+ui_cancel                Esc（Godot 內建，project.godot 沒有覆寫）
 ```
 
 ---
@@ -654,6 +655,22 @@ solid  NavGrid 障礙格     collision  碰撞形狀（Godot 原生除錯繪製�
 
 ```
 訂閱 GameClock.time_changed，不每幀輪詢。掛在 main.tscn 的 HUD/TimeLabel
+```
+
+## Pause — scripts/ui/pause.gd · CanvasLayer
+
+```gdscript
+set_paused(paused: bool) -> void             # get_tree().paused + 遮罩顯示
+```
+
+```
+Esc(ui_cancel) 切換暫停。main.tscn 的 Pause，子節點 Dim(ColorRect) / Text(Label)
+† process_mode 必須 ALWAYS(3)：跟著暫停就收不到輸入，醒不過來
+† 必須是 main.tscn 的第一個子節點：_unhandled_input 反序傳遞，
+  排最前面才最後收到 ⇒ 面板開著時 Esc 關面板不暫停
+† layer=10 蓋在 HUD/ChatInput/DebugConsole(layer 1) 之上
+† Esc 優先序：debug_console(_input) > chat_input / character_create(_unhandled_input) > pause
+† autoload 繼承 root 的 process_mode ⇒ 暫停時 GameClock 停；AIService 已送出的請求不會中止
 ```
 
 ---
