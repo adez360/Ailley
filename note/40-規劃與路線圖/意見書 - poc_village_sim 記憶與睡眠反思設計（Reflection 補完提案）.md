@@ -21,7 +21,7 @@ updated: 2026-07-30
 
 ## 1. 已經有的、可以直接沿用的部分
 
-`poc_agent_loop/memory_store.py` 的 `retrieve_memories()` 已經實作「新近度＋重要性」加權
+`poc_agent_loop/memory_store.py`（2026-08-10 已搬進 `poc_archive/reference_cross_run_persistence/`）的 `retrieve_memories()` 已經實作「新近度＋重要性」加權
 排序（`MEMORY_RECENCY_DECAY = 0.95`，用 `global_index` 指數衰減），每次只取分數最高的
 `MEMORY_TOP_K = 6` 筆餵進 prompt。
 
@@ -111,5 +111,5 @@ long_term_memory 塞進 {{RECENT_MEMORY_BLOCK}}
 這是設計提案，**尚未實作**。確認方向後才動手：
 1. 幫 `run_tick_sim.py` 的 ticks_log 加上「依角色重新索引」的當日 log（方案 C）。
 2. 新增睡眠反思的 prompt／grammar（比照 Specify2 §8 格式）。
-3. 把 `poc_agent_loop/memory_store.py` 的 retrieve/save 邏輯搬一份到 `poc_village_sim/`，
+3. 把 `poc_archive/reference_cross_run_persistence/memory_store.py`（原路徑 `poc_agent_loop/memory_store.py`）的 retrieve/save 邏輯搬一份到 `poc_village_sim/`，
    欄位對齊 `long_term_memory` 格式。

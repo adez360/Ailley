@@ -191,7 +191,7 @@ revert 乾淨。
 
 詳見 [[意見書 - poc_village_sim 記憶與睡眠反思設計（Reflection 補完提案）]]。採用方案 C：
 睡眠反思產物（`long_term_memory`）進 `retrieve_memories()` 的新近度＋重要性排序（沿用
-`poc_agent_loop/memory_store.py`），但當天原始 tick log 另外留一份備查，不進檢索排序。
+`poc_agent_loop/memory_store.py`，2026-08-10 已搬進 `poc_archive/reference_cross_run_persistence/`），但當天原始 tick log 另外留一份備查，不進檢索排序。
 尚未實作。
 
 ## 睡眠反思一次過多的 bug + 家/睡覺機制（2026-07-27）

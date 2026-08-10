@@ -4,23 +4,24 @@
 `note/40-規劃與路線圖/POC 完整技術文件 - 架構、測試方法、檔案與資料流程.md`
 與 `note/40-規劃與路線圖/POC 架構總覽與 Generative Agents 論文比對.md`。
 
-## 目前確定要繼續發展、拿來寫正式主程式的版本（不在這裡）
+## 目前實際在用、拿來寫正式主程式的版本（不在這裡）
 
-- `poc_mode_a/dialogue_ping_pong_multimodel.py`——一村民一模型架構
-- `poc_agent_loop/`——規劃 → 行程重疊觸發相遇 → 對話 → 意識流 → 跨天持久化記憶
+- `poc_village_sim/`——現行主線，六維人格＋生理狀態＋通用動作＋睡眠反思＋攻擊/生命值系統，
+  已經過多輪長時間驗證（見 [[POC 紀錄 - poc_village_sim 五人整合試跑（新版 AI 架構首測）]]）。
 
-正式主程式會把這兩者合併：`poc_agent_loop` 的整體迴圈架構為基礎，對話生成環節換成
-`dialogue_ping_pong_multimodel.py` 驗證過的「依村民切換底層模型」機制。
+> [!warning] 2026-07-28 更新（早期規劃已作廢）
+> 這份 README 最早（7/24）規劃的是「`poc_agent_loop` 整體迴圈 + `dialogue_ping_pong_multimodel.py`
+> 的多模型切換機制」合併成正式主程式——那是紅藍村獻祭博弈場景時代的規劃。引擎改 Godot、
+> 村民 AI 規格改版之後，實際往下發展的是全新的 `poc_village_sim/`，不是「合併 A+B」這條路線。
+> 詳見 [[poc_village_sim 驗證引擎邏輯總覽]]。
 
-> [!warning] 2026-07-28 更新
-> 上面這段是舊規劃（紅藍村獻祭博弈場景時代寫的）。引擎改 Godot、村民 AI 規格改版之後，
-> 實際往下發展的是全新的 `poc_village_sim/`（六維人格＋生理狀態＋通用動作＋睡眠反思＋
-> 攻擊/生命值系統，已經過多輪 20-30 tick × 5 次批次驗證），不是這裡講的「合併 A+B」路線。
-> `poc_agent_loop/memory_store.py`／`run_multiday.py`（跨天存檔接續）跟
-> `poc_mode_a/dialogue_ping_pong_multimodel.py`（多模型切換）這兩塊功能**還沒有被
-> `poc_village_sim` 重新實作**，繼續留在原地當參考，但不代表「正式主程式＝這兩者合併」
-> 這個舊計畫還算數。詳見 [[POC 紀錄 - poc_village_sim 五人整合試跑（新版 AI 架構首測）]]、
-> [[poc_village_sim 驗證引擎邏輯總覽]]。
+> [!info] 2026-08-10 更新：地端一村民一模型確認不做，兩塊「參考用」程式碼移進本目錄找到定位
+> - **地端不再打算做「一角色一模型」**；雲端如果要做類似效果，是走 OpenRouter 選模型的邏輯，
+>   不會直接沿用 `dialogue_ping_pong_multimodel.py` 這份地端實作——已封存進
+>   `poc_mode_a_multimodel_reference/`，見下方條目。
+> - `poc_agent_loop/memory_store.py`／`run_multiday.py`（跨行程存檔接續）**目前仍是
+>   `poc_village_sim` 沒有的能力**（同一個世界關掉程式重開仍要記得，不是「開新世界」的
+>   概念），還不確定要不要做，先搬進 `reference_cross_run_persistence/` 保留參考、方便找。
 
 ## 這裡封存的內容
 
@@ -57,8 +58,20 @@
   HTTP／JSON 崩潰防禦重試邏輯、`template.replace()` 組 prompt 的寫法，已經被
   `poc_village_sim/run_tick_sim.py` 重新實作且做得更完整（多了連線層級重試、平行呼叫），
   這個檔案本身也已經因為 `characters.py` 被搬走而跑不動，繼續留在 `poc_agent_loop/` 沒有
-  意義。`poc_agent_loop/memory_store.py`／`run_multiday.py`（跨天硬碟持久化＋接續執行）跟
-  `prompts/plan_system_prompt.txt`／`inner_monologue_system_prompt.txt`（規劃／內心獨白，
-  `poc_village_sim` 目前是純反應式、沒有規劃機制）**沒有被封存**——這些功能還沒被
-  `poc_village_sim` 重新實作，繼續留在原地當參考。詳見
+  意義。`poc_agent_loop/prompts/plan_system_prompt.txt`／`inner_monologue_system_prompt.txt`
+  跟 `grammar/plan.gbnf.template`／`thought.gbnf.template`（規劃／內心獨白，`poc_village_sim`
+  目前是純反應式、沒有獨立的規劃 LLM 呼叫）**沒有被封存**——這些功能還沒被 `poc_village_sim`
+  重新實作，繼續留在 `poc_agent_loop/` 原地當參考。詳見
   [[poc_village_sim 驗證引擎邏輯總覽]] 的「已知限制」一節。
+- `reference_cross_run_persistence/`（2026-08-10 搬移，非封存——只是換位置方便找）——
+  `poc_agent_loop/memory_store.py`／`run_multiday.py`，跨行程硬碟存檔接續機制（`roster.json`／
+  `state.json`／`memory_*.json` 都寫在同一個 `memory_store/` 目錄，關掉程式重開會自動接續讀取
+  同一個世界；沒有多重「世界存檔槽」的設計，要開新世界得手動清空該目錄）。`poc_village_sim`
+  目前沒有跨行程存檔能力（單次執行內的模擬結束就只留 transcript JSON，不能中斷後接續），
+  這兩個檔案原本留在 `poc_agent_loop/` 裡不容易找到，搬來這裡並改成一望即知用途的資料夾名。
+  `run_multiday.py` 依賴已封存的 `characters.py`，目前 import 會失敗，純參考用。
+- `poc_mode_a_multimodel_reference/`（2026-08-10 封存）——`dialogue_ping_pong_multimodel.py`
+  ＋依賴的 `grammar/importance.gbnf.template`。一村民一模型（依角色動態切換 llama-server
+  背後模型）的驗證實作，見 [[POC 紀錄 - 多模型輪替啟動測試（10 顆 7-9B 模型）]]。**地端確認
+  不採用**這個方向；雲端如果要做類似效果會走 OpenRouter 選模型的邏輯，不會直接沿用這份地端
+  `subprocess` 熱切換實作，純供歷史參考。
