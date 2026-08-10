@@ -226,6 +226,53 @@ func face_towards(other: Character) -> void:
 	sprite.play("idle_" + facing)
 
 
+# ---- 狀態快照 ----
+
+# 純資料的角色狀態，不含任何翻譯字串或 BBCode。debug_console.gd 的 status
+# 指令只負責把這份 Dictionary 排版顯示，不重新蒐集一次；日後 LLM payload
+# （見 note/技術/LLM 串接與 AI 服務層.md）要的也是同一批資料。
+#
+# key/value 一律是識別字，不可以是翻譯過的字 —— Stats.SPEC 的 label 存的是
+# 翻譯 key，這裡照樣只放 key，翻譯留給顯示端做。stats/affinity/schedule
+# 只有掛了對應元件、或本身是 Agent，才會出現在回傳值裡，呼叫端用 has() 判斷
+func get_state_snapshot() -> Dictionary:
+	var snapshot := {
+		"id": character_id,
+		"name": character_name,
+		"position": get_body_position(),
+		"moving": is_moving(),
+		"facing": facing,
+		"animation": sprite.animation,
+		"in_conversation": is_in_conversation(),
+	}
+
+	if stats != null:
+		var values := {}
+		for key in Stats.SPEC:
+			values[key] = stats.get_value(key)
+		snapshot["stats"] = values
+
+	if relationships != null and not relationships.known_ids().is_empty():
+		var affinity := {}
+		for other_id in relationships.known_ids():
+			var record := relationships.get_record(other_id)
+			affinity[other_id] = {"value": record["affinity"], "met_count": record["met_count"]}
+		snapshot["affinity"] = affinity
+
+	# 行程表是 Agent 才有的東西（current_place/current_state/schedule 宣告在
+	# agent.gd，不在這個基底），Player 沒有這一段。用 get() 動態讀取，不用
+	# 靜態成員存取——那三個識別字在 Character 自己的作用域裡不存在，會直接
+	# Parse Error，不是留到執行期才發現
+	if is_in_group("agents"):
+		snapshot["schedule"] = {
+			"place": get("current_place"),
+			"state": get("current_state"),
+			"size": (get("schedule") as Array).size(),
+		}
+
+	return snapshot
+
+
 # ---- 滑鼠選取 ----
 
 # 滑鼠點得到的範圍，世界座標。用目前影格的圖去量而不是碰撞形狀 ——

@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-08
+updated: 2026-08-10
 ---
 
 # Character 基底與 Agent
@@ -147,6 +147,21 @@ id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存
 > `nav_grid.gd` 要等 TileMapDual 的碰撞體進物理空間才建得出網格。
 > Agent 在 `_ready()` 就呼叫 `move_to()` 必定拿到空路徑 ——
 > 所以它會先 `await nav.grid_built`。
+
+## 狀態快照是純資料，供顯示端與 AI payload 共用
+
+`get_state_snapshot()` 回傳角色狀態（位置、數值、好感、行程……），
+主控台的 `status` 指令只負責把它排版成 BBCode，不自己蒐集一次
+——蒐集邏輯原本糊在 `debug_console.gd` 裡，任何人想重用都得先拆掉格式。
+
+> [!important] key/value 一律是識別字，不可以是翻譯過的字
+> `Stats.SPEC` 的 `label` 存的是翻譯 key（如 `STAT_HUNGER`），snapshot 照樣只放
+> key 不放翻譯後的文字。這批資料以後會直接進 LLM 的 prompt
+> （見 [[LLM 串接與 AI 服務層]] 的 payload 設計），不該隨玩家介面語系跑掉。
+
+`schedule` 欄位（`place`/`state`/`size`）只有 Agent 才有，用
+`get("current_place")` 之類的動態存取讀，不是宣告成員：那三個識別字
+宣告在 `agent.gd`，寫在 `Character` 自己的作用域裡引用會直接 Parse Error。
 
 ## 碰撞分層
 

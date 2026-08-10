@@ -117,10 +117,18 @@ func get_pick_rect() -> Rect2                # 目前影格的矩形，世界座
 func set_highlighted(on: bool) -> void
 func is_highlighted() -> bool
 
+func get_state_snapshot() -> Dictionary       # 純資料，見下方
 func _decide_velocity() -> Vector2           # 子類覆寫點：這一幀往哪走
 ```
 
 ```
+get_state_snapshot() -> {
+  id, name, position, moving, facing, animation, in_conversation,   # 一定有
+  stats: {key: value, ...},                     # 有掛 Stats 才有，key 是 SPEC 的 key
+  affinity: {other_id: {value, met_count}, ...}, # 有認識的人才有
+  schedule: {place, state, size},                # 只有 Agent 才有
+}
+
 † 尋徑一律 get_body_position()，不用 global_position
   CollisionShape2D 有 y 偏移(0,6)；用節點原點會把碰撞體塞進牆裡
 † move_to() 需場景有 nav_grid group，否則 push_error + false
@@ -133,6 +141,11 @@ func _decide_velocity() -> Vector2           # 子類覆寫點：這一幀往哪
 ⚠ set_highlighted 訂 frame_changed **與** animation_changed 兩個訊號
   換動畫時影格編號可能沒變（都是 0），只有後者會發 —— 少訂就會拿舊 region 描邊
   材質延遲建立，關掉時 material=null 並解除兩個連接
+† get_state_snapshot() 的 key/value 一律是識別字，不可以是翻譯過的字——
+  這批資料要進 LLM 的 prompt，不該隨玩家介面語系跑掉
+⚠ schedule 欄位靠 get("current_place") 動態讀，不是靜態成員存取——
+  那三個識別字宣告在 agent.gd，Character 自己的作用域裡沒有，
+  寫成 current_place 會直接 Parse Error
 → 技術/Character 基底與 Agent · 技術/滑鼠選取與鏡頭
 ```
 
@@ -552,7 +565,7 @@ chat 鍵(Enter/KpEnter)開關；Esc 取消；送出 → player.say()
 
 goto <name> <x> <y>      走到該格（格座標，可負，A*）
 talk <name> | <a> <b>    搭話；單一參數=玩家對誰講
-status [name]            角色狀態；數值直接掃 Stats.SPEC
+status [name]            角色狀態；讀 Character.get_state_snapshot()，只負責排版
 debug [項目] [on|off]     疊圖開關；debug off 全關
 stop                     停止玩家移動
 pos                      玩家座標與所在格
