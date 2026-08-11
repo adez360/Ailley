@@ -31,6 +31,10 @@ func _ready() -> void:
 		"nav": {"run": _cmd_nav, "usage": "nav rebuild", "help": "HELP_NAV"},
 		"inv": {"run": _cmd_inv, "usage": "inv [name] / inv give <item_id> [count]", "help": "HELP_INV"},
 		"ai": {"run": _cmd_ai, "usage": "ai [text]", "help": "HELP_AI"},
+		# help 留空：跟 village_ai 一樣先不進 locale/console.csv，避免動到翻譯資源
+		# 匯入（這台機器上曾經卡住），純 debug 用途，之後真的要收進正式指令表
+		# 再補翻譯
+		"village_ai": {"run": _cmd_village_ai, "usage": "village_ai <character_id> [base_url]", "help": ""},
 		"locale": {"run": _cmd_locale, "usage": "locale [code]", "help": "HELP_LOCALE"},
 		"help": {"run": _cmd_help, "usage": "help", "help": ""},
 		"clear": {"run": _cmd_clear, "usage": "clear", "help": "HELP_CLEAR"},
@@ -547,6 +551,50 @@ func _cmd_ai(args: PackedStringArray) -> void:
 		_print("[color=88ff88]  %s %s[/color]" % [L10n.t("CON_AI_CONTENT"), JSON.stringify(parsed["data"])])
 	else:
 		_print("[color=ffcc66]  %s[/color]" % L10n.tf("CON_AI_INVALID", {"error": parsed["error"]}))
+
+# village_ai <character_id> [base_url]
+#
+# transport 層第一步驗證：對 poc_village_sim/server.py 的 /decide 端點打一次
+# 固定測試 snapshot（角色站在自己家、視野內沒有其他人），拿回原始決策 JSON
+# 印出來。不接遊戲內真實狀態（那是決策迴圈的工作，還沒做，見
+# note/40-規劃與路線圖/意見書 - AI串接口欄位對照規格書06與04.md）——這裡只證明
+# 「送得出去、收得回來、JSON 解析得了」這條線路通不通。
+#
+# character_id 目前只能填 alan/zhou/mei/tie/aji（server.py 綁死的 POC 固定名單）。
+# base_url 預設打本機的 8100（server.py 文件頭寫的啟動 port），組員自己的環境
+# 要接遠端要手動帶第二個參數，例如：village_ai zhou http://<tailscale-ip>:8100
+const VILLAGE_AI_DEFAULT_BASE_URL := "http://127.0.0.1:8100"
+
+func _cmd_village_ai(args: PackedStringArray) -> void:
+	if args.is_empty():
+		_error("village_ai <character_id> [base_url]")
+		return
+
+	var character_id := args[0]
+	var base_url := args[1] if args.size() > 1 else VILLAGE_AI_DEFAULT_BASE_URL
+
+	var payload := {
+		"character_id": character_id,
+		"current_time": "第 3 天 19:40（夜晚）",
+		"location": "村莊廣場",
+		"visible": [],
+		"recent_event": "上一刻村子裡各自在忙自己的事，沒有人特別找你",
+		"last_emotion": "neutral",
+		"current_goal": "",
+		"last_action_result": "",
+		"recent_memory": "",
+	}
+
+	_print("[color=888888]→ POST %s/decide %s[/color]" % [base_url, JSON.stringify(payload)])
+
+	var client := VillageSimClient.new()
+	var result: Dictionary = await client.decide(base_url, payload)
+
+	if not result["ok"]:
+		_error("← village_ai 失敗：%s" % result["error"])
+		return
+
+	_print("[color=88ff88]← %s[/color]" % JSON.stringify(result["data"]))
 
 # locale        顯示目前語系與可用清單
 # locale <code> 切換（zh_TW / en）
