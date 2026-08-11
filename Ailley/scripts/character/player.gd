@@ -12,6 +12,11 @@ func _ready() -> void:
 # 用 _unhandled_input 而不是 _input：debug 主控台的輸入框拿到焦點時
 # 打字不該觸發搭話
 func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("make_noise"):
+		get_viewport().set_input_as_handled()
+		make_noise()
+		return
+
 	if not event.is_action_pressed("interact"):
 		return
 
