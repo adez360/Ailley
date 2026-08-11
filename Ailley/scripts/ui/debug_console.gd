@@ -656,14 +656,23 @@ func _cmd_village_ai_act(args: PackedStringArray) -> void:
 	var half_day := "夜晚" if (GameClock.hour < 6 or GameClock.hour >= 18) else "白天"
 	var current_time := "第 %d 天 %02d:%02d（%s）" % [GameClock.day, GameClock.hour, GameClock.minute, half_day]
 
+	# 視野內其他角色：只有查得到 poc id 對照（VillageSimLocale.GODOT_NAME_TO_POC_ID）
+	# 的人才塞進去，查不到的略過不送——理由跟地點翻譯同一條：寧可讓 AI 誤以為
+	# 這個人不在場，也不要送錯的 id，grammar 會把它當合法候選值，AI 可能因此
+	# 做出指向根本搭不上的對象的決策
+	var visible: Array = []
+	if character.vision != null:
+		for other in character.vision.get_visible_characters():
+			var other_poc_id: String = VillageSimLocale.GODOT_NAME_TO_POC_ID.get(other.character_name, "")
+			if other_poc_id.is_empty():
+				continue
+			visible.append({"id": other_poc_id, "activity": "在附近"})
+
 	var payload := {
 		"character_id": poc_character_id,
 		"current_time": current_time,
 		"location": poc_location,
-		# 視野內其他角色的 poc id 目前沒有對照層，一律送空陣列——寧可讓 AI
-		# 誤以為身邊沒人，也不要送錯的 id 進去（那會比沒有更糟：grammar 會
-		# 拿它當合法候選值，AI 可能因此做出指向根本搭不上的對象的決策）
-		"visible": [],
+		"visible": visible,
 		"recent_event": "上一刻村子裡各自在忙自己的事，沒有人特別找你",
 		"last_emotion": "neutral",
 		"current_goal": "",
@@ -685,6 +694,16 @@ func _cmd_village_ai_act(args: PackedStringArray) -> void:
 
 	var data: Dictionary = result["data"]
 	_print("[color=88ff88]← %s[/color]" % JSON.stringify(data))
+
+	# 說話：跟動作是不是 move_to 無關——poc_village_sim 那邊的設計原則本來就是
+	# 「說話跟 intent.action 是兩件事，可以同時發生」（見 poc_village_sim/prompts/
+	# villager_system_prompt.txt），所以這裡先處理 speech，再處理動作執行，
+	# 兩者不互相排斥
+	var output: Dictionary = data.get("output", {})
+	var speech = output.get("speech")
+	if speech != null and str(speech) != "":
+		character.say(str(speech))
+		_print("[color=88ff88]  %s 說：%s[/color]" % [args[0], speech])
 
 	var action_en := str(data.get("action_en", ""))
 	if action_en != "move_to":
