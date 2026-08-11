@@ -168,15 +168,16 @@ func _trigger_village_ai() -> void:
 
 	var data: Dictionary = result["data"]
 	var output: Dictionary = data.get("output", {})
-	# reasoning 是 AI 決策前寫的分析文字（先分析、再決定 intent，見
-	# poc_village_sim 的推理鷹架設計），判斷這次決策合不合理主要看這個——
-	# 但要記得現在 AI 看到的生理狀態是 poc_village_sim 自己存的那份，不是
-	# Godot 這邊的即時 Stats.SPEC（physiology_override 還沒接），reasoning
-	# 講得通不代表跟這隻角色在遊戲裡的真實狀態吻合，見 [[LLM 串接與 AI 服務層]]
 	print("[village_ai] %s 決策完成：action_en=%s speech=%s" % [
 		character_name, data.get("action_en", ""), output.get("speech")
 	])
 	print("[village_ai]   reasoning: %s" % output.get("reasoning", ""))
+	# 現在已經接上 physiology_override（見 VillageSimDecision._build_physiology_override()），
+	# 這裡重印一次真實的 Stats.SPEC 數值，方便對照 reasoning 判斷這次決策
+	# 合不合理——只轉得出 hunger/energy(stamina)/fun(boredom) 三項，
+	# social/mood 沒有對應欄位，thirst/health/money 這三項 Godot 沒有資料
+	# 來源，AI 那邊沿用 poc 角色檔案原本的值，不是這隻角色的真實狀態
+	print("[village_ai]   godot stats（僅供對照，非全部都送出去了）: %s" % get_state_snapshot().get("stats", {}))
 
 # 行程表是「到點切換」，所以只在時間字串剛好吻合的那一分鐘換目標
 func _on_time_changed(hour: int, minute: int) -> void:

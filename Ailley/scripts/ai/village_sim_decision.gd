@@ -59,6 +59,10 @@ static func decide_and_act(character: Node, poc_character_id: String, base_url: 
 		"recent_memory": "",
 	}
 
+	var physiology_override := _build_physiology_override(character)
+	if not physiology_override.is_empty():
+		payload["physiology_override"] = physiology_override
+
 	var client := VillageSimClient.new()
 	var result: Dictionary = await client.decide(base_url, payload)
 	if not result["ok"]:
@@ -91,3 +95,32 @@ static func decide_and_act(character: Node, poc_character_id: String, base_url: 
 
 static func _fail(error: String) -> Dictionary:
 	return {"ok": false, "data": {}, "error": error}
+
+
+## Godot Stats.SPEC -> poc_village_sim physiology 的部分對照，只轉得出來
+## 這幾項就送這幾項——physiology_override 是淺層合併，沒送的欄位（thirst/
+## health/money）會自動沿用 poc 那邊角色檔案原本的值，不用湊齊全部欄位。
+## 對照表跟方向反轉的理由見 [[LLM 串接與 AI 服務層]]：
+##
+##   hunger（100=飽→0=餓） -> hunger（0=飽→100=餓）：方向相反，要反轉
+##   energy（100=飽滿→0=沒力） -> stamina（同方向）：直接映射
+##   fun（100=不無聊→0=無聊） -> boredom（方向相反）：要反轉
+##   social／mood：poc 沒有對應欄位，不送
+##
+## character.get_state_snapshot() 抓到的是這隻角色到目前為止**持續模擬
+## 出來**的真實數值（Stats 元件本來就有 drift 速率、隨真實時間累積變化，
+## 不是這裡才臨時生出來的一次性快照），每次呼叫都重新抓一次最新值。
+static func _build_physiology_override(character: Node) -> Dictionary:
+	var snapshot: Dictionary = character.get_state_snapshot()
+	var stats: Dictionary = snapshot.get("stats", {})
+	if stats.is_empty():
+		return {}
+
+	var override := {}
+	if stats.has("hunger"):
+		override["hunger"] = 100.0 - float(stats["hunger"])
+	if stats.has("energy"):
+		override["stamina"] = float(stats["energy"])
+	if stats.has("fun"):
+		override["boredom"] = 100.0 - float(stats["fun"])
+	return override
