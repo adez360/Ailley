@@ -35,6 +35,11 @@ func _ready() -> void:
 		# 匯入（這台機器上曾經卡住），純 debug 用途，之後真的要收進正式指令表
 		# 再補翻譯
 		"village_ai": {"run": _cmd_village_ai, "usage": "village_ai <character_id> [base_url]", "help": ""},
+		"village_ai_act": {
+			"run": _cmd_village_ai_act,
+			"usage": "village_ai_act <godot_name> <poc_character_id> [base_url]",
+			"help": "",
+		},
 		"locale": {"run": _cmd_locale, "usage": "locale [code]", "help": "HELP_LOCALE"},
 		"help": {"run": _cmd_help, "usage": "help", "help": ""},
 		"clear": {"run": _cmd_clear, "usage": "clear", "help": "HELP_CLEAR"},
@@ -595,6 +600,115 @@ func _cmd_village_ai(args: PackedStringArray) -> void:
 		return
 
 	_print("[color=88ff88]← %s[/color]" % JSON.stringify(result["data"]))
+
+# village_ai_act <godot_name> <poc_character_id> [base_url]
+#
+# 比 village_ai 進一步：抓這隻角色的真實狀態（Character.get_state_snapshot()、
+# Agent.current_place）組成 payload，打給 server.py，如果 AI 決定的動作是
+# move_to 且地點翻譯得回 Godot 錨點，就真的呼叫 character.move_to() 讓角色走過去。
+#
+# 只支援 Agent（要讀 current_place 判斷現在在哪個錨點；Player 沒有這個欄位，
+# 目前沒有另一套方式問「玩家現在算在哪個地點」，先不支援）。
+#
+# poc_character_id 只能填 alan/zhou/mei/tie/aji（server.py 綁死的 POC 名單，
+# 跟 godot_name 指的是同一個人這件事目前純粹是操作者自己保證，程式不驗證，
+# 兩者本來就是兩套獨立的身分系統，還沒有正式的對照層——見
+# note/技術/LLM 串接與 AI 服務層.md）。
+#
+# 地點跟能見度都是有限對照（見 VillageSimLocale 檔頭說明）：對不上的地點
+# 會直接中止，不亂猜；視野內其他角色目前一律送空陣列，因為它們的 poc id
+# 同樣沒有對照層。
+func _cmd_village_ai_act(args: PackedStringArray) -> void:
+	if args.size() < 2:
+		_error("village_ai_act <godot_name> <poc_character_id> [base_url]")
+		return
+
+	var character := _get_character(args[0])
+	if character == null:
+		return
+
+	var poc_character_id := args[1]
+	var poc_character_name: String = VillageSimLocale.POC_CHARACTER_NAMES.get(poc_character_id, "")
+	if poc_character_name.is_empty():
+		_error("未知的 poc_character_id：%s（只能填 %s）" % [
+			poc_character_id, ", ".join(VillageSimLocale.POC_CHARACTER_NAMES.keys())
+		])
+		return
+
+	if not character.is_in_group("agents"):
+		_error("village_ai_act 目前只支援 Agent（要讀 current_place），%s 不是 Agent" % args[0])
+		return
+
+	# Agent 沒有宣告 class_name，型別檢查只能靠 group；current_place 是 Agent
+	# 自己加的欄位，_get_character() 回傳的靜態型別是基底 Character，沒有這個
+	# 欄位，用 Object.get() 動態存取繞過靜態型別檢查，上面的 group 檢查
+	# 已經保證這一定是隻 Agent、這個欄位一定存在
+	var current_place: String = character.get("current_place")
+	var is_own_home := current_place == "home_001"
+	var poc_location := VillageSimLocale.godot_place_to_poc_zh(current_place, is_own_home, poc_character_name)
+	if poc_location.is_empty():
+		_error("地點 %s 沒有對應的 poc_village_sim 地點，目前對照表不完整（見 VillageSimLocale）" % current_place)
+		return
+
+	var base_url := args[2] if args.size() > 2 else VILLAGE_AI_DEFAULT_BASE_URL
+	var snapshot := character.get_state_snapshot()
+
+	var half_day := "夜晚" if (GameClock.hour < 6 or GameClock.hour >= 18) else "白天"
+	var current_time := "第 %d 天 %02d:%02d（%s）" % [GameClock.day, GameClock.hour, GameClock.minute, half_day]
+
+	var payload := {
+		"character_id": poc_character_id,
+		"current_time": current_time,
+		"location": poc_location,
+		# 視野內其他角色的 poc id 目前沒有對照層，一律送空陣列——寧可讓 AI
+		# 誤以為身邊沒人，也不要送錯的 id 進去（那會比沒有更糟：grammar 會
+		# 拿它當合法候選值，AI 可能因此做出指向根本搭不上的對象的決策）
+		"visible": [],
+		"recent_event": "上一刻村子裡各自在忙自己的事，沒有人特別找你",
+		"last_emotion": "neutral",
+		"current_goal": "",
+		"last_action_result": "",
+		"recent_memory": "",
+	}
+
+	_print("[color=888888]→ %s（%s）@ %s → POST %s/decide[/color]" % [
+		args[0], poc_character_id, current_place, base_url
+	])
+	_print("[color=888888]  snapshot: %s[/color]" % JSON.stringify(snapshot))
+
+	var client := VillageSimClient.new()
+	var result: Dictionary = await client.decide(base_url, payload)
+
+	if not result["ok"]:
+		_error("← village_ai_act 失敗：%s" % result["error"])
+		return
+
+	var data: Dictionary = result["data"]
+	_print("[color=88ff88]← %s[/color]" % JSON.stringify(data))
+
+	var action_en := str(data.get("action_en", ""))
+	if action_en != "move_to":
+		_print("[color=888888]  動作是 %s，village_ai_act 目前只執行 move_to，其餘只印出不執行[/color]" % action_en)
+		return
+
+	var target_place := VillageSimLocale.poc_location_to_godot_place(
+		data.get("location", {}), poc_character_id
+	)
+	if target_place.is_empty():
+		_error("AI 決定移動，但目的地沒有對應的 Godot 錨點（見上面 location 欄位），不執行")
+		return
+
+	var places := get_tree().get_first_node_in_group("place_anchors")
+	if places == null or not places.has(target_place):
+		_error("找不到錨點 %s，不執行" % target_place)
+		return
+
+	var target: Vector2 = places.resolve(target_place)
+	if not character.move_to(target):
+		_error("%s move_to(%s) 失敗（無路徑）" % [args[0], target_place])
+		return
+
+	_print("[color=88ff88]  %s 依 AI 決策移動到 %s[/color]" % [args[0], target_place])
 
 # locale        顯示目前語系與可用清單
 # locale <code> 切換（zh_TW / en）
