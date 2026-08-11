@@ -8,8 +8,8 @@ extends CanvasLayer
 ## 掛在 main.tscn 的第一個子節點。_unhandled_input 依場景樹反序傳遞
 ## （最後一個子節點先收到），排在最前面才是最後一個收到 ——
 ## 面板開著時 ESC 該關面板，不是暫停。debug_console 走 _input、
-## chat_input 與 character_create 走 _unhandled_input，
-## 三個都會 set_input_as_handled()，所以不必再做面板堆疊管理。
+## chat_input、character_create、status_panel 走 _unhandled_input，
+## 四個都會 set_input_as_handled()，所以不必再做面板堆疊管理。
 
 func _unhandled_input(event: InputEvent) -> void:
 	if not event.is_action_pressed("ui_cancel"):
