@@ -547,3 +547,29 @@ Godot 節點被設成同一個 poc 身分時，`Agent2` 看到 `agent`、視野�
 不一樣（Godot 5 維 hunger/energy/social/fun/mood，poc_village_sim 是
 hunger/thirst/stamina/boredom/health+money 這套），不是換個欄位名字就好，
 要先決定怎麼對應（甚至要不要對應——兩套本來就是為不同情境設計的）。
+
+### `physiology_override` 欄位對照表（Godot `Stats.SPEC` ↔ poc_village_sim `physiology`）
+
+決定不改 `poc_village_sim` 的資料方向（改動範圍會牽動這幾天所有驗證過的
+門檻邏輯跟 prompt 樣板，風險/工作量都太大，而且之後真正出貨的 GDScript
+版本不會沿用 poc 這套資料模型，對齊工作可能是白做的），改成**在 Godot 端
+寫轉換**，只送對得上的欄位，其餘讓 `physiology_override` 的淺層合併沿用
+poc 角色檔案原本的值：
+
+| Godot `Stats.SPEC` | poc_village_sim `physiology` | 換算 |
+| --- | --- | --- |
+| `hunger`（100=飽→0=餓） | `hunger`（0=飽→100=餓） | **方向相反**：`poc_hunger = 100 - godot_hunger` |
+| `energy`（100=飽滿→0=沒力） | `stamina`（同方向） | 直接映射，不用轉 |
+| `fun`（100=不無聊→0=無聊） | `boredom`（方向相反） | **方向相反**：`poc_boredom = 100 - godot_fun` |
+| `social` | 無對應欄位 | poc 沒有獨立追蹤社交需求，不送 |
+| `mood` | 無對應欄位 | poc 的「情緒」是 AI 自己宣告的 `emotion`，不是 physiology 數值，不送 |
+| （無） | `thirst`／`health`／`money` | Godot `Stats.SPEC` 沒有這三項的資料來源，不送，沿用 poc 預設值 |
+
+> [!warning] 給之後寫正式 GDScript 版本的人（可能是核果，也可能是我自己）
+> 如果那份重寫**照抄了 poc_village_sim 已驗證過的門檻邏輯**（`characters.py`
+> 的 `_tier_adjective`、`if hunger >= 90` 這類具體數字），**移植的當下方向
+> 要反過來翻，不能把數字原封不動複製過去**——poc 的 `hunger >= 90`「快撐
+> 不住」，翻成 Godot 自己的方向要變成 `hunger <= 10` 才是同一個意思。
+> 這是移植當下要抓對的一次性正確性問題，不是要求你之後永遠記得「這裡是
+> 反的」——寫完的 GDScript 版本應該要是自洽的，全部用 Godot 自己的方向，
+> 不需要在執行時做任何轉換。真的要重寫時回頭讀這份對照表當檢查清單。
