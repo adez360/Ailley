@@ -19,6 +19,17 @@ extends Character
 ## 看到陌生人之後愣住多久（現實秒）
 const NOTICE_PAUSE := 2.0
 
+## demo 用的手動開關：這隻 Agent 看到玩家時，要不要打 village_sim_client
+## 問一次真實決策（見 VillageSimDecision）。刻意預設關閉、要逐隻手動開，
+## 不是全體 Agent 一起開——[[LLM 串接與 AI 服務層]] 明講過「先從一隻角色
+## 開始，不要一次對所有 Agent 開放」，這是那條原則的落實。
+@export var village_ai_enabled := false
+
+## village_ai_enabled 開啟時，這隻 Agent 對應到 poc_village_sim 的哪個內部
+## id（alan/zhou/mei/tie/aji）。跟 village_ai_enabled 一樣，這是 demo 用的
+## 暫時欄位，不是正式的角色身分對照方案。
+@export var poc_character_id := ""
+
 var schedule: Array = []
 var current_place := ""
 var current_state := "idle"
@@ -113,6 +124,14 @@ func get_state_snapshot() -> Dictionary:
 # 判斷放在這裡而不是 Vision 裡：感知回報「看到誰」，要不要有反應是人格與關係的事，
 # 接 LLM 之後這整段會換成「把 visible 放進 context 讓模型決定」
 func _on_spotted(other: Character) -> void:
+	# 玩家靠近時觸發一次真的 AI 決策——跟下面「陌生人才會『！』」那段是獨立的
+	# 兩件事：AI 觸發不看認不認識（老朋友走近一樣想問問 AI 現在會怎麼決策），
+	# 只看是不是玩家、這隻 Agent 有沒有開這個開關。目前只支援玩家觸發，
+	# Agent 對 Agent 互相觸發是後續才要處理的範圍（見 [[LLM 串接與 AI 服務層]]
+	# 的斷點記錄）。
+	if village_ai_enabled and other.is_in_group("player") and not is_in_conversation():
+		VillageSimDecision.decide_and_act(self, poc_character_id)
+
 	if is_in_conversation() or _noticed.has(other.character_id):
 		return
 
