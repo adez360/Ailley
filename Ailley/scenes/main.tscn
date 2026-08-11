@@ -1,6 +1,6 @@
-[gd_scene load_steps=17 format=4 uid="uid://bianwxowjctjk"]
+[gd_scene load_steps=20 format=4 uid="uid://bianwxowjctjk"]
 
-[ext_resource type="Script" path="res://scripts/ui/pause.gd" id="1_a8y0u"]
+[ext_resource type="Script" uid="uid://djdfer2luq3s5" path="res://scripts/ui/pause.gd" id="1_a8y0u"]
 [ext_resource type="PackedScene" uid="uid://v21qv1icuh5m" path="res://scenes/player.tscn" id="1_ljsu2"]
 [ext_resource type="Script" uid="uid://bhds0h8vwl2g5" path="res://scripts/world/follow_camera.gd" id="2_a52xk"]
 [ext_resource type="Material" uid="uid://cmbcfxlkxxnwq" path="res://addons/TileMapDual/ghost_material.tres" id="2_kvyyq"]
@@ -14,6 +14,8 @@
 [ext_resource type="Script" uid="uid://ytd7qh6vh57r" path="res://scripts/world/selection.gd" id="10_trceg"]
 [ext_resource type="Script" uid="uid://dm8733qx3w3uk" path="res://scripts/ui/time_label.gd" id="11_7bo0c"]
 [ext_resource type="Script" uid="uid://bnxsowwm2cpvd" path="res://scripts/world/places.gd" id="12_sc7p8"]
+[ext_resource type="Script" uid="uid://dej3fk4srven5" path="res://scripts/ui/status_panel.gd" id="15_jbj1t"]
+[ext_resource type="Texture2D" uid="uid://b06f01r4ovc0r" path="res://assets/ui/Setting menu.png" id="16_muem4"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_pl1ev"]
 texture = ExtResource("3_y8peb")
@@ -140,6 +142,14 @@ terrain_set_0/terrain_1/name = "FG -Sprite-0001.png"
 terrain_set_0/terrain_1/color = Color(0.5, 0.4375, 0.25, 1)
 sources/0 = SubResource("TileSetAtlasSource_pl1ev")
 
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_jbj1t"]
+texture = ExtResource("16_muem4")
+texture_margin_left = 6.0
+texture_margin_top = 28.0
+texture_margin_right = 6.0
+texture_margin_bottom = 6.0
+region_rect = Rect2(11, 12, 106, 122)
+
 [node name="Node" type="Node"]
 
 [node name="Pause" type="CanvasLayer" parent="."]
@@ -228,3 +238,65 @@ offset_right = 5.0
 offset_bottom = 25.0
 theme_type_variation = &"HUDLabel"
 script = ExtResource("11_7bo0c")
+
+[node name="StatusPanel" type="CanvasLayer" parent="."]
+script = ExtResource("15_jbj1t")
+
+[node name="Panel" type="Panel" parent="StatusPanel"]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -75.0
+offset_top = -87.0
+offset_right = 75.0
+offset_bottom = 88.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxTexture_jbj1t")
+
+[node name="TitleBg" type="ColorRect" parent="StatusPanel/Panel"]
+layout_mode = 0
+anchor_right = 1.0
+offset_left = 6.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = 24.0
+mouse_filter = 2
+color = Color(0.8627451, 0.7254902, 0.5411765, 1)
+
+[node name="TitleLabel" type="Label" parent="StatusPanel/Panel"]
+layout_mode = 0
+anchor_right = 1.0
+offset_left = 6.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = 24.0
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+horizontal_alignment = 1
+vertical_alignment = 1
+clip_text = true
+
+[node name="VBox" type="VBoxContainer" parent="StatusPanel/Panel"]
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 10.0
+offset_top = 32.0
+offset_right = -10.0
+offset_bottom = -8.0
+mouse_filter = 2
+theme_override_constants/separation = 4
+
+[node name="AgeLabel" type="Label" parent="StatusPanel/Panel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+
+[node name="StatsBox" type="VBoxContainer" parent="StatusPanel/Panel/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="HintLabel" type="Label" parent="StatusPanel/Panel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+autowrap_mode = 3
