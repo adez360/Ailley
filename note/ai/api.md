@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-10
+updated: 2026-08-11
 ---
 
 # api
@@ -63,6 +63,7 @@ assets/shaders/character_outline.gdshader   hover 描邊
 ```
 move_up/down/left/right  WASD
 interact                 E
+make_noise               F
 chat                     Enter / KpEnter
 select                   滑鼠左鍵
 ui_cancel                Esc（Godot 內建，project.godot 沒有覆寫）
@@ -74,11 +75,13 @@ ui_cancel                Esc（Godot 內建，project.godot 沒有覆寫）
 
 ```gdscript
 signal move_finished(reached: bool)          # 走完 true / 卡住放棄 false
+signal noise_heard(source: Character)        # 收到方會發，見 make_noise()
 
 const SPEED = 80.0
 const ARRIVE_DISTANCE = 2.0
 const STUCK_TIME = 1.0
 const TALK_RANGE := 32.0                     # 2 格
+const NOISE_RADIUS := 128.0                  # 8 格，make_noise() 的預設半徑
 
 const TALK_OK := ""                          # 以下為 talk_to() 回傳值
 const TALK_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
@@ -112,6 +115,7 @@ func say(line: String) -> void
 func speech_duration(line: String) -> float
 func face_towards(other: Character) -> void
 func update_animation() -> void
+func make_noise(radius: float = NOISE_RADIUS) -> void   # 廣播 noise_heard 給範圍內每個角色
 
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
 func get_pick_rect() -> Rect2                # 目前影格的矩形，世界座標
@@ -148,7 +152,8 @@ get_state_snapshot() -> {
   不是基底用 is_in_group("agents") 嗅探 —— 子類別的欄位由子類別自己放
 † affinity 的欄名跟 relationships.gd 的 record 一致，不要改名成 value
   同一個數值兩個名字，讀過 relationships.gd 的人會在 snapshot 上找不到它
-→ 技術/Character 基底與 Agent · 技術/滑鼠選取與鏡頭
+† make_noise() 不查視線遮蔽，聲音穿牆，跟 Vision 刻意不同
+→ 技術/Character 基底與 Agent · 技術/滑鼠選取與鏡頭 · 技術/聽覺感測
 ```
 
 ## Player — scripts/character/player.gd · extends Character
@@ -160,6 +165,7 @@ func get_input_direction() -> Vector2        # WASD 正規化
 ```
 輸入優先：一按方向鍵就 stop_moving() 中斷 A*
 interact(E)：對話中→leave_conversation()；否則→talk_to(find_nearest_character())
+make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不會冒 !?
 † gui_get_focus_owner() != null 時 get_input_direction() 回 ZERO
   Input.get_axis() 讀全域狀態，LineEdit 攔不住
 搭話失敗對玩家靜默，只有主控台印原因碼
@@ -186,6 +192,7 @@ _ready: await nav.grid_built 才出發（NavGrid 非同步建置，太早→空�
 地點解析：只認 place_anchors 底下的同名 Marker2D，沒有就 push_error 且不動
 spotted 且 !relationships.has_met() → say("！") + stop_moving() + 2s + 重算行程
   _noticed 表確保每個對象只觸發一次
+noise_heard 且 !is_in_conversation() → say("!?")，無去重，每次都會反應
 ⚠ 抵達判定 = 距離 ≤ ARRIVE_DISTANCE(2px) OR 已在目標格內(16px)
   只比距離的話 2..11px 是死角：距離說沒到，find_path() 卻因同格只回一個點
   → move_to() false → 假的「走不到」。每次重算行程都會噴
@@ -729,6 +736,7 @@ schedule 插槽現為 {time, place, state}，是計畫結構的子集
 ```
 Vision 圓形無朝向；lost 無呼叫端
 Agent 不對 Stats 反應（get_lowest_need_place() 可用但無呼叫端）
+noise_heard 對話中會被吞掉；睡覺中的 Agent 沒有排除，一樣會冒 !?
 無存檔機制（全專案無 user:// 存檔/ConfigFile）
 character_id 與 GameClock.day 都未持久化，重開就重來
 LLM 未接對話與行程（服務層可用，無呼叫端）
