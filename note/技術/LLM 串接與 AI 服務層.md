@@ -573,3 +573,19 @@ poc 角色檔案原本的值：
 > 這是移植當下要抓對的一次性正確性問題，不是要求你之後永遠記得「這裡是
 > 反的」——寫完的 GDScript 版本應該要是自洽的，全部用 Godot 自己的方向，
 > 不需要在執行時做任何轉換。真的要重寫時回頭讀這份對照表當檢查清單。
+
+### 2026-08-11 續：已實作，`physiology_override` 接上了
+
+`VillageSimDecision._build_physiology_override()` 照上面的對照表換算，
+每次呼叫都從 `character.get_state_snapshot()` 抓最新的即時 `Stats.SPEC`
+數值（不是一次性快照，Stats 元件本來就持續在跑 drift 模擬），塞進
+`physiology_override` 送給 `server.py`。headless 驗證：手動核對三個欄位
+換算結果，跟公式手算的期望值完全一致，`social`/`mood` 正確沒有送出去，
+`server.py` 接受這個 payload 正確回應。
+
+**現在跟前面那段「證明的是管線通，不是決策內容對」的落差縮小了一塊**——
+AI 決策依據的生理狀態，至少 `hunger`/`stamina`/`boredom` 三項已經是這隻
+Godot 角色真實累積出來的數值，不再是完全脫節的 poc 自己那份存檔。
+`thirst`/`health`/`money`（沒有 Godot 資料來源）跟 `social`/`mood`
+（沒有 poc 對應欄位）這幾項還是沿用 poc 的預設值，這塊落差還在，
+沒有辦法完全消除——除非兩邊的資料模型本身先對齊，而那個決策還沒做。
