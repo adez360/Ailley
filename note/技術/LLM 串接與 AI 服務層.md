@@ -511,3 +511,39 @@ headless 驗證：玩家傳送到開了開關的 demo agent 旁邊，完全沒�
   信封格式怎麼對齊，仍然沒有結論
 
 暫停在這裡，之後接續開工前先讀這一段跟上面「已拍板」／「Step 0-3」對齊一次。
+
+### 2026-08-11 續：實測抓到一個真的會 crash 的案例，加上防呆＋log 補強
+
+編輯器實測時真的撞到一次：把 `Agent2` 的 `poc_character_id` 設成 `aji`，
+但 `GODOT_NAME_TO_POC_ID` 表裡 `agent`（另一隻角色）也對應 `aji`，兩個不同
+Godot 節點被設成同一個 poc 身分時，`Agent2` 看到 `agent`、視野清單翻譯出來
+也是 `aji`，等於送出「我看到了我自己」，`poc_village_sim` 沒有自己對自己
+的好感度紀錄，`server.py` 直接 500（`KeyError: 'aji'`）。已修：
+`decide_and_act()` 組 `visible` 清單時，跳過 poc id 等於自己 `poc_character_id`
+的條目。
+
+同時發現自動觸發路徑完全沒有可見回饋（跑失敗跟跑成功但剛好沒事，使用者
+分不出來），補了 `print()`（含 `reasoning` 欄位，之後判斷決策合不合理主要
+看它）。
+
+### 重要澄清：現在證明的是「管線通」，不是「決策內容對」
+
+實測到這裡，`village_ai_enabled` 這條自動觸發路徑已經證明**機制可行**：
+玩家靠近 → 自動觸發 → 讀真實 `get_state_snapshot()` → 翻譯地點/視野 →
+打地端模型 → 執行動作/說話，全部真的跑通，不是紙上規劃。
+
+但**決策內容本身目前是脫節的**，不能拿「角色動了、AI 回答合理」當作
+「這個決策是對的」的證據：
+
+- **AI 完全沒看到 Godot 角色的真實生理狀態**——`DecideRequest.physiology_override`
+  這個欄位一直沒接，AI 決策依據的是 `poc_village_sim` 自己存的那份角色
+  檔案（`characters/<id>.json`），跟這隻 Godot 角色的 `Stats.SPEC`（hunger/
+  energy/social/fun/mood）完全無關、不同步
+- `GODOT_NAME_TO_POC_ID` 目前是寫死的 2 條demo對照，不是真正的角色身分系統
+- `character_id`／`poc_character_id` 誰對應誰純靠操作者手動保證，程式不驗證
+
+**下一步（尚未開始）：接上 `physiology_override`**，把 Godot 的
+`get_state_snapshot()` 真的餵給 AI 當決策依據。卡點：兩邊生理模型維度
+不一樣（Godot 5 維 hunger/energy/social/fun/mood，poc_village_sim 是
+hunger/thirst/stamina/boredom/health+money 這套），不是換個欄位名字就好，
+要先決定怎麼對應（甚至要不要對應——兩套本來就是為不同情境設計的）。
