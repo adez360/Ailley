@@ -469,3 +469,39 @@ func request(envelope, requester_id, policy := Policy.SCHEDULED) -> Dictionary
 - [ ] 人格資料的欄位結構 —— `data/personas.json` 要放哪些欄位才夠組 system prompt
 - [ ] 成本上限機制（§11 只列了標題，沒有設計）
 - [ ] 記憶系統上線前，Agent 的對話逐字稿要不要先存記憶體就好
+
+## 進度斷點（2026-08-11）：`village_sim_client` 這條線做到哪、下一步是什麼
+
+這是 `feature/godot-ai-transport` 分支這幾輪的完整進度記錄，方便之後接手／回頭查。
+
+### 已經做到的（都經過 headless + 編輯器實測驗證）
+
+1. **Transport 層**（`village_sim_client.gd` + `village_ai` 指令）——Godot 真的
+   打得通 `poc_village_sim/server.py`／地端 llama-server，拿回合法決策 JSON
+2. **讀真實狀態**（`village_ai_act` 指令）——用 `Character.get_state_snapshot()`
+   ＋ `Agent.current_place` 組出真實 payload（不再是寫死的測試資料），透過
+   `VillageSimLocale` 的有限地點對照表把 Godot 錨點名稱翻譯成 poc 中文地點
+3. **動作真的被執行**——AI 決定 `move_to` 時，真的呼叫 `character.move_to()`，
+   角色在畫面上真的走過去（headless 測試量到座標真的變動、`is_moving()` 為真）
+4. **話真的被執行**——`output.speech` 非 null 時呼叫 `character.say()`，
+   `Bubble.is_speaking()` 確認氣泡真的顯示出來
+5. **視野真的被讀取**——`character.vision.get_visible_characters()` 抓真實
+   視野內角色，透過 `VillageSimLocale.GODOT_NAME_TO_POC_ID`（目前只認得
+   `agent`/`agent2` 兩隻demo角色）過濾成 poc id 塞進 `visible`
+
+### 明確的斷點：下一步是「自動呼叫」（決策迴圈）
+
+**現在這一切都是手動的**——一定要在 debug 主控台打 `village_ai_act <角色> <poc_id>`
+才會觸發一次決策，沒有任何計時器或事件會自動觸發。這正是本篇「實作順序」
+Step 3（LLM 填行程）要處理的範圍，但現在的做法（走 `village_sim_client.gd`
+打地端 Python 服務）跟 Step 3 原本設計的信封格式（走 `AIService` 打 `plan`
+類型的 envelope）不是同一套，實作時要對齊哪一套還沒決定。
+
+要做到自動，至少要處理：
+- **觸發時機**：多久問一次？行程空檔時才問，還是固定間隔？
+- **跟 `npc_schedule.json` 現有時刻表的關係**：完全取代，還是疊加（時刻表當
+  fallback，AI 決策優先）？
+- **會直接影響角色平常照表操課的行為**——這塊風險比今天做的「手動觸發＋執行」
+  高一截，要更謹慎測試，不要一次對所有 Agent 開放，先從一隻角色開始
+
+暫停在這裡，之後接續開工前先讀這一段跟上面「已拍板」／「Step 0-3」對齊一次。
