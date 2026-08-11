@@ -489,19 +489,25 @@ func request(envelope, requester_id, policy := Policy.SCHEDULED) -> Dictionary
    視野內角色，透過 `VillageSimLocale.GODOT_NAME_TO_POC_ID`（目前只認得
    `agent`/`agent2` 兩隻demo角色）過濾成 poc id 塞進 `visible`
 
-### 明確的斷點：下一步是「自動呼叫」（決策迴圈）
+### 2026-08-11 續：已經做到「玩家靠近自動觸發」，範圍限定單一角色
 
-**現在這一切都是手動的**——一定要在 debug 主控台打 `village_ai_act <角色> <poc_id>`
-才會觸發一次決策，沒有任何計時器或事件會自動觸發。這正是本篇「實作順序」
-Step 3（LLM 填行程）要處理的範圍，但現在的做法（走 `village_sim_client.gd`
-打地端 Python 服務）跟 Step 3 原本設計的信封格式（走 `AIService` 打 `plan`
-類型的 envelope）不是同一套，實作時要對齊哪一套還沒決定。
+抽出共用邏輯 `VillageSimDecision.decide_and_act()`（`scripts/ai/
+village_sim_decision.gd`），debug 指令跟自動觸發共用同一份，不要各寫一份。
+`agent.gd` 新增 `@export village_ai_enabled`（預設關閉，逐隻手動開）跟
+`@export poc_character_id`，`_on_spotted()` 裡加一段：開關開著、看到的是
+玩家、不在對話中，就自動打一次決策——不看認不認識，跟既有「陌生人才會
+『！』」的邏輯是獨立的兩件事。
 
-要做到自動，至少要處理：
-- **觸發時機**：多久問一次？行程空檔時才問，還是固定間隔？
-- **跟 `npc_schedule.json` 現有時刻表的關係**：完全取代，還是疊加（時刻表當
-  fallback，AI 決策優先）？
-- **會直接影響角色平常照表操課的行為**——這塊風險比今天做的「手動觸發＋執行」
-  高一截，要更謹慎測試，不要一次對所有 Agent 開放，先從一隻角色開始
+headless 驗證：玩家傳送到開了開關的 demo agent 旁邊，完全沒有下任何手動
+指令，`AGENT_IS_MOVING=true`、`BUBBLE_IS_SPEAKING=true` 都自動成立，
+`server.py` 的 access log 確認收到新的請求。
+
+**這不是完整的決策迴圈，是一個範圍很小的自動化起點**：
+- 只在玩家主動靠近時觸發，不是持續輪詢／固定間隔
+- 只有手動開了 `village_ai_enabled` 的那隻 Agent 會觸發，其餘照舊跑
+  `npc_schedule.json` 時刻表，完全不受影響
+- Agent 對 Agent 互相觸發、時刻表以外的持續性決策迴圈，都還沒做——
+  這才是本篇 Step 3 完整範圍要處理的東西，跟 `AIService` 的 `plan` envelope
+  信封格式怎麼對齊，仍然沒有結論
 
 暫停在這裡，之後接續開工前先讀這一段跟上面「已拍板」／「Step 0-3」對齊一次。
