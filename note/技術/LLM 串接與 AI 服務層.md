@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-05
+updated: 2026-08-11
 ---
 
 # LLM 串接與 AI 服務層
@@ -20,6 +20,31 @@ updated: 2026-08-05
 > **設計，尚未實作。** 現況是零 —— 全專案 game code 無任何 `HTTPRequest`、
 > 無金鑰處理、無存檔機制。`addons/godot_ai/` 裡的 WebSocket 與 api_key 是
 > **編輯器 MCP bridge，不是 runtime SDK**，不可挪用。
+
+> [!warning] 2026-08-11：出現第二個碰網路的地方，跟本篇「AIService 是唯一入口」衝突
+> `scripts/ai/village_sim_client.gd`（`feature/godot-ai-transport` 分支）新增了一個
+> **不經過 `AIService`** 的 `HTTPRequest` 呼叫，直接打 `poc_village_sim/server.py`
+> 的 `/decide` 端點（地端 llama-server，GBNF grammar 約束輸出）。`debug_console.gd`
+> 也新增了對應的 `village_ai <character_id>` 指令，跟現有的 `ai` 指令並存。
+>
+> **為什麼沒有走 `AIService`**：`AIService` 的 envelope（`system`/`payload`/`model`）
+> 跟節流設計（`min_interval_sec`/`max_calls_per_game_day`）是針對 OpenRouter 這類
+> **付費雲端**呼叫訂的；`village_sim_client.gd` 打的是地端免費服務，呼叫模式（批次/
+> 高頻 vs 偶發觸發）跟成本結構完全不同，套同一組節流沒有意義。
+>
+> **這不是要推翻本篇的決定，是把一個尚未拍板的岔路開誠布公記下來**：POC 那邊（
+> `poc_village_sim`）已經驗證出一套跑得動的地端決策管線（reasoning 鷹架、
+> 對話追蹤、`speech_target` 等），要不要讓 Godot 走「呼叫獨立 Python 後端」這條路
+> （而不是本篇規劃的「Godot 直接打 LLM provider」），目前完全沒有結論。POC 那邊
+> 有一份對應的討論草稿記著同一個問題（不同分支的 note vault，內容概要：格式保證/
+> 延遲/維運複雜度的取捨表；文件本身在另一條分支歷史裡，這裡先摘要結論，
+> 之後兩邊要合流時再處理連結）。
+>
+> **目前的實際狀態**：`village_sim_client.gd` 只是一個獨立的 debug 驗證用途，
+> 已經端到端跑通（headless 測試 + 編輯器裡實測 `village_ai aji` 三次都
+> `200 OK`），**沒有接上任何遊戲邏輯**——沒有自動觸發、AI 回傳的動作也沒有
+> 被執行。跟本篇 Step 0-3 的關係是平行線，不是取代，動工前這個架構問題要先
+> 有人拍板，不然兩條線會各自往下長。
 
 ## 已拍板
 
