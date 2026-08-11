@@ -129,8 +129,12 @@ func _on_spotted(other: Character) -> void:
 	# 只看是不是玩家、這隻 Agent 有沒有開這個開關。目前只支援玩家觸發，
 	# Agent 對 Agent 互相觸發是後續才要處理的範圍（見 [[LLM 串接與 AI 服務層]]
 	# 的斷點記錄）。
+	#
+	# 呼叫 _trigger_village_ai() 而不是直接 await decide_and_act()：這裡故意
+	# 不擋住下面的「！」反應——網路呼叫可能要幾秒，「！」反應應該要即時，
+	# 不該被 AI 呼叫拖慢
 	if village_ai_enabled and other.is_in_group("player") and not is_in_conversation():
-		VillageSimDecision.decide_and_act(self, poc_character_id)
+		_trigger_village_ai()
 
 	if is_in_conversation() or _noticed.has(other.character_id):
 		return
@@ -148,6 +152,25 @@ func _on_spotted(other: Character) -> void:
 	# 與 exit_conversation() 同一個理由
 	if not is_in_conversation():
 		_apply_current_entry()
+
+# 之前吃過虧：decide_and_act() 完全沒有可見的回饋，跑失敗或跑成功但
+# 剛好沒事發生（沒話、動作不是 move_to）看起來一模一樣，使用者分不出來
+# 「壞了」還是「這次剛好沒事」。這裡一律 print()——不進遊戲內 UI，
+# 印到 Godot 的 Output 面板／終端機，跟 debug 主控台的 _cmd_village_ai_act
+# 是兩個不同的可見管道，但至少有一個能看
+func _trigger_village_ai() -> void:
+	print("[village_ai] %s 看到玩家，觸發自動決策（poc_character_id=%s）" % [character_name, poc_character_id])
+	var result: Dictionary = await VillageSimDecision.decide_and_act(self, poc_character_id)
+
+	if not result["ok"]:
+		print("[village_ai] %s 決策失敗：%s" % [character_name, result["error"]])
+		return
+
+	var data: Dictionary = result["data"]
+	var speech = data.get("output", {}).get("speech")
+	print("[village_ai] %s 決策完成：action_en=%s speech=%s" % [
+		character_name, data.get("action_en", ""), speech
+	])
 
 # 行程表是「到點切換」，所以只在時間字串剛好吻合的那一分鐘換目標
 func _on_time_changed(hour: int, minute: int) -> void:
