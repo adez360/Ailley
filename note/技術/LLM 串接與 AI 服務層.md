@@ -21,30 +21,34 @@ updated: 2026-08-11
 > 無金鑰處理、無存檔機制。`addons/godot_ai/` 裡的 WebSocket 與 api_key 是
 > **編輯器 MCP bridge，不是 runtime SDK**，不可挪用。
 
-> [!warning] 2026-08-11：出現第二個碰網路的地方，跟本篇「AIService 是唯一入口」衝突
-> `scripts/ai/village_sim_client.gd`（`feature/godot-ai-transport` 分支）新增了一個
-> **不經過 `AIService`** 的 `HTTPRequest` 呼叫，直接打 `poc_village_sim/server.py`
-> 的 `/decide` 端點（地端 llama-server，GBNF grammar 約束輸出）。`debug_console.gd`
-> 也新增了對應的 `village_ai <character_id>` 指令，跟現有的 `ai` 指令並存。
+> [!success] 2026-08-11：架構問題已有團隊結論——出貨不走 Python 後端
+> 三六零在組員討論裡明確否決「隨遊戲出貨 Python 後端」這個方向，理由：
+> - 自架中繼伺服器早就被否決過（決策：「AI 呼叫跑在擁有者自己的電腦上、費用自己付」，
+>   架中繼等於幫玩家代付、還多一台要維運的機器）
+> - 出貨包 Python：三平台各打包、macOS 要簽章、Windows 會被防毒誤判、多幾十 MB、
+>   每次發版要顧兩套 build，還多出「程式沒起來/port被佔/防火牆攔掉」這些新壞法，
+>   而且 Godot 端照樣得寫 HTTP client 去打它——程式碼變多不變少
+> - `scripts/ai/` 這 700 行（`ai_service.gd`/`ai_config.gd`/`ai_schema.gd`）已經寫完、
+>   除過兩個真的難抓的 bug（見上方 Step 0），重寫成 Python 等於把這些學費丟掉
+> - Python 真正的優勢（本機向量檢索、SSE 串流）現在都用不到，不值得為它們多開一個進程
+> - **`base_url` 能指向任何 OpenAI 相容端點，程式一行不用改**——想用 Python 的人
+>   自己在前面架一層、把網址改掉就跑起來了（Ollama 就是這樣接的）
 >
-> **為什麼沒有走 `AIService`**：`AIService` 的 envelope（`system`/`payload`/`model`）
-> 跟節流設計（`min_interval_sec`/`max_calls_per_game_day`）是針對 OpenRouter 這類
-> **付費雲端**呼叫訂的；`village_sim_client.gd` 打的是地端免費服務，呼叫模式（批次/
-> 高頻 vs 偶發觸發）跟成本結構完全不同，套同一組節流沒有意義。
+> **結論：Python 後端是每個玩家自己的選擇，不是專案要不要出貨的架構決定。**
+> 傾向的正式出貨方向是 **Godot（`HTTPRequest`）↔ Sidecar（`llama-server`）**，
+> 不經過任何 Python 中間層——這條線正在確認中，核果已經在研究把原本規劃在
+> Python 後端的邏輯（grammar 組建等）直接用 GDScript 寫一份試看看。
 >
-> **這不是要推翻本篇的決定，是把一個尚未拍板的岔路開誠布公記下來**：POC 那邊（
-> `poc_village_sim`）已經驗證出一套跑得動的地端決策管線（reasoning 鷹架、
-> 對話追蹤、`speech_target` 等），要不要讓 Godot 走「呼叫獨立 Python 後端」這條路
-> （而不是本篇規劃的「Godot 直接打 LLM provider」），目前完全沒有結論。POC 那邊
-> 有一份對應的討論草稿記著同一個問題（不同分支的 note vault，內容概要：格式保證/
-> 延遲/維運複雜度的取捨表；文件本身在另一條分支歷史裡，這裡先摘要結論，
-> 之後兩邊要合流時再處理連結）。
+> **這對 `poc_village_sim`／`village_sim_client.gd` 的定位是什麼**：
+> 三六零同時明講「可以繼續使用 python 開發，但是要提供一個 http 接口給 godot 端」——
+> 也就是 `poc_village_sim` 繼續當 **R&D／驗證用途**（快速調校 prompt、grammar、
+> 決策邏輯，方法論見下方「不記入本篇」的教訓），不是出貨架構的一部分。
+> `village_sim_client.gd`／`village_ai` 指令完全符合這個要求，已經端到端驗證通過
+> （headless 測試 + 編輯器實測 `village_ai aji` 三次 `200 OK`），繼續保留當驗證
+> 工具沒問題，只是**不會是玩家實際玩到的那條路**。
 >
-> **目前的實際狀態**：`village_sim_client.gd` 只是一個獨立的 debug 驗證用途，
-> 已經端到端跑通（headless 測試 + 編輯器裡實測 `village_ai aji` 三次都
-> `200 OK`），**沒有接上任何遊戲邏輯**——沒有自動觸發、AI 回傳的動作也沒有
-> 被執行。跟本篇 Step 0-3 的關係是平行線，不是取代，動工前這個架構問題要先
-> 有人拍板，不然兩條線會各自往下長。
+> 動工前要做的事：跟核果對一下 GDScript 版 grammar/決策邏輯的進度，避免兩邊
+> 各自重寫一份同樣的東西。
 
 ## 已拍板
 
