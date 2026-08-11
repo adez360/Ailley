@@ -35,6 +35,13 @@ static func decide_and_act(character: Node, poc_character_id: String, base_url: 
 			var other_poc_id: String = VillageSimLocale.GODOT_NAME_TO_POC_ID.get(other.character_name, "")
 			if other_poc_id.is_empty():
 				continue
+			# 防呆：兩個不同的 Godot 節點被設定成同一個 poc_character_id 時
+			# （操作者設定錯誤，程式不驗證這件事），視野清單不能把「跟自己
+			# 同一個 poc 身分」的人算進去——poc_village_sim 那邊沒有「自己對
+			# 自己的好感度」這種紀錄，送出去會讓 server.py 直接 500。
+			# 這裡擋掉比讓它送出去 crash 再回頭查穩妥
+			if other_poc_id == poc_character_id:
+				continue
 			visible.append({"id": other_poc_id, "activity": "在附近"})
 
 	var half_day := "夜晚" if (GameClock.hour < 6 or GameClock.hour >= 18) else "白天"
