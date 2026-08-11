@@ -59,6 +59,9 @@ func _make_slot(index: int) -> TextureButton:
 	var button := TextureButton.new()
 	button.texture_normal = atlas
 	button.stretch_mode = TextureButton.STRETCH_KEEP
+	# 純滑鼠點擊格，不搶鍵盤焦點——理由跟 hotbar.gd 同一段註解：按鈕預設
+	# FOCUS_ALL，焦點卡住會被 chat_input.gd 的 _ui_is_busy() 誤判成有 UI 在忙
+	button.focus_mode = Control.FOCUS_NONE
 	button.pressed.connect(_select.bind(index))
 	main_grid.add_child(button)
 	return button
