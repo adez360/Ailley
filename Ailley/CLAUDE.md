@@ -127,6 +127,18 @@ $G --headless --path . --quit-after 300                            # 開得起�
 > 任何靠 `_process` 計時、`create_timer`、或訊號節流的行為都不會觸發 ——
 > 這種一定要在編輯器裡用 `project_run` + `game_eval` 驗。
 
+> [!warning] `-s <script>.gd` 自訂主迴圈一樣認不得 autoload，跟 `--check-only` 同一個病根
+> 想寫一支 throwaway 的 `extends SceneTree` 腳本、`instantiate()` main.tscn
+> 來做端到端驗證時，只要場景裡任何一個腳本引用了 `GameClock`／`AIService`
+> 這類 autoload，一樣會在 `_initialize()` 階段直接 `Identifier not found`
+> 編譯失敗——用 `print(GameClock.day)` 這種最小化腳本就能重現，跟你自己的
+> 改動無關。原因是 autoload 掛進場景樹、註冊成 GDScript 編譯器認得的全域
+> 名字，發生在引擎正常開機流程的某個時間點；`-s` 模式下你的腳本**取代了
+> 主迴圈**，`_initialize()` 執行的時機比那個時間點早，`await process_frame`
+> 也救不回來——卡編譯期的那一行本身就已經編譯失敗了，跟後面有沒有 await
+> 無關。這種端到端驗證目前**只能靠 `--quit-after` 完整開機**（main_scene
+> 走正常流程載入，autoload 會就緒）或編輯器 Play，`-s` 這條路走不通。
+
 ## 備援與疑難排解
 
 - 另有 `mcp__godot__*`（@coding-solo/godot-mcp）server。它只能做基本操作

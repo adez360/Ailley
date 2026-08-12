@@ -650,3 +650,88 @@ Godot 角色真實累積出來的數值，不再是完全脫節的 poc 自己那
 合併進來的內容跟這條分支要做的事無關：聽覺感測（`make_noise()`／F 鍵）、
 背包/狀態/設定面板、熱鍵列偷焦點的修正。headless 重新匯入＋開機驗證都過，
 無 script error。
+
+### 2026-08-12 續：補上 AI 決策的通用可見提示（issue #59／PR #60），另開分支 `feat/ai-action-feedback`
+
+`VillageSimDecision.apply()` 之前只有 `move_to` 有可見反應，poc 動作白名單
+剩下的 30 幾種 Godot 沒有對應機制時完全沒有遊戲內回饋，只印在 Output
+面板——決策失敗、成功但剛好沒事、根本沒觸發，三種情況畫面上分不出來，
+除錯時已經因為這個原因誤判過。改法：`action_en` 不是 `move_to` 且非空時，
+借用既有 `Bubble` 顯示 `［action_en：尚未實作，僅供除錯查看］`，跟真的
+說話排同一個佇列，方括號跟固定字樣讓人一眼分得出不是角色台詞。範圍只到
+「顯示」，不含把任何未實作動作真的做出來。
+
+編輯器實測確認過會冒泡。**踩到一次「切分支後 Play 沒重啟」的坑**：
+`gh issue develop 59 -c` 把這個 worktree 切到 `feat/ai-action-feedback`
+時，磁碟上的 `village_sim_decision.gd` 已經換成新版，但如果編輯器**在切
+分支前就已經在 Play**，Godot 不會把新程式碼熱載入到正在跑的 session——
+跟這條分支更早之前踩過的「改完程式碼要重開 Play」是同一個坑，只是這次
+的觸發原因是切分支不是改檔案，記錄起來是因為觸發原因不同、容易誤判成
+別的問題。
+
+> [!warning] `-s` throwaway SceneTree 腳本這次驗證不出來
+> 這次改動想用 headless throwaway 腳本做端到端驗證，結果連最小化的
+> `print(GameClock.day)` 都會 `Identifier not found`——`-s` 自訂主迴圈
+> 模式下 autoload 完全解析不出來，是這個環境既有的限制，跟這次改動無關，
+> 已經記進 `Ailley/CLAUDE.md` 的 Headless 驗證那節。這次改用完整開機
+> （`--quit-after`，確認語法正確）＋程式碼審查（純字串格式化，無非同步
+> 邏輯）＋編輯器實測，沒有 throwaway SceneTree 這一關。
+
+### 2026-08-12 續：poc_village_sim 目前的輸出 JSON vs 規格書《06》的差異
+
+`/decide` 實測拿到的真實回應：
+
+```json
+{
+  "character_id": "alan", "npc_id": "npc_alan",
+  "elapsed_seconds": 3.82, "action_start_offset_seconds": 3270,
+  "action_duration_seconds": 120, "prompt_truncated": false,
+  "action_en": "sleep",
+  "location": {"kind": "HOME", "shared_location": null, "owner_id": "alan", "owner_npc_id": "npc_alan"},
+  "target_id": null, "target_npc_id": null,
+  "output": {
+    "reasoning": "...", "emotion": "neutral", "emotion_intensity": 0,
+    "intent": {"action": "睡覺", "duration_ticks": 12, "target": null, "location": "阿蘭家"},
+    "current_goal": "恢復體力", "inner_monologue": "...",
+    "speech_target": null, "speech": null, "speech_volume": "normal"
+  }
+}
+```
+
+> [!important] 這兩份文件本來就管不同的範圍，大部分「缺席」是預期中的
+> 《06》是角色的**完整持久資料**（身分＋人格＋關係＋經濟＋狀態＋記憶全部
+> 在一起，存起來的那份）；`/decide` 回傳的是**單次決策的結果**，範圍窄
+> 很多。《06》的 `identity`／`hexaco_input`／`personality`／`system_prompt`／
+> `relations`／`reputation`／`economy` 整塊在 poc 輸出裡完全缺席，是因為
+> 這些是角色的靜態設定跟持久狀態，本來就不該出現在單次決策回傳裡——
+> 它們該活在角色自己的存檔，跟 `/decide` 的輸出是兩件事，不是漏做。
+
+真正該對齊的是 `state` 底下有重疊語意、但目前對不齊的幾塊：
+
+| 語意 | 《06》 | poc 輸出 | 差異 |
+| --- | --- | --- | --- |
+| 情緒 | `emotion.type`／`emotion.intensity`／`emotion.cause_event_id`／`emotion.duration_left` | `output.emotion`／`output.emotion_intensity` | 少了 `cause_event_id`、`duration_left`；`emotion.type` 的 8 值枚舉規格書自己標「待補」，poc 目前用的字串集合有沒有對上，沒查證過 |
+| 當前目標 | `current_goal`（≤40字） | `output.current_goal` | 有對上 |
+| 地點 | `location_id`（單一字串，見《07》） | 頂層 `location: {kind, shared_location, owner_id, owner_npc_id}` | **結構完全不同**——《06》是扁平 ID，poc 是巢狀物件 |
+| 上次動作結果 | `last_action_result.{action,target,success,reason}` | 只在**送出的 payload** 裡當輸入欄位，不是回傳內容 | 語意不同：《06》是引擎寫回的紀錄，poc 是呼叫端自己餵進去的上文 |
+| 當日計畫 | `today_plan`（2~4 項陣列） | 無對應 | poc 目前是單次單一動作決策，沒有多步驟計畫的概念 |
+| 特殊狀態 | `conditions[]` | 無對應 | 缺席 |
+| 生理狀態 | `physical.*`（8 項，明文「LLM 寫：**禁止**」） | 完全不在 `/decide` 回傳裡 | 方向一致——《06》本來就不准 LLM 寫生理狀態，poc 也沒有回傳它 |
+
+poc 輸出裡有、但《06》完全沒提到的欄位：`reasoning`／`inner_monologue`／
+`speech`／`speech_target`／`speech_volume`／`intent`／`action_en`／
+`target_id`／`target_npc_id`／`elapsed_seconds`／`action_start_offset_seconds`／
+`action_duration_seconds`／`prompt_truncated`。多半是「單次決策」才需要的東西
+（動作、對話、思考過程）跟 poc 自己的除錯/效能欄位，可能定義在規格書別章
+（對話機制大概在講 talk 動作設計那份），不是《06》漏寫，是《06》本來就不管這塊。
+
+> [!warning] 命名慣例對不上
+> 《06》規定 ID 格式是 `npc_017`（三碼數字），poc 用英文名字當 id（`alan`）；
+> 《06》全部 snake_case、沒有中英夾雜，poc 的 `intent.action` 用中文
+> （「睡覺」）跟頂層 `action_en` 用英文（`sleep`）同時存在，是重複資訊、
+> 兩種語言各存一份，不是《06》的做法。
+
+> [!warning] 最值得注意：`location` 的表示方式是結構性差異，不是欄位改名能解決的
+> 《06》是扁平 `location_id` 字串，poc 是巢狀 `{kind, shared_location, owner_id, owner_npc_id}`
+> 物件。之後核果要重寫 GDScript 版本、要對齊規格書時，這點要先問清楚
+> 決定用哪一種，不是移植時能各自解讀的細節。
