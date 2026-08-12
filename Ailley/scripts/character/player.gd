@@ -26,7 +26,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		leave_conversation()
 		return
 
-	# 搭話失敗在這裡是靜默的：玩家沒有回饋 UI，主控台的 talk 指令才會印原因碼
+	# 先看附近有沒有可互動物件（目前只有工作站），沒有才退回搭話——
+	# 兩者都靜默失敗：玩家沒有回饋 UI，主控台的對應指令才會印原因碼
+	var workstation := find_nearest_workstation()
+	if workstation != null:
+		work_at(workstation)
+		return
+
 	talk_to(find_nearest_character())
 
 # 讀取 WASD 輸入，回傳正規化後的方向（斜向不會加速）

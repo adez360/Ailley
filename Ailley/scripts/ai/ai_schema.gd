@@ -23,12 +23,12 @@ extends RefCounted
 # 用白名單而不是黑名單，是因為黑名單漏掉的那一項就是被打穿的那一項
 const ALLOWED_ACTIONS := [
 	"move_to", "interact", "pick_up", "drop", "use_item", "equip", "talk",
-	"attack", "farm", "chop", "mine", "sleep", "buy", "sell",
+	"attack", "farm", "chop", "mine", "sleep", "buy", "sell", "work",
 ]
 
 # 本輪真正有實作的動作。其餘動作驗證會過，但執行層要回 NOT_IMPLEMENTED，
 # 而不是在驗證層擋掉 —— 兩者是不同的失敗，混在一起 debug 時會分不清
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep"]
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "work"]
 
 const ERROR_NOT_JSON := "not_json"
 const ERROR_NOT_OBJECT := "not_object"

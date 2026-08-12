@@ -1,4 +1,4 @@
-[gd_scene load_steps=24 format=4 uid="uid://bianwxowjctjk"]
+[gd_scene load_steps=25 format=4 uid="uid://bianwxowjctjk"]
 
 [ext_resource type="Script" uid="uid://djdfer2luq3s5" path="res://scripts/ui/pause.gd" id="1_a8y0u"]
 [ext_resource type="PackedScene" uid="uid://v21qv1icuh5m" path="res://scenes/player.tscn" id="1_ljsu2"]
@@ -13,6 +13,7 @@
 [ext_resource type="PackedScene" uid="uid://q38st5oy2nj" path="res://scenes/chat_input.tscn" id="8_nnngi"]
 [ext_resource type="Script" uid="uid://ytd7qh6vh57r" path="res://scripts/world/selection.gd" id="10_trceg"]
 [ext_resource type="Script" uid="uid://dm8733qx3w3uk" path="res://scripts/ui/time_label.gd" id="11_7bo0c"]
+[ext_resource type="PackedScene" uid="uid://c5fffesir3r4v" path="res://scenes/workstation.tscn" id="12_0ld40"]
 [ext_resource type="Script" uid="uid://bnxsowwm2cpvd" path="res://scripts/world/places.gd" id="12_sc7p8"]
 [ext_resource type="Script" uid="uid://dej3fk4srven5" path="res://scripts/ui/status_panel.gd" id="15_jbj1t"]
 [ext_resource type="Texture2D" uid="uid://b06f01r4ovc0r" path="res://assets/ui/Setting menu.png" id="16_muem4"]
@@ -241,6 +242,9 @@ script = ExtResource("2_a52xk")
 
 [node name="Selection" type="Node2D" parent="Node2D"]
 script = ExtResource("10_trceg")
+
+[node name="Workstation" parent="Node2D" instance=ExtResource("12_0ld40")]
+position = Vector2(-52, 66)
 
 [node name="DebugConsole" parent="." instance=ExtResource("6_pl1ev")]
 

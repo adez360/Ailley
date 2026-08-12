@@ -27,6 +27,25 @@ const TALK_TOO_FAR := "TOO_FAR"
 const TALK_TARGET_BUSY := "TARGET_BUSY"
 const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 
+const WORK_RANGE := 32.0		# 跟 TALK_RANGE 一樣的距離門檻，2 格
+
+## work_at() 的失敗原因碼，形狀比照 TALK_*——計畫 §5.3 要求每個動作都要能講出
+## 為什麼失敗，AI 才有辦法重排行程
+const WORK_OK := ""
+const WORK_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const WORK_TOO_FAR := "TOO_FAR"
+const WORK_OCCUPIED := "OCCUPIED"	# 工作站已經有別人在用
+const WORK_BUSY := "BUSY"		# 自己已經在對話，或已經在工作
+
+## 工作要花的遊戲分鐘數。GameClock 一遊戲分鐘 = 1 現實秒（見 GameClock.gd 的
+## seconds_per_game_minute），所以這裡不直接寫「等 5 秒」，改數
+## GameClock.time_changed 發了幾次——遊戲時間流速哪天調快調慢，這裡不用跟著改
+const WORK_DURATION_MINUTES := 5
+
+## 做完一次工作固定拿多少錢。#62 明講先不做成功率或產出計價，
+## 職業系統留到《99 待規劃項目清單》P-02 拍板之後再做
+const WORK_PAYMENT := 50
+
 ## 滑鼠指到時套在 sprite 上的描邊
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
 
@@ -244,6 +263,61 @@ func make_noise(radius: float = NOISE_RADIUS) -> void:
 			other.noise_heard.emit(self)
 
 
+# ---- 工作 ----
+
+var _working := false
+
+
+func is_working() -> bool:
+	return _working
+
+# 找最近的可工作地點。E 鍵優先判斷有沒有可互動物件（見 player.gd），
+# 沒有才退回搭話——跟 find_nearest_character() 是同一種找法，只是換成
+# "workstations" 這個群組
+func find_nearest_workstation() -> Workstation:
+	var nearest: Workstation = null
+	var shortest := WORK_RANGE
+
+	for node in get_tree().get_nodes_in_group("workstations"):
+		var distance := get_body_position().distance_to(node.global_position)
+		if distance <= shortest:
+			shortest = distance
+			nearest = node
+
+	return nearest
+
+# 開始在某個工作站工作。成功回傳 WORK_OK（空字串）不代表錢已經到手——
+# 這裡只負責卡位、開始計時，真正撥款在 _run_work()，時間到了才給，
+# 跟 talk_to() 開對話一樣是 fire-and-forget
+func work_at(workstation: Workstation) -> String:
+	if workstation == null:
+		return WORK_TARGET_NOT_FOUND
+	if is_in_conversation() or _working:
+		return WORK_BUSY
+	if get_body_position().distance_to(workstation.global_position) > WORK_RANGE:
+		return WORK_TOO_FAR
+	if not workstation.try_occupy(self):
+		return WORK_OCCUPIED
+
+	_working = true
+	stop_moving()
+	_run_work(workstation)
+	return WORK_OK
+
+# 數 GameClock.time_changed 發了幾次來算「過了幾個遊戲分鐘」，不是掛
+# get_tree().create_timer()——後者是現實時間，跟 GameClock 的時間刻度脫鉤，
+# 遊戲時間變速的話兩邊就會對不上
+func _run_work(workstation: Workstation) -> void:
+	for i in WORK_DURATION_MINUTES:
+		await GameClock.time_changed
+
+	workstation.release(self)
+	_working = false
+
+	if inventory != null:
+		inventory.add_money(WORK_PAYMENT)
+
+
 # ---- 狀態快照 ----
 
 # 純資料的角色狀態，不含任何翻譯字串或 BBCode。debug_console.gd 的 status
@@ -265,6 +339,7 @@ func get_state_snapshot() -> Dictionary:
 		"facing": facing,
 		"animation": sprite.animation,
 		"in_conversation": is_in_conversation(),
+		"working": is_working(),
 	}
 
 	if stats != null:
