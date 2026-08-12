@@ -4,6 +4,12 @@ extends Character
 ## 對話中依然吃得到方向鍵 —— 走遠了由 conversation.gd 的距離判定自然散場，
 ## 不需要另外做「離開對話」的操作。
 
+## chat_input.gd 在玩家對話中打字送出時發這個訊號，next_line() 等它。
+## 不直接讓 chat_input.gd 呼叫 conversation 物件——玩家不知道、也不該知道
+## 自己現在是不是在跟一場 Conversation 物件對話，只知道「我打字、我的角色講話」，
+## 這個訊號是 Character 介面本來就有的東西（spoke 訊號同一種精神）
+signal line_submitted(text: String)
+
 
 func _ready() -> void:
 	super()
@@ -78,3 +84,10 @@ func _decide_velocity() -> Vector2:
 		return input_dir * SPEED
 
 	return super()
+
+# 玩家的下一句話就是玩家打的字，等 chat_input.gd 送出 line_submitted。
+# 沒有 end 這個概念——玩家不是靠一個結構化欄位收尾，是靠實際走開或
+# leave_conversation()（_unhandled_input 的 interact 分支），所以這裡固定 false
+func next_line(_listener: Character, _turns: Array[Dictionary], _max_turns: int) -> Dictionary:
+	var text: String = await line_submitted
+	return {"ok": true, "line": text, "end": false}

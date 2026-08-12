@@ -109,6 +109,39 @@ func exit_conversation() -> void:
 	super()
 	_apply_current_entry()
 
+## 對話中要開口，打 AIService 要一句台詞。requester_id 用 character_id，不是
+## 節點名或別的字串——這是這隻角色自己的成本控管，換節點名/場景重擺都不該
+## 讓額度重算。ok=false 涵蓋 AI 未啟用/逾時/驗證失敗全部情況，呼叫端
+## （conversation.gd）一律轉去 fallback，不細分是哪一種——細分沒有意義，
+## 三種都是「這次要不到台詞」，處理方式完全一樣
+const AI_THINKING_TEXT := "…"
+
+func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) -> Dictionary:
+	# 立刻蓋掉正在顯示的東西，讓玩家知道「這個角色在想」，不是卡住。
+	# AIService.request() 還沒送出就已經先顯示——冷卻/配額檢查也算在等待時間裡，
+	# 玩家看到「…」的時間可能比實際打網路的時間長，這是刻意的：早一點給回饋
+	# 比精準對齊網路延遲更重要
+	say(AI_THINKING_TEXT, true)
+
+	var envelope := PromptBuilder.build_dialogue_envelope(self, listener, turns, max_turns)
+	var result: Dictionary = await AIService.request(envelope, character_id, AIService.Policy.CONVERSATION)
+	if not result["ok"]:
+		return {"ok": false}
+
+	var parsed := AISchema.parse_completion(result["data"])
+	if not parsed["ok"]:
+		return {"ok": false}
+
+	var validated := AISchema.validate_dialogue(parsed["data"])
+	if not validated["ok"]:
+		return {"ok": false}
+
+	return {
+		"ok": true,
+		"line": validated["data"]["line"],
+		"end": validated["data"]["end"],
+	}
+
 # 工作結束後同理：那 5 個遊戲分鐘可能已經跨過行程的整點，而 work_at() 開頭的
 # stop_moving() 把原本的路徑清掉了，不重算的話會一路站到下一個整點字串吻合為止
 func _on_work_finished() -> void:
