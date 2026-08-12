@@ -79,6 +79,12 @@ static func decide(character: Node, poc_character_id: String, base_url: String =
 ## character 跟傳給 decide() 的必須是同一個角色，poc_character_id 也要
 ## 對應同一次呼叫——這裡不重新驗證兩者是否一致，職責已經在 decide() 那層
 ## 檢查過一次。
+##
+## poc 的動作白名單有 30 幾種（見 poc_village_sim/enums.py 的 Action），
+## Godot 這邊目前只有 move_to 有對應的執行邏輯——不是還沒接線，是其餘動作
+## 背後的玩法系統（種田／戰鬥／買賣……）本身還不存在。沒有執行邏輯的動作
+## 不能就這樣悄悄無視：AI 決定了什麼，測試/除錯的人要看得到，不然「決策
+## 失敗」「決策成功但剛好沒事發生」「根本沒觸發」三種情況畫面上會一模一樣。
 static func apply(character: Node, poc_character_id: String, result: Dictionary) -> void:
 	var data: Dictionary = result.get("data", {})
 	var output: Dictionary = data.get("output", {})
@@ -89,7 +95,9 @@ static func apply(character: Node, poc_character_id: String, result: Dictionary)
 	if speech != null and str(speech) != "":
 		character.say(str(speech))
 
-	if str(data.get("action_en", "")) == "move_to":
+	var action_en := str(data.get("action_en", ""))
+
+	if action_en == "move_to":
 		var target_place := VillageSimLocale.poc_location_to_godot_place(
 			data.get("location", {}), poc_character_id
 		)
@@ -100,6 +108,10 @@ static func apply(character: Node, poc_character_id: String, result: Dictionary)
 			# 目的地翻譯不出來或找不到錨點：安靜跳過，不執行移動。呼叫端如果
 			# 想知道有沒有真的移動，可以自己比對 data.action_en 跟事後角色是不是
 			# 真的在動——這裡不額外加一個「有沒有執行」的旗標，保持單純
+	elif not action_en.is_empty():
+		# 借用既有的 Bubble 顯示，跟真的說話排在同一個佇列裡——刻意用方括號
+		# 跟「尚未實作」字樣，讓人一眼分得出這不是角色台詞，是除錯用的動作提示
+		character.say("［%s：尚未實作，僅供除錯查看］" % action_en)
 
 
 static func _fail(error: String) -> Dictionary:
