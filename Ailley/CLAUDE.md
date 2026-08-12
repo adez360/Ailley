@@ -139,6 +139,20 @@ $G --headless --path . --quit-after 300                            # 開得起�
 > 無關。這種端到端驗證目前**只能靠 `--quit-after` 完整開機**（main_scene
 > 走正常流程載入，autoload 會就緒）或編輯器 Play，`-s` 這條路走不通。
 
+> [!warning] headless 裡帶執行緒的 `HTTPRequest` 完成時間不可信，比正常環境慢很多
+> 用 `--quit-after` 驗證真的打網路的流程（例如 `AIService.request()`）時，
+> 同一個請求用 `curl` 測不到 1 秒回應，在 headless 裡卻可能卡超過 20 秒才
+> 觸發 `request_completed`——不是請求真的卡死，是**headless 環境下
+> `use_threads = true` 的 `HTTPRequest` 完成得比正常視窗模式慢很多**，
+> 具體慢多少沒有穩定數字。踩過一次：把 `--quit-after` 的秒數設得跟正常
+> 網路延遲差不多（例如 20 秒），結果請求還沒回來視窗就先關了，看起來像
+> 「卡住」，其實只是等得不夠久。
+>
+> 這是上面那條「headless 測不到時間相關邏輯」的同類問題，但這裡具體到
+> **連 HTTP 逾時／回應時間都不能拿正常環境的直覺去估**。要驗證真的打網路
+> 的流程，`--quit-after` 的秒數要抓寬（例如平常 3 秒內會回的請求，
+> 給到 30-60 秒的窗口），或乾脆在編輯器裡 Play 驗，那邊的時間感才準。
+
 ## 備援與疑難排解
 
 - 另有 `mcp__godot__*`（@coding-solo/godot-mcp）server。它只能做基本操作

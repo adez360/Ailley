@@ -175,11 +175,13 @@ func _apply(data: Dictionary) -> void:
 		status_reason = L10n.tf("AI_STATUS_NO_ENDPOINT", {"path": CONFIG_PATH})
 		return
 
-	if not (providers[default_provider] as Provider).valid:
-		enabled = false
-		status_reason = L10n.tf("AI_STATUS_NO_KEY", {"path": CONFIG_PATH})
-		return
-
+	# 刻意不在這裡檢查 default_provider 是否 valid：enabled 只回答「這份設定檔
+	# 結構完整、有個叫得到名字的預設值」，不是「預設那個 provider 剛好可用」。
+	# 某個具名 provider 沒填金鑰是 per-provider 的事，request() 會用
+	# get_provider() 查到的 Provider.valid 擋下來(ERROR_NO_PROVIDER)——擋在
+	# 這裡的話，default_provider 缺金鑰會連累其他填好金鑰、被明確指名的
+	# provider 一起變成 ERROR_DISABLED，等於單一 provider 沒設好就讓整個
+	# 多 provider 系統當機，違背這次要做「各自獨立」的初衷
 	enabled = true
 	status_reason = L10n.t("AI_STATUS_ENABLED")
 
