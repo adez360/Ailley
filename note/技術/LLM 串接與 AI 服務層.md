@@ -638,3 +638,15 @@ Godot 角色真實累積出來的數值，不再是完全脫節的 poc 自己那
 > 都還沒有結論。之後如果要新增 AI 相關的 Godot 檔案（例如把
 > `village_sim_client.gd`／`village_sim_decision.gd` 這類正式收進主線），
 > 先跟組長確認這份新規範的實際適用範圍再動作。
+
+### 2026-08-12 續：已把 main 合併進來，分支跟上團隊進度
+
+`git merge origin/main`，`agent.gd` 一處衝突：main 的聽覺感測在 `_on_spotted()`
+後面加了 `_on_noise_heard()`，跟這條分支加的 `_trigger_village_ai()` 插在
+同一個位置，兩個都是新函式、沒有邏輯重疊，直接兩個都留下。其餘檔案（`character.gd`／
+`player.gd`／`main.tscn`／`project.godot`／背包與狀態面板等 UI）都是 main
+單方面新增，git 自動合併沒有動到這條分支的東西。
+
+合併進來的內容跟這條分支要做的事無關：聽覺感測（`make_noise()`／F 鍵）、
+背包/狀態/設定面板、熱鍵列偷焦點的修正。headless 重新匯入＋開機驗證都過，
+無 script error。
