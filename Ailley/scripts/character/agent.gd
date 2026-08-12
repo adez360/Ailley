@@ -48,6 +48,8 @@ func _ready() -> void:
 	if vision != null:
 		vision.spotted.connect(_on_spotted)
 
+	noise_heard.connect(_on_noise_heard)
+
 	# NavGrid 開場是非同步建的，不等它建完就出發只會拿到空路徑
 	var nav = get_tree().get_first_node_in_group("nav_grid")
 	if nav != null and not nav.built:
@@ -182,6 +184,15 @@ func _trigger_village_ai() -> void:
 	# 執行動作/說話留在這裡自己呼叫，不讓 VillageSimDecision 幫忙做——
 	# 副作用要留在角色自己的程式碼路徑，理由見 village_sim_decision.gd 的檔頭註解
 	VillageSimDecision.apply(self, poc_character_id, result)
+
+# 範圍內有人發出聲音（見 character.gd 的 make_noise()）。
+# 跟 _on_spotted 不同，這裡不記錄「已經反應過」——聲音是一次性事件，
+# 每次都該有反應，不是像陌生人那樣「見過一次就不再驚訝」
+func _on_noise_heard(_source: Character) -> void:
+	if is_in_conversation():
+		return
+
+	say(L10n.t("DLG_NOISE_ALERT"))
 
 # 行程表是「到點切換」，所以只在時間字串剛好吻合的那一分鐘換目標
 func _on_time_changed(hour: int, minute: int) -> void:

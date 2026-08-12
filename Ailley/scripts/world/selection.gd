@@ -1,6 +1,10 @@
+class_name Selection
 extends Node2D
 
 ## 用滑鼠指人與選人。三件事：指到誰描邊、點到誰就讓鏡頭跟著他、點空地取消。
+##
+## class_name 是給 status_panel.gd 用的：它重用這裡的 character_at()
+## 做點擊判定，兩邊要認同一顆角色不必各自猜一次「點中了誰」。
 ##
 ## 不走 Godot 內建的 physics object picking：角色的碰撞形狀只有腳下那個小圓，
 ## 點頭部會落空；而 Vision 那圈 Area2D 大到會把游標整個吃掉。

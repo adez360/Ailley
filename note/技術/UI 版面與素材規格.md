@@ -3,9 +3,9 @@ tags:
   - 技術
   - ui
 status: 已實作
-scene: scenes/bubble.tscn, scenes/chat_input.tscn, scenes/debug_console.tscn
-script: scripts/ui/bubble.gd
-updated: 2026-08-10
+scene: scenes/bubble.tscn, scenes/chat_input.tscn, scenes/debug_console.tscn, scenes/main.tscn
+script: scripts/ui/bubble.gd, scripts/ui/status_panel.gd, scripts/ui/inventory_panel.gd
+updated: 2026-08-11
 ---
 
 # UI 版面與素材規格
@@ -157,11 +157,57 @@ Ink/Amber 4.87:1、Cream/Moss 5.84:1、Cream/Ember 8.27:1。停用文字 3.79:1 
 | `chat_input.tscn` 的 `Input` | 底部置中，240×20，離底 12 |
 | `debug_console.tscn` 的 `Root` | 頂部橫向貼邊，左右各留 4，高 128 |
 | `main.tscn` 的 `HUD/TimeLabel` | 左上 (4, 2) |
+| `main.tscn` 的 `StatusPanel/Panel` | 螢幕置中，150×175 |
+| `main.tscn` 的 `InventoryPanel/Panel` | 螢幕置中，280×160 |
+| `main.tscn` 的 `Hotbar/Backdrop` | 底部置中，270×40，離底 8 |
 | 氣泡折行寬度 | `bubble.gd` 的 `MAX_LINE_WIDTH = 132`，11px 下一行約 12 個中文字 |
 
 氣泡的 `BORDER_X` / `BORDER_TOP` / `BORDER_BOTTOM` / `TAIL_INSET_FROM_RIGHT` 對應素材本身的 patch margin，只有換素材時才動，跟解析度無關。
+
+### StatusPanel 重用 Setting menu.png 的做法
+
+`Setting menu.png`（256×144）切兩格，各 106×122：左格帶烤進圖裡的 "SETTINGS" 標題列
+（含底線），右格素面。`StatusPanel/Panel` 的背景是 `StyleBoxTexture`，`region_rect`
+切左格 `Rect2(11, 12, 106, 122)`。
+
+九宮格中間會被拉伸這件事決定了 `texture_margin` 怎麼抓：
+
+> [!warning] `texture_margin_top` 太小的話，標題文字會被跟著拉伸、對不上自己疊上去的 Label
+> 9-slice 只有 `texture_margin` 框住的邊角是 1:1 不拉伸；框外（哪怕離邊角很近）
+> 一律進中間可伸縮區，面板大小一變就跟著非等比縮放。標題文字＋底線一起烤在素材裡，
+> 如果只留 6px 頂邊界，文字會落進可伸縮區，位置跟著面板高度飄，蓋不準。
+> 解法是把 `texture_margin_top` 拉到 28（蓋過底線），讓整條標題列變成固定不拉伸的頂邊，
+> 場景裡 `TitleBg`／`TitleLabel` 的座標才會跟素材原始像素位置一致。
+
+面板文字疊法：`TitleBg`（ColorRect，色 `#DCB98A`，取樣自素材本體色，不是 theme 的
+Wheat `#D9C49A`——兩者肉眼相近但不是同一個值，蓋色要用素材自己的顏色才會無縫）
+蓋掉烤進去的 "SETTINGS" 字樣，`TitleLabel` 疊在上面放角色名字，底線裝飾留著不蓋。
+
+StatsBox 底下的 Label 是 `_ready()` 動態長出來的（見 stats.gd 同款設計），
+場景編輯器設不到顏色，字色只能在 `status_panel.gd` 裡 `add_theme_color_override`。
+
+### `Sprite sheet for Basic Pack.png` 的格子素材
+
+背包／快捷欄格框用的是這張圖裡素面的暖色格子（跟本專案調色盤的 Wheat 系一致，
+同一張圖另外還有一組冷色調的變體，跟本專案色系不搭，沒用）：
+`region_rect = Rect2(11, 59, 26, 28)`。整張圖是 48×48 的網格排列
+（icon 本體 26×28，其餘是留白），要切別的圖示時先假設同一個網格對。
+
+快捷欄（`hotbar.gd`，螢幕下方常駐 9 格）跟主背包（`inventory_panel.gd`，
+按 P 開關的 27 格）是**兩個獨立的 CanvasLayer**，不是同一個節點樹底下的
+兩塊——快捷欄要在背包沒開的時候也看得到，硬塞進同一個面板做不到。
+兩邊各自 `_ready()` 用 `TextureButton` 動態生出格子（理由跟
+`status_panel.gd` 的 `StatsBox` 一樣：資料筆數變動時不用回頭改場景），
+選取狀態不換圖，用 `modulate` 疊 Amber `#C96C23` 色調表示，跟
+`ailley_theme.tres` 的 `TextEdit` focus 框同一個顏色語意。
+
+快捷欄的選取（`Inventory.set_selected_index()`）是角色自己的狀態，
+主背包格點擊只是 `InventoryPanel` 自己的視覺高亮——`Inventory` 沒有
+主背包格對應的資料欄位可以存，硬塞的話等於誤把主背包點擊當成換手持物品。
 
 ## 還沒做的
 
 - `bubble.tscn` 的 `Box.region_rect` 是非整數（`Rect2(6.065604, 6.3701286, ...)`）。9-slice 用非整數 region 會取樣到相鄰像素，邊框出現雜點
 - `assets/unuse/` 裡的 1536×1024 與 1362×1155 對話框圖在這個解析度用不上，縮下來必糊
+- `StatusPanel` 的年齡欄目前是 `AGE_PLACEHOLDER` 示意值，Character 還沒有年齡欄位
+- `InventoryPanel` 的 36 格目前全部空著，沒有任何道具圖示（`Inventory` 還沒有 item 登錄資料）
