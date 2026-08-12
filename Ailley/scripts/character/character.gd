@@ -273,6 +273,12 @@ func get_state_snapshot() -> Dictionary:
 			values[key] = stats.get_value(key)
 		snapshot["stats"] = values
 
+	# 只放金錢，不放整份背包：Agent 查得到自己有多少錢是最低限度，
+	# 而 slots 是 36 格的陣列，塞進每一次快照（含日後的 LLM payload）太貴。
+	# 要看背包內容的呼叫端自己拿 inventory.get_summary()
+	if inventory != null:
+		snapshot["money"] = inventory.get_money()
+
 	# 欄名跟 relationships.gd 的 record 一致（affinity / met_count），
 	# 不要在這裡改名——同一個數值有兩個名字，讀過 relationships.gd 的人
 	# 會在 snapshot 上找不到 affinity。用純量 accessor 不用 get_record()，

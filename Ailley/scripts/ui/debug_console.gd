@@ -30,6 +30,7 @@ func _ready() -> void:
 		"pos": {"run": _cmd_pos, "usage": "pos", "help": "HELP_POS"},
 		"nav": {"run": _cmd_nav, "usage": "nav rebuild", "help": "HELP_NAV"},
 		"inv": {"run": _cmd_inv, "usage": "inv [name] / inv give <item_id> [count]", "help": "HELP_INV"},
+		"money": {"run": _cmd_money, "usage": "money <amount>", "help": "HELP_MONEY"},
 		"ai": {"run": _cmd_ai, "usage": "ai [text]", "help": "HELP_AI"},
 		# help 留空：跟 village_ai 一樣先不進 locale/console.csv，避免動到翻譯資源
 		# 匯入（這台機器上曾經卡住），純 debug 用途，之後真的要收進正式指令表
@@ -327,6 +328,9 @@ func _cmd_status(args: PackedStringArray) -> void:
 		if not others.is_empty():
 			_field("CON_FIELD_STATE", SEP.join(others))
 
+	if snapshot.has("money"):
+		_field("CON_FIELD_MONEY", "%d" % int(snapshot["money"]))
+
 	if snapshot.has("affinity"):
 		var lines: Array[String] = []
 		for other_id in snapshot["affinity"]:
@@ -486,6 +490,38 @@ func _cmd_inv_give(args: PackedStringArray) -> void:
 
 	_print(L10n.tf("CON_INV_GIVE_OK", {
 		"name": player.character_name, "count": count, "item": shown_id
+	}))
+
+# money <amount>   正數走 add_money()，負數走 spend()
+#
+# 沒有查詢用法：金錢已經在 status 的輸出裡，任何角色都查得到。
+# 這條指令只做「改」，而且刻意兩個方向都能走——扣款那條路有餘額檢查，
+# 只能加錢的話 MONEY_NOT_ENOUGH 就沒有辦法從主控台測到
+func _cmd_money(args: PackedStringArray) -> void:
+	# is_valid_int() 對 "0" 成立，但 0 兩邊都不是合法異動，要自己擋
+	if args.size() != 1 or not args[0].is_valid_int() or args[0].to_int() == 0:
+		_error(L10n.t("CON_USAGE_MONEY"))
+		return
+
+	var player := _get_player()
+	if player == null:
+		return
+
+	if player.inventory == null:
+		_error(L10n.tf("CON_NO_INVENTORY", {"name": player.character_name}))
+		return
+
+	var amount := args[0].to_int()
+	var reason := (
+		player.inventory.add_money(amount) if amount > 0
+		else player.inventory.spend(-amount)
+	)
+	if reason != Inventory.MONEY_OK:
+		_error(L10n.tf("CON_MONEY_FAILED", {"reason": reason}))
+		return
+
+	_print(L10n.tf("CON_MONEY_OK", {
+		"name": player.character_name, "money": player.inventory.get_money()
 	}))
 
 # 主控台自己算一個呼叫方，用固定 id 才吃得到 AIService 的速率限制 ——

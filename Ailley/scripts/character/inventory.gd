@@ -7,6 +7,9 @@ extends Node
 ##
 ## 一格的資料照規格書 08 §1：{item_id, count, decay, durability}，空格是 {}。
 ## 堆疊規則見 §4，_add_stackable() / _add_unstackable() 各自對應規則 #1 #2。
+##
+## 金錢也在這裡：規格書 01 §3-3 把 money 與 inventory 同樣歸在 economy 底下，
+## 為了一個 int 另外開一個節點，換到的只是多一個 get_node_or_null 要防。
 
 const HOTBAR_SIZE := 9
 const MAIN_SIZE := 27
@@ -26,11 +29,24 @@ const REMOVE_OK := ""
 const REMOVE_NOT_FOUND := "NOT_FOUND"
 const REMOVE_INVALID_COUNT := "INVALID_COUNT"
 
+## 開局身上有多少錢。規格書 01 §3-3
+const DEFAULT_MONEY := 300
+
+## add_money() / spend() 的失敗原因碼
+const MONEY_OK := ""
+const MONEY_NOT_ENOUGH := "NOT_ENOUGH"
+const MONEY_INVALID_AMOUNT := "INVALID_AMOUNT"
+
 var slots: Array[Dictionary] = []
 
 # 快捷欄選到第幾格。這是資料層狀態不是 UI 狀態——UI 只是顯示它，
 # Agent 沒有 UI 也要有「手上拿著什麼」這個概念
 var _selected_index := 0
+
+# 私有而不是像 slots 那樣公開：金錢只有「進帳」與「扣款」兩種合法異動，
+# 兩者都要驗證。公開欄位讓呼叫端寫得出 inventory.money -= price，
+# 那條路繞過餘額檢查，扣成負數之後不會有任何地方報錯
+var _money := DEFAULT_MONEY
 
 
 # 在 _init() 而不是 _ready() 配置，這樣 Inventory.new() 出來的實例還沒進場景樹
@@ -192,6 +208,32 @@ func get_selected_index() -> int:
 
 func set_selected_index(index: int) -> void:
 	_selected_index = clampi(index, 0, HOTBAR_SIZE - 1)
+
+
+# ---- 金錢 ----
+
+func get_money() -> int:
+	return _money
+
+# 進帳。amount 非正數回原因碼而不是默默放行——要扣錢的呼叫端該用 spend()，
+# 讓 add_money(-50) 成立的話，「收入」與「支出」就會走同一條沒有餘額檢查的路
+func add_money(amount: int) -> String:
+	if amount <= 0:
+		return MONEY_INVALID_AMOUNT
+
+	_money += amount
+	return MONEY_OK
+
+# 扣款。餘額不足時一毛都不扣，跟 remove_item() 的原子性一致——
+# 呼叫端拿到 MONEY_NOT_ENOUGH 就知道這筆交易整個沒發生，不必自己回滾
+func spend(amount: int) -> String:
+	if amount <= 0:
+		return MONEY_INVALID_AMOUNT
+	if _money < amount:
+		return MONEY_NOT_ENOUGH
+
+	_money -= amount
+	return MONEY_OK
 
 
 # ---- Agent 查詢 ----
