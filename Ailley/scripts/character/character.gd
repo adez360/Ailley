@@ -46,6 +46,17 @@ const WORK_DURATION_MINUTES := 5
 ## 職業系統留到《99 待規劃項目清單》P-02 拍板之後再做
 const WORK_PAYMENT := 50
 
+const BUY_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE 一樣的距離門檻，2 格
+
+## buy_from() 的失敗原因碼。TOO_FAR 以外三種都直接借用底層回傳的原因碼——
+## NOT_ENOUGH（Inventory.MONEY_NOT_ENOUGH）、NO_SPACE（Inventory.ADD_NO_SPACE）——
+## 不重新取名，這裡沒有必要跟 Inventory 自己的字典再對一次照
+const BUY_OK := ""
+const BUY_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const BUY_TOO_FAR := "TOO_FAR"
+const BUY_ITEM_NOT_FOUND := "ITEM_NOT_FOUND"		# 販賣機沒有賣這個 item_id
+const BUY_NO_INVENTORY := "NO_INVENTORY"		# 沒有背包的角色沒辦法買東西
+
 ## 滑鼠指到時套在 sprite 上的描邊
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
 
@@ -325,6 +336,52 @@ func _run_work(workstation: Workstation) -> void:
 
 	if inventory != null:
 		inventory.add_money(WORK_PAYMENT)
+
+
+# ---- 購買 ----
+
+# 找最近的販賣機，跟 find_nearest_workstation() 是同一種找法，只是換成
+# "vending_machines" 這個群組
+func find_nearest_vending_machine() -> VendingMachine:
+	var nearest: VendingMachine = null
+	var shortest := BUY_RANGE
+
+	for node in get_tree().get_nodes_in_group("vending_machines"):
+		var distance := get_body_position().distance_to(node.global_position)
+		if distance <= shortest:
+			shortest = distance
+			nearest = node
+
+	return nearest
+
+# 跟販賣機買一件東西。買一件東西是兩件事，要一起成功（#63 明講的坑）：
+# spend() 扣款成功之後，add_item() 還是可能因為背包滿了回 ADD_NO_SPACE ——
+# 那時候錢已經扣了，玩家等於白付錢。這裡用「扣款失敗就不買、加入失敗就退款」
+# 的補償式寫法，而不是買之前先用 find_first_empty() 猜背包放不放得下——
+# 猜的話還要重算一次 Inventory 內部的堆疊規則（同 item_id 可能疊進既有格，
+# 不一定要空格），退款反而更簡單可靠
+func buy_from(machine: VendingMachine, item_id: String) -> String:
+	if machine == null:
+		return BUY_TARGET_NOT_FOUND
+	if get_body_position().distance_to(machine.global_position) > BUY_RANGE:
+		return BUY_TOO_FAR
+	if inventory == null:
+		return BUY_NO_INVENTORY
+
+	var price := machine.get_price(item_id)
+	if price < 0:
+		return BUY_ITEM_NOT_FOUND
+
+	var spend_reason := inventory.spend(price)
+	if spend_reason != Inventory.MONEY_OK:
+		return spend_reason
+
+	var add_reason := inventory.add_item(item_id)
+	if add_reason != Inventory.ADD_OK:
+		inventory.add_money(price)		# 退回剛剛扣的錢——買賣沒有真的發生
+		return add_reason
+
+	return BUY_OK
 
 
 # ---- 狀態快照 ----

@@ -20,26 +20,41 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not event.is_action_pressed("interact"):
 		return
 
+	# 販賣機選單開著時，這個 E 是要給選單用來關閉／已經在選單裡點過商品了，
+	# 不該在這裡又被當成「開始一個新的互動」——不 set_input_as_handled()，
+	# 讓事件繼續往下傳給 vending_menu.gd 自己的 _unhandled_input 處理
+	var vending_menu := get_tree().get_first_node_in_group("vending_menu")
+	if vending_menu != null and vending_menu.is_open():
+		return
+
 	get_viewport().set_input_as_handled()
 
 	if is_in_conversation():
 		leave_conversation()
 		return
 
-	# 先看附近有沒有可互動物件（目前只有工作站），沒有才退回搭話——
-	# 兩者對玩家都是靜默失敗，沒有回饋 UI；但失敗原因會印成 warning
+	# 先看附近有沒有可互動物件（工作站、販賣機），沒有才退回搭話——
+	# 全部對玩家都是靜默失敗，沒有回饋 UI；但失敗原因會印成 warning
 	# （跟 character.gd 的 _check_stuck() 同一種寫法），方便開發時對著
 	# 編輯器 Output/Debugger 面板看，不用另外開主控台查
 	var workstation := find_nearest_workstation()
 	if workstation != null:
-		var reason := work_at(workstation)
-		if reason != WORK_OK:
-			push_warning("%s: work_at 失敗（%s）" % [character_name, reason])
+		var work_reason := work_at(workstation)
+		if work_reason != WORK_OK:
+			push_warning("%s: work_at 失敗（%s）" % [character_name, work_reason])
 		return
 
-	var reason := talk_to(find_nearest_character())
-	if reason != TALK_OK:
-		push_warning("%s: talk_to 失敗（%s）" % [character_name, reason])
+	# 販賣機不是立刻執行動作，是開商品選單——真正的購買發生在
+	# vending_menu.gd 裡點下某一項的時候。vending_menu 理論上一定找得到
+	# （場景裡固定掛著），這裡多防一手是避免場景漏掛的話直接炸掉
+	var vending_machine := find_nearest_vending_machine()
+	if vending_machine != null and vending_menu != null:
+		vending_menu.open(vending_machine, self)
+		return
+
+	var talk_reason := talk_to(find_nearest_character())
+	if talk_reason != TALK_OK:
+		push_warning("%s: talk_to 失敗（%s）" % [character_name, talk_reason])
 
 # 讀取 WASD 輸入，回傳正規化後的方向（斜向不會加速）
 func get_input_direction() -> Vector2:

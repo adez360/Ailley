@@ -1,4 +1,4 @@
-[gd_scene load_steps=25 format=4 uid="uid://bianwxowjctjk"]
+[gd_scene load_steps=28 format=4 uid="uid://bianwxowjctjk"]
 
 [ext_resource type="Script" uid="uid://djdfer2luq3s5" path="res://scripts/ui/pause.gd" id="1_a8y0u"]
 [ext_resource type="PackedScene" uid="uid://v21qv1icuh5m" path="res://scenes/player.tscn" id="1_ljsu2"]
@@ -15,10 +15,12 @@
 [ext_resource type="Script" uid="uid://dm8733qx3w3uk" path="res://scripts/ui/time_label.gd" id="11_7bo0c"]
 [ext_resource type="PackedScene" uid="uid://c5fffesir3r4v" path="res://scenes/workstation.tscn" id="12_0ld40"]
 [ext_resource type="Script" uid="uid://bnxsowwm2cpvd" path="res://scripts/world/places.gd" id="12_sc7p8"]
+[ext_resource type="PackedScene" uid="uid://bta26yf1ol1rm" path="res://scenes/vending_machine.tscn" id="13_yc10j"]
 [ext_resource type="Script" uid="uid://dej3fk4srven5" path="res://scripts/ui/status_panel.gd" id="15_jbj1t"]
 [ext_resource type="Texture2D" uid="uid://b06f01r4ovc0r" path="res://assets/ui/Setting menu.png" id="16_muem4"]
 [ext_resource type="Script" uid="uid://bghlt4yqp6xrt" path="res://scripts/ui/inventory_panel.gd" id="17_dp3eg"]
 [ext_resource type="Script" uid="uid://hism2nudt3ss" path="res://scripts/ui/hotbar.gd" id="17_muem4"]
+[ext_resource type="Script" uid="uid://dm5y3oyvsultm" path="res://scripts/ui/vending_menu.gd" id="21_jscy8"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_pl1ev"]
 texture = ExtResource("3_y8peb")
@@ -168,6 +170,14 @@ content_margin_right = 6.0
 content_margin_bottom = 6.0
 bg_color = Color(0.05, 0.05, 0.07, 0.6)
 
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_pm3ni"]
+texture = ExtResource("16_muem4")
+texture_margin_left = 6.0
+texture_margin_top = 6.0
+texture_margin_right = 6.0
+texture_margin_bottom = 6.0
+region_rect = Rect2(139, 12, 106, 122)
+
 [node name="Node" type="Node"]
 
 [node name="Pause" type="CanvasLayer" parent="."]
@@ -245,6 +255,9 @@ script = ExtResource("10_trceg")
 
 [node name="Workstation" parent="Node2D" instance=ExtResource("12_0ld40")]
 position = Vector2(-52, 66)
+
+[node name="VendingMachine" parent="Node2D" instance=ExtResource("13_yc10j")]
+position = Vector2(140, -20)
 
 [node name="DebugConsole" parent="." instance=ExtResource("6_pl1ev")]
 
@@ -403,3 +416,45 @@ grow_vertical = 2
 mouse_filter = 2
 theme_override_constants/h_separation = 3
 columns = 9
+
+[node name="VendingMenu" type="CanvasLayer" parent="."]
+script = ExtResource("21_jscy8")
+
+[node name="Panel" type="Panel" parent="VendingMenu"]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -75.0
+offset_top = -75.0
+offset_right = 75.0
+offset_bottom = 75.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxTexture_pm3ni")
+
+[node name="VBox" type="VBoxContainer" parent="VendingMenu/Panel"]
+layout_mode = 0
+offset_left = 10.0
+offset_top = 8.0
+offset_right = 140.0
+offset_bottom = 142.0
+mouse_filter = 2
+theme_override_constants/separation = 4
+
+[node name="TitleLabel" type="Label" parent="VendingMenu/Panel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+horizontal_alignment = 1
+
+[node name="ItemList" type="VBoxContainer" parent="VendingMenu/Panel/VBox"]
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_constants/separation = 3
+
+[node name="HintLabel" type="Label" parent="VendingMenu/Panel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+horizontal_alignment = 1

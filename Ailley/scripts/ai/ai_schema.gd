@@ -28,7 +28,7 @@ const ALLOWED_ACTIONS := [
 
 # 本輪真正有實作的動作。其餘動作驗證會過，但執行層要回 NOT_IMPLEMENTED，
 # 而不是在驗證層擋掉 —— 兩者是不同的失敗，混在一起 debug 時會分不清
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "work"]
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "work", "buy"]
 
 const ERROR_NOT_JSON := "not_json"
 const ERROR_NOT_OBJECT := "not_object"
