@@ -313,6 +313,10 @@ theme_override_constants/separation = 4
 layout_mode = 2
 theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
 
+[node name="MoneyLabel" type="Label" parent="StatusPanel/Panel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+
 [node name="StatsBox" type="VBoxContainer" parent="StatusPanel/Panel/VBox"]
 layout_mode = 2
 theme_override_constants/separation = 2
