@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-05
+updated: 2026-08-11
 ---
 
 # LLM 串接與 AI 服務層
@@ -20,6 +20,35 @@ updated: 2026-08-05
 > **設計，尚未實作。** 現況是零 —— 全專案 game code 無任何 `HTTPRequest`、
 > 無金鑰處理、無存檔機制。`addons/godot_ai/` 裡的 WebSocket 與 api_key 是
 > **編輯器 MCP bridge，不是 runtime SDK**，不可挪用。
+
+> [!success] 2026-08-11：架構問題已有團隊結論——出貨不走 Python 後端
+> 三六零在組員討論裡明確否決「隨遊戲出貨 Python 後端」這個方向，理由：
+> - 自架中繼伺服器早就被否決過（決策：「AI 呼叫跑在擁有者自己的電腦上、費用自己付」，
+>   架中繼等於幫玩家代付、還多一台要維運的機器）
+> - 出貨包 Python：三平台各打包、macOS 要簽章、Windows 會被防毒誤判、多幾十 MB、
+>   每次發版要顧兩套 build，還多出「程式沒起來/port被佔/防火牆攔掉」這些新壞法，
+>   而且 Godot 端照樣得寫 HTTP client 去打它——程式碼變多不變少
+> - `scripts/ai/` 這 700 行（`ai_service.gd`/`ai_config.gd`/`ai_schema.gd`）已經寫完、
+>   除過兩個真的難抓的 bug（見上方 Step 0），重寫成 Python 等於把這些學費丟掉
+> - Python 真正的優勢（本機向量檢索、SSE 串流）現在都用不到，不值得為它們多開一個進程
+> - **`base_url` 能指向任何 OpenAI 相容端點，程式一行不用改**——想用 Python 的人
+>   自己在前面架一層、把網址改掉就跑起來了（Ollama 就是這樣接的）
+>
+> **結論：Python 後端是每個玩家自己的選擇，不是專案要不要出貨的架構決定。**
+> 傾向的正式出貨方向是 **Godot（`HTTPRequest`）↔ Sidecar（`llama-server`）**，
+> 不經過任何 Python 中間層——這條線正在確認中，核果已經在研究把原本規劃在
+> Python 後端的邏輯（grammar 組建等）直接用 GDScript 寫一份試看看。
+>
+> **這對 `poc_village_sim`／`village_sim_client.gd` 的定位是什麼**：
+> 三六零同時明講「可以繼續使用 python 開發，但是要提供一個 http 接口給 godot 端」——
+> 也就是 `poc_village_sim` 繼續當 **R&D／驗證用途**（快速調校 prompt、grammar、
+> 決策邏輯，方法論見下方「不記入本篇」的教訓），不是出貨架構的一部分。
+> `village_sim_client.gd`／`village_ai` 指令完全符合這個要求，已經端到端驗證通過
+> （headless 測試 + 編輯器實測 `village_ai aji` 三次 `200 OK`），繼續保留當驗證
+> 工具沒問題，只是**不會是玩家實際玩到的那條路**。
+>
+> 動工前要做的事：跟核果對一下 GDScript 版 grammar/決策邏輯的進度，避免兩邊
+> 各自重寫一份同樣的東西。
 
 ## 已拍板
 
@@ -440,3 +469,184 @@ func request(envelope, requester_id, policy := Policy.SCHEDULED) -> Dictionary
 - [ ] 人格資料的欄位結構 —— `data/personas.json` 要放哪些欄位才夠組 system prompt
 - [ ] 成本上限機制（§11 只列了標題，沒有設計）
 - [ ] 記憶系統上線前，Agent 的對話逐字稿要不要先存記憶體就好
+
+## 進度斷點（2026-08-11）：`village_sim_client` 這條線做到哪、下一步是什麼
+
+這是 `feature/godot-ai-transport` 分支這幾輪的完整進度記錄，方便之後接手／回頭查。
+
+### 已經做到的（都經過 headless + 編輯器實測驗證）
+
+1. **Transport 層**（`village_sim_client.gd` + `village_ai` 指令）——Godot 真的
+   打得通 `poc_village_sim/server.py`／地端 llama-server，拿回合法決策 JSON
+2. **讀真實狀態**（`village_ai_act` 指令）——用 `Character.get_state_snapshot()`
+   ＋ `Agent.current_place` 組出真實 payload（不再是寫死的測試資料），透過
+   `VillageSimLocale` 的有限地點對照表把 Godot 錨點名稱翻譯成 poc 中文地點
+3. **動作真的被執行**——AI 決定 `move_to` 時，真的呼叫 `character.move_to()`，
+   角色在畫面上真的走過去（headless 測試量到座標真的變動、`is_moving()` 為真）
+4. **話真的被執行**——`output.speech` 非 null 時呼叫 `character.say()`，
+   `Bubble.is_speaking()` 確認氣泡真的顯示出來
+5. **視野真的被讀取**——`character.vision.get_visible_characters()` 抓真實
+   視野內角色，透過 `VillageSimLocale.GODOT_NAME_TO_POC_ID`（目前只認得
+   `agent`/`agent2` 兩隻demo角色）過濾成 poc id 塞進 `visible`
+
+### 2026-08-11 續：已經做到「玩家靠近自動觸發」，範圍限定單一角色
+
+抽出共用邏輯 `VillageSimDecision.decide_and_act()`（`scripts/ai/
+village_sim_decision.gd`），debug 指令跟自動觸發共用同一份，不要各寫一份。
+`agent.gd` 新增 `@export village_ai_enabled`（預設關閉，逐隻手動開）跟
+`@export poc_character_id`，`_on_spotted()` 裡加一段：開關開著、看到的是
+玩家、不在對話中，就自動打一次決策——不看認不認識，跟既有「陌生人才會
+『！』」的邏輯是獨立的兩件事。
+
+headless 驗證：玩家傳送到開了開關的 demo agent 旁邊，完全沒有下任何手動
+指令，`AGENT_IS_MOVING=true`、`BUBBLE_IS_SPEAKING=true` 都自動成立，
+`server.py` 的 access log 確認收到新的請求。
+
+**這不是完整的決策迴圈，是一個範圍很小的自動化起點**：
+- 只在玩家主動靠近時觸發，不是持續輪詢／固定間隔
+- 只有手動開了 `village_ai_enabled` 的那隻 Agent 會觸發，其餘照舊跑
+  `npc_schedule.json` 時刻表，完全不受影響
+- Agent 對 Agent 互相觸發、時刻表以外的持續性決策迴圈，都還沒做——
+  這才是本篇 Step 3 完整範圍要處理的東西，跟 `AIService` 的 `plan` envelope
+  信封格式怎麼對齊，仍然沒有結論
+
+暫停在這裡，之後接續開工前先讀這一段跟上面「已拍板」／「Step 0-3」對齊一次。
+
+### 2026-08-11 續：實測抓到一個真的會 crash 的案例，加上防呆＋log 補強
+
+編輯器實測時真的撞到一次：把 `Agent2` 的 `poc_character_id` 設成 `aji`，
+但 `GODOT_NAME_TO_POC_ID` 表裡 `agent`（另一隻角色）也對應 `aji`，兩個不同
+Godot 節點被設成同一個 poc 身分時，`Agent2` 看到 `agent`、視野清單翻譯出來
+也是 `aji`，等於送出「我看到了我自己」，`poc_village_sim` 沒有自己對自己
+的好感度紀錄，`server.py` 直接 500（`KeyError: 'aji'`）。已修：
+`decide_and_act()` 組 `visible` 清單時，跳過 poc id 等於自己 `poc_character_id`
+的條目。
+
+同時發現自動觸發路徑完全沒有可見回饋（跑失敗跟跑成功但剛好沒事，使用者
+分不出來），補了 `print()`（含 `reasoning` 欄位，之後判斷決策合不合理主要
+看它）。
+
+### 重要澄清：現在證明的是「管線通」，不是「決策內容對」
+
+實測到這裡，`village_ai_enabled` 這條自動觸發路徑已經證明**機制可行**：
+玩家靠近 → 自動觸發 → 讀真實 `get_state_snapshot()` → 翻譯地點/視野 →
+打地端模型 → 執行動作/說話，全部真的跑通，不是紙上規劃。
+
+但**決策內容本身目前是脫節的**，不能拿「角色動了、AI 回答合理」當作
+「這個決策是對的」的證據：
+
+- **AI 完全沒看到 Godot 角色的真實生理狀態**——`DecideRequest.physiology_override`
+  這個欄位一直沒接，AI 決策依據的是 `poc_village_sim` 自己存的那份角色
+  檔案（`characters/<id>.json`），跟這隻 Godot 角色的 `Stats.SPEC`（hunger/
+  energy/social/fun/mood）完全無關、不同步
+- `GODOT_NAME_TO_POC_ID` 目前是寫死的 2 條demo對照，不是真正的角色身分系統
+- `character_id`／`poc_character_id` 誰對應誰純靠操作者手動保證，程式不驗證
+
+**下一步（尚未開始）：接上 `physiology_override`**，把 Godot 的
+`get_state_snapshot()` 真的餵給 AI 當決策依據。卡點：兩邊生理模型維度
+不一樣（Godot 5 維 hunger/energy/social/fun/mood，poc_village_sim 是
+hunger/thirst/stamina/boredom/health+money 這套），不是換個欄位名字就好，
+要先決定怎麼對應（甚至要不要對應——兩套本來就是為不同情境設計的）。
+
+### `physiology_override` 欄位對照表（Godot `Stats.SPEC` ↔ poc_village_sim `physiology`）
+
+決定不改 `poc_village_sim` 的資料方向（改動範圍會牽動這幾天所有驗證過的
+門檻邏輯跟 prompt 樣板，風險/工作量都太大，而且之後真正出貨的 GDScript
+版本不會沿用 poc 這套資料模型，對齊工作可能是白做的），改成**在 Godot 端
+寫轉換**，只送對得上的欄位，其餘讓 `physiology_override` 的淺層合併沿用
+poc 角色檔案原本的值：
+
+| Godot `Stats.SPEC` | poc_village_sim `physiology` | 換算 |
+| --- | --- | --- |
+| `hunger`（100=飽→0=餓） | `hunger`（0=飽→100=餓） | **方向相反**：`poc_hunger = 100 - godot_hunger` |
+| `energy`（100=飽滿→0=沒力） | `stamina`（同方向） | 直接映射，不用轉 |
+| `fun`（100=不無聊→0=無聊） | `boredom`（方向相反） | **方向相反**：`poc_boredom = 100 - godot_fun` |
+| `social` | 無對應欄位 | poc 沒有獨立追蹤社交需求，不送 |
+| `mood` | 無對應欄位 | poc 的「情緒」是 AI 自己宣告的 `emotion`，不是 physiology 數值，不送 |
+| （無） | `thirst`／`health`／`money` | Godot `Stats.SPEC` 沒有這三項的資料來源，不送，沿用 poc 預設值 |
+
+> [!warning] 給之後寫正式 GDScript 版本的人（可能是核果，也可能是我自己）
+> 如果那份重寫**照抄了 poc_village_sim 已驗證過的門檻邏輯**（`characters.py`
+> 的 `_tier_adjective`、`if hunger >= 90` 這類具體數字），**移植的當下方向
+> 要反過來翻，不能把數字原封不動複製過去**——poc 的 `hunger >= 90`「快撐
+> 不住」，翻成 Godot 自己的方向要變成 `hunger <= 10` 才是同一個意思。
+> 這是移植當下要抓對的一次性正確性問題，不是要求你之後永遠記得「這裡是
+> 反的」——寫完的 GDScript 版本應該要是自洽的，全部用 Godot 自己的方向，
+> 不需要在執行時做任何轉換。真的要重寫時回頭讀這份對照表當檢查清單。
+
+### 2026-08-11 續：已實作，`physiology_override` 接上了
+
+`VillageSimDecision._build_physiology_override()` 照上面的對照表換算，
+每次呼叫都從 `character.get_state_snapshot()` 抓最新的即時 `Stats.SPEC`
+數值（不是一次性快照，Stats 元件本來就持續在跑 drift 模擬），塞進
+`physiology_override` 送給 `server.py`。headless 驗證：手動核對三個欄位
+換算結果，跟公式手算的期望值完全一致，`social`/`mood` 正確沒有送出去，
+`server.py` 接受這個 payload 正確回應。
+
+**現在跟前面那段「證明的是管線通，不是決策內容對」的落差縮小了一塊**——
+AI 決策依據的生理狀態，至少 `hunger`/`stamina`/`boredom` 三項已經是這隻
+Godot 角色真實累積出來的數值，不再是完全脫節的 poc 自己那份存檔。
+`thirst`/`health`/`money`（沒有 Godot 資料來源）跟 `social`/`mood`
+（沒有 poc 對應欄位）這幾項還是沿用 poc 的預設值，這塊落差還在，
+沒有辦法完全消除——除非兩邊的資料模型本身先對齊，而那個決策還沒做。
+
+### 2026-08-11 續：實測發現延遲對即時互動來說很明顯，記下體感層面的解法（尚未實作）
+
+編輯器實測 `village_ai_enabled` 自動觸發：玩家靠近到角色真的有反應（動作/
+說話），中間大概 2.5-4 秒（跟 headless 測試量到的 `elapsed_sec` 一致，
+時間主要花在 llama-server 的 grammar 約束生成本身，不是網路或 Godot 端）。
+**這個延遲對「玩家靠近、期待角色即時反應」這種互動模式來說很明顯，體感
+上會覺得卡**——玩家靠近之後畫面上完全沒有任何回饋，3 秒後突然講話/移動。
+
+這不是意外——本篇前面跟更早的專案啟動文件都提過同樣的擔心：「逐輪之後
+每輪都有一次網路延遲，『…』氣泡的等待體感要實跑才知道能不能接受」，
+更早的模組 D 前端規劃甚至寫了「推理時的『內心思考中』視覺雜訊動畫，
+完美隱藏硬體延遲」——原始設計本來就沒有預期「即時無感」，是打算靠視覺
+回饋讓等待感覺合理，不是要把延遲真的消除。
+
+**體感層面的解法（記下想法，尚未實作，等之後要動再回來看）**：
+`_trigger_village_ai()` 觸發的當下（送出請求之前），先給一個立即的視覺
+回饋——氣泡先顯示「…」思考中，或角色停下腳步做個「在想事情」的小動作，
+等 `decide_and_act()` 真的回來才把「…」換成真正的台詞/執行動作。把死寂的
+2.5-4 秒變成「看得出來它在反應」的等待，不用真的縮短延遲，體感會差很多。
+
+**縮短延遲本身的槓桿（另一個方向，同樣尚未實作）**：`REASONING_INSTRUCTION`
+的 100 字上限是延遲/品質的直接槓桿（見主線 POC 紀錄的字數上限測試），
+往下砍會更快但決策品質會掉；其他槓桿是模型量化等級、llama-server 的
+`--parallel` 設定，這些會影響全部呼叫、不只這個功能，改動範圍更大。
+
+### 2026-08-12：拆分 decide()/apply()，並記下一個待對齊的協作規範落差
+
+`VillageSimDecision.decide_and_act()` 拆成 `decide()`（純問答，不執行任何
+動作）＋ `apply()`（把結果套用到角色身上），呼叫端（`agent.gd`／
+`debug_console.gd`）自己明確呼叫兩步，不再是一次 black-box 呼叫。理由：
+對齊組長發的協作規範裡「向下呼叫、向上發信號」的精神，副作用要留在角色
+自己的程式碼路徑才看得到、才好追蹤。headless 驗證：`decide()` 單獨呼叫後
+角色沒有任何動作，呼叫 `apply()` 才真的移動，行為跟拆分前一致。
+
+> [!warning] 待對齊：組長發的資料夾結構規範，跟現有 `CLAUDE.md` 不一樣
+> 組長發了一份協作規範文件，資料夾結構建議是**按遊戲物件模組**分類
+> （`entities/player/` 場景/腳本/圖片全部放一起），跟現有 `Ailley/CLAUDE.md`
+> 記載的**按系統層**分類（`scripts/ai/`／`scripts/character/`／
+> `scripts/dialogue/`...）是兩套不同邏輯，不是小差異。
+>
+> 目前沒有動任何現有檔案去符合新規範——這個決定牽動全隊檔案怎麼放，
+> 影響範圍大，不該片面判斷。使用者原話：「規範文件是組長發的，主要是
+> Godot 端為了讓每個 PR 跟 issue 避免重工或找不到檔案使用的，如果我們
+> 製作 Godot 文件，可能要配合」——代表這份新規範至少對**新產出的 Godot
+> 文件/檔案**適用，但現有結構要不要整個重排、`CLAUDE.md` 要不要一併更新，
+> 都還沒有結論。之後如果要新增 AI 相關的 Godot 檔案（例如把
+> `village_sim_client.gd`／`village_sim_decision.gd` 這類正式收進主線），
+> 先跟組長確認這份新規範的實際適用範圍再動作。
+
+### 2026-08-12 續：已把 main 合併進來，分支跟上團隊進度
+
+`git merge origin/main`，`agent.gd` 一處衝突：main 的聽覺感測在 `_on_spotted()`
+後面加了 `_on_noise_heard()`，跟這條分支加的 `_trigger_village_ai()` 插在
+同一個位置，兩個都是新函式、沒有邏輯重疊，直接兩個都留下。其餘檔案（`character.gd`／
+`player.gd`／`main.tscn`／`project.godot`／背包與狀態面板等 UI）都是 main
+單方面新增，git 自動合併沒有動到這條分支的東西。
+
+合併進來的內容跟這條分支要做的事無關：聽覺感測（`make_noise()`／F 鍵）、
+背包/狀態/設定面板、熱鍵列偷焦點的修正。headless 重新匯入＋開機驗證都過，
+無 script error。
