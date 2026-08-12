@@ -58,17 +58,30 @@ func load_npc_data():
 func get_npc(id:String):
 	return npc_data.get(id, null)
 
-# 這個角色該用哪份行程模板。沒有指定就回空字串，由呼叫端決定怎麼退回
+# assignments 查一個欄位，查不到一律回空字串，由呼叫端決定怎麼退回。
+#
+# 一定要檢查那一格真的是 Dictionary：舊格式是 `"Agent": "npc001"` 這種純字串，
+# 有人照舊寫法加一隻回來的話，String 沒有 get() 會直接炸——而這條路徑是從基底
+# Character._ready() 走的，炸掉的是整場角色（含 Player），不是那一隻而已。
+# null 也要擋，str(null) 回傳的是非空字串 "<null>"，會被當成有效值採用
+func _assignment(node_name:String, field:String)->String:
+	var entry = schedule_assignments.get(node_name)
+	if not entry is Dictionary:
+		return ""
+	var value = entry.get(field)
+	return "" if value == null else str(value)
+
+# 這個角色該用哪份行程模板
 func get_schedule_template(node_name:String)->String:
-	return str(schedule_assignments.get(node_name, {}).get("schedule_template", ""))
+	return _assignment(node_name, "schedule_template")
 
 # 這個角色的固定身分。沒有指定就回空字串，呼叫端退回執行期生成的值——
 # 只有場景裡固定的 demo NPC 會有指定，Player 跟未指派的角色本來就不該有
 func get_character_id(node_name:String)->String:
-	return str(schedule_assignments.get(node_name, {}).get("character_id", ""))
+	return _assignment(node_name, "character_id")
 
 func get_character_name(node_name:String)->String:
-	return str(schedule_assignments.get(node_name, {}).get("character_name", ""))
+	return _assignment(node_name, "character_name")
 
 func get_place_data(place_name:String):
 	if !places.has(place_name):
