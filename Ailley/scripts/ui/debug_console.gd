@@ -311,6 +311,9 @@ func _cmd_status(args: PackedStringArray) -> void:
 	if snapshot["in_conversation"]:
 		_field("CON_FIELD_TALK", L10n.t("CON_TALK_ACTIVE"))
 
+	if snapshot["working"]:
+		_field("CON_FIELD_WORK", L10n.t("CON_WORK_ACTIVE"))
+
 	# 直接掃 Stats.SPEC，所以之後加數值不用回來改這裡。
 	# SPEC 的 label 存的是翻譯 key，翻譯在這個顯示端做
 	if snapshot.has("stats"):

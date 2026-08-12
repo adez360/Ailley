@@ -27,13 +27,19 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 
 	# 先看附近有沒有可互動物件（目前只有工作站），沒有才退回搭話——
-	# 兩者都靜默失敗：玩家沒有回饋 UI，主控台的對應指令才會印原因碼
+	# 兩者對玩家都是靜默失敗，沒有回饋 UI；但失敗原因會印成 warning
+	# （跟 character.gd 的 _check_stuck() 同一種寫法），方便開發時對著
+	# 編輯器 Output/Debugger 面板看，不用另外開主控台查
 	var workstation := find_nearest_workstation()
 	if workstation != null:
-		work_at(workstation)
+		var reason := work_at(workstation)
+		if reason != WORK_OK:
+			push_warning("%s: work_at 失敗（%s）" % [character_name, reason])
 		return
 
-	talk_to(find_nearest_character())
+	var reason := talk_to(find_nearest_character())
+	if reason != TALK_OK:
+		push_warning("%s: talk_to 失敗（%s）" % [character_name, reason])
 
 # 讀取 WASD 輸入，回傳正規化後的方向（斜向不會加速）
 func get_input_direction() -> Vector2:
