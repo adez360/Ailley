@@ -16,8 +16,8 @@
 [ext_resource type="Script" uid="uid://bnxsowwm2cpvd" path="res://scripts/world/places.gd" id="12_sc7p8"]
 [ext_resource type="Script" path="res://scripts/ui/status_panel.gd" id="15_jbj1t"]
 [ext_resource type="Texture2D" uid="uid://b06f01r4ovc0r" path="res://assets/ui/Setting menu.png" id="16_muem4"]
-[ext_resource type="Script" path="res://scripts/ui/inventory_panel.gd" id="17_dp3eg"]
-[ext_resource type="Script" path="res://scripts/ui/hotbar.gd" id="17_muem4"]
+[ext_resource type="Script" uid="uid://bghlt4yqp6xrt" path="res://scripts/ui/inventory_panel.gd" id="17_dp3eg"]
+[ext_resource type="Script" uid="uid://hism2nudt3ss" path="res://scripts/ui/hotbar.gd" id="17_muem4"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_pl1ev"]
 texture = ExtResource("3_y8peb")
@@ -372,21 +372,26 @@ anchor_left = 0.5
 anchor_top = 1.0
 anchor_right = 0.5
 anchor_bottom = 1.0
-offset_left = -135.0
-offset_top = -48.0
-offset_right = 135.0
+offset_left = -104.0
+offset_top = -42.0
+offset_right = 104.0
 offset_bottom = -8.0
+grow_horizontal = 2
+grow_vertical = 0
 mouse_filter = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_gqmmt")
 
 [node name="Grid" type="GridContainer" parent="Hotbar/Backdrop"]
-layout_mode = 0
+layout_mode = 1
+anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = 6.0
 offset_top = 6.0
 offset_right = -6.0
 offset_bottom = -6.0
+grow_horizontal = 2
+grow_vertical = 2
 mouse_filter = 2
-theme_override_constants/h_separation = 3
+theme_override_constants/h_separation = 2
 columns = 9

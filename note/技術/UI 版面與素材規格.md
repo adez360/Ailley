@@ -4,8 +4,8 @@ tags:
   - ui
 status: 已實作
 scene: scenes/bubble.tscn, scenes/chat_input.tscn, scenes/debug_console.tscn, scenes/main.tscn
-script: scripts/ui/bubble.gd, scripts/ui/status_panel.gd, scripts/ui/inventory_panel.gd
-updated: 2026-08-11
+script: scripts/ui/bubble.gd, scripts/ui/status_panel.gd, scripts/ui/inventory_panel.gd, scripts/ui/hotbar.gd
+updated: 2026-08-12
 ---
 
 # UI 版面與素材規格
@@ -154,12 +154,12 @@ Ink/Amber 4.87:1、Cream/Moss 5.84:1、Cream/Ember 8.27:1。停用文字 3.79:1 
 
 | 節點 | 位置 |
 | --- | --- |
-| `chat_input.tscn` 的 `Input` | 底部置中，240×20，離底 12 |
+| `chat_input.tscn` 的 `Input` | 底部置中，240×22，疊在 `Hotbar/Backdrop` 正上方，離其頂邊 4 |
 | `debug_console.tscn` 的 `Root` | 頂部橫向貼邊，左右各留 4，高 128 |
 | `main.tscn` 的 `HUD/TimeLabel` | 左上 (4, 2) |
 | `main.tscn` 的 `StatusPanel/Panel` | 螢幕置中，150×175 |
 | `main.tscn` 的 `InventoryPanel/Panel` | 螢幕置中，280×160 |
-| `main.tscn` 的 `Hotbar/Backdrop` | 底部置中，270×40，離底 8 |
+| `main.tscn` 的 `Hotbar/Backdrop` | 底部置中，208×34，離底 8 |
 | 氣泡折行寬度 | `bubble.gd` 的 `MAX_LINE_WIDTH = 132`，11px 下一行約 12 個中文字 |
 
 氣泡的 `BORDER_X` / `BORDER_TOP` / `BORDER_BOTTOM` / `TAIL_INSET_FROM_RIGHT` 對應素材本身的 patch margin，只有換素材時才動，跟解析度無關。
@@ -192,6 +192,12 @@ StatsBox 底下的 Label 是 `_ready()` 動態長出來的（見 stats.gd 同款
 同一張圖另外還有一組冷色調的變體，跟本專案色系不搭，沒用）：
 `region_rect = Rect2(11, 59, 26, 28)`。整張圖是 48×48 的網格排列
 （icon 本體 26×28，其餘是留白），要切別的圖示時先假設同一個網格對。
+
+快捷欄的格子在畫面上是縮小過的（`hotbar.gd` 的 `SLOT_SIZE = Vector2(20, 22)`），
+原生 26×28 素材沒動——`TextureButton` 開 `ignore_texture_size = true`
+配 `stretch_mode = STRETCH_KEEP_ASPECT_CENTERED`，靠 `custom_minimum_size`
+在顯示時等比縮小，不是切一張小張素材。主背包 `InventoryPanel` 沒有這個限制，
+維持原生 26×28。
 
 快捷欄（`hotbar.gd`，螢幕下方常駐 9 格）跟主背包（`inventory_panel.gd`，
 按 P 開關的 27 格）是**兩個獨立的 CanvasLayer**，不是同一個節點樹底下的
