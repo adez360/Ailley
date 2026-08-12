@@ -275,8 +275,12 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 #
 # 1. 過濾出還在時間窗內的候選（沒有 window 的一律算候選）
 # 2. 每筆算分數，取最高的
-# 3. 過承諾檢查才真的切換——分數贏一點點、或目前任務才剛開始執行，
-#    都不足以打斷，避免兩個分數接近的任務讓角色來回抖動
+# 3. 過承諾檢查才真的切換——但承諾檢查（含 interruptible）只保護「還在自己
+#    時間窗內」的目前任務。窗口已經過期的任務不受保護，該讓位就讓位——
+#    否則 sleep（interruptible=false）會在窗口結束後卡死，永遠醒不過來，
+#    因為每次重算都在「不可中斷」那關直接 return，連「自己的窗口已經過了」
+#    都沒機會判斷到。interruptible 管的是「有沒有更高分的候選能搶」，
+#    不該管「自己是不是早就該結束了」，這是兩件事
 func _reevaluate() -> void:
 	if _tasks.is_empty():
 		return
@@ -306,17 +310,22 @@ func _reevaluate() -> void:
 	if best["id"] == _current_task["id"]:
 		return
 
-	if not is_interruptible():
-		return
+	var current_still_in_window := _in_window_or_unwindowed(_current_task, now)
 
-	var current_score := _score(_current_task, now)
-	if best_score < current_score + HYSTERESIS:
-		return
+	if current_still_in_window:
+		if not is_interruptible():
+			return
 
-	var committed_for: int = now_minutes - _current_task_started_at
-	if _current_task.get("source", "") != "reflex" and committed_for < MIN_COMMIT:
-		return
+		var current_score := _score(_current_task, now)
+		if best_score < current_score + HYSTERESIS:
+			return
 
+		var committed_for: int = now_minutes - _current_task_started_at
+		if _current_task.get("source", "") != "reflex" and committed_for < MIN_COMMIT:
+			return
+
+	# current_still_in_window == false：目前任務自己的窗口已經過了，
+	# 沒有繼續佔著的理由，不用比分數也不用管 interruptible，直接換
 	_run(best, now_minutes)
 
 func _run(task: Dictionary, now_minutes: int) -> void:
