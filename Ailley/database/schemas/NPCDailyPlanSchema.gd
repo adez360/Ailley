@@ -11,14 +11,11 @@ static func create(db) -> bool:
 
 		npc_id TEXT NOT NULL,
 
-		day_of_week INTEGER NOT NULL DEFAULT 0
+		-- 行程起始時間，用tick計算
+		start_time INTEGER NOT NULL DEFAULT 0
 			CHECK (
-				day_of_week BETWEEN 0 AND 6
+				start_time BETWEEN 0 AND 1439
 			),
-
-		start_time TEXT NOT NULL,
-
-		end_time TEXT,
 
 		action TEXT NOT NULL DEFAULT '',
 
@@ -54,10 +51,6 @@ static func create(db) -> bool:
 	CREATE INDEX IF NOT EXISTS
 	idx_npc_daily_plan_npc_id
 	ON npc_daily_plan(npc_id);
-
-	CREATE INDEX IF NOT EXISTS
-	idx_npc_daily_plan_day
-	ON npc_daily_plan(npc_id, day_of_week);
 	"""
 
 	if not db.query(sql):

@@ -7,29 +7,18 @@ static func create(db) -> bool:
 	var sql := """
 	CREATE TABLE IF NOT EXISTS npc_appearance (
 
+		-- 對應NPC
 		npc_id TEXT PRIMARY KEY,
-
-		height INTEGER NOT NULL DEFAULT 170
-			CHECK (height > 0),
-
-		weight INTEGER NOT NULL DEFAULT 60
-			CHECK (weight > 0),
-
-		hair_color TEXT DEFAULT '',
-
-		hair_style TEXT DEFAULT '',
-
-		eye_color TEXT DEFAULT '',
-
-		skin_color TEXT DEFAULT '',
-
-		body_type TEXT DEFAULT '',
-
-		face_description TEXT DEFAULT '',
-
-		clothing_description TEXT DEFAULT '',
-
-		appearance_description TEXT DEFAULT '',
+		-- 髮型
+		hair_id TEXT DEFAULT '',
+		-- 臉型
+		face_id TEXT DEFAULT '',
+		-- 衣服
+		clothes_id TEXT DEFAULT '',
+		-- 配件1
+		decoration1_id TEXT DEFAULT '',
+		-- 配件2
+		decoration2_id TEXT DEFAULT '',
 
 		updated_at TEXT NOT NULL
 			DEFAULT CURRENT_TIMESTAMP,

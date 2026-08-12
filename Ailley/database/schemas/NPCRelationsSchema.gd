@@ -33,11 +33,6 @@ static func create(db) -> bool:
 				relations_debt BETWEEN -100 AND 100
 			),
 
-		reputation INTEGER NOT NULL DEFAULT 0
-			CHECK (
-				reputation BETWEEN -100 AND 100
-			),
-
 		updated_at TEXT NOT NULL
 			DEFAULT CURRENT_TIMESTAMP,
 

@@ -91,7 +91,6 @@ static func initialize(db) -> bool:
 		NPCPersonalitySchema,
 		NPCAppearanceSchema,
 		NPCOccupationSchema,
-		NPCCreatorMessageSchema,
 		NPCTabooSchema,
 
 

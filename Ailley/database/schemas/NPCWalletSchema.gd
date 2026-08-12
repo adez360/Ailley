@@ -11,7 +11,7 @@ static func create(db) -> bool:
 
 		npc_id INTEGER NOT NULL UNIQUE,
 
-		balance INTEGER NOT NULL DEFAULT 0,
+		money INTEGER NOT NULL DEFAULT 300,
 
 		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -19,7 +19,7 @@ static func create(db) -> bool:
 			REFERENCES npc(npc_id)
 			ON DELETE CASCADE,
 
-		CHECK (balance >= 0)
+		CHECK (money >= 0)
 	);
 	"""
 

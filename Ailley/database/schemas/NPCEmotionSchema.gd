@@ -8,26 +8,18 @@ static func create(db) -> bool:
 	CREATE TABLE IF NOT EXISTS npc_emotion (
 
 		npc_id TEXT PRIMARY KEY,
-
+		-- 八種情緒
 		emotion TEXT NOT NULL DEFAULT 'neutral',
 
 		intensity INTEGER NOT NULL DEFAULT 0
 			CHECK (intensity BETWEEN 0 AND 100),
 
-		happiness INTEGER NOT NULL DEFAULT 50
-			CHECK (happiness BETWEEN 0 AND 100),
-
-		anger INTEGER NOT NULL DEFAULT 0
-			CHECK (anger BETWEEN 0 AND 100),
-
-		fear INTEGER NOT NULL DEFAULT 0
-			CHECK (fear BETWEEN 0 AND 100),
-
-		sadness INTEGER NOT NULL DEFAULT 0
-			CHECK (sadness BETWEEN 0 AND 100),
-
-		stress INTEGER NOT NULL DEFAULT 0
-			CHECK (stress BETWEEN 0 AND 100),
+		-- 起因事件
+		cause_event_id TEXT NOT NULL,
+		
+		-- 剩餘 tick，每 tick 減 1
+		duration_left  INTEGER NOT NULL DEFAULT 0
+			CHECK (duration_left >= 0),
 
 		updated_at TEXT NOT NULL
 			DEFAULT CURRENT_TIMESTAMP,

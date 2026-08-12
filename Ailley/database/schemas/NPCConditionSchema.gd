@@ -1,6 +1,12 @@
 class_name NPCConditionSchema
 extends RefCounted
 
+# "conditions": [
+#    {
+#        "type": "injured",
+#        "turns_left": 8
+#    }
+#]
 
 static func create(db) -> bool:
 
@@ -9,37 +15,11 @@ static func create(db) -> bool:
 
 		npc_id TEXT PRIMARY KEY,
 
-		physical_condition INTEGER NOT NULL DEFAULT 100
-			CHECK (
-				physical_condition BETWEEN 0 AND 100
-			),
+		-- 生理衍生（由 state.physical 自動觸發） / 社會狀態 / 行動佔用 / 終局狀態
+		type TEXT NOT NULL,
 
-		mental_condition INTEGER NOT NULL DEFAULT 100
-			CHECK (
-				mental_condition BETWEEN 0 AND 100
-			),
-
-		health_condition INTEGER NOT NULL DEFAULT 100
-			CHECK (
-				health_condition BETWEEN 0 AND 100
-			),
-
-		fatigue INTEGER NOT NULL DEFAULT 0
-			CHECK (
-				fatigue BETWEEN 0 AND 100
-			),
-
-		pain INTEGER NOT NULL DEFAULT 0
-			CHECK (
-				pain BETWEEN 0 AND 100
-			),
-
-		sick INTEGER NOT NULL DEFAULT 0
-			CHECK (
-				sick IN (0, 1)
-			),
-
-		condition_description TEXT DEFAULT '',
+		-- 剩餘 tick。-1 表示持續到條件解除為止
+		turns_left INTEGER NOT NULL DEFAULT 0,
 
 		updated_at TEXT NOT NULL
 			DEFAULT CURRENT_TIMESTAMP,
