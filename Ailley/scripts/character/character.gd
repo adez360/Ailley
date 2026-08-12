@@ -67,6 +67,7 @@ const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader
 @onready var bubble: Node2D = get_node_or_null("Bubble")
 @onready var vision: Vision = get_node_or_null("Vision")
 @onready var inventory: Inventory = get_node_or_null("Inventory")
+@onready var work_progress: WorkProgress = get_node_or_null("WorkProgress")
 
 # 最後一次的面向：front / back / right，停下時用來挑 idle 動畫
 var facing := "front"
@@ -301,18 +302,26 @@ func work_at(workstation: Workstation) -> String:
 
 	_working = true
 	stop_moving()
+	if work_progress != null:
+		work_progress.show_progress(0.0)
 	_run_work(workstation)
 	return WORK_OK
 
 # 數 GameClock.time_changed 發了幾次來算「過了幾個遊戲分鐘」，不是掛
 # get_tree().create_timer()——後者是現實時間，跟 GameClock 的時間刻度脫鉤，
-# 遊戲時間變速的話兩邊就會對不上
+# 遊戲時間變速的話兩邊就會對不上。進度條每過一個遊戲分鐘更新一次，
+# 不是照 _process() 的 delta 平滑跑——工作本身就是離散地一分鐘一分鐘算，
+# 進度條應該老實反映這件事，不用假裝連續
 func _run_work(workstation: Workstation) -> void:
 	for i in WORK_DURATION_MINUTES:
 		await GameClock.time_changed
+		if work_progress != null:
+			work_progress.show_progress(float(i + 1) / float(WORK_DURATION_MINUTES))
 
 	workstation.release(self)
 	_working = false
+	if work_progress != null:
+		work_progress.hide_progress()
 
 	if inventory != null:
 		inventory.add_money(WORK_PAYMENT)
