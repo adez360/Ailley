@@ -59,6 +59,15 @@ var _current_task: Dictionary = {}
 ## 給 MIN_COMMIT 判斷用
 var _current_task_started_at := 0
 
+## 這隻 Agent 的 AI 呼叫要打去哪個具名 provider（見 AIConfig，例如
+## "local"／"openrouter"）。空字串就用設定檔的 default_provider。
+##
+## 刻意做成角色身上的屬性，不查表——這是「角色被丟進世界那一刻決定用
+## 哪個服務」的介面，動態生成系統（issue #73）做出來之後，生成流程直接
+## 把這個屬性設到剛生成的角色上即可，這個欄位跟它的用法都不用改。
+## 現在唯一的呼叫端是這裡的 Inspector，之後只是多一個呼叫端。
+@export var ai_provider := ""
+
 var current_place := ""
 var current_state := "idle"
 
