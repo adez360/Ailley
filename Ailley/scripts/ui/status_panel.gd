@@ -1,7 +1,7 @@
 class_name StatusPanel
 extends CanvasLayer
 
-## 點選角色彈出的狀態表：姓名（標題列）、年齡，以及 Stats.SPEC 的全部數值。
+## 點選角色彈出的狀態表：姓名（標題列）、年齡、金錢，以及 Stats.SPEC 的全部數值。
 ## 點角色本體開啟，再點一次空白處或按 Esc 關閉。
 ##
 ## 年齡目前是 AGE_PLACEHOLDER 示意值 —— Character 還沒有年齡欄位，等年齡系統
@@ -15,6 +15,7 @@ extends CanvasLayer
 ##       TitleLabel（疊在 TitleBg 上面，放角色名字）
 ##       VBox
 ##         AgeLabel
+##         MoneyLabel（沒掛 Inventory 的角色會隱藏，跟 StatsBox 同一種條件顯示）
 ##         StatsBox（VBoxContainer，空的 —— 本腳本依 Stats.SPEC 動態長出一個 Label）
 ##         HintLabel
 ##
@@ -37,6 +38,7 @@ const AGE_PLACEHOLDER := "—"
 @onready var panel: Panel = $Panel
 @onready var title_label: Label = $Panel/TitleLabel
 @onready var age_label: Label = $Panel/VBox/AgeLabel
+@onready var money_label: Label = $Panel/VBox/MoneyLabel
 @onready var stats_box: VBoxContainer = $Panel/VBox/StatsBox
 @onready var hint_label: Label = $Panel/VBox/HintLabel
 
@@ -90,6 +92,13 @@ func _pick_character(screen_pos: Vector2) -> Character:
 func open(character: Character) -> void:
 	title_label.text = character.character_name
 	age_label.text = _line("UI_STATUS_AGE", AGE_PLACEHOLDER)
+
+	# 跟 debug_console.gd 的 status 指令同一個條件——沒掛 Inventory 就沒有錢可顯示，
+	# 不是「顯示 0」，是這個角色根本沒有這項資料
+	var has_money := character.inventory != null
+	money_label.visible = has_money
+	if has_money:
+		money_label.text = _line("UI_STATUS_MONEY", str(character.inventory.get_money()))
 
 	var has_stats := character.stats != null
 	stats_box.visible = has_stats

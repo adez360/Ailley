@@ -27,6 +27,25 @@ const TALK_TOO_FAR := "TOO_FAR"
 const TALK_TARGET_BUSY := "TARGET_BUSY"
 const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 
+const WORK_RANGE := 32.0		# 跟 TALK_RANGE 一樣的距離門檻，2 格
+
+## work_at() 的失敗原因碼，形狀比照 TALK_*——計畫 §5.3 要求每個動作都要能講出
+## 為什麼失敗，AI 才有辦法重排行程
+const WORK_OK := ""
+const WORK_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const WORK_TOO_FAR := "TOO_FAR"
+const WORK_OCCUPIED := "OCCUPIED"	# 工作站已經有別人在用
+const WORK_BUSY := "BUSY"		# 自己已經在對話，或已經在工作
+
+## 工作要花的遊戲分鐘數。GameClock 一遊戲分鐘 = 1 現實秒（見 GameClock.gd 的
+## seconds_per_game_minute），所以這裡不直接寫「等 5 秒」，改數
+## GameClock.time_changed 發了幾次——遊戲時間流速哪天調快調慢，這裡不用跟著改
+const WORK_DURATION_MINUTES := 5
+
+## 做完一次工作固定拿多少錢。#62 明講先不做成功率或產出計價，
+## 職業系統留到《99 待規劃項目清單》P-02 拍板之後再做
+const WORK_PAYMENT := 50
+
 ## 滑鼠指到時套在 sprite 上的描邊
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
 
@@ -48,6 +67,7 @@ const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader
 @onready var bubble: Node2D = get_node_or_null("Bubble")
 @onready var vision: Vision = get_node_or_null("Vision")
 @onready var inventory: Inventory = get_node_or_null("Inventory")
+@onready var work_progress: WorkProgress = get_node_or_null("WorkProgress")
 
 # 最後一次的面向：front / back / right，停下時用來挑 idle 動畫
 var facing := "front"
@@ -151,9 +171,11 @@ func get_body_position() -> Vector2:
 func is_in_conversation() -> bool:
 	return _conversation != null
 
-# 目前在做的事可不可以被打斷。基底一律可以，Agent 依行程覆寫
+# 目前在做的事可不可以被打斷。工作中一律不行——work_at() 擋掉「對話中的人去工作」，
+# 這裡是對稱的另一半：擋掉「把工作中的人拉進對話」。只做單邊的話，角色會同時冒
+# 氣泡跟進度條，而且工作照樣走完、錢照領。Agent 再依行程加上自己的條件
 func is_interruptible() -> bool:
-	return true
+	return not _working
 
 # 對某人搭話。成功回傳 TALK_OK（空字串），否則回傳失敗原因碼
 func talk_to(other: Character) -> String:
@@ -161,7 +183,9 @@ func talk_to(other: Character) -> String:
 		return TALK_TARGET_NOT_FOUND
 	if other == self:
 		return TALK_TARGET_IS_SELF
-	if is_in_conversation() or other.is_in_conversation():
+	# 自己在工作中也算忙。少了這條，E 鍵在 work_at() 回 WORK_BUSY 之後退回搭話，
+	# 工作中的角色就開得起對話——正好繞過上面 is_interruptible() 要擋的那件事
+	if is_in_conversation() or _working or other.is_in_conversation():
 		return TALK_TARGET_BUSY
 	if get_body_position().distance_to(other.get_body_position()) > TALK_RANGE:
 		return TALK_TOO_FAR
@@ -244,6 +268,97 @@ func make_noise(radius: float = NOISE_RADIUS) -> void:
 			other.noise_heard.emit(self)
 
 
+# ---- 工作 ----
+
+var _working := false
+
+
+func is_working() -> bool:
+	return _working
+
+# 找最近的可工作地點。E 鍵優先判斷有沒有可互動物件（見 player.gd），
+# 沒有才退回搭話——跟 find_nearest_character() 是同一種找法，只是換成
+# "workstations" 這個群組
+func find_nearest_workstation() -> Workstation:
+	var nearest: Workstation = null
+	var shortest := WORK_RANGE
+
+	for node in get_tree().get_nodes_in_group("workstations"):
+		var distance := get_body_position().distance_to(node.global_position)
+		if distance <= shortest:
+			shortest = distance
+			nearest = node
+
+	return nearest
+
+# 開始在某個工作站工作。成功回傳 WORK_OK（空字串）不代表錢已經到手——
+# 這裡只負責卡位、開始計時，真正撥款在 _run_work()，時間到了才給，
+# 跟 talk_to() 開對話一樣是 fire-and-forget
+func work_at(workstation: Workstation) -> String:
+	if workstation == null:
+		return WORK_TARGET_NOT_FOUND
+	if is_in_conversation() or _working:
+		return WORK_BUSY
+	if get_body_position().distance_to(workstation.global_position) > WORK_RANGE:
+		return WORK_TOO_FAR
+	if not workstation.try_occupy(self):
+		return WORK_OCCUPIED
+
+	_working = true
+	stop_moving()
+	if work_progress != null:
+		work_progress.show_progress(0.0)
+	_run_work(workstation)
+	return WORK_OK
+
+# 數 GameClock.time_changed 發了幾次來算「過了幾個遊戲分鐘」，不是掛
+# get_tree().create_timer()——後者是現實時間，跟 GameClock 的時間刻度脫鉤，
+# 遊戲時間變速的話兩邊就會對不上。進度條每過一個遊戲分鐘更新一次，
+# 不是照 _process() 的 delta 平滑跑——工作本身就是離散地一分鐘一分鐘算，
+# 進度條應該老實反映這件事，不用假裝連續
+func _run_work(workstation: Workstation) -> void:
+	for i in WORK_DURATION_MINUTES:
+		await GameClock.time_changed
+
+		# 這個協程橫跨 5 個遊戲分鐘，中間什麼都可能發生。兩件事要在每次醒來時重驗：
+		#
+		# 一、工作站可能已經被移除。await 之後直接 workstation.release() 會炸
+		#     「call function on a previously freed instance」。
+		# 二、角色可能自己走開了——Player 一按方向鍵就蓋掉 work_at() 的 stop_moving()，
+		#     `_working` 攔不住移動。不重驗距離的話，按下 E 之後跑到地圖另一頭，
+		#     時間到照樣入帳，而且這 5 分鐘工作站一直被卡著、現場卻沒人。
+		#
+		# 兩種都是「沒有做完」，所以收尾但不撥款：錢是站在這裡做滿的報酬，
+		# 不是按下 E 的報酬
+		if not is_instance_valid(workstation) \
+				or get_body_position().distance_to(workstation.global_position) > WORK_RANGE:
+			_end_work(workstation)
+			return
+
+		if work_progress != null:
+			work_progress.show_progress(float(i + 1) / float(WORK_DURATION_MINUTES))
+
+	_end_work(workstation)
+	if inventory != null:
+		inventory.add_money(WORK_PAYMENT)
+
+# 收尾：放掉工作站、清狀態與進度條。**撥款不在這裡**——做滿全程才給，
+# 半途放棄走的是同一條收尾路徑但沒有那一行
+func _end_work(workstation: Workstation) -> void:
+	if is_instance_valid(workstation):
+		workstation.release(self)
+	_working = false
+	if work_progress != null:
+		work_progress.hide_progress()
+	_on_work_finished()
+
+# 工作結束後的鉤子。基底不做事；Agent 覆寫它重算行程——工作是 5 遊戲分鐘的
+# 阻塞動作，期間可能已經跨過行程的整點，跟 exit_conversation() 是同一個理由。
+# 用覆寫而不是在基底嗅探 is_in_group("agents")：子類別的事由子類別自己做
+func _on_work_finished() -> void:
+	pass
+
+
 # ---- 狀態快照 ----
 
 # 純資料的角色狀態，不含任何翻譯字串或 BBCode。debug_console.gd 的 status
@@ -265,6 +380,7 @@ func get_state_snapshot() -> Dictionary:
 		"facing": facing,
 		"animation": sprite.animation,
 		"in_conversation": is_in_conversation(),
+		"working": is_working(),
 	}
 
 	if stats != null:
