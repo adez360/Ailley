@@ -313,8 +313,7 @@ Agent 真的改去該地點 → 關掉 AI 後退回純 schedule 行為。
   組出真實 payload，透過 `VillageSimLocale` 把 Godot 錨點名稱翻譯成 poc 中文地點
 - **動作與話語真的被執行**：`move_to` 真的移動、`speech` 真的呼叫 `character.say()`
 - **視野真的被讀取**：`character.vision.get_visible_characters()` 過濾成 poc id
-  塞進 `visible`（`GODOT_ID_TO_POC_ID` 拿 `character_id` 查，目前只認得
-  `Agent`/`Agent2` 兩隻 demo 角色）
+  塞進 `visible`（讀對方自己的 `poc_character_id`，沒設定的角色一律略過）
 - **玩家靠近自動觸發**：`village_ai_enabled` 開啟時，`_on_spotted()` 偵測到玩家
   就自動打一次決策，範圍限定單一角色（逐隻手動開，不是全體 Agent 一起開）
 - **`decide()`／`apply()` 分離**：`decide()` 純問答不執行動作，`apply()` 才套用
@@ -332,7 +331,8 @@ Agent 真的改去該地點 → 關掉 AI 後退回純 schedule 行為。
 - `physiology_override` 已接上（見下表），但 `thirst`/`health`/`money`（Godot
   無資料來源）與 `social`/`mood`（poc 無對應欄位）仍沿用 poc 角色檔案的預設值，
   不是這隻 Godot 角色的真實狀態
-- `GODOT_ID_TO_POC_ID` 是寫死的 2 條 demo 對照，不是正式的角色身分系統
+- `poc_character_id` 是每隻 Agent 手填的 `@export`，操作者要自己保證填對，
+  不是正式的角色身分對照方案
 - `character_id`／`poc_character_id` 誰對應誰純靠操作者手動保證，程式不驗證
 - **決策準不準沒有系統性驗證**——只能肉眼看 `reasoning` 判斷合不合理
 - poc 動作白名單 38 種裡只有 `move_to`／說話真的執行，其餘因為 Godot 沒有

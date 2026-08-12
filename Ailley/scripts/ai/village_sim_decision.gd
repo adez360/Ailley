@@ -37,8 +37,14 @@ static func decide(character: Node, poc_character_id: String, base_url: String =
 	var visible: Array = []
 	if character.vision != null:
 		for other in character.vision.get_visible_characters():
-			var other_poc_id: String = VillageSimLocale.GODOT_ID_TO_POC_ID.get(other.character_id, "")
-			if other_poc_id.is_empty():
+			# 問這隻角色自己「你在 poc 那邊是誰」，不要在這裡放一張場景專屬的
+			# 對照表——那等於替 Godot 角色發第二組身分，而且表裡的值跟場景一改
+			# 就靜默對不上。沒有這個欄位（Player、沒設定的 Agent）就略過：
+			# 假造一個 id 塞進去比讓 AI 不知道有這個人更糟，grammar 會把它當合法
+			# 候選值，AI 可能因此做出指向根本不存在的對象的決策
+			var raw_poc_id = other.get("poc_character_id")
+			var other_poc_id: String = "" if raw_poc_id == null else str(raw_poc_id)
+			if not VillageSimLocale.POC_CHARACTER_NAMES.has(other_poc_id):
 				continue
 			# 防呆：兩個不同的 Godot 節點被設定成同一個 poc_character_id 時
 			# （操作者設定錯誤，程式不驗證這件事），視野清單不能把「跟自己

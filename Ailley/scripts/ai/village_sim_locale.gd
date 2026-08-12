@@ -26,20 +26,6 @@ const POC_CHARACTER_NAMES := {
 	"aji": "阿吉",
 }
 
-## Godot 角色的 character_id -> poc_village_sim 內部 id，demo 用的暫時對照，
-## 只給「視野內其他角色要不要塞進 visible 清單」這件事用。目前場景只有
-## Agent／Agent2 兩隻有固定 id（npc_schedule.json 的 assignments），其他角色
-## 一律查不到（回傳空字串），呼叫端要略過查不到的人，不要假造一個 id 塞進去——
-## 幻想出一個查不到對應的人，比讓 AI 不知道有這個人更糟（grammar 會把它當合法
-## 候選值，AI 可能因此做出指向根本不存在的對象的決策）。
-##
-## key 用 character_id 不用 character_name：顯示名是玩家可以改的，
-## 拿它當 join key 的話改名就查不到，而查不到是靜默略過，不會有人看到
-const GODOT_ID_TO_POC_ID := {
-	"9c08a635-fd0e-4d4c-a48a-0077f684f36d": "aji",	# Agent（阿吉）
-	"bed2d401-0ef5-4b47-b63f-a782844e647f": "alan",	# Agent2（阿蘭）
-}
-
 ## Godot 地點錨點名稱 -> poc_village_sim 中文地點名稱（SharedLocation 那幾個，
 ## 不含「家」——家是每個角色專屬的，見 godot_home_to_poc_zh()）
 const GODOT_TO_POC_SHARED := {
