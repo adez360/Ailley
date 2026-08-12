@@ -37,7 +37,7 @@ static func decide(character: Node, poc_character_id: String, base_url: String =
 	var visible: Array = []
 	if character.vision != null:
 		for other in character.vision.get_visible_characters():
-			var other_poc_id: String = VillageSimLocale.GODOT_NAME_TO_POC_ID.get(other.character_name, "")
+			var other_poc_id: String = VillageSimLocale.GODOT_ID_TO_POC_ID.get(other.character_id, "")
 			if other_poc_id.is_empty():
 				continue
 			# 防呆：兩個不同的 Godot 節點被設定成同一個 poc_character_id 時

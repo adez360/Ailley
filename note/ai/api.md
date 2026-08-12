@@ -204,7 +204,9 @@ spotted 且 village_ai_enabled 且對方是玩家 → 觸發一次 VillageSimDec
   只比距離的話 2..11px 是死角：距離說沒到，find_path() 卻因同格只回一個點
   → move_to() false → 假的「走不到」。每次重算行程都會噴
 † schedule_template ≠ character_id：前者是「用哪份資料」，後者是「我是誰」
-† assignments 的 key 是節點名不是 character_id（id 是 UUID，json 裡手寫不出來）
+† assignments 的 key 是節點名不是 character_id（id 是 UUID，當 key 讀不出那列是誰）
+† assignments 指定的 character_id 也是 UUID literal，不寫可讀字串——可讀 id 跟隔壁的
+  character_name 是同一個資訊，而且會讓 _short_id()／主控台前綴比對失效
   查不到 → 退回 @export 並 push_warning（預設值 instance 共用，靜默退回會兩隻同行程）
   節點名只在同一層唯一，不同父節點下撞名 → push_error（兩隻會查到同一筆）
 ```

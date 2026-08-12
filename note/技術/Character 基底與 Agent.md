@@ -90,12 +90,12 @@ Player 跟未指派角色的 id 每次開遊戲都重新生成——這塊要等
 "assignments": {
   "Agent": {
     "schedule_template": "npc001",
-    "character_id": "aji-fixed-demo-npc",
+    "character_id": "9c08a635-fd0e-4d4c-a48a-0077f684f36d",
     "character_name": "阿吉"
   },
   "Agent2": {
     "schedule_template": "npc006",
-    "character_id": "alan-fixed-demo-npc",
+    "character_id": "bed2d401-0ef5-4b47-b63f-a782844e647f",
     "character_name": "阿蘭"
   }
 }
@@ -110,21 +110,18 @@ Player 跟未指派角色的 id 每次開遊戲都重新生成——這塊要等
 instance 共用，靜默退回會兩隻走同一份行程）；`character_id`／`character_name`
 退回是安全的（各自生成 UUID／退回節點名），不特別警告。
 
-> [!warning] 固定 `character_id` 之間不能有前綴重疊
-> `debug_console.gd` 的 `_get_character()` 找不到完整符合的名字時，會退回
-> `character_id` **前綴比對**（因為 UUID 太長打不完，允許打前幾碼）。
-> 一開始寫的示範值是 `agent-001-fixed-demo-npc`／`agent2-001-fixed-demo-npc`，
-> 打 `status agent` 兩個都符合前綴，變成「多筆符合」——這不是主控台的 bug，
-> 是選值的人自己讓兩個 id 共用了 `agent` 這個前綴。改成 `aji-fixed-demo-npc`／
-> `alan-fixed-demo-npc` 之後就不會撞。**手動指派固定 id 時，順手檢查一下
-> 會不會变成另一個 id 的前綴。**
+> [!important] 指派的 `character_id` 一樣是 UUID，不要寫成看得懂的字串
+> 寫死一個好讀的 id（`aji-fixed-demo-npc` 這種）一樣能跨場次穩定，
+> 但它跟旁邊的 `character_name` 攜帶同一個資訊 —— 那一格的 key 已經是節點名、
+> 隔壁就是顯示名，可讀 id 一個字的新資訊都沒加，只是把「名字」寫了第三次。
+> 而 id 一旦帶語意，人就會開始讀它、解析它，`_short_id()` 截前 8 碼、
+> 主控台的前綴比對這些靠 UUID 格式撐著的東西也會一起失效。
+> 要新增一隻就 `uuid.uuid4()` 生一個貼進去，格式跟 `generate_id()` 保持一致。
 
 > [!important] key 用節點名，不用 `character_id`
 > `assignments` 問的是「場景裡哪一隻該用哪組資料」，不是「哪個身分」——
-> 用節點名查表才問得出來。這裡的 `character_id` 值本身也不再一定是
-> `generate_id()` 那種真的 UUID：手動指派固定身分時，寫一個好讀、穩定的
-> 字串就夠，不需要跟隨機生成的格式一致，反正 `character_id` 的規則本來就是
-> 「不要解析它」，格式從來不是任何呼叫端該假設的東西。
+> 用節點名查表才問得出來。反過來拿 id 當 key 的話，人在 json 裡讀不出
+> 那一列是誰。
 
 > [!warning] 節點名只在同一層唯一
 > 引擎只保證兄弟節點不撞名（撞了會自動改成 `@Agent@2`），
