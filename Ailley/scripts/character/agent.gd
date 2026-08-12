@@ -1,8 +1,12 @@
 extends Character
 
-## 由行程表驅動的角色。
-## 這一版讀 data/npc_schedule.json 的靜態行程；日後會換成 AI 維護的行程表，
-## 換掉的只有 _load_schedule() 與行程項目的結構，移動與動畫都在 Character 基底。
+## 由任務池 + 仲裁器驅動的角色。
+## 這一版只有 schedule 來源的任務（從 npc_schedule.json 轉換），仲裁器本身
+## 已經是通用的——LLM 決策迴圈接上後，只要把任務丟進 _tasks 就會跟 schedule
+## 任務公平競爭，不用再改這個檔案的仲裁邏輯。設計見 [[行程佇列與任務仲裁]]。
+##
+## 這一版刻意不接 LLM：先確保任務池/仲裁器重構完，行為跟舊版 cron 完全一致，
+## 之後接 LLM 若行為跑歪，才分得出是這次重構寫錯還是 LLM 給的決策爛。
 
 ## 初始行程模板，對應 npc_schedule.json 的鍵（例如 "npc001"）。
 ## 這是「用哪份資料」而不是「我是誰」，所以刻意不共用 character_id ——
@@ -12,8 +16,6 @@ extends Character
 ## 場景裡的預設值是所有 instance 共用的，只靠它的話同一份 agent.tscn 生出來的
 ## 每一隻 Agent 都會拿到同一份行程、在同一分鐘走去同一個地點。
 ## 誰用哪份行程是資料，寫在資料檔裡才有辦法逐隻不同。
-##
-## 暫時性欄位：行程改由 AI 逐一維護後（見計畫 §5.1）就會消失
 @export var schedule_template := ""
 
 ## 看到陌生人之後愣住多久（現實秒）
@@ -30,7 +32,33 @@ const NOTICE_PAUSE := 2.0
 ## 暫時欄位，不是正式的角色身分對照方案。
 @export var poc_character_id := ""
 
-var schedule: Array = []
+## schedule 任務給中間值，靠 time_bonus 拉開跟其他來源的差距，
+## 不是靠 base priority 本身——見 [[行程佇列與任務仲裁]] 的「待決」那節
+const SCHEDULE_BASE_PRIORITY := 10.0
+
+## 窗內給的加成，要明顯大於任何 base priority，確保「到點的行程」
+## 預設壓過「隨時可做的雜事」
+const TIME_BONUS := 100.0
+
+## 兩個任務分數接近時的防抖動閾值：新任務分數要贏過目前任務「這麼多」才切換。
+## 跟 MIN_COMMIT 一樣是待實跑調的暫定值，不是理論算出來的
+const HYSTERESIS := 5.0
+
+## 最短承諾時間（遊戲分鐘）：任務至少要做滿這麼久才允許被非 reflex 任務搶走，
+## 防止兩個分數接近的任務讓角色來回抖動
+const MIN_COMMIT := 2.0
+
+## 候選任務池。這一版只在 _load_schedule() 建立一次就不再變動——
+## 「到點才可用」靠仲裁時的 window 過濾，不是把任務從池子裡搬進搬出
+var _tasks: Array[Dictionary] = []
+
+## 目前執行中的任務，空字典代表還沒選過任何任務
+var _current_task: Dictionary = {}
+
+## _current_task 是什麼時候開始執行的（遊戲分鐘，見 _now_minutes()），
+## 給 MIN_COMMIT 判斷用
+var _current_task_started_at := 0
+
 var current_place := ""
 var current_state := "idle"
 
@@ -55,7 +83,9 @@ func _ready() -> void:
 	if nav != null and not nav.built:
 		await nav.grid_built
 
-	_apply_current_entry()
+	# 開場只是「第一次重算」，不是特例——沒有「套用目前這一筆」這種概念，
+	# 每次重算都是仲裁器從候選裡挑分數最高的那個
+	_reevaluate()
 
 # 先問資料檔這隻角色被指派了哪份行程，沒有指派才用場景裡的 @export 後備值。
 # 順序不能反過來：@export 一定有值（agent.tscn 的預設），反過來的話 assignments 永遠不生效
@@ -84,7 +114,39 @@ func _load_schedule() -> void:
 		push_error("Agent %s: npc_schedule.json 裡沒有模板 %s" % [name, schedule_template])
 		return
 
-	schedule = data["schedule"]
+	_tasks = _tasks_from_schedule_json(data["schedule"])
+
+# 把 npc_schedule.json 的 {time, place, state} 陣列轉成 Task 結構（見
+# [[行程佇列與任務仲裁]]）。window.end 由下一筆的 time 推出，最後一筆
+# 補到隔日的第一筆時間（不寫死 08:00，跟著資料檔本身的開場時間走）。
+# sleep 標記成不可中斷，其餘動作沿用舊版行為（可被打斷）
+func _tasks_from_schedule_json(entries: Array) -> Array[Dictionary]:
+	var tasks: Array[Dictionary] = []
+	if entries.is_empty():
+		return tasks
+
+	var wrap_to: String = entries[0]["time"]
+
+	for i in entries.size():
+		var entry: Dictionary = entries[i]
+		var end: String = entries[i + 1]["time"] if i + 1 < entries.size() else wrap_to
+
+		tasks.append({
+			"id": "schedule_%d" % i,
+			"action": entry["state"],
+			"params": {"place": entry["place"]},
+			"priority": SCHEDULE_BASE_PRIORITY,
+			"window": {"start": entry["time"], "end": end},
+			"duration": 0.0,
+			"interruptible": entry["state"] != "sleep",
+			"preconditions": [],
+			"source": "schedule",
+			"created_at": 0,
+			"expires_at": 0,
+			"retries": 0,
+		})
+
+	return tasks
 
 # 節點名只在**同一層**唯一 —— 引擎只會把撞名的兄弟節點改名，不同父節點底下
 # 兩隻都叫 Agent 是合法的。那樣它們會查到同一筆 assignment，靜默共用一份行程。
@@ -98,21 +160,24 @@ func _warn_if_node_name_shared() -> void:
 			])
 			return
 
-# 睡覺中的 Agent 不接受搭話。行程插槽之後會有 interruptible 欄位（計畫 §5.1），
-# 現在先用 state 判斷
+# super() 顧「工作中不能被搭話」（character.gd 新加的規則）；
+# current_state != "sleep" 是既有規則；_current_task 那段是仲裁器自己的
+# 任務層級判斷，不再比對 current_state == "sleep"——sleep 這筆任務的
+# interruptible 在 _tasks_from_schedule_json() 就已經填 false，三者缺一不可
 func is_interruptible() -> bool:
-	return super() and current_state != "sleep"
+	return super() and current_state != "sleep" and _current_task.get("interruptible", true)
 
 # 對話結束後重算一次「現在該做什麼」，而不是接續原本那條路 ——
 # 對話期間可能已經跨過了行程的整點
 func exit_conversation() -> void:
 	super()
-	_apply_current_entry()
+	_reevaluate()
 
 # 工作結束後同理：那 5 個遊戲分鐘可能已經跨過行程的整點，而 work_at() 開頭的
-# stop_moving() 把原本的路徑清掉了，不重算的話會一路站到下一個整點字串吻合為止
+# stop_moving() 把原本的路徑清掉了，不重算的話會一路站到下一個整點字串吻合為止——
+# 跟 exit_conversation() 一樣呼叫 _reevaluate()，不是舊 cron 版的 _apply_current_entry()
 func _on_work_finished() -> void:
-	_apply_current_entry()
+	_reevaluate()
 
 # 基底的快照加上行程表這一段。schedule/current_place/current_state 宣告在這裡，
 # 所以是這裡負責放進去 —— 基底不必去猜誰有行程表
@@ -121,7 +186,7 @@ func get_state_snapshot() -> Dictionary:
 	snapshot["schedule"] = {
 		"place": current_place,
 		"state": current_state,
-		"size": schedule.size(),
+		"size": _tasks.size(),
 	}
 	return snapshot
 
@@ -158,7 +223,7 @@ func _on_spotted(other: Character) -> void:
 	# 愣完重算行程而不是接回原本那條路：這 2 秒可能已經跨過行程的整點，
 	# 與 exit_conversation() 同一個理由
 	if not is_in_conversation():
-		_apply_current_entry()
+		_reevaluate()
 
 # 之前吃過虧：decide_and_act() 完全沒有可見的回饋，跑失敗或跑成功但
 # 剛好沒事發生（沒話、動作不是 move_to）看起來一模一樣，使用者分不出來
@@ -188,6 +253,10 @@ func _trigger_village_ai() -> void:
 
 	# 執行動作/說話留在這裡自己呼叫，不讓 VillageSimDecision 幫忙做——
 	# 副作用要留在角色自己的程式碼路徑，理由見 village_sim_decision.gd 的檔頭註解
+	#
+	# 這條路目前完全繞過任務池/仲裁器（不進 _tasks，也不動 _current_task），
+	# 跟下面的仲裁器是兩個獨立機制，會互相覆蓋——見 [[行程佇列與任務仲裁]]
+	# 的已知並存說明，這則重構不含把這條路接進仲裁器
 	VillageSimDecision.apply(self, poc_character_id, result)
 
 # 範圍內有人發出聲音（見 character.gd 的 make_noise()）。
@@ -199,33 +268,68 @@ func _on_noise_heard(_source: Character) -> void:
 
 	say(L10n.t("DLG_NOISE_ALERT"))
 
-# 行程表是「到點切換」，所以只在時間字串剛好吻合的那一分鐘換目標
-func _on_time_changed(hour: int, minute: int) -> void:
-	var now := "%02d:%02d" % [hour, minute]
-	for entry in schedule:
-		if entry["time"] == now:
-			_start_entry(entry)
-			return
+func _on_time_changed(_hour: int, _minute: int) -> void:
+	_reevaluate()
 
-# 開場時間通常不是第一筆行程的整點，直接套用「已經開始的最後一筆」，
-# 否則 Agent 會站在原地空等到下一個整點
-func _apply_current_entry() -> void:
+# 仲裁器的核心：每次重算，不維護「目前是第幾筆」。
+#
+# 1. 過濾出還在時間窗內的候選（沒有 window 的一律算候選）
+# 2. 每筆算分數，取最高的
+# 3. 過承諾檢查才真的切換——分數贏一點點、或目前任務才剛開始執行，
+#    都不足以打斷，避免兩個分數接近的任務讓角色來回抖動
+func _reevaluate() -> void:
+	if _tasks.is_empty():
+		return
+
 	var now := "%02d:%02d" % [GameClock.hour, GameClock.minute]
-	var current = null
+	var now_minutes := _now_minutes()
 
-	for entry in schedule:
-		if entry["time"] <= now:
-			current = entry
+	var best: Dictionary = {}
+	var best_score := -INF
 
-	if current != null:
-		_start_entry(current)
+	for task in _tasks:
+		if not _in_window_or_unwindowed(task, now):
+			continue
 
-func _start_entry(entry: Dictionary) -> void:
-	current_place = entry["place"]
-	current_state = entry["state"]
+		var score := _score(task, now)
+		if score > best_score:
+			best_score = score
+			best = task
+
+	if best.is_empty():
+		return
+
+	if _current_task.is_empty():
+		_run(best, now_minutes)
+		return
+
+	if best["id"] == _current_task["id"]:
+		return
+
+	if not is_interruptible():
+		return
+
+	var current_score := _score(_current_task, now)
+	if best_score < current_score + HYSTERESIS:
+		return
+
+	var committed_for: int = now_minutes - _current_task_started_at
+	if _current_task.get("source", "") != "reflex" and committed_for < MIN_COMMIT:
+		return
+
+	_run(best, now_minutes)
+
+func _run(task: Dictionary, now_minutes: int) -> void:
+	_current_task = task
+	_current_task_started_at = now_minutes
+	current_place = str(task["params"].get("place", ""))
+	current_state = str(task["action"])
 
 	# 對話中先記下該去哪但不動身，講完由 exit_conversation() 重算
 	if is_in_conversation():
+		return
+
+	if current_place.is_empty():
 		return
 
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
@@ -259,3 +363,75 @@ func _has_arrived_at(target: Vector2) -> bool:
 		return false
 
 	return nav.world_to_cell(get_body_position()) == nav.world_to_cell(target)
+
+# score(task, now) = priority + time_bonus + need_bonus + age_bonus，
+# 見 [[行程佇列與任務仲裁]]。這一版只有 schedule 來源，need_bonus／
+# age_bonus 先固定回 0——兩者要等 LLM 任務接進來、真的有「等待中的任務」
+# 才有意義，不是這則重構的範圍
+func _score(task: Dictionary, now: String) -> float:
+	return float(task.get("priority", 0.0)) \
+		+ _time_bonus(task, now) \
+		+ _need_bonus(task) \
+		+ _age_bonus(task)
+
+func _time_bonus(task: Dictionary, now: String) -> float:
+	var window = task.get("window")
+	if window == null:
+		return 0.0
+	return TIME_BONUS if _in_window(window, now) else 0.0
+
+# 這一版恆為 0——schedule 任務不看角色需求，等 LLM 依 Stats 產生任務時才會用到
+func _need_bonus(_task: Dictionary) -> float:
+	return 0.0
+
+# 這一版恆為 0——schedule 任務是「到點就可用」的固定候選，不是排隊等執行、
+# 需要防餓死的任務。LLM 任務有真的 created_at 時間戳之後才有意義
+func _age_bonus(_task: Dictionary) -> float:
+	return 0.0
+
+func _in_window_or_unwindowed(task: Dictionary, now: String) -> bool:
+	var window = task.get("window")
+	if window == null:
+		return true
+	return _in_window(window, now)
+
+# "HH:MM" 字串比較。start <= end 是同一天內的一般窗口；start > end 代表
+# 跨過午夜（例如 18:00~08:00 的 sleep），要用「在 start 之後 或 在 end 之前」
+func _in_window(window: Dictionary, now: String) -> bool:
+	var start: String = window["start"]
+	var end: String = window["end"]
+	if start <= end:
+		return now >= start and now < end
+	return now >= start or now < end
+
+func _now_minutes() -> int:
+	return GameClock.day * 1440 + GameClock.hour * 60 + GameClock.minute
+
+## Debug 用：回傳候選池每一筆的分數拆項跟目前有沒有在窗內／是不是執行中——
+## debug_console.gd 的 tasks 指令用這個顯示。不直接碰底線開頭的內部欄位，
+## 保持仲裁邏輯本身是這個檔案唯一能動 _tasks/_current_task 的地方
+func get_task_debug_info() -> Array[Dictionary]:
+	var now := "%02d:%02d" % [GameClock.hour, GameClock.minute]
+	var result: Array[Dictionary] = []
+
+	for task in _tasks:
+		result.append({
+			"task": task,
+			"is_current": not _current_task.is_empty() and task["id"] == _current_task["id"],
+			"in_window": _in_window_or_unwindowed(task, now),
+			"score": {
+				"base": float(task.get("priority", 0.0)),
+				"time": _time_bonus(task, now),
+				"need": _need_bonus(task),
+				"age": _age_bonus(task),
+				"total": _score(task, now),
+			},
+		})
+
+	return result
+
+## Debug 用：目前這筆任務已經執行幾個遊戲分鐘，給 tasks 指令顯示
+func get_current_task_elapsed_minutes() -> int:
+	if _current_task.is_empty():
+		return 0
+	return _now_minutes() - _current_task_started_at
