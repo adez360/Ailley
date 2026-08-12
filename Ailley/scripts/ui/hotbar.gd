@@ -24,10 +24,6 @@ const SIZE := 9
 const SLOT_REGION := Rect2(11, 59, 26, 28)
 const SLOT_SHEET := preload("res://assets/ui/Sprite sheet for Basic Pack.png")
 
-## 縮小過的格子尺寸——原生 26×28 太佔畫面，讓 Enter 發話欄有位置疊在快捷欄上方。
-## 靠 ignore_texture_size + STRETCH_KEEP_ASPECT_CENTERED 縮圖，不是切小張素材。
-const SLOT_SIZE := Vector2(20, 22)
-
 const SELECTED_TINT := Color("C96C23")	# Amber，跟 inventory_panel.gd 同一個顏色語意
 const NORMAL_TINT := Color(1, 1, 1, 1)
 
@@ -48,9 +44,7 @@ func _make_slot(index: int) -> TextureButton:
 
 	var button := TextureButton.new()
 	button.texture_normal = atlas
-	button.ignore_texture_size = true
-	button.stretch_mode = TextureButton.STRETCH_KEEP_ASPECT_CENTERED
-	button.custom_minimum_size = SLOT_SIZE
+	button.stretch_mode = TextureButton.STRETCH_KEEP
 	# 純滑鼠點擊格，不搶鍵盤焦點——按鈕預設 FOCUS_ALL，點一下焦點就卡在上面
 	# 不放，chat_input.gd 的 _ui_is_busy() 拿「有沒有東西拿著焦點」判斷有沒有
 	# 別的 UI 在忙，卡住的焦點會被誤判成「忙」，Enter 永遠開不了聊天框

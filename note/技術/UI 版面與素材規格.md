@@ -88,7 +88,10 @@ Godot 會把它套成 project theme 的 `default_font`，效果等同寫進 `.tr
 | `ConsoleOutput/styles/normal` | StyleBoxFlat，半透明深色 | 主控台輸出底板 |
 
 後三個是 **type variation**，節點端要設 `theme_type_variation` 才會套用。
-場景裡已經沒有任何 `theme_override_*`，樣式全部由這份 theme 供給。
+
+`main.tscn` 裡還留著 14 個 `theme_override_*`（`Hotbar/Backdrop` 的底板樣式、
+`Grid` 的 `h_separation`、`StatusPanel` 那批……）。找某個節點的樣式時
+**先看場景端有沒有 override**，只翻這份 theme 會找不到。
 
 > [!tip] 清 override 時 Color 是特例
 > `node_set_property` 傳 `null` 清得掉 int 與 Resource 型的 override，
@@ -154,15 +157,22 @@ Ink/Amber 4.87:1、Cream/Moss 5.84:1、Cream/Ember 8.27:1。停用文字 3.79:1 
 
 | 節點 | 位置 |
 | --- | --- |
-| `chat_input.tscn` 的 `Input` | 底部置中，240×22，疊在 `Hotbar/Backdrop` 正上方，離其頂邊 4 |
+| `chat_input.tscn` 的 `Input` | 底部置中，240×22，在 `Hotbar/Backdrop` 上方，離其頂邊 4 |
 | `debug_console.tscn` 的 `Root` | 頂部橫向貼邊，左右各留 4，高 128 |
 | `main.tscn` 的 `HUD/TimeLabel` | 左上 (4, 2) |
 | `main.tscn` 的 `StatusPanel/Panel` | 螢幕置中，150×175 |
 | `main.tscn` 的 `InventoryPanel/Panel` | 螢幕置中，280×160 |
-| `main.tscn` 的 `Hotbar/Backdrop` | 底部置中，208×34，離底 8 |
+| `main.tscn` 的 `Hotbar/Backdrop` | 底部置中，270×40，離底 8 |
 | 氣泡折行寬度 | `bubble.gd` 的 `MAX_LINE_WIDTH = 132`，11px 下一行約 12 個中文字 |
 
 氣泡的 `BORDER_X` / `BORDER_TOP` / `BORDER_BOTTOM` / `TAIL_INSET_FROM_RIGHT` 對應素材本身的 patch margin，只有換素材時才動，跟解析度無關。
+
+> [!warning] 聊天輸入框靠 `grow_vertical = 0` 才不會長回快捷欄上
+> `Input` 的 22 就是 `LineEdit` 的**最小**高度，不是指定的高度 ——
+> `ailley_theme.tres` 沒給 `LineEdit/styles/normal`，這個最小值來自 Godot 預設 theme。
+> 哪天補了樣式或調大字級，最小高度一變大，Control 就會把它撐大，而
+> `grow_vertical` 預設是 `GROW_DIRECTION_END`（往下），跟快捷欄之間那 4px
+> 一下就被吃掉，又疊回去。設成 `0`（BEGIN）之後方向是往上長，下緣釘在 308 不動。
 
 ### StatusPanel 重用 Setting menu.png 的做法
 
@@ -193,12 +203,6 @@ StatsBox 底下的 Label 是 `_ready()` 動態長出來的（見 stats.gd 同款
 `region_rect = Rect2(11, 59, 26, 28)`。整張圖是 48×48 的網格排列
 （icon 本體 26×28，其餘是留白），要切別的圖示時先假設同一個網格對。
 
-快捷欄的格子在畫面上是縮小過的（`hotbar.gd` 的 `SLOT_SIZE = Vector2(20, 22)`），
-原生 26×28 素材沒動——`TextureButton` 開 `ignore_texture_size = true`
-配 `stretch_mode = STRETCH_KEEP_ASPECT_CENTERED`，靠 `custom_minimum_size`
-在顯示時等比縮小，不是切一張小張素材。主背包 `InventoryPanel` 沒有這個限制，
-維持原生 26×28。
-
 快捷欄（`hotbar.gd`，螢幕下方常駐 9 格）跟主背包（`inventory_panel.gd`，
 按 P 開關的 27 格）是**兩個獨立的 CanvasLayer**，不是同一個節點樹底下的
 兩塊——快捷欄要在背包沒開的時候也看得到，硬塞進同一個面板做不到。
@@ -216,4 +220,4 @@ StatsBox 底下的 Label 是 `_ready()` 動態長出來的（見 stats.gd 同款
 - `bubble.tscn` 的 `Box.region_rect` 是非整數（`Rect2(6.065604, 6.3701286, ...)`）。9-slice 用非整數 region 會取樣到相鄰像素，邊框出現雜點
 - `assets/unuse/` 裡的 1536×1024 與 1362×1155 對話框圖在這個解析度用不上，縮下來必糊
 - `StatusPanel` 的年齡欄目前是 `AGE_PLACEHOLDER` 示意值，Character 還沒有年齡欄位
-- `InventoryPanel` 的 36 格目前全部空著，沒有任何道具圖示（`Inventory` 還沒有 item 登錄資料）
+- `InventoryPanel` 的 27 格目前全部空著，沒有任何道具圖示（`Inventory` 還沒有 item 登錄資料）
