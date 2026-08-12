@@ -26,20 +26,35 @@ func _unhandled_input(event: InputEvent) -> void:
 		leave_conversation()
 		return
 
-	# 先看附近有沒有可互動物件（目前只有工作站），沒有才退回搭話——
+	# 附近的可互動物件（目前只有工作站）與可搭話的人，兩邊都先找出來。
 	# 兩者對玩家都是靜默失敗，沒有回饋 UI；但失敗原因會印成 warning
 	# （跟 character.gd 的 _check_stuck() 同一種寫法），方便開發時對著
 	# 編輯器 Output/Debugger 面板看，不用另外開主控台查
 	var workstation := find_nearest_workstation()
-	if workstation != null:
-		var reason := work_at(workstation)
-		if reason != WORK_OK:
-			push_warning("%s: work_at 失敗（%s）" % [character_name, reason])
-		return
+	var other := find_nearest_character()
 
-	var reason := talk_to(find_nearest_character())
-	if reason != TALK_OK:
-		push_warning("%s: talk_to 失敗（%s）" % [character_name, reason])
+	# 兩個都在範圍內就比距離，近的先試。**不能無條件讓工作站優先**——
+	# 桌子是擺在世界裡的固定物件，很容易落在某個地點錨點的互動半徑內
+	# （`square` 那張距錨點 23px < WORK_RANGE 32），而 agent 的行程正好
+	# 把大家帶去那些錨點。工作站永遠優先的話，那個點上的搭話等於死掉
+	var work_first := workstation != null
+	if work_first and other != null:
+		var to_work := get_body_position().distance_to(workstation.global_position)
+		var to_other := get_body_position().distance_to(other.get_body_position())
+		work_first = to_work <= to_other
+
+	# 失敗要往下掉到搭話，不是直接 return。工作站被別人佔用（WORK_OCCUPIED）
+	# 或自己正在工作（WORK_BUSY）時直接 return 的話，E 整個沒反應 ——
+	# 玩家連站在眼前那個正在工作的人都搭不了話
+	if work_first:
+		var work_reason := work_at(workstation)
+		if work_reason == WORK_OK:
+			return
+		push_warning("%s: work_at 失敗（%s）" % [character_name, work_reason])
+
+	var talk_reason := talk_to(other)
+	if talk_reason != TALK_OK:
+		push_warning("%s: talk_to 失敗（%s）" % [character_name, talk_reason])
 
 # 讀取 WASD 輸入，回傳正規化後的方向（斜向不會加速）
 func get_input_direction() -> Vector2:

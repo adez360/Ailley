@@ -171,9 +171,11 @@ func get_body_position() -> Vector2:
 func is_in_conversation() -> bool:
 	return _conversation != null
 
-# 目前在做的事可不可以被打斷。基底一律可以，Agent 依行程覆寫
+# 目前在做的事可不可以被打斷。工作中一律不行——work_at() 擋掉「對話中的人去工作」，
+# 這裡是對稱的另一半：擋掉「把工作中的人拉進對話」。只做單邊的話，角色會同時冒
+# 氣泡跟進度條，而且工作照樣走完、錢照領。Agent 再依行程加上自己的條件
 func is_interruptible() -> bool:
-	return true
+	return not _working
 
 # 對某人搭話。成功回傳 TALK_OK（空字串），否則回傳失敗原因碼
 func talk_to(other: Character) -> String:
@@ -181,7 +183,9 @@ func talk_to(other: Character) -> String:
 		return TALK_TARGET_NOT_FOUND
 	if other == self:
 		return TALK_TARGET_IS_SELF
-	if is_in_conversation() or other.is_in_conversation():
+	# 自己在工作中也算忙。少了這條，E 鍵在 work_at() 回 WORK_BUSY 之後退回搭話，
+	# 工作中的角色就開得起對話——正好繞過上面 is_interruptible() 要擋的那件事
+	if is_in_conversation() or _working or other.is_in_conversation():
 		return TALK_TARGET_BUSY
 	if get_body_position().distance_to(other.get_body_position()) > TALK_RANGE:
 		return TALK_TOO_FAR
@@ -315,16 +319,44 @@ func work_at(workstation: Workstation) -> String:
 func _run_work(workstation: Workstation) -> void:
 	for i in WORK_DURATION_MINUTES:
 		await GameClock.time_changed
+
+		# 這個協程橫跨 5 個遊戲分鐘，中間什麼都可能發生。兩件事要在每次醒來時重驗：
+		#
+		# 一、工作站可能已經被移除。await 之後直接 workstation.release() 會炸
+		#     「call function on a previously freed instance」。
+		# 二、角色可能自己走開了——Player 一按方向鍵就蓋掉 work_at() 的 stop_moving()，
+		#     `_working` 攔不住移動。不重驗距離的話，按下 E 之後跑到地圖另一頭，
+		#     時間到照樣入帳，而且這 5 分鐘工作站一直被卡著、現場卻沒人。
+		#
+		# 兩種都是「沒有做完」，所以收尾但不撥款：錢是站在這裡做滿的報酬，
+		# 不是按下 E 的報酬
+		if not is_instance_valid(workstation) \
+				or get_body_position().distance_to(workstation.global_position) > WORK_RANGE:
+			_end_work(workstation)
+			return
+
 		if work_progress != null:
 			work_progress.show_progress(float(i + 1) / float(WORK_DURATION_MINUTES))
 
-	workstation.release(self)
+	_end_work(workstation)
+	if inventory != null:
+		inventory.add_money(WORK_PAYMENT)
+
+# 收尾：放掉工作站、清狀態與進度條。**撥款不在這裡**——做滿全程才給，
+# 半途放棄走的是同一條收尾路徑但沒有那一行
+func _end_work(workstation: Workstation) -> void:
+	if is_instance_valid(workstation):
+		workstation.release(self)
 	_working = false
 	if work_progress != null:
 		work_progress.hide_progress()
+	_on_work_finished()
 
-	if inventory != null:
-		inventory.add_money(WORK_PAYMENT)
+# 工作結束後的鉤子。基底不做事；Agent 覆寫它重算行程——工作是 5 遊戲分鐘的
+# 阻塞動作，期間可能已經跨過行程的整點，跟 exit_conversation() 是同一個理由。
+# 用覆寫而不是在基底嗅探 is_in_group("agents")：子類別的事由子類別自己做
+func _on_work_finished() -> void:
+	pass
 
 
 # ---- 狀態快照 ----

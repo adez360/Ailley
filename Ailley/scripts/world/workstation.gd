@@ -20,8 +20,12 @@ var occupant: Character = null
 func _ready() -> void:
 	add_to_group("workstations")
 
+# 用 is_instance_valid() 不用 `occupant != null`：Godot 4 裡被 free 掉的物件
+# `!= null` 仍然成立，所以佔用者被移除（換場景、日後的 despawn）之後，工作站會
+# 永遠回報「有人在用」，而 release() 比對的是一個已經不存在的角色，永遠清不掉。
+# 這裡也是「角色工作到一半被 free」時唯一會把位子放出來的地方
 func is_occupied() -> bool:
-	return occupant != null
+	return is_instance_valid(occupant)
 
 func try_occupy(character: Character) -> bool:
 	if is_occupied():

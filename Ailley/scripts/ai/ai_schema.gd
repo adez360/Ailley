@@ -28,7 +28,12 @@ const ALLOWED_ACTIONS := [
 
 # 本輪真正有實作的動作。其餘動作驗證會過，但執行層要回 NOT_IMPLEMENTED，
 # 而不是在驗證層擋掉 —— 兩者是不同的失敗，混在一起 debug 時會分不清
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "work"]
+# work 不在這裡：Character.work_at() 做出來了，但沒有任何執行層把一筆
+# {"action": "work"} 對應到一個 Workstation 實例（唯一的執行器
+# village_sim_decision.gd 只認得 move_to），而 work_at() 需要節點參照、
+# find_nearest_workstation() 只看得到 32px。列進來的話就變成「白名單宣稱做得到、
+# 實際靜默不做」，正是上面那段註解要避免的混淆。等執行層接得到再加
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep"]
 
 const ERROR_NOT_JSON := "not_json"
 const ERROR_NOT_OBJECT := "not_object"
