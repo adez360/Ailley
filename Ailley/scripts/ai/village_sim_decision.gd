@@ -12,10 +12,15 @@ const DEFAULT_BASE_URL := "http://127.0.0.1:8100"
 ## character 必須是 Agent（is_in_group("agents")，要讀 current_place）。
 ## poc_character_id 只能是 VillageSimLocale.POC_CHARACTER_NAMES 裡的那 5 個。
 ##
+## 只負責「問 AI、拿答案」，**不執行任何動作**——要不要把決策套用到角色身上
+## 是呼叫端自己的事，見下面的 apply()。這樣分開是為了對齊組長發的協作規範
+## 裡「向下呼叫、向上發信號」的精神：這支工具類不該直接伸手去動角色狀態，
+## 副作用要留在角色自己的程式碼路徑裡才看得到、才好追蹤。
+##
 ## 回傳 {"ok": bool, "data": Dictionary, "error": String}——形狀跟
 ## VillageSimClient.decide() 一樣，`error` 在這一層新增的失敗（角色不是
 ## Agent、地點翻譯不出來）也會以同樣形狀回傳，呼叫端不用分兩種方式判斷。
-static func decide_and_act(character: Node, poc_character_id: String, base_url: String = DEFAULT_BASE_URL) -> Dictionary:
+static func decide(character: Node, poc_character_id: String, base_url: String = DEFAULT_BASE_URL) -> Dictionary:
 	var poc_character_name: String = VillageSimLocale.POC_CHARACTER_NAMES.get(poc_character_id, "")
 	if poc_character_name.is_empty():
 		return _fail("unknown_poc_character_id:%s" % poc_character_id)
@@ -64,14 +69,21 @@ static func decide_and_act(character: Node, poc_character_id: String, base_url: 
 		payload["physiology_override"] = physiology_override
 
 	var client := VillageSimClient.new()
-	var result: Dictionary = await client.decide(base_url, payload)
-	if not result["ok"]:
-		return result
+	return await client.decide(base_url, payload)
 
-	var data: Dictionary = result["data"]
+
+## 把 decide() 的結果套用到角色身上——說話跟移動。呼叫端自己決定要不要呼叫
+## 這個函式（例如 result["ok"] 是 false 就不會有人呼叫它），這裡不重複做
+## ok 檢查，假設呼叫端已經確認過。
+##
+## character 跟傳給 decide() 的必須是同一個角色，poc_character_id 也要
+## 對應同一次呼叫——這裡不重新驗證兩者是否一致，職責已經在 decide() 那層
+## 檢查過一次。
+static func apply(character: Node, poc_character_id: String, result: Dictionary) -> void:
+	var data: Dictionary = result.get("data", {})
 	var output: Dictionary = data.get("output", {})
 
-	# 說話跟動作是不是 move_to 無關，理由同 _cmd_village_ai_act 原本的註解：
+	# 說話跟動作是不是 move_to 無關，理由同前——
 	# poc_village_sim 的設計原則是「說話跟 intent.action 是兩件事，可以同時發生」
 	var speech = output.get("speech")
 	if speech != null and str(speech) != "":
@@ -86,11 +98,8 @@ static func decide_and_act(character: Node, poc_character_id: String, base_url: 
 			if places != null and places.has(target_place):
 				character.move_to(places.resolve(target_place))
 			# 目的地翻譯不出來或找不到錨點：安靜跳過，不執行移動。呼叫端如果
-			# 想知道有沒有真的移動，可以自己比對 result.data.action_en 跟事後
-			# 角色是不是真的在動——這裡不额外加一個「有沒有執行」的旗標，
-			# 保持回傳形狀跟 VillageSimClient.decide() 一致
-
-	return result
+			# 想知道有沒有真的移動，可以自己比對 data.action_en 跟事後角色是不是
+			# 真的在動——這裡不額外加一個「有沒有執行」的旗標，保持單純
 
 
 static func _fail(error: String) -> Dictionary:

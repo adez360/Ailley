@@ -160,7 +160,7 @@ func _on_spotted(other: Character) -> void:
 # 是兩個不同的可見管道，但至少有一個能看
 func _trigger_village_ai() -> void:
 	print("[village_ai] %s 看到玩家，觸發自動決策（poc_character_id=%s）" % [character_name, poc_character_id])
-	var result: Dictionary = await VillageSimDecision.decide_and_act(self, poc_character_id)
+	var result: Dictionary = await VillageSimDecision.decide(self, poc_character_id)
 
 	if not result["ok"]:
 		print("[village_ai] %s 決策失敗：%s" % [character_name, result["error"]])
@@ -178,6 +178,10 @@ func _trigger_village_ai() -> void:
 	# social/mood 沒有對應欄位，thirst/health/money 這三項 Godot 沒有資料
 	# 來源，AI 那邊沿用 poc 角色檔案原本的值，不是這隻角色的真實狀態
 	print("[village_ai]   godot stats（僅供對照，非全部都送出去了）: %s" % get_state_snapshot().get("stats", {}))
+
+	# 執行動作/說話留在這裡自己呼叫，不讓 VillageSimDecision 幫忙做——
+	# 副作用要留在角色自己的程式碼路徑，理由見 village_sim_decision.gd 的檔頭註解
+	VillageSimDecision.apply(self, poc_character_id, result)
 
 # 行程表是「到點切換」，所以只在時間字串剛好吻合的那一分鐘換目標
 func _on_time_changed(hour: int, minute: int) -> void:

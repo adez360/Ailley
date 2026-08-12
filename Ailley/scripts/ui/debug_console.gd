@@ -632,9 +632,10 @@ func _cmd_village_ai_act(args: PackedStringArray) -> void:
 
 	_print("[color=888888]→ %s（%s）→ POST %s/decide[/color]" % [args[0], poc_character_id, base_url])
 
-	# 主控台指令跟自動觸發（agent.gd 玩家靠近時）共用同一份邏輯，見
-	# VillageSimDecision 檔頭說明，避免兩邊各寫一份
-	var result: Dictionary = await VillageSimDecision.decide_and_act(character, poc_character_id, base_url)
+	# 主控台指令跟自動觸發（agent.gd 玩家靠近時）共用同一份 decide() 邏輯，見
+	# VillageSimDecision 檔頭說明，避免兩邊各寫一份。執行動作/說話（apply()）
+	# 則由這裡自己呼叫，不讓 VillageSimDecision 幫忙做——理由同樣見檔頭註解
+	var result: Dictionary = await VillageSimDecision.decide(character, poc_character_id, base_url)
 
 	if not result["ok"]:
 		_error("← village_ai_act 失敗：%s" % result["error"])
@@ -656,6 +657,8 @@ func _cmd_village_ai_act(args: PackedStringArray) -> void:
 		_print("[color=88ff88]  %s 依 AI 決策移動（目的地見上面 location 欄位）[/color]" % args[0])
 	else:
 		_print("[color=888888]  動作是 %s，village_ai_act 目前只執行 move_to，其餘只印出不執行[/color]" % action_en)
+
+	VillageSimDecision.apply(character, poc_character_id, result)
 
 # locale        顯示目前語系與可用清單
 # locale <code> 切換（zh_TW / en）
