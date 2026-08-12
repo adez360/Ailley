@@ -10,7 +10,8 @@ extends CanvasLayer
 ## 那邊點擊只是面板自己的視覺高亮，因為主背包沒有對應的 Inventory 欄位；
 ## 快捷欄這 9 格全部都對得到 Inventory.set_selected_index()。
 ##
-## 目前 Inventory.slots 全部是空的，9 格先畫空框，不畫道具圖示（見 #54）。
+## 格子上的文字（見 inventory_slot_button.gd）是暫時的示意畫法：專案還沒有
+## item 定義檔可以查真正的圖示，先印 item_id 前三碼＋數量。
 ##
 ## 場景結構：
 ##   CanvasLayer（本腳本）
@@ -42,7 +43,8 @@ func _make_slot(index: int) -> TextureButton:
 	atlas.atlas = SLOT_SHEET
 	atlas.region = SLOT_REGION
 
-	var button := TextureButton.new()
+	var button := InventorySlotButton.new()
+	button.slot_index = index		# 快捷欄在 Inventory.slots 就是 0-8，跟格子 index 一樣
 	button.texture_normal = atlas
 	button.stretch_mode = TextureButton.STRETCH_KEEP
 	# 純滑鼠點擊格，不搶鍵盤焦點——按鈕預設 FOCUS_ALL，點一下焦點就卡在上面

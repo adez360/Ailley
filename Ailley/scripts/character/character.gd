@@ -79,6 +79,7 @@ const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader
 @onready var vision: Vision = get_node_or_null("Vision")
 @onready var inventory: Inventory = get_node_or_null("Inventory")
 @onready var work_progress: WorkProgress = get_node_or_null("WorkProgress")
+@onready var money_popup: MoneyPopup = get_node_or_null("MoneyPopup")
 
 # 最後一次的面向：front / back / right，停下時用來挑 idle 動畫
 var facing := "front"
@@ -380,6 +381,11 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 	if add_reason != Inventory.ADD_OK:
 		inventory.add_money(price)		# 退回剛剛扣的錢——買賣沒有真的發生
 		return add_reason
+
+	# 退款的路徑不會走到這裡——買賣真的成立、錢是真的扣了，才值得頭上飄一個
+	# -N。中途失敗退款的話淨變動是 0，飄出來只會讓人以為扣了又加，很奇怪
+	if money_popup != null:
+		money_popup.show_change(-price)
 
 	return BUY_OK
 
