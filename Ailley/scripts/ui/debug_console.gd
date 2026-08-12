@@ -162,6 +162,25 @@ func _get_character(token: String) -> Character:
 		_error(L10n.tf("CON_AMBIGUOUS_ID", {"count": by_id.size(), "id": token}))
 		return null
 
+	# 最後退回節點名（Godot 場景樹裡的名字，不是玩家取的顯示名）。
+	# 以前這條沒必要——character_name 沒指定時就退回節點名，兩者本來就相同。
+	# 現在固定 demo NPC 有了真正的顯示名（阿吉／阿蘭）之後，打熟悉的英文
+	# 節點名（agent／agent2）就會完全查不到，這裡補回這條方便查法
+	var by_node_name: Array[Character] = []
+	for node in characters:
+		if node.name.to_lower() == wanted:
+			by_node_name.append(node as Character)
+
+	if by_node_name.size() == 1:
+		return by_node_name[0]
+
+	if by_node_name.size() > 1:
+		_error(L10n.tf("CON_AMBIGUOUS_NAME", {
+			"count": by_node_name.size(), "name": token,
+			"ids": ", ".join(by_node_name.map(func(c): return _short_id(c.character_id))),
+		}))
+		return null
+
 	var known: Array[String] = []
 	for node in characters:
 		known.append("%s (%s)" % [node.character_name, _short_id(node.character_id)])

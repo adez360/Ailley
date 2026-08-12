@@ -672,7 +672,9 @@ village_ai <id> [url]              純 transport 測試，打固定測試 payloa
 village_ai_act <name> <id> [url]   讀真實狀態、真的執行動作/說話
 help | clear
 
-角色查找：character_name(不分大小寫) → 撞名列候選 id 前 8 碼 → character_id 前綴
+角色查找：character_name(不分大小寫) → character_id 前綴 → 節點名(不分大小寫)
+  → 撞名列候選 id 前 8 碼。節點名這條是給熟悉場景樹的人用（agent/agent2），
+  跟玩家看得到的 character_name（阿吉/阿蘭）是兩回事
   → 報錯列全部。id 一律只顯示前 8 碼：整串 UUID 沒人打得完，且每次開遊戲都不一樣
 † ai 指令用固定 requester_id="debug_console" ⇒ 吃得到 30s 冷卻
   手動測試不受限就測不出正式呼叫端的行為
