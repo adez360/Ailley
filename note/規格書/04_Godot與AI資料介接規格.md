@@ -1,3 +1,9 @@
+---
+tags: [規格書, 架構]
+status: 參數待填
+updated: 2026-08-12
+---
+
 # 04_Godot與AI資料介接規格
 
 # 04｜Godot 與 AI 資料介接規格
