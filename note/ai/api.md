@@ -130,6 +130,7 @@ func _decide_velocity() -> Vector2           # 子類覆寫點：這一幀往哪
 get_state_snapshot() -> {
   id, name, position, moving, facing, animation, in_conversation,   # 一定有
   stats: {key: value, ...},                     # 有掛 Stats 才有，key 是 SPEC 的 key
+  money: int,                                   # 有掛 Inventory 才有；背包內容不進快照
   affinity: {other_id: {affinity, met_count}, ...}, # 有記錄的人才有，欄名同 relationships
   schedule: {place, state, size},                # agent.gd override 補上，Player 沒有
 }
@@ -301,6 +302,8 @@ const STACK_DECAY_TOLERANCE := 10
 
 const ADD_OK := "" · ADD_NO_SPACE := "NO_SPACE" · ADD_INVALID_COUNT := "INVALID_COUNT"
 const REMOVE_OK := "" · REMOVE_NOT_FOUND := "NOT_FOUND" · REMOVE_INVALID_COUNT := "INVALID_COUNT"
+const DEFAULT_MONEY := 300                   # 規格書 01 §3-3
+const MONEY_OK := "" · MONEY_NOT_ENOUGH := "NOT_ENOUGH" · MONEY_INVALID_AMOUNT := "INVALID_AMOUNT"
 
 var slots: Array[Dictionary]                 # 每格 {item_id, count, decay, durability} 或 {}
 
@@ -317,6 +320,10 @@ func swap_slot(a, b) -> bool                  # 交換兩個已佔用的格
 func get_selected_index() -> int
 func set_selected_index(index) -> void        # clamp 0..HOTBAR_SIZE-1
 
+func get_money() -> int                       # _money 是私有的，只能經由下面兩個函式異動
+func add_money(amount) -> String              # amount <= 0 回 MONEY_INVALID_AMOUNT
+func spend(amount) -> String                  # 餘額不足回 MONEY_NOT_ENOUGH，一毛都不扣
+
 func get_summary() -> Array[Dictionary]       # 不含空格，每筆補 slot 索引；給 AI payload 用
 ```
 
@@ -329,6 +336,9 @@ func get_summary() -> Array[Dictionary]       # 不含空格，每筆補 slot �
 † slots 在 _init() 就配置好 — Inventory.new() 出來還沒入樹也是合法容器
 † 快捷欄與主背包是同一個陣列，不是兩個容器 — 搬進/出快捷欄 = move_slot() 搬 index
 † 選格是資料層狀態（get/set_selected_index），不是 UI 狀態 — Agent 沒 UI 也要有「手上拿著什麼」
+† 金錢跟背包同一個元件 — 規格書 01 §3-3 把 money 與 inventory 都歸在 economy 底下
+† 收入與支出是兩個函式，不是 add_money(±n) — 合成一個就等於支出那條路沒有餘額檢查
+† spend() 失敗是原子的，跟 remove_item() 一致 — 呼叫端拿到原因碼就知道整筆沒發生，不必回滾
 ⚠ durability=-1 是本實作的哨兵值，不在規格書 0–100 範圍內；物品定義檔進來後要對齊
 → 技術/物品欄
 ```
@@ -653,6 +663,7 @@ stop                     停止玩家移動
 pos                      玩家座標與所在格
 nav rebuild              重建尋徑網格
 inv [name]               列出背包；inv give <item_id> [count] 塞測試物品給玩家
+money <amount>           改玩家的錢；正數走 add_money()，負數走 spend()。查詢看 status
 ai [文字]                 對 LLM 打一次測試請求
 village_ai <id> [url]              純 transport 測試，打固定測試 payload
 village_ai_act <name> <id> [url]   讀真實狀態、真的執行動作/說話
