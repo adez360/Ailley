@@ -90,12 +90,12 @@ Player 跟未指派角色的 id 每次開遊戲都重新生成——這塊要等
 "assignments": {
   "Agent": {
     "schedule_template": "npc001",
-    "character_id": "agent-001-fixed-demo-npc",
+    "character_id": "aji-fixed-demo-npc",
     "character_name": "阿吉"
   },
   "Agent2": {
     "schedule_template": "npc006",
-    "character_id": "agent2-001-fixed-demo-npc",
+    "character_id": "alan-fixed-demo-npc",
     "character_name": "阿蘭"
   }
 }
@@ -109,6 +109,15 @@ Player 跟未指派角色的 id 每次開遊戲都重新生成——這塊要等
 `schedule_template` 退回時會 `push_warning`（因為 `agent.tscn` 的預設值所有
 instance 共用，靜默退回會兩隻走同一份行程）；`character_id`／`character_name`
 退回是安全的（各自生成 UUID／退回節點名），不特別警告。
+
+> [!warning] 固定 `character_id` 之間不能有前綴重疊
+> `debug_console.gd` 的 `_get_character()` 找不到完整符合的名字時，會退回
+> `character_id` **前綴比對**（因為 UUID 太長打不完，允許打前幾碼）。
+> 一開始寫的示範值是 `agent-001-fixed-demo-npc`／`agent2-001-fixed-demo-npc`，
+> 打 `status agent` 兩個都符合前綴，變成「多筆符合」——這不是主控台的 bug，
+> 是選值的人自己讓兩個 id 共用了 `agent` 這個前綴。改成 `aji-fixed-demo-npc`／
+> `alan-fixed-demo-npc` 之後就不會撞。**手動指派固定 id 時，順手檢查一下
+> 會不會变成另一個 id 的前綴。**
 
 > [!important] key 用節點名，不用 `character_id`
 > `assignments` 問的是「場景裡哪一隻該用哪組資料」，不是「哪個身分」——

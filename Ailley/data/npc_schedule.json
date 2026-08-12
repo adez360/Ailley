@@ -2,12 +2,12 @@
 	"assignments": {
 		"Agent": {
 			"schedule_template": "npc001",
-			"character_id": "agent-001-fixed-demo-npc",
+			"character_id": "aji-fixed-demo-npc",
 			"character_name": "阿吉"
 		},
 		"Agent2": {
 			"schedule_template": "npc006",
-			"character_id": "agent2-001-fixed-demo-npc",
+			"character_id": "alan-fixed-demo-npc",
 			"character_name": "阿蘭"
 		}
 	},
