@@ -90,8 +90,8 @@ const TALK_TOO_FAR := "TOO_FAR"
 const TALK_TARGET_BUSY := "TARGET_BUSY"
 const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 
-@export var character_id := ""               # 唯一身分，留空→生成 UUID v4（正常路徑）
-@export var character_name := ""             # 顯示名，可改可撞，留空→節點名小寫
+@export var character_id := ""               # 優先序：assignments 固定值 > 這個 @export > 生成 UUID v4
+@export var character_name := ""             # 優先序同上，最後才退回節點名小寫
 static func generate_id() -> String           # RFC 4122 v4，不帶語意，別解析它
 var facing := "front"                        # front|back|right
 
@@ -141,7 +141,10 @@ get_state_snapshot() -> {
 † TALK_* ≠ Conversation.REASON_*
   前者=搭話失敗，後者=對話正常結束。混用會讓 AI 反覆重試成功的動作
 † character_id 撞到就換一個新的 + push_error，不是只偵測。共用 id = 共用關係與記憶
-† character_id 未持久化：每次開遊戲重新生成，關係紀錄一重開就指向不存在的人
+† 場景裡固定的 demo NPC 用 npc_schedule.json 的 assignments 指定固定
+  character_id／character_name（GameManager.get_character_id/name()），跨開
+  遊戲都一樣，不用等存檔系統；Player 跟未指派角色沒有指定，還是執行期生成/
+  退回節點名，關係紀錄一重開就指向不存在的人
 † 動畫只有 front/back/right 三向，往左用 flip_h 翻轉 right
 † get_pick_rect 用 sprite 影格不用碰撞形狀：後者只有腳下小圓，點頭部會落空
 ⚠ set_highlighted 訂 frame_changed **與** animation_changed 兩個訊號
@@ -733,11 +736,13 @@ Esc(ui_cancel) 切換暫停。main.tscn 的 Pause，子節點 Dim(ColorRect) / T
 ```gdscript
 var places = {}                              # places.json 的 places 區塊
 var npc_data = {}                            # NPC 模板 id -> 資料
-var schedule_assignments = {}                # 節點名 -> schedule_template
+var schedule_assignments = {}                # 節點名 -> {schedule_template, character_id, character_name}
 
 func get_place_data(place_name: String)          # 查不到 → null
 func get_npc(id: String)                         # 查不到 → null
 func get_schedule_template(node_name: String) -> String   # 沒指派 → ""
+func get_character_id(node_name: String) -> String       # 沒指派 → ""
+func get_character_name(node_name: String) -> String     # 沒指派 → ""
 func load_places()
 func load_npc_data()
 ```
@@ -784,7 +789,10 @@ Vision 圓形無朝向；lost 無呼叫端
 Agent 不對 Stats 反應（get_lowest_need_place() 可用但無呼叫端）
 noise_heard 對話中會被吞掉；睡覺中的 Agent 沒有排除，一樣會冒 !?
 無存檔機制（全專案無 user:// 存檔/ConfigFile）
-character_id 與 GameClock.day 都未持久化，重開就重來
+GameClock.day 未持久化，重開就重來
+character_id／character_name：場景裡固定的 demo NPC（Agent／Agent2）已經用
+  assignments 指定固定值，跨開遊戲一致；Player 跟未指派角色仍是執行期生成，
+  重開就變，關係紀錄跟著斷——這塊要等真正的存檔系統
 AIService（正式線）仍未接對話與行程：conversation.gd 仍同步、agent.gd 仍純行程表驅動
 poc_village_sim（R&D 驗證線）已有呼叫端（見上方 Agent／village_sim_*.gd），
   但只證明管線通、決策內容有效性未驗證，且不是出貨架構

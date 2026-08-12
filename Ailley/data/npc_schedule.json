@@ -1,7 +1,15 @@
 {
 	"assignments": {
-		"Agent": "npc001",
-		"Agent2": "npc006"
+		"Agent": {
+			"schedule_template": "npc001",
+			"character_id": "agent-001-fixed-demo-npc",
+			"character_name": "阿吉"
+		},
+		"Agent2": {
+			"schedule_template": "npc006",
+			"character_id": "agent2-001-fixed-demo-npc",
+			"character_name": "阿蘭"
+		}
 	},
 	"villagers": [
 		{

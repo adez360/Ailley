@@ -33,12 +33,16 @@ const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader
 ## 角色的身分，全遊戲唯一且不隨改名而變：存檔、記憶連結、交誼區都靠它指人。
 ## 是內部識別字，不拿來顯示，也**不要去解析它** —— 格式只有 generate_id() 說了算。
 ##
-## 留空就生成一個，這是正常路徑；`@export` 只留給場景裡手擺的測試角色。
-## 目前每次開遊戲都重新生成，要跨場次接續得等存檔把它寫下來
+## 優先順序（跟 agent.gd 的 schedule_template 同一套邏輯）：
+## npc_schedule.json 的 assignments 固定值 > 這個 @export（場景裡手擺的測試值）
+## > 執行期生成一個。給場景裡固定的 demo NPC 用 assignments 指定，才會跨開遊戲
+## 都一樣——不必等存檔系統，因為這是設計時就決定好的資料，不是要被記住的
+## 執行期狀態。Player 跟沒被指派的角色本來就查不到，落回執行期生成
 @export var character_id := ""
 
 ## 玩家給角色取的名字，是拿來顯示與被指令指名的那一個，可以改、可以撞名。
-## 留空就沿用節點名 —— 不能退回 character_id，那是一串沒人讀得懂的 UUID
+## 優先順序跟 character_id 一樣：assignments 固定值 > 這個 @export > 節點名。
+## 留空退回節點名時**不能退回 character_id**，那是一串沒人讀得懂的 UUID
 @export var character_name := ""
 
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
@@ -61,10 +65,18 @@ var _outline: ShaderMaterial = null
 
 
 func _ready() -> void:
-	if character_id.is_empty():
+	# assignments 固定值優先於場景裡手擺的 @export，跟 agent.gd 的
+	# _load_schedule() 查 schedule_template 同一套順序
+	var assigned_id := GameManager.get_character_id(name)
+	if not assigned_id.is_empty():
+		character_id = assigned_id
+	elif character_id.is_empty():
 		character_id = generate_id()
 
-	if character_name.is_empty():
+	var assigned_name := GameManager.get_character_name(name)
+	if not assigned_name.is_empty():
+		character_name = assigned_name
+	elif character_name.is_empty():
 		character_name = name.to_lower()
 
 	_ensure_unique_id()

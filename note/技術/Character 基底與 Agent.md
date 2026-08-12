@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-10
+updated: 2026-08-12
 ---
 
 # Character 基底與 Agent
@@ -42,16 +42,21 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 | `character_name` | 玩家取的名字，顯示用，指令也用它指名 | 是 | 是 |
 | `schedule_template`（僅 Agent） | 用哪份行程資料，對應 `npc_schedule.json` 的鍵 | — | 是 |
 
-留空時：`character_id` 生成一個 UUID，`character_name` 退回節點名小寫。
+優先序（`character_id`／`character_name` 兩個欄位一致）：
+`npc_schedule.json` 的 `assignments` 固定值 > 這個 `@export`（場景裡手擺的值）
+> 執行期生成／退回節點名小寫。
 
 「玩家可改」不等於「這一場不會變」：`character_id` 玩家碰不到，但撞號時
-`_ensure_unique_id()` 會就地換掉一個，而且目前每次開遊戲都重新生成。
-別把它快取在 `_ready()` 之外，也別假設它跨場次還是同一個。
+`_ensure_unique_id()` 會就地換掉一個。**只有沒被 `assignments` 指派的角色**
+（現況只有 Player）才是每次開遊戲重新生成，別把它快取在 `_ready()` 之外，
+也別假設它跨場次還是同一個；場景裡固定的 demo NPC（`Agent`／`Agent2`）已經
+用 `assignments` 指定固定值，跨開遊戲都一樣。
 
-## `character_id` 是生成的 UUID，不帶任何語意
+## `character_id` 沒指派時是生成的 UUID，不帶任何語意
 
 `Character.generate_id()` 用 `Crypto.generate_random_bytes(16)` 產生 RFC 4122 v4。
-`@export var character_id` 留著只是給場景裡手擺的測試角色用，**留空才是正常路徑**。
+`@export var character_id` 留著給場景裡手擺的測試角色用，`assignments` 沒指派、
+`@export` 也留空才會走生成——這是 Player 跟未指派角色的正常路徑。
 
 > [!important] 不要解析 id，也不要把東西編進去
 > 擁有者、名字、行程都不在 id 裡，那些各自是欄位。
@@ -67,7 +72,9 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 而不是印完錯誤讓兩隻共用。共用 id 等於共用一份關係與記憶
 （`relationships.gd` 拿 id 當 key）。生成的 id 不會撞，會走到這條的是場景裡手寫重複。
 
-id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存檔]]。
+Player 跟未指派角色的 id 每次開遊戲都重新生成——這塊要等真正的存檔系統，
+見 [[存檔]]。場景裡固定的 demo NPC 不受影響：它們的 id 是設計時就決定好的
+資料，寫進 `assignments` 就跨開遊戲一致，不需要「記住」也不需要存檔。
 
 > [!important] 為什麼 `schedule_template` 不共用 `character_id`
 > 它是「用哪份資料」不是「我是誰」。id 既然是全遊戲唯一身分，
@@ -75,25 +82,40 @@ id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存
 >
 > 這是暫時欄位 —— 行程改由 AI 逐一維護之後就會消失。
 
-## 誰用哪份行程寫在資料檔，不寫在場景
+## 誰用哪份行程、身分寫在資料檔，不寫在場景
 
-`npc_schedule.json` 的 `assignments` 把**節點名**對到模板名：
+`npc_schedule.json` 的 `assignments` 把**節點名**對到一組資料：
 
 ```json
-"assignments": { "Agent": "npc001", "Agent2": "npc006" }
+"assignments": {
+  "Agent": {
+    "schedule_template": "npc001",
+    "character_id": "agent-001-fixed-demo-npc",
+    "character_name": "阿吉"
+  },
+  "Agent2": {
+    "schedule_template": "npc006",
+    "character_id": "agent2-001-fixed-demo-npc",
+    "character_name": "阿蘭"
+  }
+}
 ```
 
 `agent.gd` 先問 `GameManager.get_schedule_template(name)`，
-沒有指派才退回 `@export var schedule_template`。順序不能反過來 ——
+`character.gd._ready()` 先問 `get_character_id(name)`／`get_character_name(name)`，
+沒有指派才退回 `@export`。三個欄位是同一套查表模式，順序都不能反過來 ——
 `@export` 一定有值（場景的預設），先看它的話 `assignments` 永遠不會生效。
 
-退回時會 `push_warning`。退回本身是允許的，但因為 `agent.tscn` 的預設值
-所有 instance 共用，靜默退回的結果就是兩隻走同一份行程 —— 正是這個機制要防的事。
-漏寫 `assignments` 遠比刻意不指派常見，所以寧可吵。
+`schedule_template` 退回時會 `push_warning`（因為 `agent.tscn` 的預設值所有
+instance 共用，靜默退回會兩隻走同一份行程）；`character_id`／`character_name`
+退回是安全的（各自生成 UUID／退回節點名），不特別警告。
 
 > [!important] key 用節點名，不用 `character_id`
-> id 是生成的 UUID，人在 json 裡手寫不出來。
-> 而 `assignments` 問的正是「場景裡哪一隻用哪份資料」，不是「哪個身分」。
+> `assignments` 問的是「場景裡哪一隻該用哪組資料」，不是「哪個身分」——
+> 用節點名查表才問得出來。這裡的 `character_id` 值本身也不再一定是
+> `generate_id()` 那種真的 UUID：手動指派固定身分時，寫一個好讀、穩定的
+> 字串就夠，不需要跟隨機生成的格式一致，反正 `character_id` 的規則本來就是
+> 「不要解析它」，格式從來不是任何呼叫端該假設的東西。
 
 > [!warning] 節點名只在同一層唯一
 > 引擎只保證兄弟節點不撞名（撞了會自動改成 `@Agent@2`），
@@ -204,6 +226,6 @@ accessor，不用 `get_record()`：後者每筆都 `duplicate(true)` 深拷一�
   但沒有任何呼叫端 —— 接上它就是「AI 壞掉時退回內建行為」的那條 fallback
 - `main.tscn` 是測試方塊圖，四個錨點擺在外圍空地，不是真的地點
 - 行程表是靜態 JSON，之後換成 AI 維護的版本，見 [[行程佇列與任務仲裁]]
-- 兩隻 Agent 的行程已經不同，但**人格還沒有**：沒有 `persona_id`，
-  也沒有覆寫 `character_name`（顯示名就是 `agent` / `agent2`）
+- 兩隻 Agent 的行程已經不同，顯示名也已經覆寫（`assignments` 指定
+  `Agent`＝阿吉、`Agent2`＝阿蘭），但**人格還沒有**：沒有 `persona_id`
 - 兩隻的家都是 `home_001` —— 「家在哪」還不是角色的屬性

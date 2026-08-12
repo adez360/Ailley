@@ -27,9 +27,10 @@ updated: 2026-08-10
 
 這三件看起來像 i18n 的缺口，其實都是「功能還沒做」，不是翻譯漏掉：
 
-- **角色沒有顯示名。** 玩家角色的名字是 `player`，NPC 是 `agent`／`agent2`，
-  直接就是識別字。所以英文模式下會看到「Good to see you again, agent!」。
-  要修得先有一套角色命名，不是翻譯的事
+- **玩家角色沒有顯示名。** 玩家角色的名字是 `player`，直接就是識別字，
+  英文模式下會看到「Good to see you again, player!」。場景裡固定的兩隻 NPC
+  已經有真正的顯示名了（`Agent`＝阿吉、`Agent2`＝阿蘭，見 `npc_schedule.json`
+  的 assignments），不會再顯示節點名——但玩家自訂角色命名系統還沒做
 - **地點沒有顯示名。** `farm`、`restaurant` 這些現在只當 key 用，
   主控台直接把 key 印出來。要顯示「農場／Farm」得另做一層對照表
 - **失敗原因還是代碼。** 搭話失敗時主控台印的是 `TALK_TOO_FAR` 這種代碼。
