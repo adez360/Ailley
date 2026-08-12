@@ -274,13 +274,18 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 # 仲裁器的核心：每次重算，不維護「目前是第幾筆」。
 #
 # 1. 過濾出還在時間窗內的候選（沒有 window 的一律算候選）
-# 2. 每筆算分數，取最高的
-# 3. 過承諾檢查才真的切換——但承諾檢查（含 interruptible）只保護「還在自己
-#    時間窗內」的目前任務。窗口已經過期的任務不受保護，該讓位就讓位——
-#    否則 sleep（interruptible=false）會在窗口結束後卡死，永遠醒不過來，
-#    因為每次重算都在「不可中斷」那關直接 return，連「自己的窗口已經過了」
-#    都沒機會判斷到。interruptible 管的是「有沒有更高分的候選能搶」，
-#    不該管「自己是不是早就該結束了」，這是兩件事
+# 2. 每筆算分數，取最高的，決定要不要換（_consider_switch）
+# 3. 不管有沒有換，都再嘗試一次「往目前任務的方向前進」（_pursue_current_task）
+#
+# 第 3 步不能省，也不能只在「真的換了」的時候才做：GameClock 每個遊戲分鐘
+# 都會呼叫這裡（見 _on_time_changed），對話中也一樣會被呼叫到——選定新任務
+# 那一刻若剛好在對話中，_pursue_current_task() 會先記下地點但不移動
+# （見該函式），等對話真的結束後 exit_conversation() 再呼叫一次 _reevaluate()。
+# 但那時候 best 通常還是同一筆（跟選定當下比，沒有新的更高分候選），
+# 「是不是同一筆」這個判斷如果直接 return，就沒有第二次機會去補跑
+# move_to()——角色會卡在對話結束的地方不動，即使任務其實已經換了、
+# 只是移動一直沒真的觸發。所以「選任務」跟「往任務移動」要分開，
+# 每次重算都無條件重跑後者，就算任務沒換也一樣
 func _reevaluate() -> void:
 	if _tasks.is_empty():
 		return
@@ -300,11 +305,16 @@ func _reevaluate() -> void:
 			best_score = score
 			best = task
 
-	if best.is_empty():
-		return
+	if not best.is_empty():
+		_consider_switch(best, best_score, now, now_minutes)
 
+	_pursue_current_task()
+
+# 決定要不要把 _current_task 換成 best。只動狀態，不碰移動——
+# 移動一律交給呼叫端之後統一補跑的 _pursue_current_task()
+func _consider_switch(best: Dictionary, best_score: float, now: String, now_minutes: int) -> void:
 	if _current_task.is_empty():
-		_run(best, now_minutes)
+		_select(best, now_minutes)
 		return
 
 	if best["id"] == _current_task["id"]:
@@ -313,6 +323,12 @@ func _reevaluate() -> void:
 	var current_still_in_window := _in_window_or_unwindowed(_current_task, now)
 
 	if current_still_in_window:
+		# 承諾檢查（含 interruptible）只保護「還在自己時間窗內」的目前任務。
+		# 窗口已經過期的任務不受保護，該讓位就讓位——否則 sleep
+		# （interruptible=false）會在窗口結束後卡死，永遠醒不過來，因為
+		# 每次重算都在「不可中斷」這關直接 return，連「自己的窗口已經過了」
+		# 都沒機會判斷到。interruptible 管的是「有沒有更高分的候選能搶」，
+		# 不該管「自己是不是早就該結束了」，這是兩件事
 		if not is_interruptible():
 			return
 
@@ -324,15 +340,20 @@ func _reevaluate() -> void:
 		if _current_task.get("source", "") != "reflex" and committed_for < MIN_COMMIT:
 			return
 
-	# current_still_in_window == false：目前任務自己的窗口已經過了，
-	# 沒有繼續佔著的理由，不用比分數也不用管 interruptible，直接換
-	_run(best, now_minutes)
+	_select(best, now_minutes)
 
-func _run(task: Dictionary, now_minutes: int) -> void:
+func _select(task: Dictionary, now_minutes: int) -> void:
 	_current_task = task
 	_current_task_started_at = now_minutes
 	current_place = str(task["params"].get("place", ""))
 	current_state = str(task["action"])
+
+# 往 _current_task 的方向前進。無條件每次重算都跑一次，不管這次有沒有
+# 剛選定新任務——對話中會在這裡先返回、不移動，等下一次重算（對話結束後
+# 那次）才會真的呼叫 move_to()
+func _pursue_current_task() -> void:
+	if _current_task.is_empty():
+		return
 
 	# 對話中先記下該去哪但不動身，講完由 exit_conversation() 重算
 	if is_in_conversation():
@@ -352,6 +373,14 @@ func _run(task: Dictionary, now_minutes: int) -> void:
 	# move_to() 對「路徑不足兩點」一律回傳 false，而站在原地正好就是這種情形
 	if _has_arrived_at(target):
 		stop_moving()
+		return
+
+	# 已經在路上就不要重呼叫 move_to()——這個函式現在每次重算都會跑
+	# （見上方 _reevaluate() 的說明），如果已經在移動中還每秒重算一次路徑，
+	# 會跟 Character.STUCK_TIME（卡住判定，也是 1 秒）打架：move_to() 每次
+	# 都重設 _stuck_timer，卡住偵測永遠沒機會真的累積到閾值。只有「目前沒在
+	# 移動」（剛選定任務、或剛從對話中恢復）才需要真的重新起步
+	if is_moving():
 		return
 
 	if not move_to(target):
