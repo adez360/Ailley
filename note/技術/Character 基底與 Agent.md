@@ -147,6 +147,50 @@ instance 共用，靜默退回會兩隻走同一份行程）；`character_id`／
 > 到點時只會 `push_error` 然後原地不動。目前沒有任何角色被指派到它們，
 > 但 `assignments` 一旦指過去就會踩到。要用之前得先補錨點或改寫那幾份行程。
 
+## 改一個欄位的語意，要先查誰把它當 key 用
+
+> [!danger] `character_name` 從節點名改成真正的顯示名，讓 code review 抓到一個靜默壞掉的功能
+> `village_sim_locale.gd` 的 `VillageSimLocale` 對照表原本拿 `character_name`
+> 當 join key（`"agent": "aji"`）——這在改之前沒問題，因為那時候
+> `character_name` 沒指定就是節點名，兩者本來就相等。這則的改動讓
+> `character_name` 變成真正的顯示名（`阿吉`／`阿蘭`）之後，那張表的 key
+> 全部對不上了：查不到不會報錯、不會有 warning，`decide()` 只是安靜地
+> `continue` 跳過，AI 送出去的 `visible` 清單變成永遠是空的，決策變成
+> 「這裡只有我一個」，沒有人會在 log 裡看到任何異常。
+>
+> 這不是 `village_sim_locale.gd` 寫得不好，是**改一個欄位的實際取值範圍時，
+> 沒有查過全專案有誰拿它當 join key 在用**。`character_name` 是拿來顯示
+> 給玩家看的欄位，不是設計來當穩定識別碼的，但因為它「剛好」曾經等於
+> 節點名，就被另一個系統誤用成事實上的穩定 key——這種耦合平常看不出來，
+> 只有在其中一邊的假設被打破時才會炸，而且炸得無聲無息。
+>
+> 修法（已在這則 PR 落地）：真的需要穩定 join key 的地方一律改查
+> `character_id`，`GODOT_ID_TO_POC_ID` 見 `village_sim_locale.gd`。
+> **下次要改一個欄位的取值範圍或語意之前，先全專案搜一次這個欄位被
+> `.get()`／當字典 key／當比對值用在哪些地方**，不能只看這個欄位自己
+> 的定義端。
+
+> [!warning] 好讀的固定值等於把同一個資訊寫第二次，還會誘使呼叫端解析它
+> 最初把固定 `character_id` 寫成 `aji-fixed-demo-npc` 這種看得懂的字串，
+> 想說方便肉眼核對——結果兩個問題一起發生：`agent-001-fixed-demo-npc`／
+> `agent2-001-fixed-demo-npc` 共用 `agent` 前綴，讓 debug 主控台的前綴比對
+> 分不出是哪一隻；而且這串字本身就是 `character_name`（隔壁欄位）的英文翻譯，
+> 同一個資訊寫了兩次。改回真正的 UUID 之後兩個問題一起消失——**不只是
+> 修掉前綴撞名，是從根本上不給任何人「拿 id 當字串解析」的動機**。
+> 之後要指派固定身分，直接生一個 UUID 貼上去，不要為了好讀而發明格式。
+
+> [!warning] 從基底生命週期呼叫的函式，一個資料錯誤會拖垮全場，不只拖垮一隻
+> `get_character_id()`／`get_character_name()` 是從 `Character._ready()`
+> 呼叫的，所以 `npc_schedule.json` 裡任何一筆 `assignments` 格式錯了
+> （例如有人手殘照舊格式寫回 `"Agent3": "npc002"` 這種純字串），受影響的
+> 不是那一隻角色，是**開場時每一隻角色（含 Player）**——因為大家的
+> `_ready()` 都會跑到同一段查表邏輯。另外 `str(null)` 在 Godot 4 回傳的是
+> 非空字串 `"<null>"`，會被誤判成一個有效值採用，不會走到空字串的退回邏輯。
+> 兩者一起檢查、收進 `game_manager.gd` 的 `_assignment()` helper 裡處理。
+> **凡是掛在共用生命週期鉤子（`_ready()`／`_process()`……）上、會被每個
+> 子類別繼承呼叫的函式，防禦性檢查的優先度要提高一級**——它的錯誤半徑
+> 是全場，不是呼叫端自己。
+
 ## 決策
 
 > [!important] 動畫只做三向 front / back / right
