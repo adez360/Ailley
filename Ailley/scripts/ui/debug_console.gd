@@ -31,7 +31,7 @@ func _ready() -> void:
 		"nav": {"run": _cmd_nav, "usage": "nav rebuild", "help": "HELP_NAV"},
 		"inv": {"run": _cmd_inv, "usage": "inv [name] / inv give <item_id> [count]", "help": "HELP_INV"},
 		"money": {"run": _cmd_money, "usage": "money <amount>", "help": "HELP_MONEY"},
-		"ai": {"run": _cmd_ai, "usage": "ai [text]", "help": "HELP_AI"},
+		"ai": {"run": _cmd_ai, "usage": "ai [dialogue] [@provider] [text]", "help": "HELP_AI"},
 		# help 留空：跟 village_ai 一樣先不進 locale/console.csv，避免動到翻譯資源
 		# 匯入（這台機器上曾經卡住），純 debug 用途，之後真的要收進正式指令表
 		# 再補翻譯
@@ -588,11 +588,17 @@ const AI_REQUESTER_ID := "debug_console"
 const AI_PROBE_SYSTEM := "You are a connection probe. Reply with JSON only, no prose, no code fence: {\"ok\": true, \"echo\": \"<the text field you were given>\"}"
 const AI_PROBE_TEXT := "hello from ailley"
 
-# ai                    用預設探針句打一次（走 SCHEDULED，吃 30 秒冷卻）
-# ai <文字>             改用這段文字當探針
-# ai dialogue [<文字>]  走 CONVERSATION，驗證對話輪次確實豁免冷卻與配額
+# ai                          用預設探針句打一次（走 SCHEDULED，吃 30 秒冷卻）
+# ai <文字>                   改用這段文字當探針
+# ai dialogue [<文字>]        走 CONVERSATION，驗證對話輪次確實豁免冷卻與配額
+# ai @<provider> [<文字>]     指定要測哪個 provider（不指定用 default_provider）
+# ai dialogue @<provider> [<文字>]  兩者可以並用，順序固定：dialogue 在前
 #
-# 兩種都留著才測得出差別：連打兩次 ai 第二次應該被擋，
+# @provider 這個記法是為了不跟探針文字本身混淆——文字通常是一句話，
+# 用 @ 開頭這種明顯不像自然語言開頭的記法，判斷「這個 token 是不是指定
+# provider」不用去猜文字內容像不像 provider 名稱
+#
+# dialogue／SCHEDULED 兩種都留著才測得出差別：連打兩次 ai 第二次應該被擋，
 # 連打兩次 ai dialogue 應該兩次都過
 #
 # 每次都先 reload_config()，玩家剛寫完 user://ai_config.json 不用重開遊戲
@@ -610,9 +616,28 @@ func _cmd_ai(args: PackedStringArray) -> void:
 	# 第一個參數是 dialogue 就切成對話政策，其餘參數仍然是探針句
 	var policy := AIService.Policy.SCHEDULED
 	var rest := args
-	if args.size() > 0 and args[0].to_lower() == "dialogue":
+	if rest.size() > 0 and rest[0].to_lower() == "dialogue":
 		policy = AIService.Policy.CONVERSATION
-		rest = args.slice(1)
+		rest = rest.slice(1)
+
+	# @provider 記法指定要測哪個 provider，不指定就用 default_provider——
+	# 順序固定排在 dialogue 之後，跟 usage 註解裡寫的一樣
+	var provider_name := ""
+	if rest.size() > 0 and rest[0].begins_with("@"):
+		provider_name = rest[0].substr(1)
+		rest = rest.slice(1)
+
+		# 光打一個 @ 要當成打錯，不能放行：has_provider("") 會因為退回
+		# default_provider 而回 true，等於一個明顯的手誤被靜默送去預設服務
+		if provider_name.is_empty():
+			_error("@ 後面要接 provider 名稱，設定檔裡有：%s" % ", ".join(config.providers.keys()))
+			return
+
+		if not config.has_provider(provider_name):
+			_error("找不到 provider「%s」，設定檔裡有：%s" % [
+				provider_name, ", ".join(config.providers.keys())
+			])
+			return
 
 	var usage: Dictionary = AIService.get_usage(AI_REQUESTER_ID)
 	_print("[color=888888]  %s[/color]" % L10n.tf("CON_AI_USAGE", {
@@ -632,12 +657,13 @@ func _cmd_ai(args: PackedStringArray) -> void:
 		"payload": {"type": "ping", "text": text},
 	}
 
-	_print("[color=888888]→ [%s] %s[/color]" % [
+	_print("[color=888888]→ [%s → %s] %s[/color]" % [
 		L10n.t("CON_POLICY_CONVERSATION" if policy == AIService.Policy.CONVERSATION else "CON_POLICY_SCHEDULED"),
+		provider_name if not provider_name.is_empty() else config.default_provider,
 		JSON.stringify(envelope["payload"]),
 	])
 
-	var result: Dictionary = await AIService.request(envelope, AI_REQUESTER_ID, policy)
+	var result: Dictionary = await AIService.request(envelope, AI_REQUESTER_ID, policy, provider_name)
 	if not result["ok"]:
 		_error("← " + L10n.tf("CON_AI_FAILED", {"error": result["error"]}))
 		return
