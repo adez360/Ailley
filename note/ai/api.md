@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-12
+updated: 2026-08-13
 ---
 
 # api
@@ -190,8 +190,6 @@ make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不
 
 ```gdscript
 @export var schedule_template := ""          # npc_schedule.json 的鍵，如 "npc001"
-@export var village_ai_enabled := false      # demo 開關，逐隻手動開，見下方 poc_village_sim 段落
-@export var poc_character_id := ""           # village_ai_enabled 開啟時對應到 poc 的哪個內部 id
 const NOTICE_PAUSE := 2.0
 
 var schedule: Array
@@ -210,7 +208,6 @@ _ready: await nav.grid_built 才出發（NavGrid 非同步建置，太早→空�
 spotted 且 !relationships.has_met() → say("！") + stop_moving() + 2s + 重算行程
   _noticed 表確保每個對象只觸發一次
 noise_heard 且 !is_in_conversation() → say("!?")，無去重，每次都會反應
-spotted 且 village_ai_enabled 且對方是玩家 → 觸發一次 VillageSimDecision（見下方）
 ⚠ 抵達判定 = 距離 ≤ ARRIVE_DISTANCE(2px) OR 已在目標格內(16px)
   只比距離的話 2..11px 是死角：距離說沒到，find_path() 卻因同格只回一個點
   → move_to() false → 假的「走不到」。每次重算行程都會噴
@@ -220,33 +217,6 @@ spotted 且 village_ai_enabled 且對方是玩家 → 觸發一次 VillageSimDec
   節點名只在同一層唯一，不同父節點下撞名 → push_error（兩隻會查到同一筆）
 ```
 
-### poc_village_sim 驗證線 — scripts/ai/village_sim_*.gd
-
-```
-village_sim_client.gd     class_name VillageSimClient · RefCounted
-  func decide(base_url, payload, timeout=10.0) -> {ok, data, error}
-  獨立的 HTTPRequest client，不經過 AIService（不同的成本/驗證模型，見 [[LLM 串接與 AI 服務層]]）
-
-village_sim_decision.gd   class_name VillageSimDecision · RefCounted
-  static func decide(character, poc_character_id, base_url) -> {ok, data, error}
-    純問答，不執行任何動作；組 payload（真實狀態/視野/physiology_override）
-  static func apply(character, poc_character_id, result) -> void
-    套用結果：speech → character.say()；action_en=="move_to" → character.move_to()
-    （不會回寫 current_place，見下方⚠）；其餘動作 → 借 Bubble 印「［action_en：尚未實作］」
-
-village_sim_locale.gd     class_name VillageSimLocale · RefCounted
-  Godot 地點錨點/角色名 ↔ poc_village_sim 中文地點/id 的有限對照表
-  只對照「兩邊都真的存在」的地點，對不上一律回傳空字串，呼叫端要自己檢查
-```
-
-```
-† 這條線是 R&D／驗證用途，不是出貨架構（出貨走 Godot ↔ Sidecar，見 [[LLM 串接與 AI 服務層]]）
-† poc_village_sim 不在這個 git repo 裡，是本機獨立資料夾
-⚠ 只有 move_to／說話真的被執行，poc 動作白名單其餘 30 幾種目前 Godot 沒有對應玩法機制
-⚠ 跟行程表是兩個獨立機制，會互相覆蓋：apply() 不會回寫 current_place，
-  AI 移動後行程表不知道角色被動過，下一次整點觸發會把角色拉回行程表認定的地方，
-  AI 自己也不知道上一步真的執行了什麼（下一次 decide() 讀到的還是舊地點）
-```
 
 ## Stats — scripts/character/stats.gd · class_name · Node
 
@@ -712,8 +682,6 @@ nav rebuild              重建尋徑網格
 inv [name]               列出背包；inv give <item_id> [count] 塞測試物品給玩家
 money <amount>           改玩家的錢；正數走 add_money()，負數走 spend()。查詢看 status
 ai [文字]                 對 LLM 打一次測試請求
-village_ai <id> [url]              純 transport 測試，打固定測試 payload
-village_ai_act <name> <id> [url]   讀真實狀態、真的執行動作/說話
 help | clear
 
 角色查找：character_name(不分大小寫) → 撞名列候選 id 前 8 碼 → character_id 前綴
@@ -833,6 +801,4 @@ noise_heard 對話中會被吞掉；睡覺中的 Agent 沒有排除，一樣會�
 無存檔機制（全專案無 user:// 存檔/ConfigFile）
 character_id 與 GameClock.day 都未持久化，重開就重來
 AIService（正式線）仍未接對話與行程：conversation.gd 仍同步、agent.gd 仍純行程表驅動
-poc_village_sim（R&D 驗證線）已有呼叫端（見上方 Agent／village_sim_*.gd），
-  但只證明管線通、決策內容有效性未驗證，且不是出貨架構
 ```

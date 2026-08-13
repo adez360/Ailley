@@ -32,17 +32,9 @@ func _ready() -> void:
 		"inv": {"run": _cmd_inv, "usage": "inv [name] / inv give <item_id> [count]", "help": "HELP_INV"},
 		"money": {"run": _cmd_money, "usage": "money <amount>", "help": "HELP_MONEY"},
 		"ai": {"run": _cmd_ai, "usage": "ai [dialogue] [@provider] [text]", "help": "HELP_AI"},
-		# help 留空：跟 village_ai 一樣先不進 locale/console.csv，避免動到翻譯資源
-		# 匯入（這台機器上曾經卡住），純 debug 用途，之後真的要收進正式指令表
-		# 再補翻譯
-		"village_ai": {"run": _cmd_village_ai, "usage": "village_ai <character_id> [base_url]", "help": ""},
-		"village_ai_act": {
-			"run": _cmd_village_ai_act,
-			"usage": "village_ai_act <godot_name> <poc_character_id> [base_url]",
-			"help": "",
-		},
 		"locale": {"run": _cmd_locale, "usage": "locale [code]", "help": "HELP_LOCALE"},
-		# help 留空，理由同 village_ai——純 debug 用途，不進 locale/console.csv
+		# help 留空：先不進 locale/console.csv，避免動到翻譯資源匯入（這台機器上
+		# 曾經卡住），純 debug 用途，之後真的要收進正式指令表再補翻譯
 		"tasks": {"run": _cmd_tasks, "usage": "tasks <name>", "help": ""},
 		"help": {"run": _cmd_help, "usage": "help", "help": ""},
 		"clear": {"run": _cmd_clear, "usage": "clear", "help": "HELP_CLEAR"},
@@ -676,109 +668,6 @@ func _cmd_ai(args: PackedStringArray) -> void:
 		_print("[color=88ff88]  %s %s[/color]" % [L10n.t("CON_AI_CONTENT"), JSON.stringify(parsed["data"])])
 	else:
 		_print("[color=ffcc66]  %s[/color]" % L10n.tf("CON_AI_INVALID", {"error": parsed["error"]}))
-
-# village_ai <character_id> [base_url]
-#
-# transport 層第一步驗證：對 poc_village_sim/server.py 的 /decide 端點打一次
-# 固定測試 snapshot（角色站在自己家、視野內沒有其他人），拿回原始決策 JSON
-# 印出來。不接遊戲內真實狀態（那是決策迴圈的工作，還沒做，見
-# note/40-規劃與路線圖/意見書 - AI串接口欄位對照規格書06與04.md）——這裡只證明
-# 「送得出去、收得回來、JSON 解析得了」這條線路通不通。
-#
-# character_id 目前只能填 alan/zhou/mei/tie/aji（server.py 綁死的 POC 固定名單）。
-# base_url 預設打本機的 8100（server.py 文件頭寫的啟動 port），組員自己的環境
-# 要接遠端要手動帶第二個參數，例如：village_ai zhou http://<tailscale-ip>:8100
-const VILLAGE_AI_DEFAULT_BASE_URL := "http://127.0.0.1:8100"
-
-func _cmd_village_ai(args: PackedStringArray) -> void:
-	if args.is_empty():
-		_error("village_ai <character_id> [base_url]")
-		return
-
-	var character_id := args[0]
-	var base_url := args[1] if args.size() > 1 else VILLAGE_AI_DEFAULT_BASE_URL
-
-	var payload := {
-		"character_id": character_id,
-		"current_time": "第 3 天 19:40（夜晚）",
-		"location": "村莊廣場",
-		"visible": [],
-		"recent_event": "上一刻村子裡各自在忙自己的事，沒有人特別找你",
-		"last_emotion": "neutral",
-		"current_goal": "",
-		"last_action_result": "",
-		"recent_memory": "",
-	}
-
-	_print("[color=888888]→ POST %s/decide %s[/color]" % [base_url, JSON.stringify(payload)])
-
-	var client := VillageSimClient.new()
-	var result: Dictionary = await client.decide(base_url, payload)
-
-	if not result["ok"]:
-		_error("← village_ai 失敗：%s" % result["error"])
-		return
-
-	_print("[color=88ff88]← %s[/color]" % JSON.stringify(result["data"]))
-
-# village_ai_act <godot_name> <poc_character_id> [base_url]
-#
-# 比 village_ai 進一步：抓這隻角色的真實狀態（Character.get_state_snapshot()、
-# Agent.current_place）組成 payload，打給 server.py，如果 AI 決定的動作是
-# move_to 且地點翻譯得回 Godot 錨點，就真的呼叫 character.move_to() 讓角色走過去。
-#
-# 只支援 Agent（要讀 current_place 判斷現在在哪個錨點；Player 沒有這個欄位，
-# 目前沒有另一套方式問「玩家現在算在哪個地點」，先不支援）。
-#
-# poc_character_id 只能填 alan/zhou/mei/tie/aji（server.py 綁死的 POC 名單，
-# 跟 godot_name 指的是同一個人這件事目前純粹是操作者自己保證，程式不驗證，
-# 兩者本來就是兩套獨立的身分系統，還沒有正式的對照層——見
-# note/技術/LLM 串接與 AI 服務層.md）。
-#
-# 地點跟能見度都是有限對照（見 VillageSimLocale 檔頭說明）：對不上的地點
-# 會直接中止，不亂猜；視野內其他角色目前一律送空陣列，因為它們的 poc id
-# 同樣沒有對照層。
-func _cmd_village_ai_act(args: PackedStringArray) -> void:
-	if args.size() < 2:
-		_error("village_ai_act <godot_name> <poc_character_id> [base_url]")
-		return
-
-	var character := _get_character(args[0])
-	if character == null:
-		return
-
-	var poc_character_id := args[1]
-	var base_url := args[2] if args.size() > 2 else VILLAGE_AI_DEFAULT_BASE_URL
-
-	_print("[color=888888]→ %s（%s）→ POST %s/decide[/color]" % [args[0], poc_character_id, base_url])
-
-	# 主控台指令跟自動觸發（agent.gd 玩家靠近時）共用同一份 decide() 邏輯，見
-	# VillageSimDecision 檔頭說明，避免兩邊各寫一份。執行動作/說話（apply()）
-	# 則由這裡自己呼叫，不讓 VillageSimDecision 幫忙做——理由同樣見檔頭註解
-	var result: Dictionary = await VillageSimDecision.decide(character, poc_character_id, base_url)
-
-	if not result["ok"]:
-		_error("← village_ai_act 失敗：%s" % result["error"])
-		return
-
-	var data: Dictionary = result["data"]
-	_print("[color=88ff88]← %s[/color]" % JSON.stringify(data))
-
-	# 不管有沒有話、有沒有移動都印一行明確狀態——之前吃過虧：全部靠「有事才印」，
-	# 使用者會分不清楚「這次剛好沒事」跟「指令根本沒在跑」
-	var speech = data.get("output", {}).get("speech")
-	if speech != null and str(speech) != "":
-		_print("[color=88ff88]  %s 說：%s[/color]" % [args[0], speech])
-	else:
-		_print("[color=888888]  這次沒有話要說[/color]")
-
-	var action_en := str(data.get("action_en", ""))
-	if action_en == "move_to":
-		_print("[color=88ff88]  %s 依 AI 決策移動（目的地見上面 location 欄位）[/color]" % args[0])
-	else:
-		_print("[color=888888]  動作是 %s，village_ai_act 目前只執行 move_to，其餘只印出不執行[/color]" % action_en)
-
-	VillageSimDecision.apply(character, poc_character_id, result)
 
 # locale        顯示目前語系與可用清單
 # locale <code> 切換（zh_TW / en）
