@@ -33,6 +33,7 @@ characters   全部 Character        nav_grid       NavGrid
 player       玩家                  place_anchors  main.tscn 的 Node2D/PlaceAnchors
 agents       全部 Agent            debug_overlay  DebugOverlay
 selection    Selection             follow_camera  FollowCamera
+workstations 全部 Workstation
 ```
 
 ## collision layers
@@ -104,10 +105,18 @@ func is_moving() -> bool
 func get_path_points() -> PackedVector2Array
 func get_body_position() -> Vector2          # 碰撞圓心
 
+const WORK_RANGE := 32.0                     # 同 TALK_RANGE
+const WORK_OK/WORK_TARGET_NOT_FOUND/WORK_TOO_FAR/WORK_OCCUPIED/WORK_BUSY
+const WORK_DURATION_MINUTES := 5 · WORK_PAYMENT := 50
+func work_at(workstation: Workstation) -> String   # WORK_OK 或原因碼；只代表卡位成功
+func find_nearest_workstation() -> Workstation     # WORK_RANGE 內最近；無→null
+func is_working() -> bool
+func _on_work_finished() -> void             # 子類覆寫點；Agent 用它重算行程
+
 func talk_to(other: Character) -> String     # TALK_OK 或原因碼
 func find_nearest_character() -> Character   # TALK_RANGE 內最近；無→null
 func is_in_conversation() -> bool
-func is_interruptible() -> bool              # 基底恆 true，Agent 覆寫
+func is_interruptible() -> bool              # 基底 `not _working`；Agent 再 and 上非 sleep
 func enter_conversation(conversation: Node) -> void
 func exit_conversation() -> void
 func leave_conversation() -> void
@@ -128,7 +137,7 @@ func _decide_velocity() -> Vector2           # 子類覆寫點：這一幀往哪
 
 ```
 get_state_snapshot() -> {
-  id, name, position, moving, facing, animation, in_conversation,   # 一定有
+  id, name, position, moving, facing, animation, in_conversation, working,  # 一定有
   stats: {key: value, ...},                     # 有掛 Stats 才有，key 是 SPEC 的 key
   money: int,                                   # 有掛 Inventory 才有；背包內容不進快照
   affinity: {other_id: {affinity, met_count}, ...}, # 有記錄的人才有，欄名同 relationships
@@ -165,10 +174,15 @@ func get_input_direction() -> Vector2        # WASD 正規化
 
 ```
 輸入優先：一按方向鍵就 stop_moving() 中斷 A*
-interact(E)：對話中→leave_conversation()；否則→talk_to(find_nearest_character())
+interact(E)：對話中→leave_conversation()；否則→工作站與最近的人**比距離**，近的先試，
+  失敗（OCCUPIED / BUSY…）再退回另一個。兩邊都失敗只 push_warning
 make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不會冒 !?
 † gui_get_focus_owner() != null 時 get_input_direction() 回 ZERO
   Input.get_axis() 讀全域狀態，LineEdit 攔不住
+⚠ E 不能無條件讓工作站優先 — 桌子很容易落在地點錨點的互動半徑內
+  （main.tscn 那張距 `square` 23px < WORK_RANGE 32），而 agent 行程正好把人帶去錨點，
+  那個點上的搭話會整個死掉
+⚠ work_at() 失敗必須往下掉到搭話，不能 return — 否則工作站被佔用時 E 完全沒反應
 搭話失敗對玩家靜默，只有主控台印原因碼
 ```
 
@@ -341,6 +355,39 @@ func get_summary() -> Array[Dictionary]       # 不含空格，每筆補 slot �
 † spend() 失敗是原子的，跟 remove_item() 一致 — 呼叫端拿到原因碼就知道整筆沒發生，不必回滾
 ⚠ durability=-1 是本實作的哨兵值，不在規格書 0–100 範圍內；物品定義檔進來後要對齊
 → 技術/物品欄
+```
+
+## Workstation — scripts/world/workstation.gd · class_name · StaticBody2D
+
+```gdscript
+var occupant: Character                      # 目前佔用者，沒人是 null
+func is_occupied() -> bool                   # is_instance_valid(occupant)
+func try_occupy(character) -> bool           # 已被佔用回 false
+func release(character) -> void              # 只有目前佔用者叫得動
+```
+
+```
+_ready 自動 add_to_group("workstations")
+† 自己不查距離 — 距離判定全在 Character.work_at() / find_nearest_workstation()
+† StaticBody2D + CollisionShape2D 是給 NavGrid 的（可走性是物理查詢量出來的），
+  互動判定完全不靠它，只是「桌子擋路」的副作用
+⚠ is_occupied() 必須用 is_instance_valid()，不能用 `occupant != null`
+  Godot 4 裡 freed 物件 `!= null` 仍成立 ⇒ 佔用者被移除後工作站永遠鎖死，
+  而 release() 比對的是已經不存在的角色、永遠清不掉。這也是角色工作到一半被 free 時
+  唯一會把位子放出來的地方 — 協程不會恢復，沒有人替它 release()
+→ 技術/工作站
+```
+
+## WorkProgress — scripts/ui/work_progress.gd · class_name · Node2D
+
+```gdscript
+func show_progress(ratio: float) -> void     # 0.0–1.0
+func hide_progress() -> void
+```
+
+```
+† 掛在角色底下（跟 Bubble 同一種「頭上飄一塊 UI」），純顯示，
+  不知道工作站或計時器是什麼
 ```
 
 ## Vision — scripts/character/vision.gd · class_name · Area2D

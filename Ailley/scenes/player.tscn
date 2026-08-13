@@ -1,4 +1,4 @@
-[gd_scene load_steps=36 format=3 uid="uid://v21qv1icuh5m"]
+[gd_scene load_steps=38 format=3 uid="uid://v21qv1icuh5m"]
 
 [ext_resource type="Script" uid="uid://oen8wb64hv4w" path="res://scripts/character/player.gd" id="1_mbysm"]
 [ext_resource type="Texture2D" uid="uid://pcq7ouq5pyt8" path="res://assets/characters/16x16 Idle-Sheet.png" id="2_cl37t"]
@@ -8,6 +8,8 @@
 [ext_resource type="PackedScene" uid="uid://bu84ty6ven6ig" path="res://scenes/bubble.tscn" id="6_6u2qc"]
 [ext_resource type="Script" uid="uid://xne7q5cyfgre" path="res://scripts/character/vision.gd" id="7_4t2tf"]
 [ext_resource type="Script" uid="uid://rojhhinafyq2" path="res://scripts/character/inventory.gd" id="8_smehm"]
+[ext_resource type="Script" uid="uid://cebdk6kq4c7ip" path="res://scripts/ui/work_progress.gd" id="9_ur7pv"]
+[ext_resource type="Script" uid="uid://t6axa01hiamc" path="res://scripts/ui/money_popup.gd" id="10_y4r1p"]
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_bolw2"]
 atlas = ExtResource("2_cl37t")
@@ -249,3 +251,27 @@ shape = SubResource("CircleShape2D_6u2qc")
 
 [node name="Inventory" type="Node" parent="."]
 script = ExtResource("8_smehm")
+
+[node name="WorkProgress" type="Node2D" parent="."]
+z_index = 10
+position = Vector2(0, -14)
+script = ExtResource("9_ur7pv")
+
+[node name="Background" type="ColorRect" parent="WorkProgress"]
+mouse_filter = 2
+
+[node name="Fill" type="ColorRect" parent="WorkProgress"]
+mouse_filter = 2
+
+[node name="MoneyPopup" type="Node2D" parent="."]
+z_index = 10
+position = Vector2(0, -18)
+script = ExtResource("10_y4r1p")
+
+[node name="Label" type="Label" parent="MoneyPopup"]
+offset_left = -14.0
+offset_top = -7.0
+offset_right = 14.0
+offset_bottom = 7.0
+horizontal_alignment = 1
+vertical_alignment = 1

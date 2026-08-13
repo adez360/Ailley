@@ -101,12 +101,17 @@ func _warn_if_node_name_shared() -> void:
 # 睡覺中的 Agent 不接受搭話。行程插槽之後會有 interruptible 欄位（計畫 §5.1），
 # 現在先用 state 判斷
 func is_interruptible() -> bool:
-	return current_state != "sleep"
+	return super() and current_state != "sleep"
 
 # 對話結束後重算一次「現在該做什麼」，而不是接續原本那條路 ——
 # 對話期間可能已經跨過了行程的整點
 func exit_conversation() -> void:
 	super()
+	_apply_current_entry()
+
+# 工作結束後同理：那 5 個遊戲分鐘可能已經跨過行程的整點，而 work_at() 開頭的
+# stop_moving() 把原本的路徑清掉了，不重算的話會一路站到下一個整點字串吻合為止
+func _on_work_finished() -> void:
 	_apply_current_entry()
 
 # 基底的快照加上行程表這一段。schedule/current_place/current_state 宣告在這裡，

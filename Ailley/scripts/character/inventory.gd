@@ -11,6 +11,15 @@ extends Node
 ## 金錢也在這裡：規格書 01 §3-3 把 money 與 inventory 同樣歸在 economy 底下，
 ## 為了一個 int 另外開一個節點，換到的只是多一個 get_node_or_null 要防。
 
+## 格子或金錢真的變了才發。只在成功的異動上發——失敗是原子的、什麼都沒動，
+## 發出去只會讓顯示端白刷一次。
+##
+## 有這個訊號，UI 才不用每幀輪詢：36 個格子按鈕各自 _process() 重讀一次，
+## 60fps 下光是 get_slot() 的 duplicate() 就兩千多次配置／秒，而資料只在
+## 買東西或工作時才變。攜帶參數刻意留白——顯示端要的是「重讀一次」，
+## 不是「哪一格變了」，帶了反而每個顯示端都要判斷這則跟自己有沒有關係
+signal changed
+
 const HOTBAR_SIZE := 9
 const MAIN_SIZE := 27
 const SIZE := HOTBAR_SIZE + MAIN_SIZE		# index 0..8 快捷欄，9..35 主背包
@@ -108,9 +117,12 @@ func find_first_empty() -> int:
 func add_item(item_id: String, count: int = 1, decay: int = 0, durability: int = -1) -> String:
 	if count <= 0:
 		return ADD_INVALID_COUNT
-	if durability >= 0:
-		return _add_unstackable(item_id, count, decay, durability)
-	return _add_stackable(item_id, count, decay)
+	# 兩條路各有好幾個 return，所以 changed 在這裡發一次就好，不用兩邊各自散落
+	var reason := _add_unstackable(item_id, count, decay, durability) if durability >= 0 \
+			else _add_stackable(item_id, count, decay)
+	if reason == ADD_OK:
+		changed.emit()
+	return reason
 
 func _add_stackable(item_id: String, count: int, decay: int) -> String:
 	var target := _find_stackable_slot(item_id, decay)
@@ -178,6 +190,7 @@ func remove_item(item_id: String, count: int = 1) -> String:
 		if int(slot["count"]) <= 0:
 			slots[i] = {}
 
+	changed.emit()
 	return REMOVE_OK
 
 # 搬到空格；目的地非空就失敗，不覆蓋。要交換兩個已佔用的格用 swap_slot()
@@ -189,6 +202,7 @@ func move_slot(from: int, to: int) -> bool:
 
 	slots[to] = slots[from]
 	slots[from] = {}
+	changed.emit()
 	return true
 
 func swap_slot(a: int, b: int) -> bool:
@@ -198,6 +212,7 @@ func swap_slot(a: int, b: int) -> bool:
 	var tmp := slots[a]
 	slots[a] = slots[b]
 	slots[b] = tmp
+	changed.emit()
 	return true
 
 
@@ -222,6 +237,7 @@ func add_money(amount: int) -> String:
 		return MONEY_INVALID_AMOUNT
 
 	_money += amount
+	changed.emit()
 	return MONEY_OK
 
 # 扣款。餘額不足時一毛都不扣，跟 remove_item() 的原子性一致——
@@ -233,6 +249,7 @@ func spend(amount: int) -> String:
 		return MONEY_NOT_ENOUGH
 
 	_money -= amount
+	changed.emit()
 	return MONEY_OK
 
 

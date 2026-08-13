@@ -308,8 +308,13 @@ func _cmd_status(args: PackedStringArray) -> void:
 		"facing": snapshot["facing"], "anim": snapshot["animation"]
 	}))
 
+	# 兩個欄位共用同一個字串 key。原本是 CON_TALK_ACTIVE 與 CON_WORK_ACTIVE
+	# 兩個一字不差的條目——那種必須永遠一致的重複，翻譯者改了其中一個就會不同步
 	if snapshot["in_conversation"]:
-		_field("CON_FIELD_TALK", L10n.t("CON_TALK_ACTIVE"))
+		_field("CON_FIELD_TALK", L10n.t("CON_STATE_ACTIVE"))
+
+	if snapshot["working"]:
+		_field("CON_FIELD_WORK", L10n.t("CON_STATE_ACTIVE"))
 
 	# 直接掃 Stats.SPEC，所以之後加數值不用回來改這裡。
 	# SPEC 的 label 存的是翻譯 key，翻譯在這個顯示端做
