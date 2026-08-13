@@ -31,9 +31,9 @@ LLM 一律走 `AIService`（`scripts/ai/ai_service.gd`）→ Godot ↔ Sidecar
 > **Godot（`HTTPRequest`）↔ Sidecar（`llama-server`）**，不經 Python 中間層。
 
 > [!warning] 2026-08-12：GDScript 決策邏輯重寫由使用者負責
-> 正式線現況：**決策迴圈還未實作**（目前只有仲裁器的殼，對應
-> [[行程佇列與任務仲裁]] 的 Step 2）、**身分對照系統尚未**、**雙向對話尚未**
-> （對應 Step 1）。把 `poc_village_sim` 決策邏輯搬進 GDScript、接上仲裁器，
+> 正式線現況：對話已經走 `AIService`，但**行程決策迴圈還未實作**——仲裁器只吃
+> schedule 來源的任務，沒有任何 LLM 產生的 Task；**身分對照系統也尚未**。
+> 把 `poc_village_sim` 決策邏輯搬進 GDScript、接上仲裁器，
 > 是**使用者自己要寫的東西**。
 >
 > 身分對照的缺口在 Character 基底層：issue #69（`character_id`／`character_name`
@@ -80,7 +80,7 @@ WebSocket 在本專案有位置，但是**另一條線**：
 | `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers` 與全域的速率限制三個旋鈕 |
 | `ai_service.gd` | **正式線唯一碰網路的地方**。autoload。節點池、佇列、逾時、速率限制、重試 |
 | `ai_schema.gd` | 回應驗證：`JSON.parse_string` → null 檢查 → 逐欄位型別檢查 → `action` 白名單 |
-| `prompt_builder.gd` | 由 Character 組出請求信封（尚未實作） |
+| `prompt_builder.gd` | 由 Character 組出請求信封。dialogue 信封已實作，plan 還沒 |
 
 `data/personas.json` — 人格資料，Agent 以 `@export var persona_id` 指定（尚未實作）。
 
@@ -140,21 +140,10 @@ llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key
 > 的是 `base_url`／`model` 空白，不是金鑰：範例檔給的 `sk-or-v1-REPLACE_ME`
 > 本來就非空。
 
-### 未來要改的既有檔案（正式線，尚未動工）
+## JSON 信封
 
-| 檔案 | 改動 |
-| --- | --- |
-| `conversation.gd` | 同步 → 非同步（pending 狀態、「…」氣泡、失敗回退）；`_speak()` 目前用字串長度算計時器，非同步 LLM 塞不進去，這段一定要動 |
-| `agent.gd` | cron → 任務池＋仲裁器；接受 LLM push 的 Task，見 [[行程佇列與任務仲裁]] |
-| `character.gd` | 加 `signal spoke(line: String)` |
-| `chat_input.gd` | 玩家在對話中打字 → 文字送進對話上下文 |
-| `dialogue_lines.gd` | **保留不刪**，降級為 fallback（逾時/未設金鑰/驗證失敗時要有保底台詞） |
-| `debug_console.gd` | 新增 `tasks` 指令 |
-| `project.godot` | 新增 autoload 走 `autoload_manage`，不手改 |
-
-## JSON 信封（正式線設計，尚未實作）
-
-對話與行程**共用同一個信封**，用 `type` 區分。
+對話與行程**共用同一個信封**，用 `type` 區分。dialogue 那半邊已經實作
+（`PromptBuilder.build_dialogue_envelope()`），plan 還沒。
 
 ### 請求
 
@@ -269,9 +258,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 > Agent ↔ Agent 跨 client 時，對方的台詞是遠端輸入，與玩家打字、與交誼區來的
 > 文字同一個等級——全部進 `context.turns` 當資料，絕不視為指令。
 
-## 正式線實作順序（Step 0 完成，Step 1-3 未開始）
-
-前置：先把工作區未提交的東西分開 commit，從乾淨基準開工。
+## 正式線實作順序（Step 0-2 完成，Step 3 未開始）
 
 ### Step 0 — 底層 ✅ 完成
 
@@ -295,23 +282,19 @@ autoload 已註冊，主控台加了 `ai` 指令。
 **尚未執行期驗證**：這些是在沒有 Godot 執行檔的環境做的，只做過靜態檢查，
 合併前要補：`project_run` → `ai` ×2 → `ai dialogue` ×2 → `logs_read`。
 
-### Step 1 — 對話（未開始）
+### Step 1 — 對話 ✅ 完成
 
-1. `prompt_builder.gd` 的 dialogue 信封
-2. 台詞來源介面（見上）
-3. `conversation.gd` 改非同步，`_pending` 狀態顯示「…」氣泡，移除 `MAX_TURNS`，
-   逾時/驗證失敗走 fallback 並結束對話
-4. `character.gd` 加 `signal spoke(line)`
-5. `chat_input.gd` 對話中打字送進上下文
+`PromptBuilder.build_dialogue_envelope()` 組信封，`Agent.next_line()` 打
+`AIService`，`conversation.gd` 改成非同步、等台詞時掛「…」氣泡、拿不到就退回
+`DialogueLines`。`MAX_TURNS` 換成 `SAFETY_MAX_TURNS`（純保險，收尾由 `end` 欄位決定），
+`character.gd` 有 `signal spoke`，玩家在對話中打的字也送得進上下文。
 
-**驗收**：走到 Agent 旁按 E → 講出 LLM 產的台詞；關掉 `enabled` → 自動回到模板句。
+開場白仍然是模板句：對話由 `DialogueLines.opening()` 起頭，第二輪才進 LLM。
 
-### Step 2 — 任務池與仲裁器（未開始，純重構不接 LLM）
+### Step 2 — 任務池與仲裁器 ✅ 完成
 
-完全照 [[行程佇列與任務仲裁]] 實作，改動全在 `agent.gd`。刻意不含 LLM，
-這樣行為若有回歸，責任歸屬明確——是重構寫錯，還是 LLM 給了爛任務。
-
-**驗收**：`tasks` 指令印出池子與分數拆項 → Agent 行為與重構前完全一致。
+照 [[行程佇列與任務仲裁]] 實作，改動全在 `agent.gd`，刻意不含 LLM。
+`tasks` 指令印得出池子與分數拆項。
 
 ### Step 3 — LLM 填行程（未開始）
 

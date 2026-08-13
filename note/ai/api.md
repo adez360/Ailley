@@ -800,5 +800,5 @@ Agent 不對 Stats 反應（get_lowest_need_place() 可用但無呼叫端）
 noise_heard 對話中會被吞掉；睡覺中的 Agent 沒有排除，一樣會冒 !?
 無存檔機制（全專案無 user:// 存檔/ConfigFile）
 character_id 與 GameClock.day 都未持久化，重開就重來
-AIService（正式線）仍未接對話與行程：conversation.gd 仍同步、agent.gd 仍純行程表驅動
+AIService 已接對話（Agent.next_line()），行程還沒：任務池只有 schedule 來源的任務
 ```
