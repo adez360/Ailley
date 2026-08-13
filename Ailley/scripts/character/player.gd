@@ -154,7 +154,13 @@ var _highlighted_machine: VendingMachine = null
 var _highlighted_other: Character = null
 
 func _process(_delta: float) -> void:
-	if is_in_conversation():
+	var vending_menu := get_tree().get_first_node_in_group("vending_menu")
+
+	# 選單開著時 E 是關閉選單（見 vending_menu.gd 自己的 _unhandled_input），
+	# 不是這三個候選裡的任何一個——選單不擋移動，玩家開著選單照樣能走位/轉向，
+	# 這裡不擋的話高亮會跟著跳來跳去，暗示 E 現在會搭話/工作，實際上按下去
+	# 只會關掉選單，跟對話中不顯示互動高亮是同一個理由
+	if is_in_conversation() or (vending_menu != null and vending_menu.is_open()):
 		_set_highlighted_workstation(null)
 		_set_highlighted_machine(null)
 		_set_highlighted_other(null)
@@ -171,11 +177,13 @@ func _process(_delta: float) -> void:
 
 	# 跟 _unhandled_input() 判斷「E 會打到誰」用同一套優先序，只是不含失敗
 	# 重試那段——重試只在真的按下 E、真的失敗時才有意義，高亮只回答
-	# 「等一下按下去會先試誰」
+	# 「等一下按下去會先試誰」。machine 分支的 vending_menu != null 防呆
+	# 也要跟 _unhandled_input() 對齊：場景漏掛選單節點時那邊會直接退回
+	# 搭話，這裡不跟著擋的話高亮會亮著販賣機、但按下去其實打到人
 	if workstation != null and candidates["to_work"] <= candidates["to_machine"] \
 			and candidates["to_work"] <= candidates["to_other"]:
 		target_workstation = workstation
-	elif machine != null and candidates["to_machine"] <= candidates["to_other"]:
+	elif machine != null and candidates["to_machine"] <= candidates["to_other"] and vending_menu != null:
 		target_machine = machine
 	elif other != null:
 		target_other = other
