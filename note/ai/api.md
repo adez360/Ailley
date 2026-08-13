@@ -778,15 +778,16 @@ Esc(ui_cancel) 切換暫停。main.tscn 的 Pause，子節點 Dim(ColorRect) / T
 ## GameManager — scripts/core/game_manager.gd · autoload
 
 ```gdscript
-var places = {}                              # places.json 的 places 區塊
 var npc_data = {}                            # NPC 模板 id -> 資料
 var schedule_assignments = {}                # 節點名 -> schedule_template
 
-func get_place_data(place_name: String)          # 查不到 → null
 func get_npc(id: String)                         # 查不到 → null
 func get_schedule_template(node_name: String) -> String   # 沒指派 → ""
-func load_places()
 func load_npc_data()
+```
+
+```
+地點座標不歸 GameManager 管，一律走 PlaceAnchors 的 Marker2D
 ```
 
 ## GameClock — scripts/core/GameClock.gd · autoload
@@ -808,18 +809,13 @@ var hour := 8 · var minute := 0 · var day := 1
 ## data/
 
 ```
-npc_schedule.json     GameManager.load_npc_data()   使用中
-places.json           GameManager.load_places()     ⚠ 座標已失效
+npc_schedule.json     GameManager.load_npc_data()   使用中，villagers 只有 npc001/npc006
 ai_config.example.json  無程式讀取（給人複製的範本）
 
-⚠ places.json 的 x/y 綁死在已刪除的舊地圖（x 最遠 1120），現在可走區只有 18 格寬
-  實際地點座標走 PlaceAnchors 的 Marker2D
-  只剩 type/capacity 有意義，且目前沒有任何程式在讀
-⚠ main.tscn 只有 4 個錨點(home_001/farm/restaurant/square)，
-  npc_schedule.json 的 npc002~005 模板卻引用 temple/shop/home_002..005
-  目前 assignments 是 Agent→npc001、Agent2→npc006，兩份模板都只走
-  home_001/farm/restaurant/square，碰不到失效座標；npc002~005 沒有被指派，
-  換模板到那幾個才會落回失效座標
+† places.json、npc_schedule.json 的 npc002~005 模板、根目錄 test.md 都是死資料
+  （無呼叫端／無 assignments 指派），issue #87 整份移除，不要再對照舊版筆記
+main.tscn 只有 4 個錨點（home_001/farm/restaurant/square），npc001/npc006
+  兩份模板都只走這四個
 schedule 插槽現為 {time, place, state}，是計畫結構的子集
   → 技術/行程佇列與任務仲裁
 ```
