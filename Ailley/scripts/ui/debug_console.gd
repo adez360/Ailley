@@ -42,6 +42,8 @@ func _ready() -> void:
 			"help": "",
 		},
 		"locale": {"run": _cmd_locale, "usage": "locale [code]", "help": "HELP_LOCALE"},
+		# help 留空，理由同 village_ai——純 debug 用途，不進 locale/console.csv
+		"tasks": {"run": _cmd_tasks, "usage": "tasks <name>", "help": ""},
 		"help": {"run": _cmd_help, "usage": "help", "help": ""},
 		"clear": {"run": _cmd_clear, "usage": "clear", "help": "HELP_CLEAR"},
 	}
@@ -359,6 +361,57 @@ func _cmd_status(args: PackedStringArray) -> void:
 # 不如老實地讓欄名靠左、用顏色區分
 func _field(label_key: String, body: String) -> void:
 	_print("  [color=888888]%s[/color]  %s" % [L10n.t(label_key), body])
+
+# tasks <name>
+#
+# 印出這隻 Agent 的任務池：每筆的 source/action/params/window/分數拆項，
+# 標出目前執行中的那筆跟它已經跑了幾個遊戲分鐘。分數仲裁選出來的結果肉眼
+# 看不出理由，沒有這個指令沒辦法 debug「它為什麼跑去那裡」——
+# 見 [[行程佇列與任務仲裁]]。
+#
+# name 是必填的，不像 status／inv 那樣可以省略：那兩個省略就看玩家自己，
+# 而玩家不可能有任務池（只有 Agent 進 "agents" 群組），預設值會是個永遠失敗的死路
+func _cmd_tasks(args: PackedStringArray) -> void:
+	if args.size() != 1:
+		_error("tasks <name>")
+		return
+
+	var character := _get_character(args[0])
+	if character == null:
+		return
+
+	if not character.is_in_group("agents"):
+		_error("%s 不是 Agent，沒有任務池" % character.character_name)
+		return
+
+	var infos: Array = character.get_task_debug_info()
+	if infos.is_empty():
+		_print("[color=888888]（空池）[/color]")
+		return
+
+	_print("[color=88ccff]%s[/color][color=888888]  目前這筆已執行 %d 遊戲分鐘[/color]" % [
+		character.character_name, character.get_current_task_elapsed_minutes()
+	])
+
+	for info in infos:
+		var task: Dictionary = info["task"]
+		var score: Dictionary = info["score"]
+		var marker := "→" if info["is_current"] else " "
+		var window_note := "" if info["in_window"] else "[color=888888]（窗外）[/color]"
+
+		# 一律 .get()：仲裁器本身允許任務沒有 window（`_in_window_or_unwindowed`
+		# 直接當成隨時可選），硬取 task["window"]["start"] 會在第一筆這種任務上
+		# 崩掉整個指令——而這個指令存在的理由就是拿來看任務池
+		var window = task.get("window")
+		var window_text := "隨時" if window == null else "%s..%s" % [window["start"], window["end"]]
+
+		_print("[color=888888]%s %s[/color]  %s  params=%s  window=%s%s" % [
+			marker, task.get("source", "?"), task.get("action", "?"),
+			JSON.stringify(task.get("params", {})), window_text, window_note,
+		])
+		_print("[color=888888]    score=%.1f = base %.1f + time %.1f + need %.1f + age %.1f[/color]" % [
+			score["total"], score["base"], score["time"], score["need"], score["age"],
+		])
 
 func _get_overlay() -> Node:
 	var overlay := get_tree().get_first_node_in_group("debug_overlay")
