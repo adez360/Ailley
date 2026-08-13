@@ -48,9 +48,9 @@ const WORK_PAYMENT := 50
 
 const BUY_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE 一樣的距離門檻，2 格
 
-## buy_from() 的失敗原因碼。TOO_FAR 以外三種都直接借用底層回傳的原因碼——
-## NOT_ENOUGH（Inventory.MONEY_NOT_ENOUGH）、NO_SPACE（Inventory.ADD_NO_SPACE）——
-## 不重新取名，這裡沒有必要跟 Inventory 自己的字典再對一次照
+## buy_from() 的失敗原因碼，形狀比照 TALK_*／WORK_*。除了這五個，buy_from()
+## 還會**原樣轉傳** Inventory 自己的原因碼（`NOT_ENOUGH`、`NO_SPACE`），
+## 不在這裡重新取名——沒有必要跟 Inventory 的字典再對一次照
 const BUY_OK := ""
 const BUY_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
 const BUY_TOO_FAR := "TOO_FAR"
@@ -288,20 +288,24 @@ var _working := false
 func is_working() -> bool:
 	return _working
 
-# 找最近的可工作地點。E 鍵優先判斷有沒有可互動物件（見 player.gd），
-# 沒有才退回搭話——跟 find_nearest_character() 是同一種找法，只是換成
-# "workstations" 這個群組
-func find_nearest_workstation() -> Workstation:
-	var nearest: Workstation = null
-	var shortest := WORK_RANGE
+# 世界物件版的「找最近的」：量的是 global_position，因為工作站、販賣機這些
+# StaticBody2D 的原點就是它們的位置。find_nearest_character() 不走這條——
+# 它要跳過自己，而且量的是 get_body_position()（角色的碰撞體相對節點有偏移）
+func _find_nearest_in_group(group: String, max_distance: float) -> Node2D:
+	var nearest: Node2D = null
+	var shortest := max_distance
 
-	for node in get_tree().get_nodes_in_group("workstations"):
+	for node in get_tree().get_nodes_in_group(group):
 		var distance := get_body_position().distance_to(node.global_position)
 		if distance <= shortest:
 			shortest = distance
 			nearest = node
 
 	return nearest
+
+# 找最近的可工作地點。E 鍵在工作站、販賣機與人之間比距離挑最近的（見 player.gd）
+func find_nearest_workstation() -> Workstation:
+	return _find_nearest_in_group("workstations", WORK_RANGE) as Workstation
 
 # 開始在某個工作站工作。成功回傳 WORK_OK（空字串）不代表錢已經到手——
 # 這裡只負責卡位、開始計時，真正撥款在 _run_work()，時間到了才給，
@@ -373,19 +377,8 @@ func _on_work_finished() -> void:
 
 # ---- 購買 ----
 
-# 找最近的販賣機，跟 find_nearest_workstation() 是同一種找法，只是換成
-# "vending_machines" 這個群組
 func find_nearest_vending_machine() -> VendingMachine:
-	var nearest: VendingMachine = null
-	var shortest := BUY_RANGE
-
-	for node in get_tree().get_nodes_in_group("vending_machines"):
-		var distance := get_body_position().distance_to(node.global_position)
-		if distance <= shortest:
-			shortest = distance
-			nearest = node
-
-	return nearest
+	return _find_nearest_in_group("vending_machines", BUY_RANGE) as VendingMachine
 
 # 跟販賣機買一件東西。買一件東西是兩件事，要一起成功（#63 明講的坑）：
 # spend() 扣款成功之後，add_item() 還是可能因為背包滿了回 ADD_NO_SPACE ——
@@ -405,9 +398,13 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 	if price < 0:
 		return BUY_ITEM_NOT_FOUND
 
-	var spend_reason := inventory.spend(price)
-	if spend_reason != Inventory.MONEY_OK:
-		return spend_reason
+	# 0 元商品不呼叫 spend()：Inventory.spend() 擋掉 amount <= 0（那是防呼叫端
+	# 傳負數當加錢用的守衛），免費商品送進去會拿到 MONEY_INVALID_AMOUNT，
+	# 變成「按鈕看得到、點下去永遠買不成」。免費就是不用扣錢，本來也沒事可做
+	if price > 0:
+		var spend_reason := inventory.spend(price)
+		if spend_reason != Inventory.MONEY_OK:
+			return spend_reason
 
 	var add_reason := inventory.add_item(item_id)
 	if add_reason != Inventory.ADD_OK:

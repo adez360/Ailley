@@ -28,8 +28,18 @@ var _buyer: Character = null
 func _ready() -> void:
 	add_to_group("vending_menu")
 	panel.hide()
+	set_process(false)		# 只在選單開著時才需要量距離
 	title_label.text = L10n.t("UI_VENDING_TITLE")
 	hint_label.text = L10n.t("UI_VENDING_CLOSE_HINT")
+
+# 走出 BUY_RANGE 就自己關掉。選單擋不住移動（方向鍵照樣走），沒有這段的話
+# 玩家可以邊開著選單邊走到地圖另一頭，價格照顯示、每次點都回 BUY_TOO_FAR
+# 而且只有 push_warning 看不到，同時 player.gd 又因為「選單開著」放掉 E，
+# 等於整個卡住。跟對話走遠自然散場是同一種收法
+func _process(_delta: float) -> void:
+	if not is_instance_valid(_machine) or not is_instance_valid(_buyer) \
+			or _buyer.get_body_position().distance_to(_machine.global_position) > Character.BUY_RANGE:
+		close()
 
 func is_open() -> bool:
 	return panel.visible
@@ -46,7 +56,11 @@ func open(machine: VendingMachine, buyer: Character) -> void:
 	_machine = machine
 	_buyer = buyer
 
+	# 先 remove_child() 再 queue_free()：queue_free() 是幀末才真的刪，光是
+	# queue_free() 的話重開選單的那一幀 item_list 同時掛著 4 個舊按鈕與 4 個
+	# 新按鈕，VBox 排 8 列會撐破固定 130×134 的面板
 	for child in item_list.get_children():
+		item_list.remove_child(child)
 		child.queue_free()
 
 	for item_id in machine.list_items():
@@ -57,9 +71,11 @@ func open(machine: VendingMachine, buyer: Character) -> void:
 		item_list.add_child(button)
 
 	panel.show()
+	set_process(true)
 
 func close() -> void:
 	panel.hide()
+	set_process(false)
 	_machine = null
 	_buyer = null
 

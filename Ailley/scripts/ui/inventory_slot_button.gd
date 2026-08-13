@@ -9,6 +9,8 @@ extends TextureButton
 ## slot_index 是這格對應到 Inventory.slots 的絕對索引（0-35，快捷欄 0-8、
 ## 主背包 9-35，見 inventory.gd）。跟 hotbar.gd／inventory_panel.gd 一樣不快取
 ## player 節點——每次刷新當下才查，避免角色重生、場景切換後拿到卡死的舊參照。
+## 只有 changed 的連線是綁在開場那一個 Inventory 上的：目前沒有任何角色重生
+## 或 despawn 的路徑，真的做出來時這裡要跟著重連。
 ##
 ## 只做顯示，沒有拖放——那是 #35 的範圍，這裡不需要
 
@@ -25,11 +27,16 @@ func _ready() -> void:
 	_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_label.clip_text = true
 	add_child(_label)
-	_refresh_label()
 
-# 用 _process() 每幀重畫而不是等訊號，是因為 Inventory 目前沒有「格子變了」
-# 的訊號可以掛
-func _process(_delta: float) -> void:
+	# 掛 Inventory.changed，不是每幀重畫——36 個格子各輪詢一次 get_slot()
+	# （內含 duplicate()）在 60fps 下是兩千多次配置／秒，而資料只在買東西或
+	# 工作時才變。等一幀才連線是因為 Hotbar／InventoryPanel 跟 Player 誰先
+	# _ready() 由場景樹順序決定，這一幀不保證找得到 player
+	await get_tree().process_frame
+
+	var inventory := _get_inventory()
+	if inventory != null:
+		inventory.changed.connect(_refresh_label)
 	_refresh_label()
 
 func _refresh_label() -> void:
