@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-13
+updated: 2026-08-14
 ---
 
 # api
@@ -77,6 +77,7 @@ ui_cancel                Esc（Godot 內建，project.godot 沒有覆寫）
 ```gdscript
 signal move_finished(reached: bool)          # 走完 true / 卡住放棄 false
 signal noise_heard(source: Character)        # 收到方會發，見 make_noise()
+signal spoke(line: String)                   # 講出任何一句話都會發（逐字稿/記憶的接點）
 
 const SPEED = 80.0
 const ARRIVE_DISTANCE = 2.0
@@ -120,7 +121,7 @@ func is_interruptible() -> bool              # 基底 `not _working`；Agent 再
 func enter_conversation(conversation: Node) -> void
 func exit_conversation() -> void
 func leave_conversation() -> void
-func say(line: String) -> void
+func say(line: String, interrupt := false) -> void   # interrupt=true 蓋掉現在這句
 func speech_duration(line: String) -> float
 func face_towards(other: Character) -> void
 func update_animation() -> void
@@ -191,20 +192,44 @@ make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不
 ```gdscript
 @export var schedule_template := ""          # npc_schedule.json 的鍵，如 "npc001"
 const NOTICE_PAUSE := 2.0
+const SCHEDULE_BASE_PRIORITY := 10.0         # schedule 任務的 base 分數
+const TIME_BONUS := 100.0                    # 在 window 內加這麼多
+const HYSTERESIS := 5.0                      # 要贏現任務這麼多分才換
+const MIN_COMMIT := 2.0                      # 遊戲分鐘；做不滿就不讓非 reflex 任務搶
 
-var schedule: Array
-var current_place: String
-var current_state: String
+var current_place: String                    # 目前任務要去的地點
+var current_state: String                    # 目前任務的 action，沒任務是 "idle"
 
-func is_interruptible() -> bool              # 覆寫 current_state != "sleep"
-func exit_conversation() -> void             # 覆寫：講完重算行程
+func is_interruptible() -> bool              # 覆寫：super() and 目前任務的 interruptible
+func exit_conversation() -> void             # 覆寫：講完重算一次
+func next_line(listener, turns, max_turns) -> Dictionary   # 對話台詞，見下方
+func get_task_debug_info() -> Array[Dictionary]            # tasks 指令用
+func get_current_task_elapsed_minutes() -> int             # 目前任務做了幾遊戲分鐘
+```
+
+```
+Task 結構（_tasks 的元素，來源目前只有 schedule）
+{id, action, params:{place}, priority, window:{start,end}|null, duration,
+ interruptible, preconditions, source, created_at, expires_at, retries}
+  window 由下一筆的 time 推出，最後一筆繞回第一筆的 time
+  只有一筆的行程 → window = null（整天都做這件事，隨時可選）
+  action == "sleep" → interruptible = false
+
+仲裁：GameClock 每個遊戲分鐘重算一次，不維護「現在是第幾筆」
+  1 濾掉過期（expires_at）與不在 window 內的候選
+  2 score = priority + time_bonus + need_bonus + age_bonus，取最高分
+    time_bonus = 窗內 100 / 窗外 0；need_bonus 與 age_bonus 這一版恆為 0
+  3 不管換沒換，都再跑一次「往 current_place 前進」
+† 換任務要同時過三關：分數贏 HYSTERESIS、現任務 is_interruptible()、
+  現任務已做滿 MIN_COMMIT（source == "reflex" 豁免最後一關）
+† 三關只保護「還在自己 window 內」的現任務。窗口過了就該讓位——
+  否則 sleep（interruptible=false）會在窗口結束後卡死，永遠醒不過來
 ```
 
 ```
 _ready: await nav.grid_built 才出發（NavGrid 非同步建置，太早→空路徑）
-到點切換：只在 "%02d:%02d" 吻合的那一分鐘換目標
-開場套用「已經開始的最後一筆」，不空等到下一個整點
 地點解析：只認 place_anchors 底下的同名 Marker2D，沒有就 push_error 且不動
+  同一個地點只報一次錯（每遊戲分鐘跑一次，不擋的話一個 typo 洗掉整個面板）
 spotted 且 !relationships.has_met() → say("！") + stop_moving() + 2s + 重算行程
   _noticed 表確保每個對象只觸發一次
 noise_heard 且 !is_in_conversation() → say("!?")，無去重，每次都會反應
@@ -215,6 +240,23 @@ noise_heard 且 !is_in_conversation() → say("!?")，無去重，每次都會�
 † assignments 的 key 是節點名不是 character_id（id 是 UUID，json 裡手寫不出來）
   查不到 → 退回 @export 並 push_warning（預設值 instance 共用，靜默退回會兩隻同行程）
   節點名只在同一層唯一，不同父節點下撞名 → push_error（兩隻會查到同一筆）
+† move_finished 要比對 last_move_target：debug 主控台的 goto 也會發同一個訊號，
+  照單全收會把別人的移動當成自己這趟的結論
+→ 技術/行程佇列與任務仲裁
+```
+
+```gdscript
+func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) -> Dictionary
+# 回 {"ok": true, "line": String, "end": bool} 或 {"ok": false}
+```
+
+```
+先 say("…", true) 蓋掉現在的氣泡（送出請求前就顯示，冷卻/配額也算等待時間），
+再 PromptBuilder.build_dialogue_envelope() → AIService.request(envelope,
+character_id, Policy.CONVERSATION) → AISchema.parse_completion → validate_dialogue
+† requester_id 用 character_id 不是節點名：額度算在這隻角色頭上
+† ok=false 不分原因（未啟用/逾時/驗證失敗都一樣），呼叫端一律走 fallback
+→ 技術/LLM 串接與 AI 服務層
 ```
 
 
@@ -681,7 +723,9 @@ pos                      玩家座標與所在格
 nav rebuild              重建尋徑網格
 inv [name]               列出背包；inv give <item_id> [count] 塞測試物品給玩家
 money <amount>           改玩家的錢；正數走 add_money()，負數走 spend()。查詢看 status
-ai [文字]                 對 LLM 打一次測試請求
+ai [dialogue] [@provider] [文字]   對 LLM 打一次測試請求；dialogue 走對話 policy
+locale [code]            看目前語系／切換（zh_TW / en）
+tasks <name>             印那隻 Agent 的候選任務池：分數拆項、在不在窗內、哪筆執行中
 help | clear
 
 角色查找：character_name(不分大小寫) → 撞名列候選 id 前 8 碼 → character_id 前綴
