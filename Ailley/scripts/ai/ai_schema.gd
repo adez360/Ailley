@@ -29,9 +29,8 @@ const ALLOWED_ACTIONS := [
 # 本輪真正有實作的動作。其餘動作驗證會過，但執行層要回 NOT_IMPLEMENTED，
 # 而不是在驗證層擋掉 —— 兩者是不同的失敗，混在一起 debug 時會分不清
 # work 與 buy 不在這裡：Character.work_at()／buy_from() 做出來了，但沒有任何
-# 執行層把一筆 {"action": "work"} 對應到一個 Workstation 實例（唯一的執行器
-# village_sim_decision.gd 只認得 move_to），而它們需要節點參照、
-# find_nearest_workstation()／find_nearest_vending_machine() 只看得到 32px。
+# 執行層把一筆 {"action": "work"} 對應到一個 Workstation 實例，而它們需要
+# 節點參照、find_nearest_workstation()／find_nearest_vending_machine() 只看得到 32px。
 # buy 還多缺一個「買哪個 item_id」的來源——目前只有玩家從 vending_menu 點得出來。
 # 列進來的話就變成「白名單宣稱做得到、實際靜默不做」，正是上面那段註解要避免的
 # 混淆。等執行層接得到再加
