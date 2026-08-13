@@ -8,6 +8,7 @@ extends CharacterBody2D
 
 signal move_finished(reached: bool)
 signal noise_heard(source: Character)		# 收到的那一方會發，見 make_noise()
+signal spoke(line: String)			# 講出任何一句話都會發，日後寫逐字稿/記憶系統的接點
 
 const SPEED = 80.0
 const ARRIVE_DISTANCE = 2.0		# 距離 waypoint 多近算抵達
@@ -249,9 +250,28 @@ func leave_conversation() -> void:
 	if _conversation != null:
 		_conversation.interrupt()
 
-func say(line: String) -> void:
-	if bubble != null:
-		bubble.say(line)
+## interrupt=true 立刻蓋掉正在顯示/排隊中的內容（LLM 回應等待中的「…」要被
+## 真正的台詞立刻換掉，不能排在它後面等它自己的顯示時間跑完）。
+## 預設 false 維持原本「不打斷正在講的話」的排隊語意，其餘呼叫端不用改
+func say(line: String, interrupt: bool = false) -> void:
+	if bubble == null:
+		return
+	if interrupt:
+		bubble.clear()
+	bubble.say(line)
+	spoke.emit(line)
+
+## 這個角色對話中的下一句話由誰產生、內容是什麼。基底不知道答案——
+## 本機玩家要等打字（見 player.gd），本機 Agent 要打 AIService（見 agent.gd），
+## 兩者由子類別覆寫。conversation.gd 只問「輪到你了，下一句是什麼」，不問
+## 「你是誰」，之後要接遠端角色（伺服器轉發）也只是再多一個覆寫，會話層不用改。
+##
+## 回傳 {"ok": bool, "line": String, "end": bool}：ok=false 代表這一輪要不到
+## 台詞（LLM 停用/逾時/驗證失敗），呼叫端（conversation.gd）要轉去 fallback，
+## 不是把空字串當成正常台詞講出去
+func next_line(_listener: Character, _turns: Array[Dictionary], _max_turns: int) -> Dictionary:
+	push_error("%s: next_line() 沒有被子類別覆寫" % character_name)
+	return {"ok": false}
 
 # 這句話大概會佔多久，讓對話狀態機知道什麼時候換人講
 func speech_duration(line: String) -> float:

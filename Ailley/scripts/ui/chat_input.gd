@@ -60,4 +60,11 @@ func _on_submitted(text: String) -> void:
 		push_error("ChatInput: 場景裡找不到 player group 的節點")
 		return
 
-	player.say(line)
+	# 對話中的話，這句是輪到玩家的那一句，要送進 conversation.gd 的輪次——
+	# 走 line_submitted 訊號而不是直接呼叫 conversation 物件，chat_input.gd
+	# 不需要知道玩家現在是不是在一場 Conversation 裡，只管把打的字交給
+	# Player。不在對話中就是原本的行為：單純冒一句氣泡
+	if player.is_in_conversation():
+		player.line_submitted.emit(line)
+	else:
+		player.say(line)

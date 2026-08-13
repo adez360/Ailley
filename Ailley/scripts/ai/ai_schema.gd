@@ -99,27 +99,37 @@ static func parse_completion(response: Dictionary) -> Dictionary:
 	return parse_object(_strip_code_fence(content))
 
 
-# dialogue 回應的驗證。設計文件定義兩種形狀：整場 {"lines": [...]}
-# 與逐輪 {"line": "..."}；已定案一律逐輪，但兩種都先收下讓 Step 1 自己挑。
-# Step 1 要在這裡加：長度上限、去除控制字元、拒絕空字串
-static func validate_dialogue(data: Dictionary) -> Dictionary:
-	if data.has("line"):
-		if not data["line"] is String:
-			return _fail(ERROR_BAD_SHAPE)
-		return _ok({"lines": [data["line"]]})
+# dialogue 回應的驗證。設計已定案一律逐輪（note/技術/LLM 串接與 AI 服務層.md
+# 的「對話生成粒度」），只收 {"line": "...", "end": bool}，不再收整場的
+# {"lines": [...]} 那個形狀——兩種都收只會讓呼叫端多一種要處理的分支，
+# 拍板了就該把沒選的那條路刪掉，不是留著兩條都能過
+const MAX_LINE_CHARS := 200
 
-	if not data.has("lines") or not data["lines"] is Array:
+static func validate_dialogue(data: Dictionary) -> Dictionary:
+	if not data.has("line") or not data["line"] is String:
 		return _fail(ERROR_BAD_SHAPE)
 
-	var lines: Array[String] = []
-	for item in data["lines"] as Array:
-		# 陣列裡混進非字串就整包拒絕，不做「跳過壞的留好的」——
-		# 部分接受等於讓攻擊者用一個壞元素決定剩下哪些會被採用
-		if not item is String:
-			return _fail(ERROR_BAD_SHAPE)
-		lines.append(item as String)
+	# 拒絕空字串：LLM 回空白台詞不是合法的「這輪不講話」，那個語意要用
+	# end=true 表達，不是一個空字串——空字串講出去，玩家會看到一個空氣泡
+	var line: String = (data["line"] as String).strip_edges()
+	if line.is_empty():
+		return _fail(ERROR_BAD_SHAPE)
 
-	return _ok({"lines": lines})
+	# 外來文字上限：模型可能被誘導狂吐字，氣泡本身也有 MAX_LINE_WIDTH 折行，
+	# 一句台詞不該無限長。截斷而不是整包拒絕——截斷後仍是可用的一句話，
+	# 拒絕的話這一輪就要進 fallback，體驗上沒有必要這麼激烈
+	if line.length() > MAX_LINE_CHARS:
+		line = line.substr(0, MAX_LINE_CHARS)
+
+	# end 省略視為 false——沒說要收尾就當作還沒講完，比預設收尾安全
+	# （少一句台詞好過對話莫名其妙斷掉）
+	var end := false
+	if data.has("end"):
+		if not data["end"] is bool:
+			return _fail(ERROR_BAD_SHAPE)
+		end = data["end"]
+
+	return _ok({"line": line, "end": end})
 
 
 # plan 回應的驗證。空陣列是合法的，意思是「不更新行程」。
