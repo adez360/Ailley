@@ -19,7 +19,9 @@ updated: 2026-08-13
 ## 現況：只有一條線
 
 LLM 一律走 `AIService`（`scripts/ai/ai_service.gd`）→ Godot ↔ Sidecar
-（`llama-server`），不經任何 Python 中間層。實作進度見下方「正式線實作順序」。
+（`llama-server`），不經任何 Python 中間層。Step 0-3 全部完成：底層、
+`conversation.gd` 非同步對話（issue #82）、`agent.gd` 任務池＋仲裁器（issue #71）、
+決策迴圈（issue #88，`llm_decision_enabled` 開關）。細節見下方「正式線實作順序」。
 
 > [!success] 架構決定：出貨不走 Python 後端
 > 三六零否決「隨遊戲出貨 Python 後端」：自架中繼伺服器已被否決過（AI 呼叫要跑在
@@ -31,10 +33,11 @@ LLM 一律走 `AIService`（`scripts/ai/ai_service.gd`）→ Godot ↔ Sidecar
 > **Godot（`HTTPRequest`）↔ Sidecar（`llama-server`）**，不經 Python 中間層。
 
 > [!warning] 2026-08-12：GDScript 決策邏輯重寫由使用者負責
-> 正式線現況：對話已經走 `AIService`，但**行程決策迴圈還未實作**——仲裁器只吃
-> schedule 來源的任務，沒有任何 LLM 產生的 Task；**身分對照系統也尚未**。
-> 把 `poc_village_sim` 決策邏輯搬進 GDScript、接上仲裁器，
-> 是**使用者自己要寫的東西**。
+> Step 0-3（底層、對話、任務池仲裁器、決策迴圈）都已完成，**身分對照系統
+> 仍是缺口**——`llm_decision_enabled` 開啟後 Agent 會自己問 LLM 該做什麼，
+> 但把 `poc_village_sim` 驗證過的那套決策邏輯（門檻判斷、人格影響）搬進
+> GDScript 的 prompt/schema 設計，是**使用者自己要寫的東西**，
+> 不是這幾個 issue 的範圍。
 >
 > 身分對照的缺口在 Character 基底層：issue #69（`character_id`／`character_name`
 > 固定指派）補的就是這塊，正式線的決策迴圈用得上。
@@ -258,7 +261,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 > Agent ↔ Agent 跨 client 時，對方的台詞是遠端輸入，與玩家打字、與交誼區來的
 > 文字同一個等級——全部進 `context.turns` 當資料，絕不視為指令。
 
-## 正式線實作順序（Step 0-2 完成，Step 3 未開始）
+## 正式線實作順序（Step 0-3 全部完成）
 
 ### Step 0 — 底層 ✅ 完成
 
@@ -296,29 +299,52 @@ autoload 已註冊，主控台加了 `ai` 指令。
 照 [[行程佇列與任務仲裁]] 實作，改動全在 `agent.gd`，刻意不含 LLM。
 `tasks` 指令印得出池子與分數拆項。
 
-### Step 3 — LLM 填行程（未開始）
+### Step 3 — LLM 填行程 ✅ 完成（issue #88）
 
-1. `prompt_builder.gd` 的 plan 信封
-2. 觸發情境：遊戲日開始／需求跌破閾值／被搭話／動作失敗
-3. LLM 回傳的 Task 過 `ai_schema.gd` → push 進池子
-4. 池子守則：上限 20、同 `action + params.target` 去重、`expires_at` 到期清除
-5. 搶佔：`schedule` 丟掉／`llm` 放回池子且 `retries += 1`／`reflex` 丟掉
-6. 逾時 fallback：Agent 標記 `pending` 但繼續做原本的事
+1. `prompt_builder.gd` 的 plan 信封（`build_plan_envelope()`），沿用
+   `_self_block()`，`context` 帶 `visible`（`Vision.get_visible_characters()`）
+   跟 `pool`（目前任務池摘要）
+2. 觸發情境：這一版只接了「目前任務做滿引擎套用過下限的 `duration`」（事件驅動，
+   對應《10》§5.1）加上世界開場第一次；需求跌破閾值／被搭話／動作失敗／突發
+   事件／進出交誼區這五個還沒接，見 [[行程佇列與任務仲裁]] 的「什麼時候會
+   請 LLM 重排」
+3. LLM 回傳的 Task 過 `ai_schema.gd::validate_tasks()` → `agent.gd::_push_llm_tasks()`
+   push 進池子
+4. 池子守則：上限 `LLM_TASK_POOL_CAP`（20，只算 llm 來源）、單次回應另外有
+   `AISchema.MAX_TASKS_PER_RESPONSE`（5）、同 `action + params.target` 去重、
+   `expires_at` 到期清除沿用既有的 `_is_expired()`（issue #92）
+5. 搶佔／`retries` 遞增：**還沒接**——這一版被搶佔的 llm 任務直接留在池子裡
+   或被仲裁器自然汰換，`retries` 欄位存在但沒有任何呼叫端遞增它
+6. 逾時 fallback：`_request_next_decision()` 任何一關失敗（AI 停用、逾時、
+   驗證失敗）都靜默放棄，`_awaiting_decision` 重置，Agent 靠任務池 fallback
+   （schedule 任務或上一輪還沒被選中的 llm 任務）頂著，不是標記 `pending`
 
-**驗收**：需求打到閾值以下觸發重排 → `tasks` 看到 `source = "llm"` 的新任務 →
-Agent 真的改去該地點 → 關掉 AI 後退回純 schedule 行為。
+`response_format` 依 provider 分岔（原規劃的 GBNF／response_format 二選一）
+簡化成單一路徑：`AIConfig.Provider.supports_json_schema`（預設 `true`）決定
+送不送這個欄位，不分本機／雲端——本機 llama-server 已知支援 OpenAI 相容的
+`response_format` 並在內部自己轉成 grammar 約束，不需要在 GDScript 端手刻
+JSON Schema → GBNF 的轉換器。
+
+**驗收**：`llm_decision_enabled` 開啟、AI 停用時 `_request_next_decision()`
+靜默失敗、`_awaiting_decision` 正確重置、fallback 到 schedule 候選、
+`_push_llm_tasks()` 的 dedup／duration 下限／池子上限、`LLM_WAIT_MIN_COMMIT`
+都已用 `game_eval` 白箱驗證；真的接上本機 provider 端到端跑一次才算完整
+驗收，這次還沒做。
 
 ## 不在這一版（正式線）
 
 - **記憶系統** —— 卡在專案完全沒有存檔機制，記憶無處持久化。`character.gd` 的
-  `signal spoke` 是日後寫逐字稿的接點
+  `signal spoke` 跟 Task 上的 `reasoning`／`inner_monologue`（issue #88）都是
+  日後寫逐字稿/決策脈絡的接點，先鋪路但還沒有東西讀
 - **交誼區 WebSocket 線** —— 伺服器技術棧尚未決定
 - `preconditions` 求值 —— 結構留欄位，v1 一律通過
-- 白名單中除 `move_to` / `talk` / `sleep` 外的動作實作
+- 白名單中除 `move_to` / `talk` / `sleep` 外的動作實作——白名單本身已經是
+  《07》《11》拍板的 22 個（issue #88），但 `IMPLEMENTED_ACTIONS` 沒有跟著擴
+- `today_plan`（issue #89）、`speech` 觸發對話交接（issue #90）、約定機制、
+  `DecisionProvider` 物件化重構（issue #73）
 
 ## 待決（正式線）
 
-- [ ] `response_format` 的 json_schema 在選定模型上到底支不支援（要實測）
 - [ ] 「…」氣泡的等待體感要實跑才知道能不能接受
 - [ ] **LLM 成本上限完全沒有防護**——拿掉硬上限、對話又豁免配額的直接後果，
       要先實跑量出「一場對話平均幾輪」才有辦法訂
@@ -327,6 +353,10 @@ Agent 真的改去該地點 → 關掉 AI 後退回純 schedule 行為。
 - [ ] 人格資料的欄位結構——`data/personas.json` 要放哪些欄位才夠組 system prompt
 - [ ] 成本上限機制的具體設計
 - [ ] 記憶系統上線前，Agent 的對話逐字稿要不要先存記憶體就好
+- [ ] `response_format` 的 json_schema 送出去之後，模型端真的照著回、還是仍需要
+      layer 2/3 兜底救回來——只驗證過本機 llama-server 自己轉 grammar 這條路徑
+      「有在動」（決策迴圈實測延遲 2.5-4 秒能量出來就是證據），沒有拿真實壞掉的
+      回應測過三層保證的退場路徑
 
 ---
 

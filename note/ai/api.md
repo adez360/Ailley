@@ -189,14 +189,23 @@ make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不
 
 ## Agent — scripts/character/agent.gd · extends Character
 
+任務池＋仲裁器驅動（issue #71），非 cron。設計見 [[行程佇列與任務仲裁]]。
+
 ```gdscript
 @export var schedule_template := ""          # npc_schedule.json 的鍵，如 "npc001"
+@export var llm_decision_enabled := false    # 決策迴圈開關（issue #88），逐隻手動開
+
 const NOTICE_PAUSE := 2.0
 const SCHEDULE_BASE_PRIORITY := 10.0         # schedule 任務的 base 分數
 const TIME_BONUS := 100.0                    # 在 window 內加這麼多
 const HYSTERESIS := 5.0                      # 要贏現任務這麼多分才換
 const MIN_COMMIT := 2.0                      # 遊戲分鐘；做不滿就不讓非 reflex 任務搶
+const LLM_WAIT_MIN_COMMIT := 5.0             # 等待決策回覆期間蓋掉 MIN_COMMIT
+const MIN_ACTION_DURATION := 10.0            # llm 任務 duration 引擎端下限（遊戲分鐘）
+const LLM_TASK_POOL_CAP := 20                # 只算 source=="llm" 的筆數
 
+var _tasks: Array[Dictionary]                # 候選池，schedule 開場建立一次，llm 用 _push_llm_tasks() 加
+var _current_task: Dictionary
 var current_place: String                    # 目前任務要去的地點
 var current_state: String                    # 目前任務的 action，沒任務是 "idle"
 
@@ -227,9 +236,16 @@ Task 結構（_tasks 的元素，來源目前只有 schedule）
 ```
 
 ```text
-_ready: await nav.grid_built 才出發（NavGrid 非同步建置，太早→空路徑）
+_ready: await nav.grid_built 才出發（NavGrid 非同步建置，太早→空路徑）；
+  首次 _reevaluate() 後，llm_decision_enabled 且沒有 llm 任務時補一次決策請求
 地點解析：只認 place_anchors 底下的同名 Marker2D，沒有就 push_error 且不動
   同一個地點只報一次錯（每遊戲分鐘跑一次，不擋的話一個 typo 洗掉整個面板）
+_reevaluate()（掛 GameClock.time_changed，一遊戲分鐘一次）：
+  1. llm_decision_enabled 時偵測目前 llm 任務是否做滿 duration，是則觸發下一次決策請求
+  2. 濾掉過期(_is_expired)／不在窗內的候選，算分取 best，_consider_switch() 決定要不要換
+  3. 不管換沒換都跑 _pursue_current_task()（對話中/工作中/_reacting 時不移動）
+_on_move_finished()：move_finished 是共用訊號（debug 主控台的 goto 也會發），
+  靠 last_move_target 比對是不是自己 current_place 的錨點才算數（issue #91）
 spotted 且 !relationships.has_met() → say("！") + stop_moving() + 2s + 重算行程
   _noticed 表確保每個對象只觸發一次
 noise_heard 且 !is_in_conversation() → say("!?")，無去重，每次都會反應
@@ -242,6 +258,7 @@ noise_heard 且 !is_in_conversation() → say("!?")，無去重，每次都會�
   節點名只在同一層唯一，不同父節點下撞名 → push_error（兩隻會查到同一筆）
 † move_finished 要比對 last_move_target：debug 主控台的 goto 也會發同一個訊號，
   照單全收會把別人的移動當成自己這趟的結論
+† Task 的 reasoning／inner_monologue（llm 來源才有）只印 console，決策準不準沒有系統性驗證
 → 技術/行程佇列與任務仲裁
 ```
 
@@ -573,8 +590,7 @@ static func closing(listener_name: String, affinity: float) -> String
 
 ```gdscript
 const POOL_SIZE := 3                         # HTTPRequest 節點數
-const MIN_INTERVAL_SEC := 30.0               # 同 requester_id 最短真實間隔
-const MAX_CALLS_PER_GAME_DAY := 20
+enum Policy { SCHEDULED, CONVERSATION }      # SCHEDULED 吃冷卻/配額；CONVERSATION 豁免但照樣計數
 const RETRY_LIMIT := 1
 const MAX_ERROR_CHARS := 200
 
@@ -590,7 +606,8 @@ const ERROR_BAD_JSON := "bad_json"
 var config: AIConfig
 
 func reload_config() -> void
-func request(envelope: Dictionary, requester_id: String) -> Dictionary   # 一律 await
+func request(envelope: Dictionary, requester_id: String,
+             policy: Policy = Policy.SCHEDULED, provider_name: String = "") -> Dictionary   # 一律 await
 func get_usage(requester_id: String) -> Dictionary
 ```
 
@@ -599,14 +616,17 @@ request() -> {"ok": bool, "data": Dictionary, "error": String}
 envelope  system:String          人格/規則/輸出 schema/動作白名單
           payload:Dictionary     字串化成 user 訊息
           model:String           選填，覆寫設定
-          response_format:Dict   選填 json_schema；各模型支援度不一，預設不帶
-get_usage -> {game_day, calls_today, max_calls, queued, in_flight}   # game_day 讀 GameClock.day
+          response_format:Dict   選填 json_schema；provider.supports_json_schema 為 false 時不送
+provider_name 空字串 -> AIConfig.default_provider；打錯名字回 ERROR_NO_PROVIDER，不會靜默轉去別的服務
+get_usage -> {game_day, calls_today, max_calls, dialogue_today, total_today,
+              dialogue_exempt, cooldown_left, queued, in_flight}
 
 † 全專案唯一碰網路的地方 ⇒ 成本上限/金鑰/防注入入口只有一處要顧
 † system 與 payload 分開是成本問題：system 幾乎不變吃得到 prompt cache
-† 速率限制掛 requester_id 不掛全域（多人版帳單逐個擁有者算）
+† 速率限制掛 requester_id 不掛全域也不分 provider（多人版帳單逐個擁有者算，同一隻角色不管打哪個服務算同一份額度）
 † 用真實秒不用遊戲時間（要擋的帳單與 provider rate limit 都活在真實時間）
 † 金鑰只在組 Authorization header 時碰得到，其餘一律過 _scrub()
+† CONVERSATION 豁免冷卻/配額但照樣計數（_dialogue_calls_today）——豁免的是限制不是帳
 → 技術/LLM 串接與 AI 服務層
 ```
 
@@ -618,13 +638,24 @@ const EXAMPLE_PATH := "res://data/ai_config.example.json"
 const DEFAULT_BASE_URL := "https://openrouter.ai/api/v1"
 const DEFAULT_MODEL := "openai/gpt-4o-mini"
 const DEFAULT_TIMEOUT := 10.0
+const DEFAULT_MIN_INTERVAL_SEC := 30.0
+const DEFAULT_MAX_CALLS_PER_GAME_DAY := 20
+const DEFAULT_DIALOGUE_EXEMPT := true
 const MASK_KEEP := 4
 
-var enabled := false · base_url · model · timeout · status_reason · api_key
+class Provider extends RefCounted:
+    var name · base_url · model · api_key · timeout · valid · status_reason
+    var supports_json_schema := true         # false 時 AIService 不送 response_format
+    func masked_key() -> String
+    func completions_url() -> String
+
+var enabled := false · status_reason · default_provider := ""
+var providers := {}                          # 名字 -> Provider，可同時併用多個具名端點
+var min_interval_sec · max_calls_per_game_day · dialogue_exempt      # 全域，不分 provider
 
 static func load_from_user() -> AIConfig     # 讀不到→enabled=false 的物件
-func masked_key() -> String
-func completions_url() -> String
+func get_provider(provider_name: String) -> Provider   # 只有空字串會退回 default_provider，打錯名字回 null
+func has_provider(provider_name: String) -> bool
 ```
 
 ```text
@@ -632,15 +663,47 @@ func completions_url() -> String
 † 「檔案不存在」是預設狀態不是錯誤：不 push_error，只留 enabled=false + status_reason
   會 push_error 的只有「檔案在但內容壞」
 † 任何 log/錯誤/主控台輸出一律走 masked_key()，_to_string() 也只吐遮蔽版
-† 換 Ollama 只要改 base_url，程式不動
+† 多個具名 provider 可同時併用（例如 "local" 打本機 llama-server、"openrouter" 打雲端）
+  ——這個類別只回答「provider 叫這個名字時連線資訊是什麼」，不管「誰該用哪個」
+† enabled 只回答「設定檔結構完整、至少一個 provider」，不管 default_provider 好不好
+  ——default 壞掉只影響沒指名 provider 的呼叫，不連累明確指名且填好的 provider
+```
+
+## PromptBuilder — scripts/ai/prompt_builder.gd · class_name · RefCounted
+
+```gdscript
+const DIALOGUE_SYSTEM := "..."               # 對話用系統提示
+const PLAN_SYSTEM_TEMPLATE := "..."          # 決策用系統提示模板，%s 是動作清單
+
+static func build_dialogue_envelope(speaker: Character, listener: Character,
+                                     turns: Array[Dictionary], max_turns: int) -> Dictionary
+static func build_plan_envelope(character: Character, visible: Array[Character],
+                                 pool: Array[Dictionary]) -> Dictionary
+static func turn_entry(speaker_name: String, text: String) -> Dictionary
+```
+
+```
+dialogue payload  {type:"dialogue", self, context:{listener, turns, max_turns}}
+plan payload      {type:"plan", self, context:{visible, pool}}
+† self 區塊兩者共用（_self_block()，沿用 Character.get_state_snapshot()），不重新蒐集一次
+† PLAN_SYSTEM 的動作清單用 AISchema.ALLOWED_ACTIONS 動態組，不另外抄一份字串
+  ——兩份清單各自維護會漂移，白名單改了這裡忘記跟著改，模型看到的允許清單就對不上驗證的
+† plan_response_schema()（AISchema）當 response_format 送出，跟 validate_tasks() 驗證的形狀對齊
+→ 技術/LLM 串接與 AI 服務層
 ```
 
 ## AISchema — scripts/ai/ai_schema.gd · class_name · RefCounted
 
 ```gdscript
-const ALLOWED_ACTIONS := [move_to, interact, pick_up, drop, use_item, equip,
-                          talk, attack, farm, chop, mine, sleep, buy, sell]
+const ALLOWED_ACTIONS := [                   # 《07》《11》拍板的 22 個，不含 spec 沒有的 "work"
+    talk, persuade, give, report, shout, perform,
+    hunt_small, hunt_large, gather, fish, buy, sell, eat, drink,
+    move_to, sleep, nap, rest, wash, idle,
+    steal, attack,
+]
 const IMPLEMENTED_ACTIONS := [move_to, talk, sleep]
+const MAX_TASKS_PER_RESPONSE := 5            # 單次決策回應最多幾筆任務
+const MAX_LINE_CHARS := 200                  # dialogue line／reasoning／inner_monologue 共用的截斷長度
 const ERROR_NOT_JSON := "not_json"
 const ERROR_NOT_OBJECT := "not_object"
 const ERROR_NO_CONTENT := "no_content"
@@ -651,7 +714,8 @@ static func parse_object(text: String) -> Dictionary
 static func extract_content(response: Dictionary) -> String
 static func parse_completion(response: Dictionary) -> Dictionary
 static func validate_dialogue(data: Dictionary) -> Dictionary
-static func validate_tasks(data: Dictionary) -> Dictionary
+static func validate_tasks(data: Dictionary) -> Dictionary   # -> {tasks, reasoning, inner_monologue}
+static func plan_response_schema() -> Dictionary             # response_format 用，跟 validate_tasks() 對齊
 static func is_allowed_action(action: String) -> bool
 static func is_implemented_action(action: String) -> bool
 ```
@@ -668,6 +732,10 @@ static func is_implemented_action(action: String) -> bool
 † 白名單不用黑名單：黑名單漏掉的那項就是被打穿的那項
 † ALLOWED 但非 IMPLEMENTED 的動作驗證會過，執行層回 NOT_IMPLEMENTED
   「不被允許」與「還沒做」是不同的失敗，混在一起 debug 分不清
+† ALLOWED_ACTIONS 刻意不含 "work"：《07》《11》的 22 個動作沒有它，
+  schedule 來源的 work 任務不經過這裡驗證，不受影響——只影響 LLM 不能自己決定叫角色去打工
+† reasoning／inner_monologue 選填、缺席給空字串、型別錯整包拒絕、超長截斷不拒絕
+  ——跟 dialogue 的 line 用同一種寬鬆度，但語意不同（可以不存在、可以是空字串）
 ```
 
 ---
@@ -844,5 +912,6 @@ Agent 不對 Stats 反應（get_lowest_need_place() 可用但無呼叫端）
 noise_heard 對話中會被吞掉；睡覺中的 Agent 沒有排除，一樣會冒 !?
 無存檔機制（全專案無 user:// 存檔/ConfigFile）
 character_id 與 GameClock.day 都未持久化，重開就重來
-AIService 已接對話（Agent.next_line()），行程還沒：任務池只有 schedule 來源的任務
+AIService 已接對話（conversation.gd 非同步）與行程（agent.gd 任務池＋決策迴圈，
+  llm_decision_enabled 開關）；決策內容有效性未實跑真實 provider 驗證過（見驗收清單）
 ```

@@ -279,8 +279,11 @@ func _build_body(envelope: Dictionary, provider: AIConfig.Provider) -> Dictionar
 		"messages": messages,
 	}
 
-	# 三層保證的第一層。各模型支援度不一，所以只有呼叫端明確要求才帶上
-	if envelope.has("response_format"):
+	# 三層保證的第一層。各模型支援度不一，所以只有呼叫端明確要求、
+	# 且這個 provider 自己也宣稱支援（AIConfig.Provider.supports_json_schema）
+	# 才帶上——不支援的 provider 退到 layer 2（prompt 裡明寫 schema）跟
+	# layer 3（AISchema 硬驗證），不送這個容易被直接拒收整包請求的欄位
+	if envelope.has("response_format") and provider.supports_json_schema:
 		body["response_format"] = envelope["response_format"]
 
 	return body
