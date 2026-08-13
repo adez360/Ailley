@@ -66,26 +66,52 @@ var current_state := "idle"
 # 沒有這張表的話，走出視野再走回來就會再驚訝一次
 var _noticed := {}
 
+# 上一次真的呼叫 move_to()（或判定「已經到了」「走不到」）的地點。
+# _pursue_current_task() 每個遊戲分鐘都會跑，靠這個分辨「還在處理同一個地點」
+# 與「地點換了要重新起步」
+var _pursued_place := ""
+
+# 這一趟移動已經有結論了（走到了，或 _check_stuck() 放棄了）。
+# 少了它，放棄之後下一次重算又會對同一個走不到的目標重新 move_to()，
+# 變成每秒一次的卡住／放棄迴圈
+var _pursuit_done := false
+
+# 正在對陌生人做「！」反應。那 2 秒刻意站著不動，期間不重新起步——
+# GameClock 一個遊戲分鐘就是 1 現實秒，不擋的話 1 秒後就被送回路上，
+# 2 秒的愣住實際上只有 1 秒
+var _reacting := false
+
 
 func _ready() -> void:
 	super()
 	add_to_group("agents")
 	_load_schedule()
-	GameClock.time_changed.connect(_on_time_changed)
 
 	if vision != null:
 		vision.spotted.connect(_on_spotted)
 
 	noise_heard.connect(_on_noise_heard)
+	move_finished.connect(_on_move_finished)
 
 	# NavGrid 開場是非同步建的，不等它建完就出發只會拿到空路徑
 	var nav = get_tree().get_first_node_in_group("nav_grid")
 	if nav != null and not nav.built:
 		await nav.grid_built
 
+	# time_changed 要在 await 之後才接：接在前面的話，NavGrid 還在建的期間就會
+	# 開始重算，而重算現在每次都會嘗試 move_to()，對著空的 AStar 只會拿到空路徑
+	# 並噴一則假的「走不到」。舊 cron 版接在前面沒事，是因為它只在時間字串剛好
+	# 吻合某筆行程時才動作，await 這段期間幾乎命中不了
+	GameClock.time_changed.connect(_on_time_changed)
+
 	# 開場只是「第一次重算」，不是特例——沒有「套用目前這一筆」這種概念，
 	# 每次重算都是仲裁器從候選裡挑分數最高的那個
 	_reevaluate()
+
+# 一趟移動有結論了：走到了，或 _check_stuck() 判定走不動而放棄。
+# 兩種都代表「這個地點不必再起步一次」，_pursue_current_task() 靠它收斂
+func _on_move_finished(_reached: bool) -> void:
+	_pursuit_done = true
 
 # 先問資料檔這隻角色被指派了哪份行程，沒有指派才用場景裡的 @export 後備值。
 # 順序不能反過來：@export 一定有值（agent.tscn 的預設），反過來的話 assignments 永遠不生效
@@ -131,12 +157,19 @@ func _tasks_from_schedule_json(entries: Array) -> Array[Dictionary]:
 		var entry: Dictionary = entries[i]
 		var end: String = entries[i + 1]["time"] if i + 1 < entries.size() else wrap_to
 
+		# 只有一筆的行程表：window 從自己繞回自己，start == end，而 _in_window()
+		# 對 start == end 一律回 false（now >= T and now < T 不可能同時成立）——
+		# 唯一的候選永遠不在窗內，這隻角色會靜靜地站著不動、什麼都不 log。
+		# 一筆的意思是「整天都做這件事」，所以不給 window：仲裁器本來就把
+		# 沒有 window 的任務當成隨時可選（見 _in_window_or_unwindowed()）
+		var window: Variant = null if entry["time"] == end else {"start": entry["time"], "end": end}
+
 		tasks.append({
 			"id": "schedule_%d" % i,
 			"action": entry["state"],
 			"params": {"place": entry["place"]},
 			"priority": SCHEDULE_BASE_PRIORITY,
-			"window": {"start": entry["time"], "end": end},
+			"window": window,
 			"duration": 0.0,
 			"interruptible": entry["state"] != "sleep",
 			"preconditions": [],
@@ -160,12 +193,14 @@ func _warn_if_node_name_shared() -> void:
 			])
 			return
 
-# super() 顧「工作中不能被搭話」（character.gd 新加的規則）；
-# current_state != "sleep" 是既有規則；_current_task 那段是仲裁器自己的
-# 任務層級判斷，不再比對 current_state == "sleep"——sleep 這筆任務的
-# interruptible 在 _tasks_from_schedule_json() 就已經填 false，三者缺一不可
+# super() 顧「工作中不能被搭話」；`interruptible` 是任務層級的判斷，睡覺不可
+# 被打斷就是靠 sleep 這筆任務的 interruptible = false 表達的。
+#
+# 這裡不另外比對 current_state == "sleep"：_select() 把 action 寫進 current_state，
+# 而 interruptible 是從同一個 action 算出來的（見 _tasks_from_schedule_json()），
+# 兩者恆等——多寫一項只會讓人以為 sleep 有額外的特例
 func is_interruptible() -> bool:
-	return super() and current_state != "sleep" and _current_task.get("interruptible", true)
+	return super() and _current_task.get("interruptible", true)
 
 # 對話結束後重算一次「現在該做什麼」，而不是接續原本那條路 ——
 # 對話期間可能已經跨過了行程的整點
@@ -174,8 +209,7 @@ func exit_conversation() -> void:
 	_reevaluate()
 
 # 工作結束後同理：那 5 個遊戲分鐘可能已經跨過行程的整點，而 work_at() 開頭的
-# stop_moving() 把原本的路徑清掉了，不重算的話會一路站到下一個整點字串吻合為止——
-# 跟 exit_conversation() 一樣呼叫 _reevaluate()，不是舊 cron 版的 _apply_current_entry()
+# stop_moving() 把原本的路徑清掉了，不重算的話會一路站到下一個整點字串吻合為止
 func _on_work_finished() -> void:
 	_reevaluate()
 
@@ -218,10 +252,16 @@ func _on_spotted(other: Character) -> void:
 
 	say(L10n.t("DLG_SURPRISE"))
 	stop_moving()
+
+	# _reacting 期間 _pursue_current_task() 不重新起步。少了它，1 秒後
+	# GameClock 的重算就會把角色送回路上，NOTICE_PAUSE 訂 2 秒實際上只有 1 秒
+	_reacting = true
 	await get_tree().create_timer(NOTICE_PAUSE).timeout
+	_reacting = false
 
 	# 愣完重算行程而不是接回原本那條路：這 2 秒可能已經跨過行程的整點，
-	# 與 exit_conversation() 同一個理由
+	# 與 exit_conversation() 同一個理由。剛剛的 stop_moving() 已經把路徑清掉，
+	# 這次重算會重新起步
 	if not is_in_conversation():
 		_reevaluate()
 
@@ -278,14 +318,15 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 # 3. 不管有沒有換，都再嘗試一次「往目前任務的方向前進」（_pursue_current_task）
 #
 # 第 3 步不能省，也不能只在「真的換了」的時候才做：GameClock 每個遊戲分鐘
-# 都會呼叫這裡（見 _on_time_changed），對話中也一樣會被呼叫到——選定新任務
-# 那一刻若剛好在對話中，_pursue_current_task() 會先記下地點但不移動
-# （見該函式），等對話真的結束後 exit_conversation() 再呼叫一次 _reevaluate()。
-# 但那時候 best 通常還是同一筆（跟選定當下比，沒有新的更高分候選），
-# 「是不是同一筆」這個判斷如果直接 return，就沒有第二次機會去補跑
-# move_to()——角色會卡在對話結束的地方不動，即使任務其實已經換了、
-# 只是移動一直沒真的觸發。所以「選任務」跟「往任務移動」要分開，
-# 每次重算都無條件重跑後者，就算任務沒換也一樣
+# 都會呼叫這裡（見 _on_time_changed），對話中也一樣會被呼叫到——任務完全可能
+# 在對話期間就換掉，而 _pursue_current_task() 那時候會因為 is_in_conversation()
+# 直接返回、沒有真的移動。等對話結束 exit_conversation() 再重算一次時，best
+# 通常還是同一筆（沒有新的更高分候選），「是不是同一筆」這個判斷若直接 return
+# 就沒有第二次機會補跑 move_to()——角色會卡在對話結束的地方不動，即使任務
+# 早就換了。所以「選任務」跟「往任務移動」是兩個獨立步驟，每次重算都跑後者。
+#
+# 代價是 _pursue_current_task() 得自己認得「這個地點已經在處理了」，
+# 見它自己的註解
 func _reevaluate() -> void:
 	if _tasks.is_empty():
 		return
@@ -307,6 +348,15 @@ func _reevaluate() -> void:
 
 	if not best.is_empty():
 		_consider_switch(best, best_score, now, now_minutes)
+	elif not _current_task.is_empty() and not _in_window_or_unwindowed(_current_task, now):
+		# 一個候選都沒有，而目前這筆自己的窗口也過了：清掉，不要留著。
+		# 留著的話 sleep（interruptible = false）會讓 is_interruptible() 永遠回
+		# false，角色再也搭不了話——跟「窗口過期還被 interruptible 擋住」是同一
+		# 個坑，只是從 best 為空這條路徑進來，走不到 _consider_switch() 那關。
+		# schedule 任務的窗口由建構方式保證連續，碰不到；有間隔的任務才會
+		_current_task = {}
+		current_place = ""
+		current_state = "idle"
 
 	_pursue_current_task()
 
@@ -317,7 +367,7 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 		_select(best, now_minutes)
 		return
 
-	if best["id"] == _current_task["id"]:
+	if best.get("id", "") == _current_task.get("id", ""):
 		return
 
 	var current_still_in_window := _in_window_or_unwindowed(_current_task, now)
@@ -342,15 +392,22 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 
 	_select(best, now_minutes)
 
+# 用 .get() 而不是硬取 key，跟計分那幾個函式同一種寫法——檔頭承諾「把任務丟進
+# _tasks 就會公平競爭，不用再改這個檔案」，那新來源少填一個欄位就不該讓這裡崩掉
 func _select(task: Dictionary, now_minutes: int) -> void:
 	_current_task = task
 	_current_task_started_at = now_minutes
-	current_place = str(task["params"].get("place", ""))
-	current_state = str(task["action"])
+	current_place = str(task.get("params", {}).get("place", ""))
+	current_state = str(task.get("action", ""))
 
 # 往 _current_task 的方向前進。無條件每次重算都跑一次，不管這次有沒有
 # 剛選定新任務——對話中會在這裡先返回、不移動，等下一次重算（對話結束後
-# 那次）才會真的呼叫 move_to()
+# 那次）才會真的呼叫 move_to()。
+#
+# 「每次都跑」的代價是這個函式必須自己分辨「該起步了」與「已經在處理了」，
+# 靠 _pursued_place / _pursuit_done 這兩個欄位（見它們的宣告）。少了這層，
+# 每個遊戲分鐘都會對同一個目標重下一次指令，而它裡面的 move_to()、push_error()
+# 都是只該在狀態真的改變時做一次的事
 func _pursue_current_task() -> void:
 	if _current_task.is_empty():
 		return
@@ -359,12 +416,27 @@ func _pursue_current_task() -> void:
 	if is_in_conversation():
 		return
 
+	# 工作中不要把自己走離工作站：_run_work() 每個遊戲分鐘重驗距離，走開就中止
+	# 而且不撥款（見 character.gd 的 _run_work()）。_consider_switch() 那邊已經
+	# 靠 is_interruptible()（含 not _working）擋住換任務，移動這半邊也要一致
+	if is_working():
+		return
+
+	# 對陌生人「！」的那 2 秒刻意站著不動
+	if _reacting:
+		return
+
 	if current_place.is_empty():
 		return
 
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
 	if anchors == null or not anchors.has(current_place):
-		push_error("Agent %s: 沒有這個地點 %s" % [character_name, current_place])
+		# 地點打錯只報一次。這個函式每個遊戲分鐘跑一次，不擋的話一個 typo
+		# 就是每小時三千多則 error 洗掉整個面板
+		if current_place != _pursued_place:
+			push_error("Agent %s: 沒有這個地點 %s" % [character_name, current_place])
+			_pursued_place = current_place
+			_pursuit_done = true
 		return
 
 	var target: Vector2 = anchors.resolve(current_place)
@@ -373,18 +445,26 @@ func _pursue_current_task() -> void:
 	# move_to() 對「路徑不足兩點」一律回傳 false，而站在原地正好就是這種情形
 	if _has_arrived_at(target):
 		stop_moving()
+		_pursued_place = current_place
+		_pursuit_done = true
 		return
 
-	# 已經在路上就不要重呼叫 move_to()——這個函式現在每次重算都會跑
-	# （見上方 _reevaluate() 的說明），如果已經在移動中還每秒重算一次路徑，
-	# 會跟 Character.STUCK_TIME（卡住判定，也是 1 秒）打架：move_to() 每次
-	# 都重設 _stuck_timer，卡住偵測永遠沒機會真的累積到閾值。只有「目前沒在
-	# 移動」（剛選定任務、或剛從對話中恢復）才需要真的重新起步
-	if is_moving():
+	# 地點沒換的話，這一趟只起步一次：還在走就繼續走（重下指令會重設
+	# Character 的 _stuck_timer，卡住偵測永遠累積不到閾值），已經有結論
+	# 也不要再試（_check_stuck() 放棄之後再 move_to() 同一個走不到的目標，
+	# 就是卡住／放棄每秒一輪的無限迴圈）。
+	#
+	# 地點換了就一定要重下——不然任務換了、角色還在走去上一筆的地點時，
+	# 新目標永遠等不到 move_to()，要先走完舊路徑才會改道
+	if current_place == _pursued_place and (is_moving() or _pursuit_done):
 		return
+
+	_pursued_place = current_place
+	_pursuit_done = false
 
 	if not move_to(target):
 		push_warning("Agent %s: 走不到 %s" % [character_name, current_place])
+		_pursuit_done = true
 
 # 站得夠近，或者已經站在目標所在的那一格。
 #
