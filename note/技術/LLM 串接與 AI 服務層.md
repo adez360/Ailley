@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-12
+updated: 2026-08-13
 ---
 
 # LLM 串接與 AI 服務層
@@ -48,7 +48,8 @@ updated: 2026-08-12
 ## 已拍板
 
 - 範圍：**底層 ＋ 行程 ＋ 對話**，三塊一起做
-- Provider 開發期預設 **OpenRouter**（Ollama 換 `base_url` 即可，尚未實測）
+- Provider 是**一組具名端點**，可以同時併用（見下方「多 provider」）。開發期實測過
+  本機 llama-server 與 OpenRouter 兩條
 - 每次呼叫帶一份含 Agent 狀態與人格的 JSON，回傳也要 JSON
 
 ## 協定：HTTP，不是 WebSocket
@@ -82,7 +83,7 @@ WebSocket 在本專案有位置，但是**另一條線**：
 
 | 檔案 | 職責 |
 | --- | --- |
-| `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。也放速率限制的三個旋鈕 |
+| `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers` 與全域的速率限制三個旋鈕 |
 | `ai_service.gd` | **正式線唯一碰網路的地方**。autoload。節點池、佇列、逾時、速率限制、重試 |
 | `ai_schema.gd` | 回應驗證：`JSON.parse_string` → null 檢查 → 逐欄位型別檢查 → `action` 白名單 |
 | `prompt_builder.gd` | 由 Character 組出請求信封（尚未實作） |
@@ -92,6 +93,55 @@ WebSocket 在本專案有位置，但是**另一條線**：
 > [!note] `user://` 在 repo 之外
 > Linux 下 `user://` ＝ `~/.local/share/godot/app_userdata/ailley4.3/`。
 > 金鑰放這裡連 `.gitignore` 都不需要，天然滿足「API key 存 `user://` 不進版控」。
+
+### 多 provider
+
+`ai_config.json` 裝的是一組具名 provider，可以同時併用（例如 `local` 打本機
+llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key` /
+`model` / `timeout`：
+
+```json
+{
+	"enabled": true,
+	"default_provider": "local",
+	"providers": {
+		"local":      {"base_url": "http://127.0.0.1:8080/v1", "api_key": "", "model": "qwen2.5-7b-instruct", "timeout": 10.0},
+		"openrouter": {"base_url": "https://openrouter.ai/api/v1", "api_key": "sk-or-v1-…", "model": "openai/gpt-4o-mini", "timeout": 10.0}
+	},
+	"min_interval_sec": 30.0
+}
+```
+
+`min_interval_sec` / `max_calls_per_game_day` / `dialogue_exempt` 維持全域，
+**不逐 provider**：那是角色的成本控管，算在 `requester_id` 上，同一隻角色不管
+打本地還雲端用的是同一份額度。
+
+哪個角色用哪個 provider 是**角色自己的屬性**（`Agent.ai_provider`），不是查表。
+角色未來是動態生成丟進世界的（見 [[行程佇列與任務仲裁]] 提到的 #73），
+查表的前提「固定節點名」不成立。
+
+> [!warning] `Agent.ai_provider` 目前沒有讀取端
+> Agent 唯一會觸發 AI 的路徑是 `_trigger_village_ai()`，它走 R&D 線的
+> `VillageSimDecision`，不經過 `AIService.request()`。會傳 provider 的只有
+> debug 主控台的 `ai @<provider>`。等 Agent 真的有一條走 `AIService` 的決策
+> 路徑，那條路徑把這個值傳下去就會生效——在那之前，在 Inspector 填它沒有效果。
+
+> [!important] 一個 provider 壞掉不該連累其他的
+> `enabled` 只回答「設定檔結構完整、至少有一個 provider」，**不管
+> `default_provider` 好不好**。`default_provider` 沒填、拼錯、或存在但缺欄位，
+> 都只影響「沒指名 provider 的那些呼叫」——它們會拿到 `ERROR_NO_PROVIDER`，
+> 明確指名而且填好的 provider 照樣打得出去。把 default 的健康狀況綁進
+> `enabled` 的話，一個字打錯就讓整個多 provider 系統回 `ERROR_DISABLED`。
+>
+> 同理，`get_provider()` **只有空字串會退回 `default_provider`**；名字打錯是回
+> `null`，不會靜默導去別的服務——這個函式決定金鑰往哪送。
+
+> [!note] 空的 `api_key` 是合法的
+> 本機 llama-server／ollama 不驗 `Authorization`。金鑰空白時
+> `AIService._send()` 整個標頭不送（不是送一個空的 `Bearer `——後者在某些
+> 伺服器會被當成「有帶但格式錯」而回 401，比不帶還糟）。擋得住「照抄範例但沒設定」
+> 的是 `base_url`／`model` 空白，不是金鑰：範例檔給的 `sk-or-v1-REPLACE_ME`
+> 本來就非空。
 
 ### `scripts/ai/`（R&D 驗證線，已完成，見下方詳細章節）
 
@@ -291,7 +341,6 @@ Agent 真的改去該地點 → 關掉 AI 後退回純 schedule 行為。
 - **記憶系統** —— 卡在專案完全沒有存檔機制，記憶無處持久化。`character.gd` 的
   `signal spoke` 是日後寫逐字稿的接點
 - **交誼區 WebSocket 線** —— 伺服器技術棧尚未決定
-- **Ollama provider** —— 換 `base_url` 即可，但尚未實測
 - `preconditions` 求值 —— 結構留欄位，v1 一律通過
 - 白名單中除 `move_to` / `talk` / `sleep` 外的動作實作
 

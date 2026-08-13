@@ -626,6 +626,13 @@ func _cmd_ai(args: PackedStringArray) -> void:
 	if rest.size() > 0 and rest[0].begins_with("@"):
 		provider_name = rest[0].substr(1)
 		rest = rest.slice(1)
+
+		# 光打一個 @ 要當成打錯，不能放行：has_provider("") 會因為退回
+		# default_provider 而回 true，等於一個明顯的手誤被靜默送去預設服務
+		if provider_name.is_empty():
+			_error("@ 後面要接 provider 名稱，設定檔裡有：%s" % ", ".join(config.providers.keys()))
+			return
+
 		if not config.has_provider(provider_name):
 			_error("找不到 provider「%s」，設定檔裡有：%s" % [
 				provider_name, ", ".join(config.providers.keys())

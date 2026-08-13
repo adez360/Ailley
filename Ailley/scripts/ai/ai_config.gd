@@ -167,23 +167,26 @@ func _apply(data: Dictionary) -> void:
 
 	if providers.is_empty():
 		enabled = false
-		status_reason = L10n.tf("AI_STATUS_NO_ENDPOINT", {"path": CONFIG_PATH})
+		status_reason = L10n.tf("AI_STATUS_NO_PROVIDERS", {"path": CONFIG_PATH, "example": EXAMPLE_PATH})
 		return
 
-	if default_provider.is_empty() or not providers.has(default_provider):
-		enabled = false
-		status_reason = L10n.tf("AI_STATUS_NO_ENDPOINT", {"path": CONFIG_PATH})
-		return
-
-	# 刻意不在這裡檢查 default_provider 是否 valid：enabled 只回答「這份設定檔
-	# 結構完整、有個叫得到名字的預設值」，不是「預設那個 provider 剛好可用」。
-	# 某個具名 provider 沒填金鑰是 per-provider 的事，request() 會用
-	# get_provider() 查到的 Provider.valid 擋下來(ERROR_NO_PROVIDER)——擋在
-	# 這裡的話，default_provider 缺金鑰會連累其他填好金鑰、被明確指名的
-	# provider 一起變成 ERROR_DISABLED，等於單一 provider 沒設好就讓整個
-	# 多 provider 系統當機，違背這次要做「各自獨立」的初衷
+	# enabled 只回答「這份設定檔結構完整、至少有一個 provider」，**不管
+	# default_provider 好不好**——不管是「沒填」「拼錯名字」還是「存在但缺金鑰」，
+	# 都只該影響「沒指名 provider 的那些呼叫」，不該連累明確指名、而且填好的
+	# provider。擋在這裡的話，default 一個字打錯就讓整個多 provider 系統當機，
+	# 違背這次要做「各自獨立」的初衷。
+	#
+	# 沒指名而 default 又不可用的呼叫，request() 會用 get_provider() 回 null／
+	# Provider.valid 為 false 擋成 ERROR_NO_PROVIDER——那是比 ERROR_DISABLED
+	# 精確得多的錯誤碼
 	enabled = true
-	status_reason = L10n.t("AI_STATUS_ENABLED")
+
+	# default 壞掉不擋 enabled，但要講出來——不然「明明 enabled 卻每次都
+	# ERROR_NO_PROVIDER」查不出原因。訊息講的是 default_provider 本身，
+	# 不借用 AI_STATUS_NO_ENDPOINT（那句在講 base_url／model 空白，是別的毛病）
+	var default_ok: bool = not default_provider.is_empty() and providers.has(default_provider)
+	status_reason = L10n.t("AI_STATUS_ENABLED") if default_ok \
+		else L10n.tf("AI_STATUS_BAD_DEFAULT", {"path": CONFIG_PATH})
 
 
 func _parse_provider(provider_name: String, data: Dictionary) -> Provider:
@@ -194,10 +197,14 @@ func _parse_provider(provider_name: String, data: Dictionary) -> Provider:
 	provider.timeout = float(data.get("timeout", DEFAULT_TIMEOUT))
 	provider.api_key = str(data.get("api_key", "")).strip_edges()
 
-	if provider.api_key.is_empty():
-		provider.valid = false
-		provider.status_reason = L10n.tf("AI_STATUS_NO_KEY", {"path": CONFIG_PATH})
-	elif provider.base_url.is_empty() or provider.model.is_empty():
+	# 空金鑰是合法的：本機 llama-server／ollama 這類服務根本不驗 Authorization，
+	# 逼它填一把假金鑰只是在替一條不合身的規則寫解法。金鑰空的時候
+	# AIService._send() 直接不送 Authorization 標頭。
+	#
+	# 這條規則本來是想擋「照抄範例檔但沒填金鑰」，但擋不到——範例檔給的是
+	# `sk-or-v1-REPLACE_ME`，非空，本來就過得了這關然後撞 401。真正擋得住的
+	# 是 base_url／model 空白
+	if provider.base_url.is_empty() or provider.model.is_empty():
 		provider.valid = false
 		provider.status_reason = L10n.tf("AI_STATUS_NO_ENDPOINT", {"path": CONFIG_PATH})
 	else:
@@ -207,10 +214,12 @@ func _parse_provider(provider_name: String, data: Dictionary) -> Provider:
 	return provider
 
 
-## 依名字取 provider，空字串或查不到就退回 default_provider。
-## 呼叫端要自己檢查回傳是不是 null——查不到任何東西（包含 default_provider
-## 本身都不存在）才會是 null，這種情況比「provider 存在但 invalid」更早
-## 就該在 AIService.request() 那層擋下來
+## 依名字取 provider。**只有空字串會退回 default_provider**；名字打錯是回 null，
+## 不會靜默導去別的服務——這個函式決定金鑰往哪送，猜錯的代價是把金鑰送去
+## 使用者沒指名的端點。
+##
+## 呼叫端要自己檢查回傳是不是 null（含 default_provider 本身不存在的情況），
+## AIService.request() 會把它擋成 ERROR_NO_PROVIDER
 func get_provider(provider_name: String) -> Provider:
 	var resolved := provider_name if not provider_name.is_empty() else default_provider
 	return providers.get(resolved)

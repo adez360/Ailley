@@ -238,10 +238,12 @@ func _send(http: HTTPRequest, job: _Job) -> void:
 	# 所以送出前才設定，不是節點建立時就固定死
 	http.timeout = job.provider.timeout
 
-	var headers := PackedStringArray([
-		"Content-Type: application/json",
-		"Authorization: Bearer %s" % job.provider.api_key,
-	])
+	# 金鑰空的時候整個標頭不送，不是送一個空的 Bearer：本機 llama-server／
+	# ollama 不驗 Authorization，而 `Bearer ` 後面空白在某些伺服器會被當成
+	# 「有帶但格式錯」而回 401，比不帶還糟
+	var headers := PackedStringArray(["Content-Type: application/json"])
+	if not job.provider.api_key.is_empty():
+		headers.append("Authorization: Bearer %s" % job.provider.api_key)
 	var body := JSON.stringify(_build_body(job.envelope, job.provider))
 
 	var err := http.request(job.provider.completions_url(), headers, HTTPClient.METHOD_POST, body)

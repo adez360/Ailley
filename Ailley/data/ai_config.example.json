@@ -4,7 +4,7 @@
 	"providers": {
 		"local": {
 			"base_url": "http://127.0.0.1:8080/v1",
-			"api_key": "not-checked-by-llama-server-but-must-be-non-empty",
+			"api_key": "",
 			"model": "qwen2.5-7b-instruct",
 			"timeout": 10.0
 		},
