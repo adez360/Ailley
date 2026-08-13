@@ -98,6 +98,12 @@ var _reacting := false
 # _consider_switch() 靠它決定要用 MIN_COMMIT 還是 LLM_WAIT_MIN_COMMIT
 var _awaiting_decision := false
 
+# LLM 任務 id 的流水號。不能拿 Time.get_ticks_msec() 當唯一值——一次回應最多
+# 五筆是在同一個同步迴圈裡建的，同毫秒是常態不是例外，撞 id 之後
+# _consider_switch() 的 best.id == _current_task.id 會把不同任務當成同一筆，
+# 直接 return 不切換
+var _next_llm_task_id := 0
+
 
 func _ready() -> void:
 	super()
@@ -347,7 +353,8 @@ func _push_llm_tasks(tasks: Array[Dictionary], response: Dictionary) -> void:
 			])
 			continue
 
-		task["id"] = "llm_%d_%d" % [now_minutes, Time.get_ticks_msec()]
+		_next_llm_task_id += 1
+		task["id"] = "llm_%d_%d" % [now_minutes, _next_llm_task_id]
 		task["source"] = "llm"
 		task["created_at"] = now_minutes
 		task["duration"] = maxf(float(task.get("duration", 0.0)), MIN_ACTION_DURATION)
@@ -361,6 +368,14 @@ func _llm_task_count() -> int:
 		if task.get("source", "") == "llm":
 			count += 1
 	return count
+
+func _remove_task(id: String) -> void:
+	if id.is_empty():
+		return
+	for i in range(_tasks.size() - 1, -1, -1):
+		if _tasks[i].get("id", "") == id:
+			_tasks.remove_at(i)
+			return
 
 func _has_llm_task() -> bool:
 	return _llm_task_count() > 0
@@ -461,6 +476,11 @@ func _reevaluate() -> void:
 	if llm_decision_enabled and not _awaiting_decision \
 			and _current_task.get("source", "") == "llm" \
 			and now_minutes - _current_task_started_at >= int(_current_task.get("duration", 0.0)):
+		# 做完的那筆要先離開池子。llm 任務沒有 window，不像 schedule 靠時間窗
+		# 自然退場——留著的話它會用原本的分數繼續參加下一輪算分，被重新選中，
+		# 變成同一件事做完又做。_current_task 是同一個 Dictionary 的參照，
+		# 移出池子不影響它，等待決策回來的期間照樣可以繼續執行
+		_remove_task(_current_task.get("id", ""))
 		_request_next_decision()
 
 	if _tasks.is_empty():

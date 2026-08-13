@@ -188,7 +188,22 @@ static func validate_tasks(data: Dictionary) -> Dictionary:
 		if task.has("duration") and not (task["duration"] is int or task["duration"] is float):
 			return _fail(ERROR_BAD_SHAPE)
 
-		tasks.append(task)
+		if task.has("priority") and not (task["priority"] is int or task["priority"] is float):
+			return _fail(ERROR_BAD_SHAPE)
+
+		# 只複製驗證過的欄位，不是原封不動放行 task。plan_response_schema() 沒有
+		# additionalProperties: false，而且 supports_json_schema 關掉的 provider
+		# 根本收不到 schema——模型多回一個欄位是隨時可能發生的事，不是異常。
+		# 放行的話 window 是字串就會讓 agent.gd 的 _in_window(window: Dictionary)
+		# 型別不符當掉，interruptible 則等於讓模型自己宣告「不准搶我」，
+		# 兩個都是把仲裁器的控制權交給回應內容。白名單跟 schema 宣告的一致
+		tasks.append({
+			"action": task["action"],
+			"params": task.get("params", {}),
+			"priority": float(task.get("priority", 0.0)),
+			"duration": float(task.get("duration", 0.0)),
+			"expires_at": int(task.get("expires_at", 0)),
+		})
 
 	# reasoning／inner_monologue：跟 validate_dialogue() 的 line 同一種處理
 	# 方式——選填字串，型別錯就整包拒絕，超長截斷不拒絕；缺席時給空字串，
