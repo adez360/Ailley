@@ -143,12 +143,20 @@ func _find_id_holder(id: String) -> Character:
 
 # ---- 移動 ----
 
+# 這次 move_to() 的目標世界座標。move_to() 的呼叫端不只一個（仲裁器、
+# debug 主控台的 goto 類指令、R&D 線的 village_sim_decision.gd 都會直接呼叫），
+# 但 move_finished 訊號是同一個，收到訊號的一方得自己有辦法分辨「這是不是
+# 我剛才發出的那個請求」——靠比對這個欄位跟自己期待的目標位置
+var last_move_target := Vector2.ZERO
+
 # 走 A* 路徑到指定的世界座標；找不到路徑回傳 false
 func move_to(target: Vector2) -> bool:
 	var nav = get_tree().get_first_node_in_group("nav_grid")
 	if nav == null:
 		push_error("Character.move_to: 場景裡沒有 NavGrid")
 		return false
+
+	last_move_target = target
 
 	var path: PackedVector2Array = nav.find_path(get_body_position(), target)
 	if path.size() < 2:
