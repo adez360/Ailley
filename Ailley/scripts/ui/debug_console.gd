@@ -31,7 +31,7 @@ func _ready() -> void:
 		"nav": {"run": _cmd_nav, "usage": "nav rebuild", "help": "HELP_NAV"},
 		"inv": {"run": _cmd_inv, "usage": "inv [name] / inv give <item_id> [count]", "help": "HELP_INV"},
 		"money": {"run": _cmd_money, "usage": "money <amount>", "help": "HELP_MONEY"},
-		"ai": {"run": _cmd_ai, "usage": "ai [text]", "help": "HELP_AI"},
+		"ai": {"run": _cmd_ai, "usage": "ai [dialogue] [@provider] [text]", "help": "HELP_AI"},
 		# help 留空：跟 village_ai 一樣先不進 locale/console.csv，避免動到翻譯資源
 		# 匯入（這台機器上曾經卡住），純 debug 用途，之後真的要收進正式指令表
 		# 再補翻譯
@@ -42,6 +42,8 @@ func _ready() -> void:
 			"help": "",
 		},
 		"locale": {"run": _cmd_locale, "usage": "locale [code]", "help": "HELP_LOCALE"},
+		# help 留空，理由同 village_ai——純 debug 用途，不進 locale/console.csv
+		"tasks": {"run": _cmd_tasks, "usage": "tasks <name>", "help": ""},
 		"help": {"run": _cmd_help, "usage": "help", "help": ""},
 		"clear": {"run": _cmd_clear, "usage": "clear", "help": "HELP_CLEAR"},
 	}
@@ -360,6 +362,57 @@ func _cmd_status(args: PackedStringArray) -> void:
 func _field(label_key: String, body: String) -> void:
 	_print("  [color=888888]%s[/color]  %s" % [L10n.t(label_key), body])
 
+# tasks <name>
+#
+# 印出這隻 Agent 的任務池：每筆的 source/action/params/window/分數拆項，
+# 標出目前執行中的那筆跟它已經跑了幾個遊戲分鐘。分數仲裁選出來的結果肉眼
+# 看不出理由，沒有這個指令沒辦法 debug「它為什麼跑去那裡」——
+# 見 [[行程佇列與任務仲裁]]。
+#
+# name 是必填的，不像 status／inv 那樣可以省略：那兩個省略就看玩家自己，
+# 而玩家不可能有任務池（只有 Agent 進 "agents" 群組），預設值會是個永遠失敗的死路
+func _cmd_tasks(args: PackedStringArray) -> void:
+	if args.size() != 1:
+		_error("tasks <name>")
+		return
+
+	var character := _get_character(args[0])
+	if character == null:
+		return
+
+	if not character.is_in_group("agents"):
+		_error("%s 不是 Agent，沒有任務池" % character.character_name)
+		return
+
+	var infos: Array = character.get_task_debug_info()
+	if infos.is_empty():
+		_print("[color=888888]（空池）[/color]")
+		return
+
+	_print("[color=88ccff]%s[/color][color=888888]  目前這筆已執行 %d 遊戲分鐘[/color]" % [
+		character.character_name, character.get_current_task_elapsed_minutes()
+	])
+
+	for info in infos:
+		var task: Dictionary = info["task"]
+		var score: Dictionary = info["score"]
+		var marker := "→" if info["is_current"] else " "
+		var window_note := "" if info["in_window"] else "[color=888888]（窗外）[/color]"
+
+		# 一律 .get()：仲裁器本身允許任務沒有 window（`_in_window_or_unwindowed`
+		# 直接當成隨時可選），硬取 task["window"]["start"] 會在第一筆這種任務上
+		# 崩掉整個指令——而這個指令存在的理由就是拿來看任務池
+		var window = task.get("window")
+		var window_text := "隨時" if window == null else "%s..%s" % [window["start"], window["end"]]
+
+		_print("[color=888888]%s %s[/color]  %s  params=%s  window=%s%s" % [
+			marker, task.get("source", "?"), task.get("action", "?"),
+			JSON.stringify(task.get("params", {})), window_text, window_note,
+		])
+		_print("[color=888888]    score=%.1f = base %.1f + time %.1f + need %.1f + age %.1f[/color]" % [
+			score["total"], score["base"], score["time"], score["need"], score["age"],
+		])
+
 func _get_overlay() -> Node:
 	var overlay := get_tree().get_first_node_in_group("debug_overlay")
 	if overlay == null:
@@ -535,11 +588,17 @@ const AI_REQUESTER_ID := "debug_console"
 const AI_PROBE_SYSTEM := "You are a connection probe. Reply with JSON only, no prose, no code fence: {\"ok\": true, \"echo\": \"<the text field you were given>\"}"
 const AI_PROBE_TEXT := "hello from ailley"
 
-# ai                    用預設探針句打一次（走 SCHEDULED，吃 30 秒冷卻）
-# ai <文字>             改用這段文字當探針
-# ai dialogue [<文字>]  走 CONVERSATION，驗證對話輪次確實豁免冷卻與配額
+# ai                          用預設探針句打一次（走 SCHEDULED，吃 30 秒冷卻）
+# ai <文字>                   改用這段文字當探針
+# ai dialogue [<文字>]        走 CONVERSATION，驗證對話輪次確實豁免冷卻與配額
+# ai @<provider> [<文字>]     指定要測哪個 provider（不指定用 default_provider）
+# ai dialogue @<provider> [<文字>]  兩者可以並用，順序固定：dialogue 在前
 #
-# 兩種都留著才測得出差別：連打兩次 ai 第二次應該被擋，
+# @provider 這個記法是為了不跟探針文字本身混淆——文字通常是一句話，
+# 用 @ 開頭這種明顯不像自然語言開頭的記法，判斷「這個 token 是不是指定
+# provider」不用去猜文字內容像不像 provider 名稱
+#
+# dialogue／SCHEDULED 兩種都留著才測得出差別：連打兩次 ai 第二次應該被擋，
 # 連打兩次 ai dialogue 應該兩次都過
 #
 # 每次都先 reload_config()，玩家剛寫完 user://ai_config.json 不用重開遊戲
@@ -557,9 +616,28 @@ func _cmd_ai(args: PackedStringArray) -> void:
 	# 第一個參數是 dialogue 就切成對話政策，其餘參數仍然是探針句
 	var policy := AIService.Policy.SCHEDULED
 	var rest := args
-	if args.size() > 0 and args[0].to_lower() == "dialogue":
+	if rest.size() > 0 and rest[0].to_lower() == "dialogue":
 		policy = AIService.Policy.CONVERSATION
-		rest = args.slice(1)
+		rest = rest.slice(1)
+
+	# @provider 記法指定要測哪個 provider，不指定就用 default_provider——
+	# 順序固定排在 dialogue 之後，跟 usage 註解裡寫的一樣
+	var provider_name := ""
+	if rest.size() > 0 and rest[0].begins_with("@"):
+		provider_name = rest[0].substr(1)
+		rest = rest.slice(1)
+
+		# 光打一個 @ 要當成打錯，不能放行：has_provider("") 會因為退回
+		# default_provider 而回 true，等於一個明顯的手誤被靜默送去預設服務
+		if provider_name.is_empty():
+			_error("@ 後面要接 provider 名稱，設定檔裡有：%s" % ", ".join(config.providers.keys()))
+			return
+
+		if not config.has_provider(provider_name):
+			_error("找不到 provider「%s」，設定檔裡有：%s" % [
+				provider_name, ", ".join(config.providers.keys())
+			])
+			return
 
 	var usage: Dictionary = AIService.get_usage(AI_REQUESTER_ID)
 	_print("[color=888888]  %s[/color]" % L10n.tf("CON_AI_USAGE", {
@@ -579,12 +657,13 @@ func _cmd_ai(args: PackedStringArray) -> void:
 		"payload": {"type": "ping", "text": text},
 	}
 
-	_print("[color=888888]→ [%s] %s[/color]" % [
+	_print("[color=888888]→ [%s → %s] %s[/color]" % [
 		L10n.t("CON_POLICY_CONVERSATION" if policy == AIService.Policy.CONVERSATION else "CON_POLICY_SCHEDULED"),
+		provider_name if not provider_name.is_empty() else config.default_provider,
 		JSON.stringify(envelope["payload"]),
 	])
 
-	var result: Dictionary = await AIService.request(envelope, AI_REQUESTER_ID, policy)
+	var result: Dictionary = await AIService.request(envelope, AI_REQUESTER_ID, policy, provider_name)
 	if not result["ok"]:
 		_error("← " + L10n.tf("CON_AI_FAILED", {"error": result["error"]}))
 		return

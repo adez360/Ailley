@@ -1,0 +1,16 @@
+[gd_scene load_steps=3 format=3 uid="uid://bta26yf1ol1rm"]
+
+[ext_resource type="Script" uid="uid://d2q7eswhr08j5" path="res://scripts/world/vending_machine.gd" id="1_b56hl"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_ehe3j"]
+size = Vector2(10, 16)
+
+[node name="VendingMachine" type="StaticBody2D"]
+script = ExtResource("1_b56hl")
+
+[node name="Polygon2D" type="Polygon2D" parent="."]
+color = Color(0.49411765, 0.5411765, 0.5764706, 1)
+polygon = PackedVector2Array(-5, -8, 5, -8, 5, 8, -5, 8)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("RectangleShape2D_ehe3j")

@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-12
+updated: 2026-08-13
 ---
 
 # LLM 串接與 AI 服務層
@@ -33,12 +33,23 @@ updated: 2026-08-12
 > **結論：Python 後端是玩家自己的選擇，不是專案出貨的架構決定。** 正式方向是
 > **Godot（`HTTPRequest`）↔ Sidecar（`llama-server`）**，不經 Python 中間層；
 > `poc_village_sim` 定位是 R&D／驗證用途，繼續開發但要保留 HTTP 接口給 Godot 端。
-> 核果正在研究把決策邏輯（grammar 組建等）直接用 GDScript 重寫。
+
+> [!warning] 2026-08-12：GDScript 決策邏輯重寫由使用者負責
+> 正式線現況：**決策迴圈還未實作**（目前只有仲裁器的殼，對應
+> [[行程佇列與任務仲裁]] 的 Step 2）、**身分對照系統尚未**、**雙向對話尚未**
+> （對應 Step 1）。把 `poc_village_sim` 決策邏輯搬進 GDScript、接上仲裁器，
+> 是**使用者自己要寫的東西**。
+>
+> 身分對照系統的缺口是兩條線共同的洞：這條 R&D 線用的
+> `VillageSimLocale.GODOT_NAME_TO_POC_ID` 也是寫死的 demo 對照，不是正式方案；
+> issue #69（`character_id`／`character_name` 固定指派，見下方）補的是
+> Character 基底層的身分基礎，兩條線都用得上，不是白做。
 
 ## 已拍板
 
 - 範圍：**底層 ＋ 行程 ＋ 對話**，三塊一起做
-- Provider 開發期預設 **OpenRouter**（Ollama 換 `base_url` 即可，尚未實測）
+- Provider 是**一組具名端點**，可以同時併用（見下方「多 provider」）。開發期實測過
+  本機 llama-server 與 OpenRouter 兩條
 - 每次呼叫帶一份含 Agent 狀態與人格的 JSON，回傳也要 JSON
 
 ## 協定：HTTP，不是 WebSocket
@@ -72,7 +83,7 @@ WebSocket 在本專案有位置，但是**另一條線**：
 
 | 檔案 | 職責 |
 | --- | --- |
-| `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。也放速率限制的三個旋鈕 |
+| `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers` 與全域的速率限制三個旋鈕 |
 | `ai_service.gd` | **正式線唯一碰網路的地方**。autoload。節點池、佇列、逾時、速率限制、重試 |
 | `ai_schema.gd` | 回應驗證：`JSON.parse_string` → null 檢查 → 逐欄位型別檢查 → `action` 白名單 |
 | `prompt_builder.gd` | 由 Character 組出請求信封（尚未實作） |
@@ -82,6 +93,59 @@ WebSocket 在本專案有位置，但是**另一條線**：
 > [!note] `user://` 在 repo 之外
 > Linux 下 `user://` ＝ `~/.local/share/godot/app_userdata/ailley4.3/`。
 > 金鑰放這裡連 `.gitignore` 都不需要，天然滿足「API key 存 `user://` 不進版控」。
+
+### 多 provider
+
+`ai_config.json` 裝的是一組具名 provider，可以同時併用（例如 `local` 打本機
+llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key` /
+`model` / `timeout`：
+
+```json
+{
+	"enabled": true,
+	"default_provider": "local",
+	"providers": {
+		"local":      {"base_url": "http://127.0.0.1:8080/v1", "api_key": "", "model": "qwen2.5-7b-instruct", "timeout": 10.0},
+		"openrouter": {"base_url": "https://openrouter.ai/api/v1", "api_key": "sk-or-v1-…", "model": "openai/gpt-4o-mini", "timeout": 10.0}
+	},
+	"min_interval_sec": 30.0
+}
+```
+
+`min_interval_sec` / `max_calls_per_game_day` / `dialogue_exempt` 維持全域，
+**不逐 provider**：那是角色的成本控管，算在 `requester_id` 上，同一隻角色不管
+打本地還雲端用的是同一份額度。
+
+「誰該用哪個 provider」不在 `AIConfig` 裡，是呼叫端用
+`AIService.request()` 的 `provider_name` 參數帶進來的。目前唯一會指名的呼叫端
+是 debug 主控台的 `ai @<provider>`。
+
+> [!note] 「每個角色固定用哪個 provider」還沒有實作，是刻意的
+> 方向已經想清楚：那應該是**角色自己的屬性**，不是一張「節點名 → provider」的
+> 查表——角色未來是動態生成丟進世界的（#73），查表的前提「固定節點名」不成立。
+>
+> 但**掛在哪裡要等真正的讀取端出現才決定**。會讀它的是一條走 `AIService` 的
+> Agent 決策迴圈，那個還沒實作（見上面「現況」）；唯一沾得上邊的
+> `VillageSimDecision` 是 R&D 測試線，而且 #86 要移除它。在那之前先加一個
+> `@export`，只會在 Inspector 長出一個填了沒作用的開關，而且等真的要接的時候
+> 多半發現該掛的是生成設定或 persona 資料，不是每隻 Agent 一個欄位。
+
+> [!important] 一個 provider 壞掉不該連累其他的
+> `enabled` 只回答「設定檔結構完整、至少有一個 provider」，**不管
+> `default_provider` 好不好**。`default_provider` 沒填、拼錯、或存在但缺欄位，
+> 都只影響「沒指名 provider 的那些呼叫」——它們會拿到 `ERROR_NO_PROVIDER`，
+> 明確指名而且填好的 provider 照樣打得出去。把 default 的健康狀況綁進
+> `enabled` 的話，一個字打錯就讓整個多 provider 系統回 `ERROR_DISABLED`。
+>
+> 同理，`get_provider()` **只有空字串會退回 `default_provider`**；名字打錯是回
+> `null`，不會靜默導去別的服務——這個函式決定金鑰往哪送。
+
+> [!note] 空的 `api_key` 是合法的
+> 本機 llama-server／ollama 不驗 `Authorization`。金鑰空白時
+> `AIService._send()` 整個標頭不送（不是送一個空的 `Bearer `——後者在某些
+> 伺服器會被當成「有帶但格式錯」而回 401，比不帶還糟）。擋得住「照抄範例但沒設定」
+> 的是 `base_url`／`model` 空白，不是金鑰：範例檔給的 `sk-or-v1-REPLACE_ME`
+> 本來就非空。
 
 ### `scripts/ai/`（R&D 驗證線，已完成，見下方詳細章節）
 
@@ -281,7 +345,6 @@ Agent 真的改去該地點 → 關掉 AI 後退回純 schedule 行為。
 - **記憶系統** —— 卡在專案完全沒有存檔機制，記憶無處持久化。`character.gd` 的
   `signal spoke` 是日後寫逐字稿的接點
 - **交誼區 WebSocket 線** —— 伺服器技術棧尚未決定
-- **Ollama provider** —— 換 `base_url` 即可，但尚未實測
 - `preconditions` 求值 —— 結構留欄位，v1 一律通過
 - 白名單中除 `move_to` / `talk` / `sleep` 外的動作實作
 
@@ -356,7 +419,7 @@ Godot `Stats.SPEC` ↔ poc_village_sim `physiology`，維度跟方向都不一�
 | `mood` | 無對應欄位 | poc 的「情緒」是 AI 自己宣告的 `emotion`，不是 physiology 數值，不送 |
 | （無） | `thirst`／`health`／`money` | Godot `Stats.SPEC` 沒有這三項的資料來源，不送，沿用 poc 預設值 |
 
-> [!warning] 給之後寫正式 GDScript 版本的人（可能是核果，也可能是使用者自己）
+> [!warning] 給之後寫正式 GDScript 版本的人（確認是使用者自己，見上方 2026-08-12 更新）
 > 如果那份重寫照抄了 poc_village_sim 已驗證過的門檻邏輯（`characters.py` 的
 > `_tier_adjective`、`if hunger >= 90` 這類具體數字），**移植的當下方向要反過來
 > 翻**——poc 的 `hunger >= 90`「快撐不住」，翻成 Godot 自己的方向要變成

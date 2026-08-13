@@ -8,9 +8,15 @@ extends Node
 ## 集中成一個服務之後，成本上限、金鑰處理、防注入入口都只有一個地方要顧。
 ##
 ## 對外只有一個函式，呼叫端一律 await：
-##     var result := await AIService.request(envelope, requester_id)                     # 行程重排
+##     var result := await AIService.request(envelope, requester_id)                     # 行程重排，預設 provider
 ##     var result := await AIService.request(envelope, requester_id, Policy.CONVERSATION) # 對話輪次
+##     var result := await AIService.request(envelope, requester_id, Policy.SCHEDULED, "local")  # 指定 provider
 ##     # result = {"ok": bool, "data": Dictionary, "error": String}
+##
+## provider 是哪個角色打去哪個 LLM 服務的名字（見 AIConfig.Provider），
+## 空字串就用設定檔的 default_provider。速率限制／每日配額算在 requester_id
+## 上，不分 provider——同一隻角色不管打本地還雲端，額度算的是同一份，
+## 這是角色的成本控管，跟打去哪個服務無關
 ##
 ## 為什麼要有 Policy 而不是所有呼叫一視同仁：速率限制的兩個數字是為
 ## **行程重排**訂的（同一隻 Agent 最短 30 秒、每遊戲日 20 次），而對話是逐輪產生、
@@ -60,6 +66,7 @@ const MAX_ERROR_CHARS := 200
 
 const ERROR_DISABLED := "disabled"
 const ERROR_NO_REQUESTER := "no_requester_id"
+const ERROR_NO_PROVIDER := "no_provider"
 const ERROR_RATE_LIMITED := "rate_limited"
 const ERROR_DAILY_QUOTA := "daily_quota"
 const ERROR_TIMEOUT := "timeout"
@@ -84,8 +91,9 @@ func _ready() -> void:
 	for i in POOL_SIZE:
 		var http := HTTPRequest.new()
 		http.name = "Request%d" % i
-		# 引擎原生逾時，不必自寫計時器
-		http.timeout = config.timeout
+		# 逐 provider 的逾時在 _send() 送出前才設定（不同 provider 可能給
+		# 不同的 timeout），這裡先給一個預設值，純粹是建立節點需要填一個初值
+		http.timeout = AIConfig.DEFAULT_TIMEOUT
 		# 不開執行緒的話 TLS 握手會卡在主執行緒上掉幀
 		http.use_threads = true
 		add_child(http)
@@ -98,20 +106,18 @@ func _ready() -> void:
 # 玩家寫好 user://ai_config.json 之後不必重開遊戲，debug 主控台的 ai 指令會先叫這個
 func reload_config() -> void:
 	config = AIConfig.load_from_user()
-	# 已經在飛的請求沿用舊逾時，下一次才套新值 —— 中途改 timeout 會讓
-	# HTTPRequest 的內部計時失去意義
-	for http in _pool:
-		http.timeout = config.timeout
 
 
 # 唯一的對外入口。呼叫端：var result := await AIService.request(envelope, "agent")
 #
 # policy 決定要不要吃速率限制，預設是「吃」—— 忘了指定的呼叫端會落在比較保守的
-# 那一邊，而不是意外地拿到無限額度
+# 那一邊，而不是意外地拿到無限額度。provider 是哪個具名 LLM 服務，空字串
+# 用設定檔的 default_provider
 func request(
 	envelope: Dictionary,
 	requester_id: String,
-	policy: Policy = Policy.SCHEDULED
+	policy: Policy = Policy.SCHEDULED,
+	provider_name: String = "",
 ) -> Dictionary:
 	if not config.enabled:
 		# 沒設定金鑰是預設狀態不是錯誤，所以安靜地回，不 push_error
@@ -121,6 +127,12 @@ func request(
 		# 沒有 requester_id 就做不了速率限制。這是呼叫端寫錯，不能默默放行
 		push_error("AIService: request() 的 requester_id 不可為空")
 		return _fail(ERROR_NO_REQUESTER)
+
+	var provider: AIConfig.Provider = config.get_provider(provider_name)
+	if provider == null or not provider.valid:
+		# 指定的 provider 不存在，或存在但沒填齊金鑰/端點——都不是呼叫端
+		# 能自己判斷的事，交給 AIConfig 那層算好的 valid 旗標
+		return _fail(ERROR_NO_PROVIDER)
 
 	var limit_error := _check_rate_limit(requester_id, policy)
 	if not limit_error.is_empty():
@@ -133,6 +145,7 @@ func request(
 	var job := _Job.new()
 	job.envelope = envelope
 	job.requester_id = requester_id
+	job.provider = provider
 	_queue.append(job)
 	_pump()
 
@@ -221,13 +234,19 @@ func _send(http: HTTPRequest, job: _Job) -> void:
 	_busy[http] = job
 	job.attempts += 1
 
-	var headers := PackedStringArray([
-		"Content-Type: application/json",
-		"Authorization: Bearer %s" % config.api_key,
-	])
-	var body := JSON.stringify(_build_body(job.envelope))
+	# 逾時是節點屬性不是逐請求參數，每個 provider 可能給不同的值，
+	# 所以送出前才設定，不是節點建立時就固定死
+	http.timeout = job.provider.timeout
 
-	var err := http.request(config.completions_url(), headers, HTTPClient.METHOD_POST, body)
+	# 金鑰空的時候整個標頭不送，不是送一個空的 Bearer：本機 llama-server／
+	# ollama 不驗 Authorization，而 `Bearer ` 後面空白在某些伺服器會被當成
+	# 「有帶但格式錯」而回 401，比不帶還糟
+	var headers := PackedStringArray(["Content-Type: application/json"])
+	if not job.provider.api_key.is_empty():
+		headers.append("Authorization: Bearer %s" % job.provider.api_key)
+	var body := JSON.stringify(_build_body(job.envelope, job.provider))
+
+	var err := http.request(job.provider.completions_url(), headers, HTTPClient.METHOD_POST, body)
 	if err != OK:
 		# 這是「連送都送不出去」（URL 格式錯、節點還在忙），不是網路往返失敗，
 		# 重試同樣送不出去，直接結束這份工作。
@@ -241,7 +260,7 @@ func _send(http: HTTPRequest, job: _Job) -> void:
 		_pump()
 
 
-func _build_body(envelope: Dictionary) -> Dictionary:
+func _build_body(envelope: Dictionary, provider: AIConfig.Provider) -> Dictionary:
 	var messages := []
 
 	var system := str(envelope.get("system", ""))
@@ -256,7 +275,7 @@ func _build_body(envelope: Dictionary) -> Dictionary:
 	})
 
 	var body := {
-		"model": str(envelope.get("model", config.model)),
+		"model": str(envelope.get("model", provider.model)),
 		"messages": messages,
 	}
 
@@ -347,10 +366,18 @@ func _brief(text: String) -> String:
 	return scrubbed
 
 
+# 洗掉**所有**已知 provider 的金鑰，不是只洗這次呼叫用的那一個——
+# 錯誤字串理論上不會含金鑰，但這條路徑的終點是 log，寧可每個都洗一次
 func _scrub(text: String) -> String:
-	if config == null or config.api_key.is_empty():
+	if config == null:
 		return text
-	return text.replace(config.api_key, "<redacted>")
+
+	var scrubbed := text
+	for provider in config.providers.values():
+		var api_key: String = (provider as AIConfig.Provider).api_key
+		if not api_key.is_empty():
+			scrubbed = scrubbed.replace(api_key, "<redacted>")
+	return scrubbed
 
 
 func _outcome(error: String, retryable: bool) -> Dictionary:
@@ -370,4 +397,5 @@ class _Job extends RefCounted:
 
 	var envelope := {}
 	var requester_id := ""
+	var provider: AIConfig.Provider
 	var attempts := 0
