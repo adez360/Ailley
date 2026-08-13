@@ -338,6 +338,11 @@ func _reevaluate() -> void:
 	var best_score := -INF
 
 	for task in _tasks:
+		# 過期任務不進入候選——expires_at 是「這件事的機會已經徹底過了」，
+		# 跟 window（「現在不是做這件事的時間，但之後還會再輪到」）是不同語意，
+		# 過期的候選不該被選中，也不該影響分數比較
+		if _is_expired(task, now_minutes):
+			continue
 		if not _in_window_or_unwindowed(task, now):
 			continue
 
@@ -348,8 +353,9 @@ func _reevaluate() -> void:
 
 	if not best.is_empty():
 		_consider_switch(best, best_score, now, now_minutes)
-	elif not _current_task.is_empty() and not _in_window_or_unwindowed(_current_task, now):
-		# 一個候選都沒有，而目前這筆自己的窗口也過了：清掉，不要留著。
+	elif not _current_task.is_empty() \
+			and (_is_expired(_current_task, now_minutes) or not _in_window_or_unwindowed(_current_task, now)):
+		# 一個候選都沒有，而目前這筆自己已經過期或窗口過了：清掉，不要留著。
 		# 留著的話 sleep（interruptible = false）會讓 is_interruptible() 永遠回
 		# false，角色再也搭不了話——跟「窗口過期還被 interruptible 擋住」是同一
 		# 個坑，只是從 best 為空這條路徑進來，走不到 _consider_switch() 那關。
@@ -370,15 +376,16 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 	if best.get("id", "") == _current_task.get("id", ""):
 		return
 
-	var current_still_in_window := _in_window_or_unwindowed(_current_task, now)
+	var current_still_valid := not _is_expired(_current_task, now_minutes) \
+		and _in_window_or_unwindowed(_current_task, now)
 
-	if current_still_in_window:
-		# 承諾檢查（含 interruptible）只保護「還在自己時間窗內」的目前任務。
-		# 窗口已經過期的任務不受保護，該讓位就讓位——否則 sleep
-		# （interruptible=false）會在窗口結束後卡死，永遠醒不過來，因為
-		# 每次重算都在「不可中斷」這關直接 return，連「自己的窗口已經過了」
-		# 都沒機會判斷到。interruptible 管的是「有沒有更高分的候選能搶」，
-		# 不該管「自己是不是早就該結束了」，這是兩件事
+	if current_still_valid:
+		# 承諾檢查（含 interruptible）只保護「還沒過期、還在自己時間窗內」的
+		# 目前任務。過期或窗口已經過期的任務不受保護，該讓位就讓位——否則
+		# sleep（interruptible=false）會卡死，永遠醒不過來，因為每次重算都在
+		# 「不可中斷」這關直接 return，連「自己早就該結束了」都沒機會判斷到。
+		# interruptible 管的是「有沒有更高分的候選能搶」，不該管「自己是不是
+		# 早就該結束了」，這是兩件事
 		if not is_interruptible():
 			return
 
@@ -506,6 +513,13 @@ func _need_bonus(_task: Dictionary) -> float:
 # 需要防餓死的任務。LLM 任務有真的 created_at 時間戳之後才有意義
 func _age_bonus(_task: Dictionary) -> float:
 	return 0.0
+
+# expires_at 是絕對遊戲分鐘數（見 _now_minutes()），0 或負值代表不會過期。
+# schedule 來源的任務目前一律填 0（見 _tasks_from_schedule_json()），碰不到
+# 這條路徑；LLM 推進池子的任務才會真的帶非零值
+func _is_expired(task: Dictionary, now_minutes: int) -> bool:
+	var expires_at: int = task.get("expires_at", 0)
+	return expires_at > 0 and expires_at < now_minutes
 
 func _in_window_or_unwindowed(task: Dictionary, now: String) -> bool:
 	var window = task.get("window")
