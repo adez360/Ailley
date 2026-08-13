@@ -9,29 +9,33 @@ static func create(db) -> bool:
 
 		npc_id TEXT PRIMARY KEY,
 
-		hunger INTEGER NOT NULL DEFAULT 0
-			CHECK (hunger BETWEEN 0 AND 100),
+		-- 生理狀態：0.0 ~ 1.0
+		-- 0.0 = 0%
+		-- 1.0 = 100%
 
-		thirst INTEGER NOT NULL DEFAULT 0
-			CHECK (thirst BETWEEN 0 AND 100),
+		hunger REAL NOT NULL DEFAULT 0.0
+			CHECK (hunger BETWEEN 0.0 AND 1.0),
 
-		stamina INTEGER NOT NULL DEFAULT 100
-			CHECK (stamina BETWEEN 0 AND 100),
+		thirst REAL NOT NULL DEFAULT 0.0
+			CHECK (thirst BETWEEN 0.0 AND 1.0),
 
-		sleepiness INTEGER NOT NULL DEFAULT 0
-			CHECK (sleepiness BETWEEN 0 AND 100),
+		stamina REAL NOT NULL DEFAULT 1.0
+			CHECK (stamina BETWEEN 0.0 AND 1.0),
 
-		hygiene INTEGER NOT NULL DEFAULT 100
-			CHECK (hygiene BETWEEN 0 AND 100),
+		sleepiness REAL NOT NULL DEFAULT 0.0
+			CHECK (sleepiness BETWEEN 0.0 AND 1.0),
 
-		alcohol INTEGER NOT NULL DEFAULT 0
-			CHECK (alcohol BETWEEN 0 AND 100),
+		hygiene REAL NOT NULL DEFAULT 1.0
+			CHECK (hygiene BETWEEN 0.0 AND 1.0),
 
-		health INTEGER NOT NULL DEFAULT 100
-			CHECK (health BETWEEN 0 AND 100),
+		alcohol REAL NOT NULL DEFAULT 0.0
+			CHECK (alcohol BETWEEN 0.0 AND 1.0),
 
-		injury INTEGER NOT NULL DEFAULT 0
-			CHECK (injury BETWEEN 0 AND 100),
+		health REAL NOT NULL DEFAULT 1.0
+			CHECK (health BETWEEN 0.0 AND 1.0),
+
+		injury REAL NOT NULL DEFAULT 0.0
+			CHECK (injury BETWEEN 0.0 AND 1.0),
 
 		location_id TEXT,
 
