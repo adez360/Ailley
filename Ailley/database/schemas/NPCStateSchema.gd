@@ -37,6 +37,7 @@ static func create(db) -> bool:
 		injury REAL NOT NULL DEFAULT 0.0
 			CHECK (injury BETWEEN 0.0 AND 1.0),
 
+		-- 當前所在位置
 		location_id TEXT,
 
 		FOREIGN KEY (npc_id)

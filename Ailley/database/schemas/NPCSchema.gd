@@ -28,17 +28,19 @@ static func create(db) -> bool:
 		
 		-- 角色對造物主的話
 		words_to_creator TEXT DEFAULT '',
-		-- 是否已說出
+
+		-- 角色對造物主的話是否已說出
 		is_spoken INTEGER NOT NULL DEFAULT 1
 			CHECK (
-				is_active IN (0, 1)
+				is_spoken IN (0, 1)
 			),
 
+		-- 角色是否啟用
 		is_active INTEGER NOT NULL DEFAULT 1
 			CHECK (
 				is_active IN (0, 1)
 			),
-			
+
 		-- =================================================
 		-- Timestamp
 		-- =================================================
@@ -46,7 +48,6 @@ static func create(db) -> bool:
 		created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 
-			
 	);
 	"""
 

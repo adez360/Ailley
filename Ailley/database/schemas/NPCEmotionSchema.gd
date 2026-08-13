@@ -9,7 +9,19 @@ static func create(db) -> bool:
 
 		npc_id TEXT PRIMARY KEY,
 		-- 八種情緒
-		emotion TEXT NOT NULL DEFAULT 'neutral',
+		emotion TEXT NOT NULL DEFAULT 'neutral'
+			CHECK(
+				emotion IN (
+					'joy',
+					'anger',
+					'sadness',
+					'fear',
+					'surprise',
+					'disgust',
+					'anticipation',
+					'neutral'
+				)
+			),
 
 		intensity INTEGER NOT NULL DEFAULT 0
 			CHECK (intensity BETWEEN 0 AND 100),

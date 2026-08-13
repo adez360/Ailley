@@ -104,16 +104,31 @@ static func initialize(db) -> bool:
 		NPCDailyPlanSchema,
 		NPCLastActionSchema,
 
+		# -------------------------------------------------
+		# 05. NPC Memory
+		# -------------------------------------------------
+
+		MemorySchema,
 
 		# -------------------------------------------------
-		# 05. Item
+		# 06. NPC Death
+		# -------------------------------------------------
+
+		NPCDeathSchema,
+		GraveSchema,
+		GraveHighlightSchema,
+		GraveEpitaphSchema,
+
+
+		# -------------------------------------------------
+		# 06. Item
 		# -------------------------------------------------
 
 		ItemSchema,
 
 
 		# -------------------------------------------------
-		# 06. Inventory / Storage
+		# 07. Inventory / Storage
 		# -------------------------------------------------
 
 		NPCInventorySchema,
@@ -121,14 +136,14 @@ static func initialize(db) -> bool:
 
 
 		# -------------------------------------------------
-		# 07. Relations
+		# 08. Relations
 		# -------------------------------------------------
 
 		NPCRelationsSchema,
 
 
 		# -------------------------------------------------
-		# 08. Economy
+		# 09. Economy
 		# -------------------------------------------------
 
 		NPCWalletSchema,
