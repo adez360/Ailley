@@ -16,13 +16,12 @@ updated: 2026-08-13
 內容層切點見 [[talk 動作設計]]，任務結構見 [[行程佇列與任務仲裁]]，
 角色狀態來源見 [[Character 基底與 Agent]]。
 
-## 現況：兩條並存的線，定位不同
+## 現況：只有一條線
 
-| | 正式出貨線 | R&D 驗證線 |
-| --- | --- | --- |
-| 走哪個協定/服務 | `AIService`（`scripts/ai/ai_service.gd`）→ 最終是 Godot ↔ Sidecar（`llama-server`） | `village_sim_client.gd` 等 → `poc_village_sim/server.py`（本機 Python，不在這個 git repo） |
-| 做到哪 | Step 0-3 全部完成：底層、`conversation.gd` 非同步對話（issue #82）、`agent.gd` 任務池＋仲裁器（issue #71）、決策迴圈（issue #88，`llm_decision_enabled` 開關） | Transport、讀真實狀態、執行動作/說話、玩家靠近自動觸發、`physiology_override`、通用動作提示，全部完成且驗證過 |
-| 玩家最終會不會玩到 | 會，這是拍板的出貨方向 | **不會**，純粹用來快速驗證 prompt/決策邏輯，供 GDScript 重寫參考 |
+LLM 一律走 `AIService`（`scripts/ai/ai_service.gd`）→ Godot ↔ Sidecar
+（`llama-server`），不經任何 Python 中間層。Step 0-3 全部完成：底層、
+`conversation.gd` 非同步對話（issue #82）、`agent.gd` 任務池＋仲裁器（issue #71）、
+決策迴圈（issue #88，`llm_decision_enabled` 開關）。細節見下方「正式線實作順序」。
 
 > [!success] 架構決定：出貨不走 Python 後端
 > 三六零否決「隨遊戲出貨 Python 後端」：自架中繼伺服器已被否決過（AI 呼叫要跑在
@@ -31,20 +30,17 @@ updated: 2026-08-13
 > 程式一行不用改，想用 Python 的人自己架一層換網址就好。
 >
 > **結論：Python 後端是玩家自己的選擇，不是專案出貨的架構決定。** 正式方向是
-> **Godot（`HTTPRequest`）↔ Sidecar（`llama-server`）**，不經 Python 中間層；
-> `poc_village_sim` 定位是 R&D／驗證用途，繼續開發但要保留 HTTP 接口給 Godot 端。
+> **Godot（`HTTPRequest`）↔ Sidecar（`llama-server`）**，不經 Python 中間層。
 
 > [!warning] 2026-08-12：GDScript 決策邏輯重寫由使用者負責
-> 正式線的 Step 0-3（底層、對話、任務池仲裁器、決策迴圈）都已完成，**身分
-> 對照系統仍是缺口**——`llm_decision_enabled` 開啟後 Agent 會自己問 LLM
-> 該做什麼，但跟 R&D 線一樣，把 `poc_village_sim` 那套已驗證過的決策邏輯
-> （門檻判斷、人格影響）搬進 GDScript 的 prompt/schema 設計，是**使用者自己
-> 要寫的東西**，不是這幾個 issue 的範圍。
+> Step 0-3（底層、對話、任務池仲裁器、決策迴圈）都已完成，**身分對照系統
+> 仍是缺口**——`llm_decision_enabled` 開啟後 Agent 會自己問 LLM 該做什麼，
+> 但把 `poc_village_sim` 驗證過的那套決策邏輯（門檻判斷、人格影響）搬進
+> GDScript 的 prompt/schema 設計，是**使用者自己要寫的東西**，
+> 不是這幾個 issue 的範圍。
 >
-> 身分對照系統的缺口是兩條線共同的洞：這條 R&D 線用的
-> `VillageSimLocale.GODOT_NAME_TO_POC_ID` 也是寫死的 demo 對照，不是正式方案；
-> issue #69（`character_id`／`character_name` 固定指派，見下方）補的是
-> Character 基底層的身分基礎，兩條線都用得上，不是白做。
+> 身分對照的缺口在 Character 基底層：issue #69（`character_id`／`character_name`
+> 固定指派）補的就是這塊，正式線的決策迴圈用得上。
 
 ## 已拍板
 
@@ -87,7 +83,7 @@ WebSocket 在本專案有位置，但是**另一條線**：
 | `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers` 與全域的速率限制三個旋鈕 |
 | `ai_service.gd` | **正式線唯一碰網路的地方**。autoload。節點池、佇列、逾時、速率限制、重試 |
 | `ai_schema.gd` | 回應驗證：`JSON.parse_string` → null 檢查 → 逐欄位型別檢查 → `action` 白名單 |
-| `prompt_builder.gd` | 由 Character 組出請求信封（尚未實作） |
+| `prompt_builder.gd` | 由 Character 組出請求信封。dialogue 信封已實作，plan 還沒 |
 
 `data/personas.json` — 人格資料，Agent 以 `@export var persona_id` 指定（尚未實作）。
 
@@ -126,8 +122,7 @@ llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key
 > 查表——角色未來是動態生成丟進世界的（#73），查表的前提「固定節點名」不成立。
 >
 > 但**掛在哪裡要等真正的讀取端出現才決定**。會讀它的是一條走 `AIService` 的
-> Agent 決策迴圈，那個還沒實作（見上面「現況」）；唯一沾得上邊的
-> `VillageSimDecision` 是 R&D 測試線，而且 #86 要移除它。在那之前先加一個
+> Agent 決策迴圈，那個還沒實作（見上面「現況」）。在那之前先加一個
 > `@export`，只會在 Inspector 長出一個填了沒作用的開關，而且等真的要接的時候
 > 多半發現該掛的是生成設定或 persona 資料，不是每隻 Agent 一個欄位。
 
@@ -148,29 +143,10 @@ llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key
 > 的是 `base_url`／`model` 空白，不是金鑰：範例檔給的 `sk-or-v1-REPLACE_ME`
 > 本來就非空。
 
-### `scripts/ai/`（R&D 驗證線，已完成，見下方詳細章節）
+## JSON 信封
 
-| 檔案 | 職責 |
-| --- | --- |
-| `village_sim_client.gd` | 打 `poc_village_sim/server.py` 的純 HTTP client，跟 `AIService` 完全獨立 |
-| `village_sim_decision.gd` | `decide()`（組真實狀態問一次，不執行動作）＋ `apply()`（套用到角色） |
-| `village_sim_locale.gd` | Godot 地點/角色名 ↔ poc 中文地點/id 的有限對照表 |
-
-### 未來要改的既有檔案（正式線，尚未動工）
-
-| 檔案 | 改動 |
-| --- | --- |
-| `conversation.gd` | 同步 → 非同步（pending 狀態、「…」氣泡、失敗回退）；`_speak()` 目前用字串長度算計時器，非同步 LLM 塞不進去，這段一定要動 |
-| `agent.gd` | cron → 任務池＋仲裁器；接受 LLM push 的 Task，見 [[行程佇列與任務仲裁]] |
-| `character.gd` | 加 `signal spoke(line: String)` |
-| `chat_input.gd` | 玩家在對話中打字 → 文字送進對話上下文 |
-| `dialogue_lines.gd` | **保留不刪**，降級為 fallback（逾時/未設金鑰/驗證失敗時要有保底台詞） |
-| `debug_console.gd` | 新增 `tasks` 指令 |
-| `project.godot` | 新增 autoload 走 `autoload_manage`，不手改 |
-
-## JSON 信封（正式線設計，尚未實作）
-
-對話與行程**共用同一個信封**，用 `type` 區分。
+對話與行程**共用同一個信封**，用 `type` 區分。dialogue 那半邊已經實作
+（`PromptBuilder.build_dialogue_envelope()`），plan 還沒。
 
 ### 請求
 
@@ -287,8 +263,6 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 
 ## 正式線實作順序（Step 0-3 全部完成）
 
-前置：先把工作區未提交的東西分開 commit，從乾淨基準開工。
-
 ### Step 0 — 底層 ✅ 完成
 
 `ai_config.gd`／`ai_service.gd`／`ai_schema.gd`／`data/ai_config.example.json`，
@@ -311,20 +285,21 @@ autoload 已註冊，主控台加了 `ai` 指令。
 **尚未執行期驗證**：這些是在沒有 Godot 執行檔的環境做的，只做過靜態檢查，
 合併前要補：`project_run` → `ai` ×2 → `ai dialogue` ×2 → `logs_read`。
 
-### Step 1 — 對話（issue #82，已完成）
+### Step 1 — 對話 ✅ 完成
 
-`prompt_builder.gd` 的 dialogue 信封、`Character.next_line()` 覆寫介面、
-`conversation.gd` 改非同步單一協程推進所有輪次、`character.gd` 加
-`signal spoke(line)`、`chat_input.gd` 對話中打字送進上下文。拿掉
-`MAX_TURNS`，改由 LLM 回應的 `end` 欄位決定收尾，保留 `SAFETY_MAX_TURNS`
-（40）當工程安全閥。
+`PromptBuilder.build_dialogue_envelope()` 組信封，`Agent.next_line()` 打
+`AIService`，`conversation.gd` 改成非同步、等台詞時掛「…」氣泡、拿不到就退回
+`DialogueLines`。`MAX_TURNS` 換成 `SAFETY_MAX_TURNS`（純保險，收尾由 `end` 欄位決定），
+`character.gd` 有 `signal spoke`，玩家在對話中打的字也送得進上下文。
 
-### Step 2 — 任務池與仲裁器（issue #71，已完成，純重構不接 LLM）
+開場白仍然是模板句：對話由 `DialogueLines.opening()` 起頭，第二輪才進 LLM。
 
-完全照 [[行程佇列與任務仲裁]] 實作，改動全在 `agent.gd`。刻意不含 LLM，
-這樣行為若有回歸，責任歸屬明確——是重構寫錯，還是 LLM 給了爛任務。
+### Step 2 — 任務池與仲裁器 ✅ 完成
 
-### Step 3 — LLM 填行程（issue #88，已完成）
+照 [[行程佇列與任務仲裁]] 實作，改動全在 `agent.gd`，刻意不含 LLM。
+`tasks` 指令印得出池子與分數拆項。
+
+### Step 3 — LLM 填行程 ✅ 完成（issue #88）
 
 1. `prompt_builder.gd` 的 plan 信封（`build_plan_envelope()`），沿用
    `_self_block()`，`context` 帶 `visible`（`Vision.get_visible_characters()`）
@@ -385,62 +360,24 @@ JSON Schema → GBNF 的轉換器。
 
 ---
 
-# R&D 驗證線：poc_village_sim 串接
+# poc_village_sim 驗證留下來的結論
 
-`village_sim_client.gd`／`village_sim_decision.gd`／`village_sim_locale.gd`，
-全部已完成並驗證過（headless + 編輯器實測）。用途是快速驗證「AI 接進 Godot 後
-可以呼叫、決策、驅動看得到的行動」這條資料流，供之後 GDScript 重寫參考——
-**不是玩家實際會玩到的路徑**（見上方「現況」表格）。
+`poc_village_sim` 是本機的獨立 Python 專案，不在這個 repo、不是出貨架構，
+Godot 端也沒有任何程式呼叫它。下面是驗證期間量到、**還在影響正式線決策**的幾件事。
 
-## 已完成的部分
+## Godot `Stats` ↔ poc `physiology`：維度與方向都不一樣
 
-- **Transport 層**：Godot 打得通 `poc_village_sim/server.py`，拿回合法決策 JSON
-- **讀真實狀態**：用 `Character.get_state_snapshot()` ＋ `Agent.current_place`
-  組出真實 payload，透過 `VillageSimLocale` 把 Godot 錨點名稱翻譯成 poc 中文地點
-- **動作與話語真的被執行**：`move_to` 真的移動、`speech` 真的呼叫 `character.say()`
-- **視野真的被讀取**：`character.vision.get_visible_characters()` 過濾成 poc id
-  塞進 `visible`（`GODOT_NAME_TO_POC_ID` 目前只認得 `agent`/`agent2` 兩隻 demo 角色）
-- **玩家靠近自動觸發**：`village_ai_enabled` 開啟時，`_on_spotted()` 偵測到玩家
-  就自動打一次決策，範圍限定單一角色（逐隻手動開，不是全體 Agent 一起開）
-- **`decide()`／`apply()` 分離**：`decide()` 純問答不執行動作，`apply()` 才套用
-  到角色，對齊「向下呼叫、向上發信號」的協作規範——副作用留在角色自己的路徑才好追蹤
-- **通用動作提示**：`action_en` 不是 `move_to` 時借用 `Bubble` 顯示
-  `［action_en：尚未實作，僅供除錯查看］`，未實作動作也看得到 AI 決定了什麼
-- **防呆**：視野清單會跳過跟自己同一個 poc 身分的條目（避免兩個 Godot 節點被
-  設成同一個 poc_character_id 時，AI 收到「看到自己」導致 `server.py` 500）
-
-## 重要限制：只證明管線通，不是決策內容對
-
-`village_ai_enabled` 這條路已經證明**機制可行**（真實狀態 → 翻譯 → 打模型 →
-執行動作/說話全部真的跑通），但決策內容本身有幾個已知落差：
-
-- `physiology_override` 已接上（見下表），但 `thirst`/`health`/`money`（Godot
-  無資料來源）與 `social`/`mood`（poc 無對應欄位）仍沿用 poc 角色檔案的預設值，
-  不是這隻 Godot 角色的真實狀態
-- `GODOT_NAME_TO_POC_ID` 是寫死的 2 條 demo 對照，不是正式的角色身分系統
-- `character_id`／`poc_character_id` 誰對應誰純靠操作者手動保證，程式不驗證
-- **決策準不準沒有系統性驗證**——只能肉眼看 `reasoning` 判斷合不合理
-- poc 動作白名單 38 種裡只有 `move_to`／說話真的執行，其餘因為 Godot 沒有
-  對應玩法機制（種田/戰鬥/買賣……），只借 Bubble 印出來
-- 玩家靠近觸發跟 `agent.gd` 既有的 cron 式行程表是**兩個獨立機制，會互相覆蓋**：
-  `apply()` 不會回寫 `current_place`，AI 移動後行程表不知道角色被動過，下次整點
-  觸發會把角色拉回行程表認定的地方，AI 自己也不知道上一步真的執行了什麼
-
-## `physiology_override` 欄位對照表
-
-Godot `Stats.SPEC` ↔ poc_village_sim `physiology`，維度跟方向都不一樣，
-決定不改 `poc_village_sim` 的資料方向（會牽動已驗證過的門檻邏輯跟 prompt
-樣板，而且未來 GDScript 版本不會沿用 poc 這套模型，對齊可能白做），
-改成在 Godot 端寫轉換，只送對得上的欄位：
+移植 poc 的門檻邏輯時要照這張表翻。兩邊的維度跟方向都不同，
+而且 poc 那套模型正式線不會沿用：
 
 | Godot `Stats.SPEC` | poc_village_sim `physiology` | 換算 |
 | --- | --- | --- |
 | `hunger`（100=飽→0=餓） | `hunger`（0=飽→100=餓） | **方向相反**：`poc_hunger = 100 - godot_hunger` |
 | `energy`（100=飽滿→0=沒力） | `stamina`（同方向） | 直接映射，不用轉 |
 | `fun`（100=不無聊→0=無聊） | `boredom`（方向相反） | **方向相反**：`poc_boredom = 100 - godot_fun` |
-| `social` | 無對應欄位 | poc 沒有獨立追蹤社交需求，不送 |
-| `mood` | 無對應欄位 | poc 的「情緒」是 AI 自己宣告的 `emotion`，不是 physiology 數值，不送 |
-| （無） | `thirst`／`health`／`money` | Godot `Stats.SPEC` 沒有這三項的資料來源，不送，沿用 poc 預設值 |
+| `social` | 無對應欄位 | poc 沒有獨立追蹤社交需求 |
+| `mood` | 無對應欄位 | poc 的「情緒」是 AI 自己宣告的 `emotion`，不是 physiology 數值 |
+| （無） | `thirst`／`health`／`money` | Godot `Stats.SPEC` 沒有這三項的資料來源 |
 
 > [!warning] 給之後寫正式 GDScript 版本的人（確認是使用者自己，見上方 2026-08-12 更新）
 > 如果那份重寫照抄了 poc_village_sim 已驗證過的門檻邏輯（`characters.py` 的
@@ -500,10 +437,10 @@ poc 輸出裡有、《06》沒提到的欄位：`reasoning`／`inner_monologue`�
 
 ## 延遲：實測 2.5-4 秒，體感層面的解法尚未實作
 
-編輯器實測 `village_ai_enabled` 自動觸發：玩家靠近到角色真的有反應，中間約
-2.5-4 秒（時間主要花在 llama-server 的 grammar 約束生成，不是網路或 Godot 端）。
+編輯器實測「玩家靠近就打一次決策」：從靠近到角色真的有反應中間約 2.5-4 秒
+（時間主要花在 llama-server 的 grammar 約束生成，不是網路或 Godot 端）。
 對「玩家靠近、期待即時反應」這種互動模式來說很明顯，玩家靠近後畫面上完全
-沒有回饋，3 秒後突然講話/移動。
+沒有回饋，3 秒後突然講話/移動。正式線接對話與行程時會碰到同一個數量級。
 
 **體感層面的解法（想法已記錄，尚未實作）**：觸發當下先給立即視覺回饋——氣泡
 顯示「…」思考中，或角色停下腳步做「在想事情」的小動作，等決策回來才換成
