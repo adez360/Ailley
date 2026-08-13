@@ -16,26 +16,47 @@ extends RefCounted
 ## 驗證順序固定：parse → null 檢查 → 型別檢查 → 白名單。
 ## 不可以因為「上一步看起來沒問題」就跳過下一步 —— 攻擊者控制的正是內容本身。
 ##
-## Step 0 只做骨架、白名單、以及把 provider 回應剝到 Dictionary 的通用路徑。
-## dialogue 的逐欄位驗證留給 Step 1，task 的留給 Step 3，介面已經在下面留好。
+## Step 0 做了骨架、白名單、以及把 provider 回應剝到 Dictionary 的通用路徑；
+## Step 1 補上 dialogue 的逐欄位驗證；Step 3（#88）補上 task 的逐欄位驗證、
+## reasoning/inner_monologue、單次回應筆數上限、跟送出去用的 JSON Schema。
 
-# §5.3 的動作白名單。不在這張表上的 action 一律拒絕 ——
-# 用白名單而不是黑名單，是因為黑名單漏掉的那一項就是被打穿的那一項
+# §5.3 的動作白名單，換成《07 地點與行動》《11 人際互動與社交行為》拍板後的
+# 22 個動作（issue #88）。不在這張表上的 action 一律拒絕 —— 用白名單而不是
+# 黑名單，是因為黑名單漏掉的那一項就是被打穿的那一項。
+#
+# 刻意不含 spec 沒有的 "work"：《07》《11》的 22 個動作裡沒有它，嚴格照 spec。
+# 這只影響 LLM 回應的驗證——schedule 來源的任務（npc_schedule.json 轉換）是
+# agent.gd 直接建構、不經過這裡，既有的 work 排程不受影響；影響的是 LLM 之後
+# 不能自己決定叫角色去打工，只有寫死在 npc_schedule.json 的排程能觸發 work。
+#
+# "move_to" 沿用既有命名，不改成 spec 用的 "move"——兩者語意完全一樣，只是
+# 命名不同，改名要動 agent.gd／debug_console.gd／api.md 好幾處引用，不值得
+# 為了對齊規格書用詞冒這個風險
 const ALLOWED_ACTIONS := [
-	"move_to", "interact", "pick_up", "drop", "use_item", "equip", "talk",
-	"attack", "farm", "chop", "mine", "sleep", "buy", "sell", "work",
+	# A 溝通類
+	"talk", "persuade", "give", "report", "shout", "perform",
+	# B 工作與消費類
+	"hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink",
+	# C 動作與移動類
+	"move_to", "sleep", "nap", "rest", "wash", "idle",
+	# D 敵對類
+	"steal", "attack",
 ]
 
 # 本輪真正有實作的動作。其餘動作驗證會過，但執行層要回 NOT_IMPLEMENTED，
 # 而不是在驗證層擋掉 —— 兩者是不同的失敗，混在一起 debug 時會分不清
 # work 與 buy 不在這裡：Character.work_at()／buy_from() 做出來了，但沒有任何
-# 執行層把一筆 {"action": "work"} 對應到一個 Workstation 實例（唯一的執行器
-# village_sim_decision.gd 只認得 move_to），而它們需要節點參照、
-# find_nearest_workstation()／find_nearest_vending_machine() 只看得到 32px。
+# 執行層把一筆 {"action": "work"} 對應到一個 Workstation 實例，而它們需要
+# 節點參照、find_nearest_workstation()／find_nearest_vending_machine() 只看得到 32px。
 # buy 還多缺一個「買哪個 item_id」的來源——目前只有玩家從 vending_menu 點得出來。
 # 列進來的話就變成「白名單宣稱做得到、實際靜默不做」，正是上面那段註解要避免的
-# 混淆。等執行層接得到再加
+# 混淆。等執行層接得到再加（talk 的動作執行留給 #90，其餘留給各自的 issue）
 const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep"]
+
+# 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
+# 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
+# 跨多次回應累積的防線，這裡管的是單次回應本身
+const MAX_TASKS_PER_RESPONSE := 5
 
 const ERROR_NOT_JSON := "not_json"
 const ERROR_NOT_OBJECT := "not_object"
@@ -133,13 +154,21 @@ static func validate_dialogue(data: Dictionary) -> Dictionary:
 
 
 # plan 回應的驗證。空陣列是合法的，意思是「不更新行程」。
-# Step 3 要在這裡加：params 的逐欄位型別、preconditions、expires_at、池子上限
+#
+# params 目前不逐欄位型別檢查——每個 action 的 params 形狀都不同（talk 對人、
+# eat 對地點、give 要 target+item），真的要嚴格 per-action schema 會讓這個
+# 函式暴增，v1 先只驗證 params 存在且是 Dictionary，逐欄位驗證留給
+# 各動作真的接執行層那個 issue 一起做
 static func validate_tasks(data: Dictionary) -> Dictionary:
 	if not data.has("tasks") or not data["tasks"] is Array:
 		return _fail(ERROR_BAD_SHAPE)
 
+	var raw_tasks := data["tasks"] as Array
+	if raw_tasks.size() > MAX_TASKS_PER_RESPONSE:
+		return _fail(ERROR_BAD_SHAPE)
+
 	var tasks: Array[Dictionary] = []
-	for item in data["tasks"] as Array:
+	for item in raw_tasks:
 		if not item is Dictionary:
 			return _fail(ERROR_BAD_SHAPE)
 
@@ -150,9 +179,99 @@ static func validate_tasks(data: Dictionary) -> Dictionary:
 		if not is_allowed_action(task["action"] as String):
 			return _fail(ERROR_ACTION_NOT_ALLOWED)
 
-		tasks.append(task)
+		if task.has("params") and not task["params"] is Dictionary:
+			return _fail(ERROR_BAD_SHAPE)
 
-	return _ok({"tasks": tasks})
+		if task.has("expires_at") and not (task["expires_at"] is int or task["expires_at"] is float):
+			return _fail(ERROR_BAD_SHAPE)
+
+		if task.has("duration") and not (task["duration"] is int or task["duration"] is float):
+			return _fail(ERROR_BAD_SHAPE)
+
+		if task.has("priority") and not (task["priority"] is int or task["priority"] is float):
+			return _fail(ERROR_BAD_SHAPE)
+
+		# 只複製驗證過的欄位，不是原封不動放行 task。plan_response_schema() 沒有
+		# additionalProperties: false，而且 supports_json_schema 關掉的 provider
+		# 根本收不到 schema——模型多回一個欄位是隨時可能發生的事，不是異常。
+		# 放行的話 window 是字串就會讓 agent.gd 的 _in_window(window: Dictionary)
+		# 型別不符當掉，interruptible 則等於讓模型自己宣告「不准搶我」，
+		# 兩個都是把仲裁器的控制權交給回應內容。白名單跟 schema 宣告的一致
+		tasks.append({
+			"action": task["action"],
+			"params": task.get("params", {}),
+			"priority": float(task.get("priority", 0.0)),
+			"duration": float(task.get("duration", 0.0)),
+			"expires_at": int(task.get("expires_at", 0)),
+		})
+
+	# reasoning／inner_monologue：跟 validate_dialogue() 的 line 同一種處理
+	# 方式——選填字串，型別錯就整包拒絕，超長截斷不拒絕；缺席時給空字串，
+	# 不是必填欄位（AI 停用時整個 request() 就已經在更早的階段失敗，走不到
+	# 這裡；但拍板：不能因為模型少回這兩個欄位就讓原本合法的 tasks 也一起作廢）
+	var reasoning: Variant = _validated_optional_line(data, "reasoning")
+	if reasoning == null:
+		return _fail(ERROR_BAD_SHAPE)
+
+	var inner_monologue: Variant = _validated_optional_line(data, "inner_monologue")
+	if inner_monologue == null:
+		return _fail(ERROR_BAD_SHAPE)
+
+	return _ok({
+		"tasks": tasks,
+		"reasoning": reasoning,
+		"inner_monologue": inner_monologue,
+	})
+
+
+# 選填字串欄位的共用驗證：缺席回空字串、型別錯回 null（呼叫端用 null 判斷失敗，
+# 因為合法值本身可以是空字串，不能拿空字串當失敗信號）、超長截斷不拒絕。
+# validate_dialogue() 的 line 沒有共用這個，因為它是必填且不可為空，跟這裡
+# 「可以不存在、可以是空字串」的語意不一樣，硬共用只會讓兩邊的條件互相繞
+static func _validated_optional_line(data: Dictionary, key: String) -> Variant:
+	if not data.has(key):
+		return ""
+	if not data[key] is String:
+		return null
+	var text: String = (data[key] as String).strip_edges()
+	if text.length() > MAX_LINE_CHARS:
+		text = text.substr(0, MAX_LINE_CHARS)
+	return text
+
+
+# response_format 用的 JSON Schema。跟 validate_tasks() 驗證的形狀對齊，
+# 一個地方維護兩者一致——schema 改了就會同時影響送出去的約束跟收回來的驗證，
+# 不會漏改其中一邊
+static func plan_response_schema() -> Dictionary:
+	return {
+		"type": "json_schema",
+		"json_schema": {
+			"name": "plan_response",
+			"schema": {
+				"type": "object",
+				"properties": {
+					"reasoning": {"type": "string"},
+					"inner_monologue": {"type": "string"},
+					"tasks": {
+						"type": "array",
+						"maxItems": MAX_TASKS_PER_RESPONSE,
+						"items": {
+							"type": "object",
+							"properties": {
+								"action": {"type": "string", "enum": ALLOWED_ACTIONS},
+								"params": {"type": "object"},
+								"priority": {"type": "number"},
+								"duration": {"type": "number"},
+								"expires_at": {"type": "number"},
+							},
+							"required": ["action"],
+						},
+					},
+				},
+				"required": ["tasks"],
+			},
+		},
+	}
 
 
 static func is_allowed_action(action: String) -> bool:
