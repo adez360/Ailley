@@ -109,9 +109,27 @@ func _ready() -> void:
 	_reevaluate()
 
 # 一趟移動有結論了：走到了，或 _check_stuck() 判定走不動而放棄。
-# 兩種都代表「這個地點不必再起步一次」，_pursue_current_task() 靠它收斂
+# 兩種都代表「這個地點不必再起步一次」，_pursue_current_task() 靠它收斂。
+#
+# move_finished 不是只有仲裁器自己會觸發——debug 主控台的 goto 類指令、
+# R&D 線的 village_sim_decision.gd 都會繞過仲裁器直接呼叫 character.move_to()，
+# 完成時一樣會發這個訊號。只有這次完成的目標剛好是仲裁器自己現在要去的
+# 地方（current_place 對應的錨點座標），才算數；不是的話代表這次完成的
+# 是別人發的請求，不該影響仲裁器自己的追逐狀態
 func _on_move_finished(_reached: bool) -> void:
+	if not _is_own_pursuit_target(last_move_target):
+		return
 	_pursuit_done = true
+
+# 判斷某個世界座標是不是仲裁器目前追的那個地點——ARRIVE_DISTANCE 當容許誤差，
+# 跟 _has_arrived_at() 判定「站得夠近」用同一個標準
+func _is_own_pursuit_target(world_position: Vector2) -> bool:
+	if current_place.is_empty():
+		return false
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null or not anchors.has(current_place):
+		return false
+	return world_position.distance_to(anchors.resolve(current_place)) <= ARRIVE_DISTANCE
 
 # 先問資料檔這隻角色被指派了哪份行程，沒有指派才用場景裡的 @export 後備值。
 # 順序不能反過來：@export 一定有值（agent.tscn 的預設），反過來的話 assignments 永遠不生效
