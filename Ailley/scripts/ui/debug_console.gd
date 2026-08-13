@@ -33,6 +33,8 @@ func _ready() -> void:
 		"money": {"run": _cmd_money, "usage": "money <amount>", "help": "HELP_MONEY"},
 		"ai": {"run": _cmd_ai, "usage": "ai [dialogue] [@provider] [text]", "help": "HELP_AI"},
 		"locale": {"run": _cmd_locale, "usage": "locale [code]", "help": "HELP_LOCALE"},
+		# help 留空：先不進 locale/console.csv，避免動到翻譯資源匯入（這台機器上
+		# 曾經卡住），純 debug 用途，之後真的要收進正式指令表再補翻譯
 		"tasks": {"run": _cmd_tasks, "usage": "tasks <name>", "help": ""},
 		"help": {"run": _cmd_help, "usage": "help", "help": ""},
 		"clear": {"run": _cmd_clear, "usage": "clear", "help": "HELP_CLEAR"},
