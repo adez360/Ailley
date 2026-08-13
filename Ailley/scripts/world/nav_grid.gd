@@ -31,15 +31,19 @@ func _ready() -> void:
 	# 改成連續兩次掃到同樣的 solid_count 才停：地形填完後計數會穩定下來，
 	# 靜態物件從頭到尾都算在計數裡，不需要另外區分來源。
 	var previous_solid := -1
+	var stabilized := false
 	for attempt in BUILD_ATTEMPTS:
 		await get_tree().physics_frame
 		rebuild()
-		if solid_count == previous_solid:
+		if tile_map != null and solid_count == previous_solid:
+			stabilized = true
 			break
 		previous_solid = solid_count
 
-	built = true
-	grid_built.emit()
+	# 只有在 tile_map 存在且計數穩定時才視為建置成功
+	if stabilized:
+		built = true
+		grid_built.emit()
 
 # 角色本身也是碰撞體，掃格時要排除，否則玩家腳下那格會被當成障礙
 func _actor_body_rids() -> Array[RID]:
