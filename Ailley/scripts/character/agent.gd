@@ -59,20 +59,6 @@ var _current_task: Dictionary = {}
 ## 給 MIN_COMMIT 判斷用
 var _current_task_started_at := 0
 
-## 這隻 Agent 的 AI 呼叫要打去哪個具名 provider（見 AIConfig，例如
-## "local"／"openrouter"）。空字串就用設定檔的 default_provider。
-##
-## 刻意做成角色身上的屬性，不查表——這是「角色被丟進世界那一刻決定用
-## 哪個服務」的介面，動態生成系統（issue #73）做出來之後，生成流程直接
-## 把這個屬性設到剛生成的角色上即可，這個欄位跟它的用法都不用改。
-##
-## **目前沒有任何程式讀這個欄位。** Agent 唯一會觸發 AI 的路徑是
-## `_trigger_village_ai()`，它走 `VillageSimDecision`（poc_village_sim），
-## 不經過 `AIService.request()`；會傳 provider 的只有 debug 主控台的
-## `ai @<provider>`。等 Agent 真的有一條走 `AIService` 的決策路徑，
-## 那條路徑把這個值傳下去就會生效——在那之前，在 Inspector 填它不會有效果
-@export var ai_provider := ""
-
 var current_place := ""
 var current_state := "idle"
 

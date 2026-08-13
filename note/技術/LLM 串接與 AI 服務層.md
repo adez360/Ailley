@@ -116,15 +116,19 @@ llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key
 **不逐 provider**：那是角色的成本控管，算在 `requester_id` 上，同一隻角色不管
 打本地還雲端用的是同一份額度。
 
-哪個角色用哪個 provider 是**角色自己的屬性**（`Agent.ai_provider`），不是查表。
-角色未來是動態生成丟進世界的（見 [[行程佇列與任務仲裁]] 提到的 #73），
-查表的前提「固定節點名」不成立。
+「誰該用哪個 provider」不在 `AIConfig` 裡，是呼叫端用
+`AIService.request()` 的 `provider_name` 參數帶進來的。目前唯一會指名的呼叫端
+是 debug 主控台的 `ai @<provider>`。
 
-> [!warning] `Agent.ai_provider` 目前沒有讀取端
-> Agent 唯一會觸發 AI 的路徑是 `_trigger_village_ai()`，它走 R&D 線的
-> `VillageSimDecision`，不經過 `AIService.request()`。會傳 provider 的只有
-> debug 主控台的 `ai @<provider>`。等 Agent 真的有一條走 `AIService` 的決策
-> 路徑，那條路徑把這個值傳下去就會生效——在那之前，在 Inspector 填它沒有效果。
+> [!note] 「每個角色固定用哪個 provider」還沒有實作，是刻意的
+> 方向已經想清楚：那應該是**角色自己的屬性**，不是一張「節點名 → provider」的
+> 查表——角色未來是動態生成丟進世界的（#73），查表的前提「固定節點名」不成立。
+>
+> 但**掛在哪裡要等真正的讀取端出現才決定**。會讀它的是一條走 `AIService` 的
+> Agent 決策迴圈，那個還沒實作（見上面「現況」）；唯一沾得上邊的
+> `VillageSimDecision` 是 R&D 測試線，而且 #86 要移除它。在那之前先加一個
+> `@export`，只會在 Inspector 長出一個填了沒作用的開關，而且等真的要接的時候
+> 多半發現該掛的是生成設定或 persona 資料，不是每隻 Agent 一個欄位。
 
 > [!important] 一個 provider 壞掉不該連累其他的
 > `enabled` 只回答「設定檔結構完整、至少有一個 provider」，**不管

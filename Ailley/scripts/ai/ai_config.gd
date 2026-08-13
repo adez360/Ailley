@@ -5,9 +5,10 @@ extends RefCounted
 ## `res://data/ai_config.example.json`。
 ##
 ## 支援多個具名 provider 同時存在（例如 `"local"` 打本機 `llama-server`、
-## `"openrouter"` 打雲端），可以同時併用——不同角色各自固定用哪一個是
-## **角色自己的屬性**（`Agent.ai_provider`），不是這裡決定的：這個檔案只
-## 回答「provider 叫這個名字時，連線資訊是什麼」，不管「誰該用哪個」。
+## `"openrouter"` 打雲端），可以同時併用。這個檔案只回答「provider 叫這個
+## 名字時，連線資訊是什麼」，**不管「誰該用哪個」**——那是呼叫端的事，
+## 由 `AIService.request()` 的 `provider_name` 參數帶進來。目前唯一會指名的
+## 呼叫端是 debug 主控台的 `ai @<provider>`。
 ##
 ## 之所以放 user:// 而不是 res://：Linux 下 user:// 是
 ## ~/.local/share/godot/app_userdata/<專案名>/，本來就在 repo 之外，
