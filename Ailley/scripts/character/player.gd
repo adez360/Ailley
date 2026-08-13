@@ -60,28 +60,21 @@ func _unhandled_input(event: InputEvent) -> void:
 		leave_conversation()
 		return
 
-	# 附近的可互動物件（工作站、販賣機）與可搭話的人，三邊都先找出來。
-	# 全部對玩家都是靜默失敗，沒有回饋 UI；但失敗原因會印成 warning
+	# 附近的可互動物件（工作站、販賣機）與可搭話的人，三邊都先找出來，誰近誰
+	# 先試——但「近」先被「有沒有面向它」篩過一輪，見 _get_interact_candidates()
+	# 的說明。全部對玩家都是靜默失敗，沒有回饋 UI；但失敗原因會印成 warning
 	# （跟 character.gd 的 _check_stuck() 同一種寫法），方便開發時對著
 	# 編輯器 Output/Debugger 面板看，不用另外開主控台查
-	var workstation := find_nearest_workstation()
-	var machine := find_nearest_vending_machine()
-	var other := find_nearest_character()
-
-	# 誰近誰先試。**不能無條件讓世界物件優先**——桌子與販賣機都是擺在世界裡的
-	# 固定物件，很容易落在某個地點錨點的互動半徑內（`square` 那張距錨點
-	# 23px < WORK_RANGE 32），而 agent 的行程正好把大家帶去那些錨點。
-	# 物件永遠優先的話，那個點上的搭話等於死掉。不在範圍內的候選距離是 INF，
-	# 直接輸掉比較，不用另外再寫一層 null 判斷
-	var pos := get_body_position()
-	var to_work: float = pos.distance_to(workstation.global_position) if workstation != null else INF
-	var to_machine: float = pos.distance_to(machine.global_position) if machine != null else INF
-	var to_other: float = pos.distance_to(other.get_body_position()) if other != null else INF
+	var candidates := _get_interact_candidates()
+	var workstation: Workstation = candidates["workstation"]
+	var machine: VendingMachine = candidates["machine"]
+	var other: Character = candidates["other"]
 
 	# 失敗要往下掉到搭話，不是直接 return。工作站被別人佔用（WORK_OCCUPIED）
 	# 或自己正在工作（WORK_BUSY）時直接 return 的話，E 整個沒反應 ——
 	# 玩家連站在眼前那個正在工作的人都搭不了話
-	if workstation != null and to_work <= to_machine and to_work <= to_other:
+	if workstation != null and candidates["to_work"] <= candidates["to_machine"] \
+			and candidates["to_work"] <= candidates["to_other"]:
 		var work_reason := work_at(workstation)
 		if work_reason == WORK_OK:
 			return
@@ -89,13 +82,134 @@ func _unhandled_input(event: InputEvent) -> void:
 	# 販賣機不是立刻執行動作，是開商品選單——真正的購買發生在
 	# vending_menu.gd 裡點下某一項的時候。vending_menu 理論上一定找得到
 	# （場景裡固定掛著），這裡多防一手是避免場景漏掛的話直接炸掉
-	elif machine != null and to_machine <= to_other and vending_menu != null:
+	elif machine != null and candidates["to_machine"] <= candidates["to_other"] and vending_menu != null:
 		vending_menu.open(machine, self)
 		return
 
 	var talk_reason := talk_to(other)
 	if talk_reason != TALK_OK:
 		push_warning("%s: talk_to 失敗（%s）" % [character_name, talk_reason])
+
+# 面向判定的錐角容許值：跟面向方向的內積要 >= 這個值才算「面對著」。
+# 0.5 大約是 ±60 度的錐角——夠寬容得下斜向靠近的誤差，又不會寬到整個
+# 半圓都算數（那樣就跟沒篩選一樣）
+const FACING_DOT_THRESHOLD := 0.5
+
+# 沒被面向的候選要加多少距離懲罰，才能保證面向著的候選一定贏。
+# 場景裡任何互動距離（TALK_RANGE/WORK_RANGE/BUY_RANGE）都是 32px，
+# 這個值只要遠大於場景尺寸就夠，不需要精算
+const UNFACED_DISTANCE_PENALTY := 10000.0
+
+# target 是不是落在玩家目前面向的方向上。target 就在腳下（距離 0，理論上
+# 不會發生，但除以零要擋）視為面向著，避免這種邊界情況把候選判掉
+func _is_facing(target: Vector2) -> bool:
+	var to_target := target - get_body_position()
+	if to_target == Vector2.ZERO:
+		return true
+	return get_facing_direction().dot(to_target.normalized()) >= FACING_DOT_THRESHOLD
+
+# 給互動優先序比較用的「有效距離」：面向著就是原始距離，沒面向就加懲罰值，
+# 讓「有沒有被面向」變成比較時的第一層篩選，見呼叫端的說明
+func _priority_distance(target: Vector2) -> float:
+	var distance := get_body_position().distance_to(target)
+	return distance if _is_facing(target) else distance + UNFACED_DISTANCE_PENALTY
+
+## 找出目前附近的三種互動候選（工作站／販賣機／可搭話的人）跟各自的優先序
+## 分數。`_unhandled_input()`（按 E 真的觸發）跟 `_process()`（每幀更新高亮）
+## 共用這個函式——兩邊要看到同一個答案，不然會出現「亮的是這個，按下去卻
+## 打到另一個」的狀況，比原本沒有高亮更誤導人。
+##
+## 純比距離會撞到 issue #81：桌子與販賣機都是擺在世界裡的固定物件，很容易
+## 落在某個地點錨點的互動半徑內（`square` 那張距錨點 21px < WORK_RANGE 32），
+## agent 的行程又正好把 NPC 帶去那些錨點，NPC 幾乎必然比物件更近，物件因此
+## 永遠打不到。改成先比「有沒有面向它」（見 _priority_distance()），距離只在
+## 同樣有沒有被面向的候選之間才決勝負；都沒人被面向時（例如玩家側身站在
+## 中間，沒有明確對著誰）大家一起加懲罰值，排序不變，自然退回純比距離那套
+## ——這是刻意保留的保底，不然一般搭話情境會被這次改動連坐弄壞。
+##
+## 這套判斷沒有做成套用任何「可互動物件」共通分類的通用系統，是延續 #63
+## 的決定，不是這次漏做——見 note/技術/販賣機.md：「不做一套通用的互動物件
+## 框架，兩個物件不值得先蓋一層抽象」，Workstation／VendingMachine 本來就是
+## 兩個獨立腳本、沒有共用基底
+func _get_interact_candidates() -> Dictionary:
+	var workstation := find_nearest_workstation()
+	var machine := find_nearest_vending_machine()
+	var other := find_nearest_character()
+
+	# 不在範圍內的候選距離是 INF，直接輸掉比較，不用另外再寫一層 null 判斷
+	return {
+		"workstation": workstation,
+		"machine": machine,
+		"other": other,
+		"to_work": _priority_distance(workstation.global_position) if workstation != null else INF,
+		"to_machine": _priority_distance(machine.global_position) if machine != null else INF,
+		"to_other": _priority_distance(other.get_body_position()) if other != null else INF,
+	}
+
+# 每幀重算一次「E 現在會打到誰」並更新高亮，跟 selection.gd::_update_hover()
+# 同一種寫法——目標沒變就不重複呼叫 set_highlighted()。對話中不顯示任何
+# 互動高亮：這時候按 E 是離開對話，不是觸發工作站/販賣機/搭話
+var _highlighted_workstation: Workstation = null
+var _highlighted_machine: VendingMachine = null
+var _highlighted_other: Character = null
+
+func _process(_delta: float) -> void:
+	if is_in_conversation():
+		_set_highlighted_workstation(null)
+		_set_highlighted_machine(null)
+		_set_highlighted_other(null)
+		return
+
+	var candidates := _get_interact_candidates()
+	var workstation: Workstation = candidates["workstation"]
+	var machine: VendingMachine = candidates["machine"]
+	var other: Character = candidates["other"]
+
+	var target_workstation: Workstation = null
+	var target_machine: VendingMachine = null
+	var target_other: Character = null
+
+	# 跟 _unhandled_input() 判斷「E 會打到誰」用同一套優先序，只是不含失敗
+	# 重試那段——重試只在真的按下 E、真的失敗時才有意義，高亮只回答
+	# 「等一下按下去會先試誰」
+	if workstation != null and candidates["to_work"] <= candidates["to_machine"] \
+			and candidates["to_work"] <= candidates["to_other"]:
+		target_workstation = workstation
+	elif machine != null and candidates["to_machine"] <= candidates["to_other"]:
+		target_machine = machine
+	elif other != null:
+		target_other = other
+
+	_set_highlighted_workstation(target_workstation)
+	_set_highlighted_machine(target_machine)
+	_set_highlighted_other(target_other)
+
+func _set_highlighted_workstation(target: Workstation) -> void:
+	if target == _highlighted_workstation:
+		return
+	if is_instance_valid(_highlighted_workstation):
+		_highlighted_workstation.set_highlighted(false)
+	_highlighted_workstation = target
+	if _highlighted_workstation != null:
+		_highlighted_workstation.set_highlighted(true)
+
+func _set_highlighted_machine(target: VendingMachine) -> void:
+	if target == _highlighted_machine:
+		return
+	if is_instance_valid(_highlighted_machine):
+		_highlighted_machine.set_highlighted(false)
+	_highlighted_machine = target
+	if _highlighted_machine != null:
+		_highlighted_machine.set_highlighted(true)
+
+func _set_highlighted_other(target: Character) -> void:
+	if target == _highlighted_other:
+		return
+	if is_instance_valid(_highlighted_other):
+		_highlighted_other.set_highlighted(false)
+	_highlighted_other = target
+	if _highlighted_other != null:
+		_highlighted_other.set_highlighted(true)
 
 # 讀取 WASD 輸入，回傳正規化後的方向（斜向不會加速）
 func get_input_direction() -> Vector2:

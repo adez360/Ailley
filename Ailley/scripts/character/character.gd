@@ -85,6 +85,19 @@ const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader
 # 最後一次的面向：front / back / right，停下時用來挑 idle 動畫
 var facing := "front"
 
+# 把 facing／sprite.flip_h 重建成單位向量，給互動優先序這類「候選是不是在我
+# 正對著的方向上」的判斷用（見 player.gd 的 _is_facing()）。跟
+# update_animation()／face_towards() 寫入這兩個欄位時用的方向對稱：
+# front=下、back=上、right 依 flip_h 分左右
+func get_facing_direction() -> Vector2:
+	match facing:
+		"back":
+			return Vector2.UP
+		"right":
+			return Vector2.LEFT if sprite.flip_h else Vector2.RIGHT
+		_:
+			return Vector2.DOWN
+
 var _path := PackedVector2Array()
 var _path_index := 0
 var _stuck_timer := 0.0
