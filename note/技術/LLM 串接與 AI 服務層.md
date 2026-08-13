@@ -33,7 +33,17 @@ updated: 2026-08-12
 > **結論：Python 後端是玩家自己的選擇，不是專案出貨的架構決定。** 正式方向是
 > **Godot（`HTTPRequest`）↔ Sidecar（`llama-server`）**，不經 Python 中間層；
 > `poc_village_sim` 定位是 R&D／驗證用途，繼續開發但要保留 HTTP 接口給 Godot 端。
-> 核果正在研究把決策邏輯（grammar 組建等）直接用 GDScript 重寫。
+
+> [!warning] 2026-08-12：GDScript 決策邏輯重寫由使用者負責
+> 正式線現況：**決策迴圈還未實作**（目前只有仲裁器的殼，對應
+> [[行程佇列與任務仲裁]] 的 Step 2）、**身分對照系統尚未**、**雙向對話尚未**
+> （對應 Step 1）。把 `poc_village_sim` 決策邏輯搬進 GDScript、接上仲裁器，
+> 是**使用者自己要寫的東西**。
+>
+> 身分對照系統的缺口是兩條線共同的洞：這條 R&D 線用的
+> `VillageSimLocale.GODOT_NAME_TO_POC_ID` 也是寫死的 demo 對照，不是正式方案；
+> issue #69（`character_id`／`character_name` 固定指派，見下方）補的是
+> Character 基底層的身分基礎，兩條線都用得上，不是白做。
 
 ## 已拍板
 
@@ -356,7 +366,7 @@ Godot `Stats.SPEC` ↔ poc_village_sim `physiology`，維度跟方向都不一�
 | `mood` | 無對應欄位 | poc 的「情緒」是 AI 自己宣告的 `emotion`，不是 physiology 數值，不送 |
 | （無） | `thirst`／`health`／`money` | Godot `Stats.SPEC` 沒有這三項的資料來源，不送，沿用 poc 預設值 |
 
-> [!warning] 給之後寫正式 GDScript 版本的人（可能是核果，也可能是使用者自己）
+> [!warning] 給之後寫正式 GDScript 版本的人（確認是使用者自己，見上方 2026-08-12 更新）
 > 如果那份重寫照抄了 poc_village_sim 已驗證過的門檻邏輯（`characters.py` 的
 > `_tier_adjective`、`if hunger >= 90` 這類具體數字），**移植的當下方向要反過來
 > 翻**——poc 的 `hunger >= 90`「快撐不住」，翻成 Godot 自己的方向要變成
