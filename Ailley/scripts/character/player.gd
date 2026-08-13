@@ -4,16 +4,37 @@ extends Character
 ## 對話中依然吃得到方向鍵 —— 走遠了由 conversation.gd 的距離判定自然散場，
 ## 不需要另外做「離開對話」的操作。
 
-## chat_input.gd 在玩家對話中打字送出時發這個訊號，next_line() 等它。
+## chat_input.gd 在玩家對話中打字送出時發這個訊號。
 ## 不直接讓 chat_input.gd 呼叫 conversation 物件——玩家不知道、也不該知道
 ## 自己現在是不是在跟一場 Conversation 物件對話，只知道「我打字、我的角色講話」，
 ## 這個訊號是 Character 介面本來就有的東西（spoke 訊號同一種精神）
 signal line_submitted(text: String)
 
+## 玩家這一輪有結果了：打字送出（ok=true），或這一輪被取消（ok=false，
+## 走遠散場／按 E 離開）。
+##
+## `next_line()` 等的是這個而**不是**直接等 `line_submitted`：後者只在玩家真的
+## 打字時才發，玩家還沒打字就離開對話的話那個 await 永遠不會回來，
+## `conversation.gd` 的 `_run()` 就永遠停在那裡——而它是唯一能安全釋放
+## Conversation 節點的地方（見該檔 `_finish()` 的說明），節點因此永遠留在場景樹上
+signal turn_resolved(text: String, ok: bool)
+
 
 func _ready() -> void:
 	super()
 	add_to_group("player")
+	line_submitted.connect(_on_line_submitted)
+
+# 打字是「這一輪有結果了」的其中一種來源，另一種是對話結束（見 exit_conversation()）。
+# 兩者收斂成同一個訊號，next_line() 才只要等一個東西
+func _on_line_submitted(text: String) -> void:
+	turn_resolved.emit(text, true)
+
+# 對話結束時取消還在等打字的那一輪。conversation.gd 的 _finish() 一定會對雙方
+# 呼叫這個函式，所以不管是走遠散場、按 E 離開、還是對方結束，都會走到這裡
+func exit_conversation() -> void:
+	super()
+	turn_resolved.emit("", false)
 
 # 用 _unhandled_input 而不是 _input：debug 主控台的輸入框拿到焦點時
 # 打字不該觸發搭話
@@ -99,9 +120,14 @@ func _decide_velocity() -> Vector2:
 
 	return super()
 
-# 玩家的下一句話就是玩家打的字，等 chat_input.gd 送出 line_submitted。
+# 玩家的下一句話就是玩家打的字。等 turn_resolved 而不是 line_submitted——
+# 這個 await 一定要有辦法在「玩家沒打字就離開對話」時收場，理由見 turn_resolved
+# 的宣告。ok=false 代表這一輪被取消，呼叫端（conversation.gd 的 _run()）緊接著
+# 的 _bail_if_finished() 會看到 _finished 已經是 true 並釋放節點，不會走到
+# fallback，也不會把空字串當台詞講出去。
+#
 # 沒有 end 這個概念——玩家不是靠一個結構化欄位收尾，是靠實際走開或
 # leave_conversation()（_unhandled_input 的 interact 分支），所以這裡固定 false
 func next_line(_listener: Character, _turns: Array[Dictionary], _max_turns: int) -> Dictionary:
-	var text: String = await line_submitted
-	return {"ok": true, "line": text, "end": false}
+	var resolved: Array = await turn_resolved
+	return {"ok": resolved[1], "line": resolved[0], "end": false}
