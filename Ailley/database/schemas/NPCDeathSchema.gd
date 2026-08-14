@@ -1,3 +1,5 @@
+# 規格尚未定案，欄位可能異動
+
 class_name NPCDeathSchema
 extends RefCounted
 

@@ -10,7 +10,7 @@
 [ext_resource type="PackedScene" uid="uid://cyrnw30ddh16r" path="res://scenes/debug_console.tscn" id="6_pl1ev"]
 [ext_resource type="Script" uid="uid://uf54btbn8mry" path="res://scripts/ui/debug_overlay.gd" id="7_hkfri"]
 [ext_resource type="PackedScene" uid="uid://q38st5oy2nj" path="res://scenes/chat_input.tscn" id="8_nnngi"]
-[ext_resource type="Script" uid="uid://ytd7qh6vh57r" path="res://scripts/world/selection.gd" id="10_trceg"]
+[ext_resource type="Script" path="res://scripts/world/selection.gd" id="10_trceg"]
 [ext_resource type="Script" uid="uid://dm8733qx3w3uk" path="res://scripts/ui/time_label.gd" id="11_7bo0c"]
 [ext_resource type="Script" uid="uid://bnxsowwm2cpvd" path="res://scripts/world/places.gd" id="12_sc7p8"]
 

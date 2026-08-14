@@ -11,27 +11,31 @@ static func create(db) -> bool:
 
 		npc_id TEXT NOT NULL,
 
+		text TEXT DEFAULT '',
+
 		-- 行程起始時間，用tick計算
-		start_time INTEGER NOT NULL DEFAULT 0
+--		start_time INTEGER NOT NULL DEFAULT 0
+--			CHECK (
+--				start_time BETWEEN 0 AND 1439
+--			),
+
+--		action TEXT NOT NULL DEFAULT '',
+
+--		location_id TEXT,
+
+--		優先權
+--		priority INTEGER NOT NULL DEFAULT 50
+--			CHECK (
+--				priority BETWEEN 0 AND 100
+--			),
+
+		-- 是否完成
+		is_done INTEGER NOT NULL DEFAULT 0
 			CHECK (
-				start_time BETWEEN 0 AND 1439
+				is_done IN (0, 1)
 			),
 
-		action TEXT NOT NULL DEFAULT '',
 
-		location_id TEXT,
-
-		priority INTEGER NOT NULL DEFAULT 50
-			CHECK (
-				priority BETWEEN 0 AND 100
-			),
-
-		is_flexible INTEGER NOT NULL DEFAULT 1
-			CHECK (
-				is_flexible IN (0, 1)
-			),
-
-		description TEXT DEFAULT '',
 
 		created_at TEXT NOT NULL
 			DEFAULT CURRENT_TIMESTAMP,
@@ -41,11 +45,11 @@ static func create(db) -> bool:
 
 		FOREIGN KEY (npc_id)
 			REFERENCES npc(npc_id)
-			ON DELETE CASCADE,
+			ON DELETE CASCADE
 
-		FOREIGN KEY (location_id)
-			REFERENCES location(location_id)
-			ON DELETE SET NULL
+--		FOREIGN KEY (location_id)
+--			REFERENCES location(location_id)
+--			ON DELETE SET NULL
 	);
 
 	CREATE INDEX IF NOT EXISTS
