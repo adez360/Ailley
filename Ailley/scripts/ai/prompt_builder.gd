@@ -94,6 +94,7 @@ static func _self_block(character: Character) -> Dictionary:
 		"id": snapshot["id"],
 		"name": snapshot["name"],
 		"stats": snapshot.get("stats", {}),
+		"reputation": snapshot.get("reputation", 0),
 		"time": {"hour": GameClock.hour, "minute": GameClock.minute},
 		"place": schedule.get("place", ""),
 		"current_action": schedule.get("state", ""),

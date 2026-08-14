@@ -169,7 +169,7 @@ get_state_snapshot() -> {
 † reputation 是 Character 自己的欄位不是元件，snapshot 一定帶著它——
   不像 stats/money/affinity 要 has() 判斷有沒有掛對應元件
 † 增減來源（偷竊被目擊……）與商店拒絕交易還沒實作，見 99 待規劃 P-05；
-  目前只有 debug 主控台的 reputation 指令會寫它
+  目前遊戲內操作入口是 debug 主控台的 reputation 指令
 → 技術/Character 基底與 Agent · 技術/滑鼠選取與鏡頭 · 技術/聽覺感測
 ```
 
