@@ -107,6 +107,8 @@ func add_trust(other_id: String, delta: float) -> float:
 	return record["trust"]
 
 func add_familiarity(other_id: String, delta: float) -> float:
+	if delta < 0.0:
+		return get_familiarity(other_id)
 	var record := _ensure_record(other_id)
 	record["familiarity"] = clampf(record["familiarity"] + delta, FAMILIARITY_MIN, FAMILIARITY_MAX)
 	return record["familiarity"]
