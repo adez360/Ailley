@@ -1,0 +1,22 @@
+{
+	"templates": [
+		{
+			"template_id": "tpl_001",
+			"character_name": "艾莉",
+			"system_prompt": "",
+			"words_to_creator": ""
+		},
+		{
+			"template_id": "tpl_002",
+			"character_name": "小海",
+			"system_prompt": "",
+			"words_to_creator": ""
+		},
+		{
+			"template_id": "tpl_003",
+			"character_name": "阿東",
+			"system_prompt": "",
+			"words_to_creator": ""
+		}
+	]
+}
