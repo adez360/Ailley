@@ -72,6 +72,20 @@ const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader
 ## 留空就沿用節點名 —— 不能退回 character_id，那是一串沒人讀得懂的 UUID
 @export var character_name := ""
 
+const REPUTATION_MIN := -100
+const REPUTATION_MAX := 100
+
+## 整村對這個角色的公共名聲，不是對單一人的好感（那是 relationships.gd 的 affinity）。
+## 規格《01_角色數值規格書》3-2：int，-100~100，預設 0，是客觀事實會注入 prompt。
+## 用 setter 保證任何寫入（包含存檔讀回、debug 指令）都會被夾在範圍內，
+## 不必要求每個呼叫端自己 clamp 一次 —— 跟 Vision.radius_tiles 是同一個理由
+##
+## 商店拒絕交易、名聲增減的實際來源（偷竊被目擊、被舉報……）不在這裡做——
+## 那是《99 待規劃項目清單》P-05 待拍板的數值，issue #110 只做欄位本身
+@export var reputation: int = 0:
+	set(value):
+		reputation = clampi(value, REPUTATION_MIN, REPUTATION_MAX)
+
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
 @onready var stats: Stats = get_node_or_null("Stats")
@@ -447,6 +461,15 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 	return BUY_OK
 
 
+# ---- 名聲 ----
+
+## 增減公共名聲，回傳夾限後的新值。跟 relationships.gd 的 add_affinity() 同一種
+## 形狀——呼叫端不用自己 clamp，也不用另外呼叫一次 get 才知道結果
+func add_reputation(delta: int) -> int:
+	reputation += delta
+	return reputation
+
+
 # ---- 狀態快照 ----
 
 # 純資料的角色狀態，不含任何翻譯字串或 BBCode。debug_console.gd 的 status
@@ -469,6 +492,7 @@ func get_state_snapshot() -> Dictionary:
 		"animation": sprite.animation,
 		"in_conversation": is_in_conversation(),
 		"working": is_working(),
+		"reputation": reputation,
 	}
 
 	if stats != null:

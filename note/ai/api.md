@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-13
+updated: 2026-08-14
 ---
 
 # api
@@ -94,6 +94,8 @@ const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 
 @export var character_id := ""               # 唯一身分，留空→生成 UUID v4（正常路徑）
 @export var character_name := ""             # 顯示名，可改可撞，留空→節點名小寫
+@export var reputation: int = 0              # 公共名聲，setter 內建 clampi(-100,100)
+func add_reputation(delta: int) -> int        # 回夾限後的新值，同 Relationships.add_affinity() 的形狀
 static func generate_id() -> String           # RFC 4122 v4，不帶語意，別解析它
 var facing := "front"                        # front|back|right
 
@@ -138,7 +140,7 @@ func _decide_velocity() -> Vector2           # 子類覆寫點：這一幀往哪
 
 ```text
 get_state_snapshot() -> {
-  id, name, position, moving, facing, animation, in_conversation, working,  # 一定有
+  id, name, position, moving, facing, animation, in_conversation, working, reputation,  # 一定有
   stats: {key: value, ...},                     # 有掛 Stats 才有，key 是 SPEC 的 key
   money: int,                                   # 有掛 Inventory 才有；背包內容不進快照
   affinity: {other_id: {affinity, met_count}, ...}, # 有記錄的人才有，欄名同 relationships
@@ -164,6 +166,10 @@ get_state_snapshot() -> {
 † affinity 的欄名跟 relationships.gd 的 record 一致，不要改名成 value
   同一個數值兩個名字，讀過 relationships.gd 的人會在 snapshot 上找不到它
 † make_noise() 不查視線遮蔽，聲音穿牆，跟 Vision 刻意不同
+† reputation 是 Character 自己的欄位不是元件，snapshot 一定帶著它——
+  不像 stats/money/affinity 要 has() 判斷有沒有掛對應元件
+† 增減來源（偷竊被目擊……）與商店拒絕交易還沒實作，見 99 待規劃 P-05；
+  目前只有 debug 主控台的 reputation 指令會寫它
 → 技術/Character 基底與 Agent · 技術/滑鼠選取與鏡頭 · 技術/聽覺感測
 ```
 
@@ -791,6 +797,7 @@ pos                      玩家座標與所在格
 nav rebuild              重建尋徑網格
 inv [name]               列出背包；inv give <item_id> [count] 塞測試物品給玩家
 money <amount>           改玩家的錢；正數走 add_money()，負數走 spend()。查詢看 status
+reputation [name] <amount>   改角色的公共名聲（省略角色名=玩家自己），走 add_reputation()。查詢看 status
 ai [dialogue] [@provider] [文字]   對 LLM 打一次測試請求；dialogue 走對話 policy
 locale [code]            看目前語系／切換（zh_TW / en）
 tasks <name>             印那隻 Agent 的候選任務池：分數拆項、在不在窗內、哪筆執行中

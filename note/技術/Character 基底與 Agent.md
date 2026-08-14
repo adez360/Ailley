@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-13
+updated: 2026-08-14
 ---
 
 # Character 基底與 Agent
@@ -166,6 +166,22 @@ override `get_state_snapshot()`、`super()` 之後補上去，**不是**基底�
 會在快照上找不到它。取值走 `get_affinity()` / `get_met_count()` 這兩個純量
 accessor，不用 `get_record()`：後者每筆都 `duplicate(true)` 深拷一份，
 只為了讀兩個數字。
+
+## 名聲 `reputation` 是 Character 自己的欄位，不是元件
+
+跟 `stats`／`relationships` 不同，`reputation` 不掛成子節點元件，直接是
+`Character` 基底自己的 `@export var reputation: int = 0`——setter 內建
+`clampi(-100, 100)`，任何寫入（debug 指令、之後的存檔讀回、事件掛鉤）都保證
+夾在範圍內，不必每個呼叫端自己 clamp。`add_reputation(delta)` 回傳夾限後的
+新值，跟 `relationships.gd` 的 `add_affinity()` 是同一種形狀。也因為是基底
+自己的欄位而不是選掛元件，`get_state_snapshot()` 一定帶著它，不像
+`stats`／`money`／`affinity` 要用 `has()` 判斷。
+
+目前唯一的讀寫入口是 debug 主控台的 `reputation [name] <amount>` 指令與
+`status` 的顯示欄位。規格《01》3-2 列的實際增減來源（偷竊被目擊、被舉報、
+公開表演……）跟商店拒絕交易的判定邏輯都還沒實作——來源數值本身待拍板
+（見《99 待規劃項目清單》P-05），而目擊偷竊要掛的 `steal`／`attack` 動作
+也還沒有執行層（`AISchema.IMPLEMENTED_ACTIONS` 沒有它們），沒有事件可接。
 
 ## 碰撞分層
 

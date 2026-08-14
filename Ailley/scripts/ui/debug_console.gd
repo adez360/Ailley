@@ -31,6 +31,7 @@ func _ready() -> void:
 		"nav": {"run": _cmd_nav, "usage": "nav rebuild", "help": "HELP_NAV"},
 		"inv": {"run": _cmd_inv, "usage": "inv [name] / inv give <item_id> [count]", "help": "HELP_INV"},
 		"money": {"run": _cmd_money, "usage": "money <amount>", "help": "HELP_MONEY"},
+		"reputation": {"run": _cmd_reputation, "usage": "reputation [name] <amount>", "help": "HELP_REPUTATION"},
 		"ai": {"run": _cmd_ai, "usage": "ai [dialogue] [@provider] [text]", "help": "HELP_AI"},
 		"locale": {"run": _cmd_locale, "usage": "locale [code]", "help": "HELP_LOCALE"},
 		# help 留空：先不進 locale/console.csv，避免動到翻譯資源匯入（這台機器上
@@ -302,6 +303,10 @@ func _cmd_status(args: PackedStringArray) -> void:
 		"facing": snapshot["facing"], "anim": snapshot["animation"]
 	}))
 
+	# 一律有，不像 stats/money/affinity 要看有沒有掛對應元件 —— reputation 是
+	# Character 基底自己的欄位
+	_field("CON_FIELD_REPUTATION", "%d" % snapshot["reputation"])
+
 	# 兩個欄位共用同一個字串 key。原本是 CON_TALK_ACTIVE 與 CON_WORK_ACTIVE
 	# 兩個一字不差的條目——那種必須永遠一致的重複，翻譯者改了其中一個就會不同步
 	if snapshot["in_conversation"]:
@@ -572,6 +577,41 @@ func _cmd_money(args: PackedStringArray) -> void:
 
 	_print(L10n.tf("CON_MONEY_OK", {
 		"name": player.character_name, "money": player.inventory.get_money()
+	}))
+
+# reputation <amount>           改玩家自己
+# reputation <name> <amount>    改指定角色 —— 名聲是公共數值，任何角色都有，
+#                                跟只有玩家能測的 money（要背包）不是同一種限制
+#
+# 沒有查詢用法：名聲已經在 status 的輸出裡。加減都走同一個入口——
+# add_reputation() 內部用 clampi 保證不出界，不需要像 money 那樣分兩條路
+func _cmd_reputation(args: PackedStringArray) -> void:
+	if args.is_empty() or args.size() > 2:
+		_error(L10n.t("CON_USAGE_REPUTATION"))
+		return
+
+	var character: Character
+	var amount_token: String
+
+	if args.size() == 1:
+		character = _get_player()
+		amount_token = args[0]
+	else:
+		character = _get_character(args[0])
+		amount_token = args[1]
+
+	if character == null:
+		return
+
+	# is_valid_int() 對 "0" 成立，但 0 不是合法異動，要自己擋（跟 money 一樣）
+	if not amount_token.is_valid_int() or amount_token.to_int() == 0:
+		_error(L10n.t("CON_USAGE_REPUTATION"))
+		return
+
+	character.add_reputation(amount_token.to_int())
+
+	_print(L10n.tf("CON_REPUTATION_OK", {
+		"name": character.character_name, "reputation": character.reputation
 	}))
 
 # 主控台自己算一個呼叫方，用固定 id 才吃得到 AIService 的速率限制 ——
