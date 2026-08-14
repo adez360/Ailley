@@ -29,8 +29,8 @@ static func create(db) -> bool:
 			CHECK (intensity BETWEEN 0 AND 100),
 
 		-- 起因事件
-		cause_event_id TEXT NOT NULL,
-		
+		cause_event_id TEXT,
+
 		-- 剩餘 tick，每 tick 減 1
 		duration_left  INTEGER NOT NULL DEFAULT 0
 			CHECK (duration_left >= 0),
@@ -40,7 +40,11 @@ static func create(db) -> bool:
 
 		FOREIGN KEY (npc_id)
 			REFERENCES npc(npc_id)
-			ON DELETE CASCADE
+			ON DELETE CASCADE,
+
+		FOREIGN KEY (cause_event_id)
+			REFERENCES event_memory(event_id)
+			ON DELETE SET NULL
 	);
 	"""
 

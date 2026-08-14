@@ -78,7 +78,20 @@ func select(
 	if not _require_ready():
 		return []
 
-	return db.select_rows(table, conditions, columns)
+	var cols := ", ".join(columns) if columns.size() > 0 else "*"
+	var sql := "SELECT %s FROM %s" % [cols, table]
+
+	if not conditions.is_empty():
+		sql += " WHERE %s" % conditions
+
+	if not db.query_with_bindings(sql, []):
+		push_error(
+			"[Database] SELECT FROM %s failed: %s"
+			% [table, db.error_message]
+		)
+		return []
+
+	return db.query_result
 
 
 func insert(table: String, data: Dictionary) -> bool:

@@ -33,11 +33,13 @@ static func create(db) -> bool:
 		-- 成功時必須為 NULL
 		action_reason TEXT
 			CHECK (
-				(is_success = 0 AND action_reason IS NOT NULL AND action_reason <> '')
-				OR
-				(is_success = 1 AND action_reason IS NULL)
-				OR
-				(is_success IS NULL AND action_reason IS NULL)
+				CASE
+					WHEN is_success = 0 AND action_reason IS NOT NULL AND action_reason <> '' THEN 1
+					WHEN is_success = 1 AND action_reason IS NULL THEN 1
+					WHEN is_success IS NULL AND action_reason IS NULL THEN 1
+					WHEN is_success IS NULL AND action_reason IS NOT NULL AND action_reason <> '' THEN 0
+					ELSE 0
+				END = 1
 			),
 
 		created_at TEXT NOT NULL

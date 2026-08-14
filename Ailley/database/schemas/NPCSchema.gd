@@ -9,11 +9,13 @@ static func create(db) -> bool:
 		-- 角色 ID
 		npc_id TEXT PRIMARY KEY,
 		-- 姓名 <= 12
-		name TEXT NOT NULL,
+		name TEXT NOT NULL
+			CHECK (LENGTH(name) <= 12),
 		-- 年齡
 		age INTEGER NOT NULL DEFAULT 18,
 		-- 性別 male/female/other
-		gender TEXT NOT NULL DEFAULT 'other',
+		gender TEXT NOT NULL DEFAULT 'other'
+			CHECK (gender IN ('male', 'female', 'other')),
 		-- 所屬村莊
 		village_id TEXT NOT NULL DEFAULT 'default_village',
 		-- 角色特色 自由文本
