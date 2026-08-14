@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/dialogue/conversation.gd
 status: 進行中
-updated: 2026-08-07
+updated: 2026-08-14
 ---
 
 # talk 動作設計
@@ -79,8 +79,9 @@ updated: 2026-08-07
 
 好感度是「關係」而不是「數值」，所以獨立成 `Relationships`，
 key 用對方的 `character_id` 而不是 name —— name 會改，用它當 key 等於改名即失憶。
-每筆存成 Dictionary 而不是單一浮點數，之後加熟悉度、最後見面時間、印象標籤
-都不用改結構。
+每筆存成 Dictionary 而不是單一浮點數：欄位是 `affinity`／`trust`／`familiarity`／
+`debt`／`met_count` 五項（規格《01》3-1），之後要加最後見面時間、印象標籤
+也一樣不用改結構。
 
 > [!important] 查詢不可以建立紀錄
 > `Relationships` 的讀寫是分開的：`get_affinity()` / `get_record()` / `has_met()`
@@ -152,6 +153,7 @@ Enter 開啟／送出，Esc 取消，送出後呼叫 `player.say()`，走的是�
 
 - **Agent 對 Agent**：`talk <a> <b>` 指令可以觸發，但「誰先開口、誰決定結束」
   的規則要等 LLM 版一起做，見 [[LLM 串接與 AI 服務層]]
+
 - 搭話失敗對玩家是靜默的（沒有回饋 UI），只有主控台印得出原因碼
 - 兩個氣泡同時顯示會互相遮擋（`z_index` 相同）。真實對話是輪流講，很少同時出現
 - 記憶寫入 —— 記憶系統還沒做，目前只留掛勾

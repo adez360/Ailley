@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-10
+updated: 2026-08-14
 ---
 
 # api
@@ -12,14 +12,14 @@ AI 專用。所有 GDScript 的公開介面，密集格式，**不寫散文**。
 
 註記語法：`†` 呼叫時必知的約束　`⚠` 踩過的坑　`→` 詳見哪則筆記
 
-```
+```text
 env  Godot 4.5.1-stable · gl_compatibility · default_texture_filter=0
      viewport 480x270 · tile 16px · 一遊戲日=24 現實分鐘(08:00 起)
 ```
 
 ## autoload
 
-```
+```text
 GameManager   scripts/core/game_manager.gd
 GameClock     scripts/core/GameClock.gd
 AIService     scripts/ai/ai_service.gd
@@ -28,16 +28,17 @@ _mcp_game_helper  addons/godot_ai/runtime/game_helper.gd   † 勿移除
 
 ## groups
 
-```
+```text
 characters   全部 Character        nav_grid       NavGrid
 player       玩家                  place_anchors  main.tscn 的 Node2D/PlaceAnchors
 agents       全部 Agent            debug_overlay  DebugOverlay
 selection    Selection             follow_camera  FollowCamera
+workstations 全部 Workstation
 ```
 
 ## collision layers
 
-```
+```text
 1 terrain    地形 TileSet physics_layer_0      layer=1  mask=—
 2 character  Player/Agent                      layer=2  mask=1
              Vision (Area2D)                   layer=0  mask=2
@@ -47,7 +48,7 @@ selection    Selection             follow_camera  FollowCamera
 
 ## scenes
 
-```
+```text
 scenes/main.tscn          Node          run/main_scene
 scenes/player.tscn        Player        CharacterBody2D
 scenes/agent.tscn         Agent         CharacterBody2D
@@ -60,11 +61,13 @@ assets/shaders/character_outline.gdshader   hover 描邊
 
 ## input actions
 
-```
+```text
 move_up/down/left/right  WASD
 interact                 E
+make_noise               F
 chat                     Enter / KpEnter
 select                   滑鼠左鍵
+ui_cancel                Esc（Godot 內建，project.godot 沒有覆寫）
 ```
 
 ---
@@ -73,11 +76,14 @@ select                   滑鼠左鍵
 
 ```gdscript
 signal move_finished(reached: bool)          # 走完 true / 卡住放棄 false
+signal noise_heard(source: Character)        # 收到方會發，見 make_noise()
+signal spoke(line: String)                   # 講出任何一句話都會發（逐字稿/記憶的接點）
 
 const SPEED = 80.0
 const ARRIVE_DISTANCE = 2.0
 const STUCK_TIME = 1.0
 const TALK_RANGE := 32.0                     # 2 格
+const NOISE_RADIUS := 128.0                  # 8 格，make_noise() 的預設半徑
 
 const TALK_OK := ""                          # 以下為 talk_to() 回傳值
 const TALK_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
@@ -90,9 +96,10 @@ const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 @export var character_name := ""             # 顯示名，可改可撞，留空→節點名小寫
 static func generate_id() -> String           # RFC 4122 v4，不帶語意，別解析它
 var facing := "front"                        # front|back|right
+func get_facing_direction() -> Vector2       # facing/sprite.flip_h 重建成單位向量
 
 # 元件（子節點，皆 get_node_or_null，沒掛不會壞）
-stats: Stats · relationships: Relationships · bubble: Node2D · vision: Vision
+stats: Stats · relationships: Relationships · bubble: Node2D · vision: Vision · inventory: Inventory
 
 func move_to(target: Vector2) -> bool        # A*；無路徑 false
 func stop_moving() -> void
@@ -100,27 +107,45 @@ func is_moving() -> bool
 func get_path_points() -> PackedVector2Array
 func get_body_position() -> Vector2          # 碰撞圓心
 
+const WORK_RANGE := 32.0                     # 同 TALK_RANGE
+const WORK_OK/WORK_TARGET_NOT_FOUND/WORK_TOO_FAR/WORK_OCCUPIED/WORK_BUSY
+const WORK_DURATION_MINUTES := 5 · WORK_PAYMENT := 50
+func work_at(workstation: Workstation) -> String   # WORK_OK 或原因碼；只代表卡位成功
+func find_nearest_workstation() -> Workstation     # WORK_RANGE 內最近；無→null
+func is_working() -> bool
+func _on_work_finished() -> void             # 子類覆寫點；Agent 用它重算行程
+
 func talk_to(other: Character) -> String     # TALK_OK 或原因碼
 func find_nearest_character() -> Character   # TALK_RANGE 內最近；無→null
 func is_in_conversation() -> bool
-func is_interruptible() -> bool              # 基底恆 true，Agent 覆寫
+func is_interruptible() -> bool              # 基底 `not _working`；Agent 覆寫 super() and 任務 interruptible
 func enter_conversation(conversation: Node) -> void
 func exit_conversation() -> void
 func leave_conversation() -> void
-func say(line: String) -> void
+func say(line: String, interrupt := false) -> void   # interrupt=true 蓋掉現在這句
 func speech_duration(line: String) -> float
 func face_towards(other: Character) -> void
 func update_animation() -> void
+func make_noise(radius: float = NOISE_RADIUS) -> void   # 廣播 noise_heard 給範圍內每個角色
 
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
 func get_pick_rect() -> Rect2                # 目前影格的矩形，世界座標
 func set_highlighted(on: bool) -> void
 func is_highlighted() -> bool
 
+func get_state_snapshot() -> Dictionary       # 純資料，見下方
 func _decide_velocity() -> Vector2           # 子類覆寫點：這一幀往哪走
 ```
 
-```
+```text
+get_state_snapshot() -> {
+  id, name, position, moving, facing, animation, in_conversation, working,  # 一定有
+  stats: {key: value, ...},                     # 有掛 Stats 才有，key 是 SPEC 的 key
+  money: int,                                   # 有掛 Inventory 才有；背包內容不進快照
+  affinity: {other_id: {affinity, met_count}, ...}, # 有記錄的人才有，欄名同 relationships
+  schedule: {place, state, size},                # agent.gd override 補上，Player 沒有
+}
+
 † 尋徑一律 get_body_position()，不用 global_position
   CollisionShape2D 有 y 偏移(0,6)；用節點原點會把碰撞體塞進牆裡
 † move_to() 需場景有 nav_grid group，否則 push_error + false
@@ -133,44 +158,113 @@ func _decide_velocity() -> Vector2           # 子類覆寫點：這一幀往哪
 ⚠ set_highlighted 訂 frame_changed **與** animation_changed 兩個訊號
   換動畫時影格編號可能沒變（都是 0），只有後者會發 —— 少訂就會拿舊 region 描邊
   材質延遲建立，關掉時 material=null 並解除兩個連接
-→ 技術/Character 基底與 Agent · 技術/滑鼠選取與鏡頭
+† get_state_snapshot() 的 key/value 一律是識別字，不可以是翻譯過的字——
+  這批資料要進 LLM 的 prompt，不該隨玩家介面語系跑掉
+† schedule 由 agent.gd override get_state_snapshot()（super() 後補一段）加上，
+  不是基底用 is_in_group("agents") 嗅探 —— 子類別的欄位由子類別自己放
+† affinity 的欄名跟 relationships.gd 的 record 一致，不要改名成 value
+  同一個數值兩個名字，讀過 relationships.gd 的人會在 snapshot 上找不到它
+† make_noise() 不查視線遮蔽，聲音穿牆，跟 Vision 刻意不同
+→ 技術/Character 基底與 Agent · 技術/滑鼠選取與鏡頭 · 技術/聽覺感測
 ```
 
 ## Player — scripts/character/player.gd · extends Character
 
 ```gdscript
 func get_input_direction() -> Vector2        # WASD 正規化
+func get_facing_direction() -> Vector2       # Character 基底，facing/flip_h 重建方向向量
+func _get_interact_candidates() -> Dictionary  # {workstation, machine, other, to_work, to_machine, to_other}
 ```
 
-```
+```text
 輸入優先：一按方向鍵就 stop_moving() 中斷 A*
-interact(E)：對話中→leave_conversation()；否則→talk_to(find_nearest_character())
+販賣機選單開著時（vending_menu.is_open()）：interact(E) 整段跳過，事件原樣
+  往下傳給 vending_menu.gd 自己的 _unhandled_input 處理；_process() 清空
+  全部互動高亮並直接 return——選單不擋移動，這時候走位/轉向不該讓高亮亂跳
+interact(E)：對話中→leave_conversation()；否則呼叫 _get_interact_candidates()，
+  workstation/machine/other 三個候選比 to_* 分數，分數最低的先試。workstation
+  失敗（OCCUPIED/BUSY）只 push_warning，不會改試 machine，直接掉到
+  talk_to(other)；machine 成功只是開商品選單，不算「完成互動」
+_process()：每幀重算 _get_interact_candidates()，跟 E 會打到誰同一套判斷，
+  更新 Workstation/VendingMachine 的 Highlight 節點與 Character.set_interact_highlighted()
+  ——玩家即時看得到「E 現在會打到誰」（issue #81）
+make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不會冒 !?
 † gui_get_focus_owner() != null 時 get_input_direction() 回 ZERO
   Input.get_axis() 讀全域狀態，LineEdit 攔不住
+† 候選先被 _is_facing()（cone 判定）篩過一輪，沒被玩家面向的直接不算候選——
+  即使範圍內只有它一個、沒有別的候選能比，沒面向就是選不到。to_work/to_machine/
+  to_other 是通過面向篩選後剩下候選的原始距離
+⚠ 純比距離會讓工作站/販賣機永遠打不到——桌子/販賣機很容易落在地點錨點的
+  互動半徑內，agent 行程正好把人帶去那個錨點，NPC 幾乎必然比物件更近
+⚠ 面向判定不是萬能解，四個真實朝向裡仍有一組會選錯（見 [[工作站]]），
+  這是即時高亮存在的理由，不是純粹的裝飾
+⚠ work_at() 失敗必須往下掉到搭話，不能 return — 否則工作站被佔用時 E 完全沒反應
 搭話失敗對玩家靜默，只有主控台印原因碼
+→ 技術/工作站（E 鍵優先序與即時高亮）
 ```
 
 ## Agent — scripts/character/agent.gd · extends Character
 
+任務池＋仲裁器驅動（issue #71），非 cron。設計見 [[行程佇列與任務仲裁]]。
+
 ```gdscript
 @export var schedule_template := ""          # npc_schedule.json 的鍵，如 "npc001"
+@export var llm_decision_enabled := false    # 決策迴圈開關（issue #88），逐隻手動開
+
 const NOTICE_PAUSE := 2.0
+const SCHEDULE_BASE_PRIORITY := 10.0         # schedule 任務的 base 分數
+const TIME_BONUS := 100.0                    # 在 window 內加這麼多
+const HYSTERESIS := 5.0                      # 要贏現任務這麼多分才換
+const MIN_COMMIT := 2.0                      # 遊戲分鐘；做不滿就不讓非 reflex 任務搶
+const LLM_WAIT_MIN_COMMIT := 5.0             # 等待決策回覆期間蓋掉 MIN_COMMIT
+const MIN_ACTION_DURATION := 10.0            # llm 任務 duration 引擎端下限（遊戲分鐘）
+const LLM_TASK_POOL_CAP := 20                # 只算 source=="llm" 的筆數
 
-var schedule: Array
-var current_place: String
-var current_state: String
+var _tasks: Array[Dictionary]                # 候選池，schedule 開場建立一次，llm 用 _push_llm_tasks() 加
+var _current_task: Dictionary
+var current_place: String                    # 目前任務要去的地點
+var current_state: String                    # 目前任務的 action，沒任務是 "idle"
 
-func is_interruptible() -> bool              # 覆寫 current_state != "sleep"
-func exit_conversation() -> void             # 覆寫：講完重算行程
+func is_interruptible() -> bool              # 覆寫：super() and 目前任務的 interruptible
+func exit_conversation() -> void             # 覆寫：講完重算一次
+func next_line(listener, turns, max_turns) -> Dictionary   # 對話台詞，見下方
+func get_task_debug_info() -> Array[Dictionary]            # tasks 指令用
+func get_current_task_elapsed_minutes() -> int             # 目前任務做了幾遊戲分鐘
 ```
 
+```text
+Task 結構（_tasks 的元素，來源目前只有 schedule）
+{id, action, params:{place}, priority, window:{start,end}|null, duration,
+ interruptible, preconditions, source, created_at, expires_at, retries}
+  window 由下一筆的 time 推出，最後一筆繞回第一筆的 time
+  只有一筆的行程 → window = null（整天都做這件事，隨時可選）
+  action == "sleep" → interruptible = false
+
+仲裁：GameClock 每個遊戲分鐘重算一次，不維護「現在是第幾筆」
+  1 濾掉過期（expires_at）與不在 window 內的候選
+  2 score = priority + time_bonus + need_bonus + age_bonus，取最高分
+    time_bonus = 窗內 100 / 窗外 0；need_bonus 與 age_bonus 這一版恆為 0
+  3 不管換沒換，都再跑一次「往 current_place 前進」
+† 換任務要同時過三關：分數贏 HYSTERESIS、現任務 is_interruptible()、
+  現任務已做滿 MIN_COMMIT（source == "reflex" 豁免最後一關）
+† 三關只保護「還在自己 window 內」的現任務。窗口過了就該讓位——
+  否則 sleep（interruptible=false）會在窗口結束後卡死，永遠醒不過來
 ```
-_ready: await nav.grid_built 才出發（NavGrid 非同步建置，太早→空路徑）
-到點切換：只在 "%02d:%02d" 吻合的那一分鐘換目標
-開場套用「已經開始的最後一筆」，不空等到下一個整點
+
+```text
+_ready: await nav.grid_built 才出發（NavGrid 非同步建置，太早→空路徑）；
+  首次 _reevaluate() 後，llm_decision_enabled 且沒有 llm 任務時補一次決策請求
 地點解析：只認 place_anchors 底下的同名 Marker2D，沒有就 push_error 且不動
+  同一個地點只報一次錯（每遊戲分鐘跑一次，不擋的話一個 typo 洗掉整個面板）
+_reevaluate()（掛 GameClock.time_changed，一遊戲分鐘一次）：
+  1. llm_decision_enabled 時偵測目前 llm 任務是否做滿 duration，是則觸發下一次決策請求
+  2. 濾掉過期(_is_expired)／不在窗內的候選，算分取 best，_consider_switch() 決定要不要換
+  3. 不管換沒換都跑 _pursue_current_task()（對話中/工作中/_reacting 時不移動）
+_on_move_finished()：move_finished 是共用訊號（debug 主控台的 goto 也會發），
+  靠 last_move_target 比對是不是自己 current_place 的錨點才算數（issue #91）
 spotted 且 !relationships.has_met() → say("！") + stop_moving() + 2s + 重算行程
   _noticed 表確保每個對象只觸發一次
+noise_heard 且 !is_in_conversation() → say("!?")，無去重，每次都會反應
 ⚠ 抵達判定 = 距離 ≤ ARRIVE_DISTANCE(2px) OR 已在目標格內(16px)
   只比距離的話 2..11px 是死角：距離說沒到，find_path() 卻因同格只回一個點
   → move_to() false → 假的「走不到」。每次重算行程都會噴
@@ -178,7 +272,26 @@ spotted 且 !relationships.has_met() → say("！") + stop_moving() + 2s + 重�
 † assignments 的 key 是節點名不是 character_id（id 是 UUID，json 裡手寫不出來）
   查不到 → 退回 @export 並 push_warning（預設值 instance 共用，靜默退回會兩隻同行程）
   節點名只在同一層唯一，不同父節點下撞名 → push_error（兩隻會查到同一筆）
+† move_finished 要比對 last_move_target：debug 主控台的 goto 也會發同一個訊號，
+  照單全收會把別人的移動當成自己這趟的結論
+† Task 的 reasoning／inner_monologue（llm 來源才有）只印 console，決策準不準沒有系統性驗證
+→ 技術/行程佇列與任務仲裁
 ```
+
+```gdscript
+func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) -> Dictionary
+# 回 {"ok": true, "line": String, "end": bool} 或 {"ok": false}
+```
+
+```text
+先 say("…", true) 蓋掉現在的氣泡（送出請求前就顯示，冷卻/配額也算等待時間），
+再 PromptBuilder.build_dialogue_envelope() → AIService.request(envelope,
+character_id, Policy.CONVERSATION) → AISchema.parse_completion → validate_dialogue
+† requester_id 用 character_id 不是節點名：額度算在這隻角色頭上
+† ok=false 不分原因（未啟用/逾時/驗證失敗都一樣），呼叫端一律走 fallback
+→ 技術/LLM 串接與 AI 服務層
+```
+
 
 ## Stats — scripts/character/stats.gd · class_name · Node
 
@@ -197,7 +310,7 @@ func get_place_for_need(key) -> String
 func get_lowest_need_place() -> String
 ```
 
-```
+```text
 key      label  drift  toward  start  is_need  place
 hunger   飢餓    3.0    0       100    ✓        restaurant
 energy   精力    1.0    0       100    ✓        home_001
@@ -215,7 +328,10 @@ mood     心情    0.5    50      50     ✗        ""
 
 ```gdscript
 const AFFINITY_MIN := -100.0 · AFFINITY_MAX := 100.0
-const DEFAULT_RECORD := {"affinity": 0.0, "met_count": 0}
+const TRUST_MIN := 0.0 · TRUST_MAX := 100.0
+const FAMILIARITY_MIN := 0.0 · FAMILIARITY_MAX := 100.0
+const DEBT_MIN := -100.0 · DEBT_MAX := 100.0
+const DEFAULT_RECORD := {"affinity": 0.0, "trust": 20.0, "familiarity": 0.0, "debt": 0.0, "met_count": 0}
 var records := {}                            # other_id -> record
 
 # 唯讀 — 不會建立紀錄
@@ -223,21 +339,114 @@ func has_met(other_id) -> bool               # met_count > 0，只認 note_meeti
 func has_record(other_id) -> bool            # 有沒有任何紀錄（見過但沒講完 = true/false）
 func get_record(other_id) -> Dictionary      # 副本，改它不會動到內部
 func get_affinity(other_id) -> float         # 沒紀錄回 0.0
+func get_trust(other_id) -> float            # 沒紀錄回 20.0（不是 0——初識不是完全不信任）
+func get_familiarity(other_id) -> float      # 沒紀錄回 0.0
+func get_debt(other_id) -> float             # 沒紀錄回 0.0；正=我欠他，負=他欠我
 func get_met_count(other_id) -> int
 func known_ids() -> Array
 
-# 寫入 — 走私有的 _ensure_record()
-func add_affinity(other_id, delta) -> float  # 回夾限後的新值
+# 寫入 — 走私有的 _ensure_record()，四維都回夾限後的新值
+func add_affinity(other_id, delta) -> float
+func add_trust(other_id, delta) -> float
+func add_familiarity(other_id, delta) -> float
+func add_debt(other_id, delta) -> float
 func note_meeting(other_id) -> void          # has_met() 為真的唯一來源
 ```
 
-```
+```text
 † key 用 character_id 不用 character_name — name 可改，用它當 key = 改名即失憶
 † 每筆是 Dictionary 不是單一 float，加欄位時呼叫端不用改
 ⚠ 讀寫必須分開：get_affinity() 曾經走「沒有就當場建一筆」，於是 conversation.gd
   開場問一次好感度就讓 has_met() 永遠為真而 met_count 還是 0
   → agent.gd 的「第一次看到陌生人」永遠不成立
+† trust/familiarity/debt 範圍與預設值照規格《01》3-1 表定死，不是隨意選的
+  （trust 預設 20 尤其容易看錯，別跟其餘三維一樣當成 0）
+† 這四維實際被哪些行動讀寫（persuade 用 trust、give 影響 debt……）還沒接線，
+  見 99 待規劃；目前只有欄位本身、查詢與寫入函式
 → 技術/talk 動作設計
+```
+
+## Inventory — scripts/character/inventory.gd · class_name · Node
+
+```gdscript
+const HOTBAR_SIZE := 9 · MAIN_SIZE := 27 · SIZE := 36    # 0..8 快捷欄，9..35 主背包
+const STACK_DECAY_TOLERANCE := 10
+
+const ADD_OK := "" · ADD_NO_SPACE := "NO_SPACE" · ADD_INVALID_COUNT := "INVALID_COUNT"
+const REMOVE_OK := "" · REMOVE_NOT_FOUND := "NOT_FOUND" · REMOVE_INVALID_COUNT := "INVALID_COUNT"
+const DEFAULT_MONEY := 300                   # 規格書 01 §3-3
+const MONEY_OK := "" · MONEY_NOT_ENOUGH := "NOT_ENOUGH" · MONEY_INVALID_AMOUNT := "INVALID_AMOUNT"
+
+var slots: Array[Dictionary]                 # 每格 {item_id, count, decay, durability} 或 {}
+
+func get_slot(index) -> Dictionary            # 副本；越界回 {}
+func count_item(item_id) -> int
+func has_item(item_id, count := 1) -> bool
+func find_first_empty() -> int                # 無空格回 -1
+
+func add_item(item_id, count := 1, decay := 0, durability := -1) -> String
+func remove_item(item_id, count := 1) -> String
+func move_slot(from, to) -> bool              # 目的地需為空格，否則 false
+func swap_slot(a, b) -> bool                  # 交換兩個已佔用的格
+
+func get_selected_index() -> int
+func set_selected_index(index) -> void        # clamp 0..HOTBAR_SIZE-1
+
+func get_money() -> int                       # _money 是私有的，只能經由下面兩個函式異動
+func add_money(amount) -> String              # amount <= 0 回 MONEY_INVALID_AMOUNT
+func spend(amount) -> String                  # 餘額不足回 MONEY_NOT_ENOUGH，一毛都不扣
+
+func get_summary() -> Array[Dictionary]       # 不含空格，每筆補 slot 索引；給 AI payload 用
+```
+
+```text
+† durability 傳 -1（預設）= decay 類，嘗試疊進相容既有格；傳 >=0 = carry 類，一件佔一格不可疊
+  物品定義檔未做，呼叫端目前得自己講清楚是哪一種
+† add_item/remove_item 失敗是原子的 — 沒位置/數量不夠時不動任何格，不會半途占一部分
+† count 必須是正整數 — add/remove 對 <= 0 回 *_INVALID_COUNT，has_item(id, 0) 回 false
+  （不擋的話 count=0 會建出清不掉的空堆疊，carry 類那條路徑還會把整個背包填滿）
+† slots 在 _init() 就配置好 — Inventory.new() 出來還沒入樹也是合法容器
+† 快捷欄與主背包是同一個陣列，不是兩個容器 — 搬進/出快捷欄 = move_slot() 搬 index
+† 選格是資料層狀態（get/set_selected_index），不是 UI 狀態 — Agent 沒 UI 也要有「手上拿著什麼」
+† 金錢跟背包同一個元件 — 規格書 01 §3-3 把 money 與 inventory 都歸在 economy 底下
+† 收入與支出是兩個函式，不是 add_money(±n) — 合成一個就等於支出那條路沒有餘額檢查
+† spend() 失敗是原子的，跟 remove_item() 一致 — 呼叫端拿到原因碼就知道整筆沒發生，不必回滾
+⚠ durability=-1 是本實作的哨兵值，不在規格書 0–100 範圍內；物品定義檔進來後要對齊
+→ 技術/物品欄
+```
+
+## Workstation — scripts/world/workstation.gd · class_name · StaticBody2D
+
+```gdscript
+var occupant: Character                      # 目前佔用者，沒人是 null
+func is_occupied() -> bool                   # is_instance_valid(occupant)
+func try_occupy(character) -> bool           # 已被佔用回 false
+func release(character) -> void              # 只有目前佔用者叫得動
+func set_highlighted(on: bool) -> void       # 切換 Highlight（Line2D）節點的 visible
+```
+
+```text
+_ready 自動 add_to_group("workstations")
+† 自己不查距離 — 距離判定全在 Character.work_at() / find_nearest_workstation()
+† StaticBody2D + CollisionShape2D 是給 NavGrid 的（可走性是物理查詢量出來的），
+  互動判定完全不靠它，只是「桌子擋路」的副作用
+⚠ is_occupied() 必須用 is_instance_valid()，不能用 `occupant != null`
+  Godot 4 裡 freed 物件 `!= null` 仍成立 ⇒ 佔用者被移除後工作站永遠鎖死，
+  而 release() 比對的是已經不存在的角色、永遠清不掉。這也是角色工作到一半被 free 時
+  唯一會把位子放出來的地方 — 協程不會恢復，沒有人替它 release()
+→ 技術/工作站
+```
+
+## WorkProgress — scripts/ui/work_progress.gd · class_name · Node2D
+
+```gdscript
+func show_progress(ratio: float) -> void     # 0.0–1.0
+func hide_progress() -> void
+```
+
+```text
+† 掛在角色底下（跟 Bubble 同一種「頭上飄一塊 UI」），純顯示，
+  不知道工作站或計時器是什麼
 ```
 
 ## Vision — scripts/character/vision.gd · class_name · Area2D
@@ -258,7 +467,7 @@ func can_see(other: Character) -> bool
 func get_radius_pixels() -> float
 ```
 
-```
+```text
 † 只回報「看到誰」，反應行為在 agent.gd — 這條線 = 日後 LLM 的 context.visible
 † 場景端必設 collision_layer=0 / collision_mask=2 / position=(0,6)
 ⚠ Area2D 會偵測到自己的父 CharacterBody2D，必須濾掉自己
@@ -293,7 +502,7 @@ func is_cell_free(cell: Vector2i) -> bool
 func nearest_free_cell(cell: Vector2i, max_radius := 8) -> Vector2i
 ```
 
-```
+```text
 † 可走性是物理查詢「量」出來的，不讀 tile data
   ⇒ TileMapDual 半格位移不影響；手放的 StaticBody2D 自動算障礙
 ⚠ 開場非同步，_ready 就 find_path() 必拿空路徑 → 等 grid_built
@@ -315,7 +524,7 @@ func follow_player() -> void                 # group player 的第一個
 func get_target() -> Node2D
 ```
 
-```
+```text
 main.tscn 的 Node2D/Camera2D（世界層，不是 Player 的子節點）
 _physics_process 每幀 global_position = _target.global_position
   角色也在物理幀移動，用 _process 會永遠慢一幀
@@ -343,7 +552,7 @@ func get_hovered() -> Character
 func character_at(point: Vector2) -> Character   # 世界座標；無→null
 ```
 
-```
+```text
 main.tscn 的 Node2D/Selection，Node2D 未開 y_sort ⇒ 排最後 = 漣漪畫在最上層
 _process   每幀更新 hover（游標移動、鏡頭移動、角色走動都要重算）
 _unhandled_input  action "select"(左鍵) → 冒漣漪 → 有人 select / 沒人 deselect
@@ -379,7 +588,7 @@ var target: Character
 func interrupt() -> void
 ```
 
-```
+```text
 † 不要直接 new，走 Character.talk_to()
 生命週期：talk_to() 設好 initiator/target 加進場景 → 講完自己 queue_free()
 只有 REASON_TURN_LIMIT 才發獎勵（social/mood/affinity + note_meeting）
@@ -398,7 +607,7 @@ static func reply(stats: Stats, affinity: float, _turn: int) -> String
 static func closing(listener_name: String, affinity: float) -> String
 ```
 
-```
+```text
 † 只收 String/Stats/float，不收 Character
   避免 character→conversation→dialogue_lines→character 循環相依；
   且這份參數清單 = 之後要送給 LLM 的 context
@@ -411,8 +620,7 @@ static func closing(listener_name: String, affinity: float) -> String
 
 ```gdscript
 const POOL_SIZE := 3                         # HTTPRequest 節點數
-const MIN_INTERVAL_SEC := 30.0               # 同 requester_id 最短真實間隔
-const MAX_CALLS_PER_GAME_DAY := 20
+enum Policy { SCHEDULED, CONVERSATION }      # SCHEDULED 吃冷卻/配額；CONVERSATION 豁免但照樣計數
 const RETRY_LIMIT := 1
 const MAX_ERROR_CHARS := 200
 
@@ -428,23 +636,27 @@ const ERROR_BAD_JSON := "bad_json"
 var config: AIConfig
 
 func reload_config() -> void
-func request(envelope: Dictionary, requester_id: String) -> Dictionary   # 一律 await
+func request(envelope: Dictionary, requester_id: String,
+             policy: Policy = Policy.SCHEDULED, provider_name: String = "") -> Dictionary   # 一律 await
 func get_usage(requester_id: String) -> Dictionary
 ```
 
-```
+```text
 request() -> {"ok": bool, "data": Dictionary, "error": String}
 envelope  system:String          人格/規則/輸出 schema/動作白名單
           payload:Dictionary     字串化成 user 訊息
           model:String           選填，覆寫設定
-          response_format:Dict   選填 json_schema；各模型支援度不一，預設不帶
-get_usage -> {game_day, calls_today, max_calls, queued, in_flight}   # game_day 讀 GameClock.day
+          response_format:Dict   選填 json_schema；provider.supports_json_schema 為 false 時不送
+provider_name 空字串 -> AIConfig.default_provider；打錯名字回 ERROR_NO_PROVIDER，不會靜默轉去別的服務
+get_usage -> {game_day, calls_today, max_calls, dialogue_today, total_today,
+              dialogue_exempt, cooldown_left, queued, in_flight}
 
 † 全專案唯一碰網路的地方 ⇒ 成本上限/金鑰/防注入入口只有一處要顧
 † system 與 payload 分開是成本問題：system 幾乎不變吃得到 prompt cache
-† 速率限制掛 requester_id 不掛全域（多人版帳單逐個擁有者算）
+† 速率限制掛 requester_id 不掛全域也不分 provider（多人版帳單逐個擁有者算，同一隻角色不管打哪個服務算同一份額度）
 † 用真實秒不用遊戲時間（要擋的帳單與 provider rate limit 都活在真實時間）
 † 金鑰只在組 Authorization header 時碰得到，其餘一律過 _scrub()
+† CONVERSATION 豁免冷卻/配額但照樣計數（_dialogue_calls_today）——豁免的是限制不是帳
 → 技術/LLM 串接與 AI 服務層
 ```
 
@@ -456,29 +668,72 @@ const EXAMPLE_PATH := "res://data/ai_config.example.json"
 const DEFAULT_BASE_URL := "https://openrouter.ai/api/v1"
 const DEFAULT_MODEL := "openai/gpt-4o-mini"
 const DEFAULT_TIMEOUT := 10.0
+const DEFAULT_MIN_INTERVAL_SEC := 30.0
+const DEFAULT_MAX_CALLS_PER_GAME_DAY := 20
+const DEFAULT_DIALOGUE_EXEMPT := true
 const MASK_KEEP := 4
 
-var enabled := false · base_url · model · timeout · status_reason · api_key
+class Provider extends RefCounted:
+    var name · base_url · model · api_key · timeout · valid · status_reason
+    var supports_json_schema := true         # false 時 AIService 不送 response_format
+    func masked_key() -> String
+    func completions_url() -> String
+
+var enabled := false · status_reason · default_provider := ""
+var providers := {}                          # 名字 -> Provider，可同時併用多個具名端點
+var min_interval_sec · max_calls_per_game_day · dialogue_exempt      # 全域，不分 provider
 
 static func load_from_user() -> AIConfig     # 讀不到→enabled=false 的物件
-func masked_key() -> String
-func completions_url() -> String
+func get_provider(provider_name: String) -> Provider   # 只有空字串會退回 default_provider，打錯名字回 null
+func has_provider(provider_name: String) -> bool
 ```
 
-```
+```text
 † 真檔在 user:// ⇒ 在 repo 之外 ⇒ 金鑰天然不進版控，連 .gitignore 都不用寫
 † 「檔案不存在」是預設狀態不是錯誤：不 push_error，只留 enabled=false + status_reason
   會 push_error 的只有「檔案在但內容壞」
 † 任何 log/錯誤/主控台輸出一律走 masked_key()，_to_string() 也只吐遮蔽版
-† 換 Ollama 只要改 base_url，程式不動
+† 多個具名 provider 可同時併用（例如 "local" 打本機 llama-server、"openrouter" 打雲端）
+  ——這個類別只回答「provider 叫這個名字時連線資訊是什麼」，不管「誰該用哪個」
+† enabled 只回答「設定檔結構完整、至少一個 provider」，不管 default_provider 好不好
+  ——default 壞掉只影響沒指名 provider 的呼叫，不連累明確指名且填好的 provider
+```
+
+## PromptBuilder — scripts/ai/prompt_builder.gd · class_name · RefCounted
+
+```gdscript
+const DIALOGUE_SYSTEM := "..."               # 對話用系統提示
+const PLAN_SYSTEM_TEMPLATE := "..."          # 決策用系統提示模板，%s 是動作清單
+
+static func build_dialogue_envelope(speaker: Character, listener: Character,
+                                     turns: Array[Dictionary], max_turns: int) -> Dictionary
+static func build_plan_envelope(character: Character, visible: Array[Character],
+                                 pool: Array[Dictionary]) -> Dictionary
+static func turn_entry(speaker_name: String, text: String) -> Dictionary
+```
+
+```
+dialogue payload  {type:"dialogue", self, context:{listener, turns, max_turns}}
+plan payload      {type:"plan", self, context:{visible, pool}}
+† self 區塊兩者共用（_self_block()，沿用 Character.get_state_snapshot()），不重新蒐集一次
+† PLAN_SYSTEM 的動作清單用 AISchema.ALLOWED_ACTIONS 動態組，不另外抄一份字串
+  ——兩份清單各自維護會漂移，白名單改了這裡忘記跟著改，模型看到的允許清單就對不上驗證的
+† plan_response_schema()（AISchema）當 response_format 送出，跟 validate_tasks() 驗證的形狀對齊
+→ 技術/LLM 串接與 AI 服務層
 ```
 
 ## AISchema — scripts/ai/ai_schema.gd · class_name · RefCounted
 
 ```gdscript
-const ALLOWED_ACTIONS := [move_to, interact, pick_up, drop, use_item, equip,
-                          talk, attack, farm, chop, mine, sleep, buy, sell]
+const ALLOWED_ACTIONS := [                   # 《07》《11》拍板的 22 個，不含 spec 沒有的 "work"
+    talk, persuade, give, report, shout, perform,
+    hunt_small, hunt_large, gather, fish, buy, sell, eat, drink,
+    move_to, sleep, nap, rest, wash, idle,
+    steal, attack,
+]
 const IMPLEMENTED_ACTIONS := [move_to, talk, sleep]
+const MAX_TASKS_PER_RESPONSE := 5            # 單次決策回應最多幾筆任務
+const MAX_LINE_CHARS := 200                  # dialogue line／reasoning／inner_monologue 共用的截斷長度
 const ERROR_NOT_JSON := "not_json"
 const ERROR_NOT_OBJECT := "not_object"
 const ERROR_NO_CONTENT := "no_content"
@@ -489,12 +744,13 @@ static func parse_object(text: String) -> Dictionary
 static func extract_content(response: Dictionary) -> String
 static func parse_completion(response: Dictionary) -> Dictionary
 static func validate_dialogue(data: Dictionary) -> Dictionary
-static func validate_tasks(data: Dictionary) -> Dictionary
+static func validate_tasks(data: Dictionary) -> Dictionary   # -> {tasks, reasoning, inner_monologue}
+static func plan_response_schema() -> Dictionary             # response_format 用，跟 validate_tasks() 對齊
 static func is_allowed_action(action: String) -> bool
 static func is_implemented_action(action: String) -> bool
 ```
 
-```
+```text
 所有驗證函式 -> {"ok": bool, "data": Dictionary, "error": String}
 
 † 防提示詞注入的最後一道防線
@@ -506,6 +762,10 @@ static func is_implemented_action(action: String) -> bool
 † 白名單不用黑名單：黑名單漏掉的那項就是被打穿的那項
 † ALLOWED 但非 IMPLEMENTED 的動作驗證會過，執行層回 NOT_IMPLEMENTED
   「不被允許」與「還沒做」是不同的失敗，混在一起 debug 分不清
+† ALLOWED_ACTIONS 刻意不含 "work"：《07》《11》的 22 個動作沒有它，
+  schedule 來源的 work 任務不經過這裡驗證，不受影響——只影響 LLM 不能自己決定叫角色去打工
+† reasoning／inner_monologue 選填、缺席給空字串、型別錯整包拒絕、超長截斷不拒絕
+  ——跟 dialogue 的 line 用同一種寬鬆度，但語意不同（可以不存在、可以是空字串）
 ```
 
 ---
@@ -522,7 +782,7 @@ func clear() -> void                         # 立刻閉嘴並清佇列
 func is_speaking() -> bool
 ```
 
-```
+```text
 Character.speech_duration() 用這三個常數換算，Conversation 靠它決定何時換人講
 ⚠ Label 開 autowrap 後 get_minimum_size() 回「最窄可接受寬度」(中文=一行一字)
   拿它當寬度會得到 25x692。改用 font.get_string_size() 量，
@@ -538,26 +798,32 @@ Character.speech_duration() 用這三個常數換算，Conversation 靠它決定
 const MAX_LENGTH := 40                       # 更長會撐出蓋住畫面的氣泡
 ```
 
-```
+```text
 chat 鍵(Enter/KpEnter)開關；Esc 取消；送出 → player.say()
 無公開函式
 † 與主控台都吃 Enter：開啟前檢查 gui_get_focus_owner()，有人拿焦點就不動作
   反向不用處理（LineEdit 有焦點時 Enter 先走 text_submitted 不會冒到 _unhandled_input）
+† Esc 攔在 _input：開著時 LineEdit 有焦點，按鍵在 GUI 階段就被吃掉，到不了
+  _unhandled_input。沒開時不攔，Esc 留給暫停
 ```
 
 ## DebugConsole — scripts/ui/debug_console.gd · CanvasLayer
 
-```
+```text
 ` 開關 · Esc 關閉 · 上下鍵翻歷史
 
 goto <name> <x> <y>      走到該格（格座標，可負，A*）
 talk <name> | <a> <b>    搭話；單一參數=玩家對誰講
-status [name]            角色狀態；數值直接掃 Stats.SPEC
+status [name]            角色狀態；讀 Character.get_state_snapshot()，只負責排版
 debug [項目] [on|off]     疊圖開關；debug off 全關
 stop                     停止玩家移動
 pos                      玩家座標與所在格
 nav rebuild              重建尋徑網格
-ai [文字]                 對 LLM 打一次測試請求
+inv [name]               列出背包；inv give <item_id> [count] 塞測試物品給玩家
+money <amount>           改玩家的錢；正數走 add_money()，負數走 spend()。查詢看 status
+ai [dialogue] [@provider] [文字]   對 LLM 打一次測試請求；dialogue 走對話 policy
+locale [code]            看目前語系／切換（zh_TW / en）
+tasks <name>             印那隻 Agent 的候選任務池：分數拆項、在不在窗內、哪筆執行中
 help | clear
 
 角色查找：character_name(不分大小寫) → 撞名列候選 id 前 8 碼 → character_id 前綴
@@ -577,7 +843,7 @@ func set_layer(layer, on) -> void
 func toggle(layer) -> bool
 ```
 
-```
+```text
 grid   tile 網格線        path       角色目前 A* 路徑（折線+點）
 coord  每格格座標         vision     視野圈 + 連到看得到的人的線
 solid  NavGrid 障礙格     collision  碰撞形狀（Godot 原生除錯繪製）
@@ -597,8 +863,24 @@ solid  NavGrid 障礙格     collision  碰撞形狀（Godot 原生除錯繪製�
 
 ## TimeLabel — scripts/ui/time_label.gd · Label
 
-```
+```text
 訂閱 GameClock.time_changed，不每幀輪詢。掛在 main.tscn 的 HUD/TimeLabel
+```
+
+## Pause — scripts/ui/pause.gd · CanvasLayer
+
+```gdscript
+set_paused(paused: bool) -> void             # get_tree().paused + 遮罩顯示
+```
+
+```text
+Esc(ui_cancel) 切換暫停。main.tscn 的 Pause，子節點 Dim(ColorRect) / Text(Label)
+† process_mode 必須 ALWAYS(3)：跟著暫停就收不到輸入，醒不過來
+† 必須是 main.tscn 的第一個子節點：_unhandled_input 反序傳遞，
+  排最前面才最後收到 ⇒ 面板開著時 Esc 關面板不暫停
+† layer=10 蓋在 HUD/ChatInput/DebugConsole(layer 1) 之上
+† Esc 優先序：chat_input / debug_console(_input) > character_create(_unhandled_input) > pause
+† autoload 繼承 root 的 process_mode ⇒ 暫停時 GameClock 停；AIService 已送出的請求不會中止
 ```
 
 ---
@@ -606,15 +888,16 @@ solid  NavGrid 障礙格     collision  碰撞形狀（Godot 原生除錯繪製�
 ## GameManager — scripts/core/game_manager.gd · autoload
 
 ```gdscript
-var places = {}                              # places.json 的 places 區塊
 var npc_data = {}                            # NPC 模板 id -> 資料
 var schedule_assignments = {}                # 節點名 -> schedule_template
 
-func get_place_data(place_name: String)          # 查不到 → null
 func get_npc(id: String)                         # 查不到 → null
 func get_schedule_template(node_name: String) -> String   # 沒指派 → ""
-func load_places()
 func load_npc_data()
+```
+
+```
+地點座標不歸 GameManager 管，一律走 PlaceAnchors 的 Marker2D
 ```
 
 ## GameClock — scripts/core/GameClock.gd · autoload
@@ -626,7 +909,7 @@ signal day_changed(day: int)                 # 跨日，在同一次 time_change
 var hour := 8 · var minute := 0 · var day := 1
 ```
 
-```
+```text
 24:00 回捲成 0:00，day += 1。無暫停/加速 API；撥錶只能直接寫欄位再手動 emit
 † 要「第幾天」一律讀 day / 訂 day_changed，不要自己比對 hour 有沒有變小 ——
   私有計數重開遊戲歸零，靠它擋的東西（每日配額）等於沒擋
@@ -636,26 +919,25 @@ var hour := 8 · var minute := 0 · var day := 1
 ## data/
 
 ```
-npc_schedule.json     GameManager.load_npc_data()   使用中
-places.json           GameManager.load_places()     ⚠ 座標已失效
+npc_schedule.json     GameManager.load_npc_data()   使用中，villagers 只有 npc001/npc006
 ai_config.example.json  無程式讀取（給人複製的範本）
 
-⚠ places.json 的 x/y 綁死在已刪除的舊地圖（x 最遠 1120），現在可走區只有 18 格寬
-  實際地點座標走 PlaceAnchors 的 Marker2D
-  只剩 type/capacity 有意義，且目前沒有任何程式在讀
-⚠ main.tscn 只有 4 個錨點(home_001/farm/restaurant/square)，
-  npc_schedule.json 卻引用 temple/shop/home_002..005
-  兩隻 Agent 都用 npc001 所以碰不到；換模板就會落回失效座標
+† places.json、npc_schedule.json 的 npc002~005 模板、根目錄 test.md 都是死資料
+  （無呼叫端／無 assignments 指派），issue #87 整份移除，不要再對照舊版筆記
+main.tscn 只有 4 個錨點（home_001/farm/restaurant/square），npc001/npc006
+  兩份模板都只走這四個
 schedule 插槽現為 {time, place, state}，是計畫結構的子集
   → 技術/行程佇列與任務仲裁
 ```
 
 ## 已知缺口
 
-```
+```text
 Vision 圓形無朝向；lost 無呼叫端
 Agent 不對 Stats 反應（get_lowest_need_place() 可用但無呼叫端）
+noise_heard 對話中會被吞掉；睡覺中的 Agent 沒有排除，一樣會冒 !?
 無存檔機制（全專案無 user:// 存檔/ConfigFile）
 character_id 與 GameClock.day 都未持久化，重開就重來
-LLM 未接對話與行程（服務層可用，無呼叫端）
+AIService 已接對話（conversation.gd 非同步）與行程（agent.gd 任務池＋決策迴圈，
+  llm_decision_enabled 開關）；決策內容有效性未實跑真實 provider 驗證過（見驗收清單）
 ```
