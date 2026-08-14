@@ -7,27 +7,31 @@ extends Node
 ## 狀態分散在兩個節點很容易漏掉一邊。
 ##
 ## 生命週期：Character.talk_to() 設好 initiator / target 後加進場景，
-## 講完自己 queue_free()。內容目前從 DialogueLines 拿。
+## 講完自己 queue_free()。
 ##
-## > 這裡曾經寫著「換成 LLM 時這個檔不用動」。**那是錯的**：
-## > _speak() 直接拿回傳字串的長度算出下一輪的計時器，是徹底同步的寫法，
-## > 非同步的 LLM 塞不進去。talk 動作設計的五層分層仍然成立，
-## > 但「內容層換掉、會話層不動」只對**同步**的內容來源成立。
-## > Step 1 要把這裡改成：向某個角色「要下一句」（await），等待期間顯示「…」氣泡，
-## > 且不阻塞 _process() 的距離檢查與中斷判定。
-## > 見 note/技術/LLM 串接與 AI 服務層。
+## Step 1：輪流講話改成非同步——`_run()` 是唯一的協程，每一輪呼叫
+## `speaker.next_line()`（見 character.gd），可能要等 LLM 回應或等玩家打字，
+## 都不阻塞 `_process()` 的距離/中斷判定。開場白仍然是模板句（見下方
+## `_run()` 的說明），不經過 next_line()。
 
 signal finished(reason: String)
 
-## 一場對話最多幾輪（雙方各講一次算兩輪）。對齊系統分析計畫 §6 的上限
-const MAX_TURNS := 6
+## 不是設計上的輪數上限（那條已經拿掉，收尾交給回應的 end 欄位決定，
+## 見 note/技術/LLM 串接與 AI 服務層.md 的「對話由 Agent 自己決定何時結束」）。
+## 這是工程上的安全閥——雙方都不主動收尾時避免真的無限跑下去，數字給得
+## 很寬鬆，正常對話不該碰到它
+const SAFETY_MAX_TURNS := 40
+
 const TURN_GAP := 0.5			# 一句講完到下一句之間的空檔（秒）
 const MAX_DISTANCE := 48.0		# 講到一半離這麼遠就散場，比搭話門檻寬鬆
 
 ## 結束原因。這些是「正常結束」，不是失敗 ——
 ## 失敗原因碼在 Character.TALK_*，兩者不可混用，
 ## 否則 AI 會把正常結束的對話當成錯誤而反覆重試
-const REASON_TURN_LIMIT := "TURN_LIMIT"
+##
+## REASON_ENDED_BY_SPEAKER 取代了原本的 REASON_TURN_LIMIT：正常結束＝有人
+## （LLM 判斷該收尾，或 fallback 收尾）決定結束，不再是「講滿幾輪就散」
+const REASON_ENDED_BY_SPEAKER := "ENDED_BY_SPEAKER"
 const REASON_TOO_FAR := "TOO_FAR"
 const REASON_INTERRUPTED := "INTERRUPTED"
 
@@ -39,26 +43,24 @@ const AFFINITY_GAIN := 3.0
 var initiator: Character
 var target: Character
 
-var _turn := 0
-var _timer := 0.0
+var _turns: Array[Dictionary] = []
 var _finished := false
 
 
 func _ready() -> void:
 	initiator.enter_conversation(self)
 	target.enter_conversation(self)
+	_run()
 
-	_speak(initiator, DialogueLines.opening(
-		target.character_name,
-		initiator.stats,
-		initiator.relationships.get_affinity(target.character_id)
-	))
-
-func _process(delta: float) -> void:
+# 只做距離/有效性檢查，不驅動輪次——輪次現在完全由 _run() 的 await 鏈推進。
+# 這裡呼叫 _finish() 是安全的：_finished 從 false 變 true 的當下，_run()
+# 一定卡在某個 await 上（GDScript 單執行緒，_process() 能跑到這裡就代表
+# _run() 這一刻沒有在執行），所以不會有「兩邊同時搶著收尾」的問題，
+# _run() 之後恢復執行時自己會看到 _finished 是 true 並收尾、釋放節點
+func _process(_delta: float) -> void:
 	if _finished:
 		return
 
-	# 任一方在對話中被移出場景就直接收掉
 	if not is_instance_valid(initiator) or not is_instance_valid(target):
 		_finish(REASON_INTERRUPTED)
 		return
@@ -67,57 +69,111 @@ func _process(delta: float) -> void:
 		_finish(REASON_TOO_FAR)
 		return
 
-	_timer -= delta
-	if _timer > 0.0:
+# 唯一的協程，整場對話的輪次都在這裡推進。
+#
+# 開場白刻意不經過 next_line()：talk_to() 目前只有玩家會呼叫（Agent 還沒有
+# 主動搭話的觸發），若開場也要等 next_line()，玩家按 E 之後要嘛得先等 LLM
+# （體感延遲，且發起方通常就是玩家，等於等自己打字），要嘛得先打一句話
+# 才能開口——兩者都是體驗倒退，現有的「按 E 立刻打招呼」沒有理由改掉，
+# 這不在這次 issue 的範圍內
+func _run() -> void:
+	var opening := DialogueLines.opening(
+		target.character_name, initiator.stats, initiator.relationships.get_affinity(target.character_id)
+	)
+	_speak(initiator, opening)
+	_turns.append(PromptBuilder.turn_entry(initiator.character_name, opening))
+
+	if await _wait_for_read(initiator, opening):
 		return
 
-	if _turn >= MAX_TURNS:
-		_finish(REASON_TURN_LIMIT)
-		return
+	var turn := 0
+	while turn < SAFETY_MAX_TURNS:
+		var speaker := target if turn % 2 == 0 else initiator
+		var listener := initiator if turn % 2 == 0 else target
 
-	_take_turn()
+		var result: Dictionary = await speaker.next_line(listener, _turns, SAFETY_MAX_TURNS)
+		if _bail_if_finished():
+			return
 
-# 輪流講。偶數輪是被搭話的一方回話，奇數輪換發起方
-func _take_turn() -> void:
-	var speaker := target if _turn % 2 == 0 else initiator
-	var listener := initiator if _turn % 2 == 0 else target
+		if not result.get("ok", false):
+			_finish_with_fallback(speaker, listener)
+			return
 
-	_speak(speaker, DialogueLines.reply(
-		speaker.stats,
-		speaker.relationships.get_affinity(listener.character_id),
-		_turn
-	))
-	_turn += 1
+		var line: String = result.get("line", "")
+		# next_line() 內部（agent.gd）自己顯示過「…」，interrupt=true 立刻換成
+		# 真正的台詞，不用等「…」的顯示時間跑完
+		_speak(speaker, line, true)
+		_turns.append(PromptBuilder.turn_entry(speaker.character_name, line))
 
-func _speak(speaker: Character, line: String) -> void:
+		if result.get("end", false):
+			_finish(REASON_ENDED_BY_SPEAKER)
+			queue_free()
+			return
+
+		turn += 1
+		if await _wait_for_read(speaker, line):
+			return
+
+	# 撞到安全閥：不算失敗，正常收尾即可，但不额外補一句收尾台詞——
+	# 這種情況下最後一句已經是某一方剛講完的話，硬塞一句「先走了」反而突兀
+	_finish(REASON_ENDED_BY_SPEAKER)
+	queue_free()
+
+# 等這句話讀完的時間，讓下一句不會緊接著跳出來。回傳 true 代表等待期間
+# 對話已經被 _process() 結束（走遠/失效），呼叫端要立刻 return，不要再往下做
+func _wait_for_read(speaker: Character, line: String) -> bool:
+	await get_tree().create_timer(speaker.speech_duration(line) + TURN_GAP).timeout
+	return _bail_if_finished()
+
+# _finished 若已經被 _process() 設成 true，代表這個協程重新拿回控制權的
+# 這一刻，就是唯一安全能真正釋放這個節點的時機——見上面 _process() 的說明
+func _bail_if_finished() -> bool:
+	if not _finished:
+		return false
+	queue_free()
+	return true
+
+func _speak(speaker: Character, line: String, interrupt: bool = false) -> void:
 	speaker.face_towards(target if speaker == initiator else initiator)
-	speaker.say(line)
-	_timer = speaker.speech_duration(line) + TURN_GAP
+	speaker.say(line, interrupt)
+
+# LLM 停用/逾時/驗證失敗，next_line() 統一回 ok=false，這裡收尾：說一句
+# DialogueLines.closing()（唯一還在用它的地方，正常結束的台詞是 LLM 自己
+# 那句，不再另外補一句），然後正常結束——對玩家來說這場對話看起來很正常，
+# 差別只在收尾早了幾輪，不是任何看得出來的「壞掉」
+func _finish_with_fallback(speaker: Character, listener: Character) -> void:
+	# next_line() 裡的 await 讓出過控制權，speaker/listener 理論上可能在這段
+	# 期間被移出場景（跟 _process() 的 is_instance_valid 檢查是同一種顧慮）
+	if is_instance_valid(speaker) and is_instance_valid(listener):
+		var affinity := 0.0
+		if speaker.relationships != null:
+			affinity = speaker.relationships.get_affinity(listener.character_id)
+		_speak(speaker, DialogueLines.closing(listener.character_name, affinity), true)
+
+	_finish(REASON_ENDED_BY_SPEAKER)
+	queue_free()
 
 # 被外部打斷（例如玩家走開、角色要去做別的事）
 func interrupt() -> void:
 	_finish(REASON_INTERRUPTED)
 
+# 只負責標記狀態、發獎勵、通知雙方離開對話、發訊號——不在這裡 queue_free()。
+# 呼叫端可能是 _process()（此時 _run() 還卡在某個 await 上，此刻 free 掉
+# self 會讓 _run() 之後恢復執行時操作一個已釋放的節點而炸掉），
+# 也可能是 _run() 自己（此時它自己緊接著呼叫 queue_free() 是安全的）
 func _finish(reason: String) -> void:
 	if _finished:
 		return
 	_finished = true
 
-	# 好好講完才有收穫；被打斷或走散不算
-	if reason == REASON_TURN_LIMIT:
+	if reason == REASON_ENDED_BY_SPEAKER:
 		_apply_rewards()
-		if is_instance_valid(initiator) and is_instance_valid(target):
-			initiator.say(DialogueLines.closing(
-				target.character_name,
-				initiator.relationships.get_affinity(target.character_id)
-			))
 
 	for character in [initiator, target]:
 		if is_instance_valid(character):
 			character.exit_conversation()
 
 	finished.emit(reason)
-	queue_free()
 
 func _apply_rewards() -> void:
 	for pair in [[initiator, target], [target, initiator]]:

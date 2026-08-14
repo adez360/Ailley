@@ -1,0 +1,18 @@
+GIMP Palette
+Name: Ailley UI
+Columns: 6
+# 暖土色系 UI 調色盤。Bark 與 Cream 沿用角色 sprite 的描邊與本體色，
+# Moss 與 Ember 取自參考圖。所有文字搭配已驗過 WCAG 對比度。
+#
+ 26  21  18	Ink
+ 47  37  34	Bark
+ 93  74  56	Loam
+117  89  60	Clay
+217 196 154	Wheat
+250 243 232	Cream
+201 108  35	Amber
+240 169  78	Honey
+ 93  97  69	Moss
+139  31  20	Ember
+126 138 147	Ash
+172 202 178	Sage

@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-08
+updated: 2026-08-13
 ---
 
 # Character 基底與 Agent
@@ -114,10 +114,8 @@ id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存
 （`home_001` / `farm` / `restaurant` / `square`），時段刻意跟 `npc001` 錯開，
 兩隻才走得出不同的軌跡 —— 接 LLM 對話時需要這個對照組。
 
-> [!warning] `npc002`~`npc005` 仍然指向不存在的地點
-> 它們用 `shop` / `temple` / `home_002`… 這些**沒有錨點**，
-> 到點時只會 `push_error` 然後原地不動。目前沒有任何角色被指派到它們，
-> 但 `assignments` 一旦指過去就會踩到。要用之前得先補錨點或改寫那幾份行程。
+`npc002`~`npc005` 這四份範本曾經用 `shop` / `temple` / `home_002`… 這些沒有
+錨點的地點，`assignments` 也沒有指派到它們——issue #87 判定為死資料整份移除了。
 
 ## 決策
 
@@ -126,11 +124,8 @@ id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存
 > 曾經有八向（含斜向）的切法，但同一張 `16x16 Walk-Sheet.png` 撐不出斜向的辨識度，
 > 維護成本卻翻倍。
 
-> [!important] 地點座標用場景錨點，不吃 `places.json`
-> `places.json` 的座標（x 最遠到 1120）綁死在一張已經不存在的舊地圖尺寸上，
-> 而現在的可走區只有 18 格寬 —— 所有地點都落在界外。
->
-> 改成在 `Node2D/PlaceAnchors`（group `place_anchors`）底下放與地點同名的 Marker2D，
+> [!important] 地點座標用場景錨點
+> 在 `Node2D/PlaceAnchors`（group `place_anchors`）底下放與地點同名的 Marker2D，
 > 那是座標的唯一事實來源：`agent.gd` 只認錨點，沒有就 `push_error` 且不動身。
 >
 > 這也是多場景（家園／交誼區）本來就需要的：全域絕對座標在多張地圖下必然是錯的。
@@ -147,6 +142,30 @@ id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存
 > `nav_grid.gd` 要等 TileMapDual 的碰撞體進物理空間才建得出網格。
 > Agent 在 `_ready()` 就呼叫 `move_to()` 必定拿到空路徑 ——
 > 所以它會先 `await nav.grid_built`。
+
+## 狀態快照是純資料，供顯示端與 AI payload 共用
+
+`get_state_snapshot()` 回傳角色狀態（位置、數值、好感、行程……），
+主控台的 `status` 指令只負責把它排版成 BBCode，不自己蒐集一次
+——蒐集邏輯原本糊在 `debug_console.gd` 裡，任何人想重用都得先拆掉格式。
+
+> [!important] key/value 一律是識別字，不可以是翻譯過的字
+> `Stats.SPEC` 的 `label` 存的是翻譯 key（如 `STAT_HUNGER`），snapshot 照樣只放
+> key 不放翻譯後的文字。這批資料以後會直接進 LLM 的 prompt
+> （見 [[LLM 串接與 AI 服務層]] 的 payload 設計），不該隨玩家介面語系跑掉。
+
+`schedule` 欄位（`place`/`state`/`size`）只有 Agent 才有。它由 `agent.gd`
+override `get_state_snapshot()`、`super()` 之後補上去，**不是**基底自己去嗅探
+誰是 Agent —— `schedule`/`current_place`/`current_state` 宣告在 `agent.gd`，
+就由 `agent.gd` 負責放進快照。基底若改用 `is_in_group("agents")` 加
+`get("current_place")` 動態讀，group 成員資格跟「有沒有這個欄位」是兩件事，
+不吻合時會拿到 `null`（或在 `as Array` 那步直接崩）。
+
+`affinity` 每筆是 `{affinity, met_count}`，欄名跟 `relationships.gd` 的 record
+一致，不要在快照裡改名 —— 同一個數值兩個名字，讀過 `relationships.gd` 的人
+會在快照上找不到它。取值走 `get_affinity()` / `get_met_count()` 這兩個純量
+accessor，不用 `get_record()`：後者每筆都 `duplicate(true)` 深拷一份，
+只為了讀兩個數字。
 
 ## 碰撞分層
 

@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-10
+updated: 2026-08-13
 ---
 
 # changelog
@@ -24,6 +24,26 @@ AI 專用。**筆記庫裡唯一可以寫「原本是什麼」的地方。**
 ```
 
 一則就是一個決定的來歷，日期倒序。**不要寫成每日工作日誌。**
+
+---
+
+## 2026-08-13
+
+### Godot 端不再保留打 `poc_village_sim` 的接口
+
+- **原本**：`poc_village_sim` 定位是 R&D／驗證，繼續開發但**保留 HTTP 接口給
+  Godot 端**；Godot 這邊有 `village_sim_client.gd`／`village_sim_decision.gd`／
+  `village_sim_locale.gd` 三支，`Agent` 上還掛著 `village_ai_enabled`／
+  `poc_character_id` 兩個 demo 用的 `@export`，主控台有 `village_ai`、
+  `village_ai_act` 兩個指令
+- **現在**：Godot 這一端整條移除，LLM 一律走 `AIService`。
+  `poc_village_sim` 本身不動，它是本機的獨立 Python 專案
+- **為什麼**：那條線混在正式的角色與主控台程式碼裡，容易被誤認成正式機制；
+  它繞過任務池／仲裁器直接動角色，跟行程表兩個機制互相覆蓋。
+  出貨架構已拍板走 Godot ↔ Sidecar，這條線不會長成出貨的樣子
+- **結論搬去哪**：`技術/LLM 串接與 AI 服務層` 只留下還在影響正式線的兩件事——
+  Godot `Stats` ↔ poc `physiology` 的方向對照（GDScript 重寫要照著翻）、
+  以及實測 2.5-4 秒的延遲與體感解法
 
 ---
 

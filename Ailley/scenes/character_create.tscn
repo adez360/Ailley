@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://cefpexpl7arvm"]
+
+[ext_resource type="Script" path="res://scripts/ui/character_create.gd" id="1_7hjmm"]
+
+[node name="CharacterCreate" type="CanvasLayer"]
+script = ExtResource("1_7hjmm")

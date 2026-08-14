@@ -1,4 +1,32 @@
-[gd_resource type="Theme" load_steps=2 format=3 uid="uid://dktke2k785jv0"]
+[gd_resource type="Theme" load_steps=12 format=3 uid="uid://dktke2k785jv0"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_s5seo"]
+content_margin_left = 8.0
+content_margin_top = 3.0
+content_margin_right = 8.0
+content_margin_bottom = 3.0
+bg_color = Color(0.459, 0.349, 0.235, 0.45)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_60kxs"]
+content_margin_left = 8.0
+content_margin_top = 3.0
+content_margin_right = 8.0
+content_margin_bottom = 3.0
+bg_color = Color(0.459, 0.349, 0.235, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ge280"]
+content_margin_left = 8.0
+content_margin_top = 3.0
+content_margin_right = 8.0
+content_margin_bottom = 3.0
+bg_color = Color(0.365, 0.29, 0.22, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ie1ck"]
+content_margin_left = 8.0
+content_margin_top = 3.0
+content_margin_right = 8.0
+content_margin_bottom = 3.0
+bg_color = Color(0.184, 0.145, 0.133, 1)
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_snxus"]
 content_margin_left = 6.0
@@ -7,14 +35,91 @@ content_margin_right = 6.0
 content_margin_bottom = 4.0
 bg_color = Color(0.05, 0.05, 0.07, 0.85)
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_id50s"]
+content_margin_left = 0.0
+content_margin_top = 2.0
+content_margin_right = 0.0
+content_margin_bottom = 2.0
+bg_color = Color(0.788, 0.424, 0.137, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_h3elb"]
+content_margin_left = 0.0
+content_margin_top = 2.0
+content_margin_right = 0.0
+content_margin_bottom = 2.0
+bg_color = Color(0.941, 0.663, 0.306, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_5ivoa"]
+content_margin_left = 0.0
+content_margin_top = 2.0
+content_margin_right = 0.0
+content_margin_bottom = 2.0
+bg_color = Color(0.459, 0.349, 0.235, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_tgcn8"]
+content_margin_left = 12.0
+content_margin_top = 12.0
+content_margin_right = 12.0
+content_margin_bottom = 12.0
+bg_color = Color(0.851, 0.769, 0.604, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.184, 0.145, 0.133, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_i72qb"]
+content_margin_left = 5.0
+content_margin_top = 5.0
+content_margin_right = 5.0
+content_margin_bottom = 5.0
+bg_color = Color(0.98, 0.953, 0.91, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.788, 0.424, 0.137, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_s6qld"]
+content_margin_left = 5.0
+content_margin_top = 5.0
+content_margin_right = 5.0
+content_margin_bottom = 5.0
+bg_color = Color(0.98, 0.953, 0.91, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.184, 0.145, 0.133, 1)
+
 [resource]
 BubbleLabel/base_type = &"Label"
 BubbleLabel/colors/font_color = Color(0.13333334, 0.13333334, 0.13333334, 1)
+Button/colors/font_color = Color(0.98, 0.953, 0.91, 1)
+Button/colors/font_disabled_color = Color(0.459, 0.349, 0.235, 1)
+Button/colors/font_hover_color = Color(0.98, 0.953, 0.91, 1)
+Button/colors/font_pressed_color = Color(0.851, 0.769, 0.604, 1)
+Button/font_sizes/font_size = 11
+Button/styles/disabled = SubResource("StyleBoxFlat_s5seo")
+Button/styles/hover = SubResource("StyleBoxFlat_60kxs")
+Button/styles/normal = SubResource("StyleBoxFlat_ge280")
+Button/styles/pressed = SubResource("StyleBoxFlat_ie1ck")
 ConsoleOutput/base_type = &"RichTextLabel"
 ConsoleOutput/styles/normal = SubResource("StyleBoxFlat_snxus")
+HSlider/constants/grabber_offset = 0
+HSlider/styles/grabber_area = SubResource("StyleBoxFlat_id50s")
+HSlider/styles/grabber_area_highlight = SubResource("StyleBoxFlat_h3elb")
+HSlider/styles/slider = SubResource("StyleBoxFlat_5ivoa")
 HUDLabel/base_type = &"Label"
 HUDLabel/colors/font_outline_color = Color(0, 0, 0, 1)
 HUDLabel/constants/outline_size = 4
 Label/font_sizes/font_size = 11
 LineEdit/font_sizes/font_size = 11
+PanelContainer/styles/panel = SubResource("StyleBoxFlat_tgcn8")
 RichTextLabel/font_sizes/normal_font_size = 11
+TextEdit/colors/caret_color = Color(0.788, 0.424, 0.137, 1)
+TextEdit/colors/font_color = Color(0.184, 0.145, 0.133, 1)
+TextEdit/colors/font_placeholder_color = Color(0.459, 0.349, 0.235, 1)
+TextEdit/font_sizes/font_size = 11
+TextEdit/styles/focus = SubResource("StyleBoxFlat_i72qb")
+TextEdit/styles/normal = SubResource("StyleBoxFlat_s6qld")

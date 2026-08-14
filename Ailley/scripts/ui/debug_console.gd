@@ -29,8 +29,13 @@ func _ready() -> void:
 		"stop": {"run": _cmd_stop, "usage": "stop", "help": "HELP_STOP"},
 		"pos": {"run": _cmd_pos, "usage": "pos", "help": "HELP_POS"},
 		"nav": {"run": _cmd_nav, "usage": "nav rebuild", "help": "HELP_NAV"},
-		"ai": {"run": _cmd_ai, "usage": "ai [text]", "help": "HELP_AI"},
+		"inv": {"run": _cmd_inv, "usage": "inv [name] / inv give <item_id> [count]", "help": "HELP_INV"},
+		"money": {"run": _cmd_money, "usage": "money <amount>", "help": "HELP_MONEY"},
+		"ai": {"run": _cmd_ai, "usage": "ai [dialogue] [@provider] [text]", "help": "HELP_AI"},
 		"locale": {"run": _cmd_locale, "usage": "locale [code]", "help": "HELP_LOCALE"},
+		# help 留空：先不進 locale/console.csv，避免動到翻譯資源匯入（這台機器上
+		# 曾經卡住），純 debug 用途，之後真的要收進正式指令表再補翻譯
+		"tasks": {"run": _cmd_tasks, "usage": "tasks <name>", "help": ""},
 		"help": {"run": _cmd_help, "usage": "help", "help": ""},
 		"clear": {"run": _cmd_clear, "usage": "clear", "help": "HELP_CLEAR"},
 	}
@@ -260,7 +265,8 @@ func _cmd_talk(args: PackedStringArray) -> void:
 		"speaker": speaker.character_name, "listener": listener.character_name
 	}))
 
-# 省略 id 就看玩家自己
+# 省略 id 就看玩家自己。蒐集資料交給 Character.get_state_snapshot()——
+# 這裡只負責把那份純資料的 Dictionary 排版成 BBCode，不重新蒐集一次
 func _cmd_status(args: PackedStringArray) -> void:
 	if args.size() > 1:
 		_error(L10n.t("CON_USAGE_STATUS"))
@@ -270,18 +276,21 @@ func _cmd_status(args: PackedStringArray) -> void:
 	if character == null:
 		return
 
-	var body := character.get_body_position()
+	var snapshot := character.get_state_snapshot()
+
 	_print("[color=88ccff]%s[/color][color=888888]  id %s[/color]" % [
-		character.character_name, character.character_id
+		snapshot["name"], snapshot["id"]
 	])
 
-	var where := "%s" % body
+	var where := "%s" % snapshot["position"]
 	var nav := get_tree().get_first_node_in_group("nav_grid")
 	if nav != null:
-		where += SEP + "%s %s" % [L10n.t("CON_FIELD_CELL"), nav.world_to_cell(body)]
+		where += SEP + "%s %s" % [L10n.t("CON_FIELD_CELL"), nav.world_to_cell(snapshot["position"])]
 	_field("CON_FIELD_POS", where)
 
-	if character.is_moving():
+	if snapshot["moving"]:
+		# 完整路徑點不進 snapshot（那批資料要進 LLM payload，路徑點太瑣碎）——
+		# 這裡是主控台自己的顯示需求，直接問 character
 		var path := character.get_path_points()
 		_field("CON_FIELD_MOVE", L10n.tf("CON_MOVE_TOWARD", {
 			"pos": path[path.size() - 1], "points": path.size()
@@ -290,22 +299,25 @@ func _cmd_status(args: PackedStringArray) -> void:
 		_field("CON_FIELD_MOVE", L10n.t("CON_MOVE_IDLE"))
 
 	_field("CON_FIELD_LOOK", L10n.tf("CON_LOOK_BODY", {
-		"facing": character.facing, "anim": character.sprite.animation
+		"facing": snapshot["facing"], "anim": snapshot["animation"]
 	}))
 
-	if character.is_in_conversation():
-		_field("CON_FIELD_TALK", L10n.t("CON_TALK_ACTIVE"))
+	# 兩個欄位共用同一個字串 key。原本是 CON_TALK_ACTIVE 與 CON_WORK_ACTIVE
+	# 兩個一字不差的條目——那種必須永遠一致的重複，翻譯者改了其中一個就會不同步
+	if snapshot["in_conversation"]:
+		_field("CON_FIELD_TALK", L10n.t("CON_STATE_ACTIVE"))
+
+	if snapshot["working"]:
+		_field("CON_FIELD_WORK", L10n.t("CON_STATE_ACTIVE"))
 
 	# 直接掃 Stats.SPEC，所以之後加數值不用回來改這裡。
 	# SPEC 的 label 存的是翻譯 key，翻譯在這個顯示端做
-	if character.stats != null:
+	if snapshot.has("stats"):
 		var needs: Array[String] = []
 		var others: Array[String] = []
 
 		for key in Stats.SPEC:
-			var text := "%s %d" % [
-				L10n.t(Stats.SPEC[key]["label"]), int(character.stats.get_value(key))
-			]
+			var text := "%s %d" % [L10n.t(Stats.SPEC[key]["label"]), int(snapshot["stats"][key])]
 			if character.stats.is_need(key):
 				needs.append(text)
 			else:
@@ -315,10 +327,13 @@ func _cmd_status(args: PackedStringArray) -> void:
 		if not others.is_empty():
 			_field("CON_FIELD_STATE", SEP.join(others))
 
-	if character.relationships != null and not character.relationships.known_ids().is_empty():
+	if snapshot.has("money"):
+		_field("CON_FIELD_MONEY", "%d" % int(snapshot["money"]))
+
+	if snapshot.has("affinity"):
 		var lines: Array[String] = []
-		for other_id in character.relationships.known_ids():
-			var record: Dictionary = character.relationships.get_record(other_id)
+		for other_id in snapshot["affinity"]:
+			var record: Dictionary = snapshot["affinity"][other_id]
 			lines.append(L10n.tf("CON_AFFINITY_ENTRY", {
 				"id": other_id,
 				"affinity": "%.1f" % record["affinity"],
@@ -326,12 +341,11 @@ func _cmd_status(args: PackedStringArray) -> void:
 			}))
 		_field("CON_FIELD_AFFINITY", SEP.join(lines))
 
-	# 行程表是 Agent 才有的東西，Player 沒有這一段
-	if character.is_in_group("agents"):
+	if snapshot.has("schedule"):
 		_field("CON_FIELD_SCHEDULE", L10n.tf("CON_SCHEDULE_BODY", {
-			"place": character.current_place,
-			"state": character.current_state,
-			"count": character.schedule.size(),
+			"place": snapshot["schedule"]["place"],
+			"state": snapshot["schedule"]["state"],
+			"count": snapshot["schedule"]["size"],
 		}))
 
 # status 的一列。欄名寬度不補空白對齊 —— 主控台用的是預設比例字型，
@@ -339,6 +353,57 @@ func _cmd_status(args: PackedStringArray) -> void:
 # 不如老實地讓欄名靠左、用顏色區分
 func _field(label_key: String, body: String) -> void:
 	_print("  [color=888888]%s[/color]  %s" % [L10n.t(label_key), body])
+
+# tasks <name>
+#
+# 印出這隻 Agent 的任務池：每筆的 source/action/params/window/分數拆項，
+# 標出目前執行中的那筆跟它已經跑了幾個遊戲分鐘。分數仲裁選出來的結果肉眼
+# 看不出理由，沒有這個指令沒辦法 debug「它為什麼跑去那裡」——
+# 見 [[行程佇列與任務仲裁]]。
+#
+# name 是必填的，不像 status／inv 那樣可以省略：那兩個省略就看玩家自己，
+# 而玩家不可能有任務池（只有 Agent 進 "agents" 群組），預設值會是個永遠失敗的死路
+func _cmd_tasks(args: PackedStringArray) -> void:
+	if args.size() != 1:
+		_error("tasks <name>")
+		return
+
+	var character := _get_character(args[0])
+	if character == null:
+		return
+
+	if not character.is_in_group("agents"):
+		_error("%s 不是 Agent，沒有任務池" % character.character_name)
+		return
+
+	var infos: Array = character.get_task_debug_info()
+	if infos.is_empty():
+		_print("[color=888888]（空池）[/color]")
+		return
+
+	_print("[color=88ccff]%s[/color][color=888888]  目前這筆已執行 %d 遊戲分鐘[/color]" % [
+		character.character_name, character.get_current_task_elapsed_minutes()
+	])
+
+	for info in infos:
+		var task: Dictionary = info["task"]
+		var score: Dictionary = info["score"]
+		var marker := "→" if info["is_current"] else " "
+		var window_note := "" if info["in_window"] else "[color=888888]（窗外）[/color]"
+
+		# 一律 .get()：仲裁器本身允許任務沒有 window（`_in_window_or_unwindowed`
+		# 直接當成隨時可選），硬取 task["window"]["start"] 會在第一筆這種任務上
+		# 崩掉整個指令——而這個指令存在的理由就是拿來看任務池
+		var window = task.get("window")
+		var window_text := "隨時" if window == null else "%s..%s" % [window["start"], window["end"]]
+
+		_print("[color=888888]%s %s[/color]  %s  params=%s  window=%s%s" % [
+			marker, task.get("source", "?"), task.get("action", "?"),
+			JSON.stringify(task.get("params", {})), window_text, window_note,
+		])
+		_print("[color=888888]    score=%.1f = base %.1f + time %.1f + need %.1f + age %.1f[/color]" % [
+			score["total"], score["base"], score["time"], score["need"], score["age"],
+		])
 
 func _get_overlay() -> Node:
 	var overlay := get_tree().get_first_node_in_group("debug_overlay")
@@ -402,17 +467,130 @@ func _cmd_nav(args: PackedStringArray) -> void:
 	nav.rebuild()
 	_print(L10n.tf("CON_NAV_REBUILT", {"region": nav.astar.region, "solid": nav.solid_count}))
 
+# inv [name]                  列出背包，省略就看玩家自己
+# inv give <item_id> [count]  塞測試物品給玩家（decay 類，見下方 add_item 呼叫）
+func _cmd_inv(args: PackedStringArray) -> void:
+	if not args.is_empty() and args[0].to_lower() == "give":
+		_cmd_inv_give(args.slice(1))
+		return
+
+	if args.size() > 1:
+		_error(L10n.t("CON_USAGE_INV"))
+		return
+
+	var character: Character = _get_player() if args.is_empty() else _get_character(args[0])
+	if character == null:
+		return
+
+	if character.inventory == null:
+		_error(L10n.tf("CON_NO_INVENTORY", {"name": character.character_name}))
+		return
+
+	_print("[color=88ccff]%s[/color][color=888888]  %s[/color]" % [
+		character.character_name,
+		L10n.tf("CON_INV_SELECTED", {"index": character.inventory.get_selected_index()}),
+	])
+
+	var entries := character.inventory.get_summary()
+	if entries.is_empty():
+		_print("  " + L10n.t("CON_INV_EMPTY"))
+		return
+
+	for entry in entries:
+		var durability: int = entry["durability"]
+		var detail := (
+			L10n.tf("CON_INV_DURABILITY", {"durability": durability}) if durability >= 0
+			else L10n.tf("CON_INV_DECAY", {"decay": entry["decay"]})
+		)
+		_print("  [color=888888][%02d][/color]  %s x%d%s%s" % [
+			entry["slot"], _escape_bbcode(entry["item_id"]), entry["count"], SEP, detail
+		])
+
+# 一律塞給玩家，測試用不需要指名角色。塞出來的是 decay 類（durability 用預設 -1）——
+# 要測 carry 類不可疊的行為得直接呼叫 Inventory.add_item()，這條指令先求夠用
+func _cmd_inv_give(args: PackedStringArray) -> void:
+	if args.is_empty() or args.size() > 2:
+		_error(L10n.t("CON_USAGE_INV_GIVE"))
+		return
+
+	var player := _get_player()
+	if player == null:
+		return
+
+	if player.inventory == null:
+		_error(L10n.tf("CON_NO_INVENTORY", {"name": player.character_name}))
+		return
+
+	var item_id := args[0]
+	var count := 1
+	if args.size() == 2:
+		# is_valid_int() 對 "0" 和 "-5" 都成立，數量還要自己驗正數
+		if not args[1].is_valid_int() or args[1].to_int() <= 0:
+			_error(L10n.t("CON_USAGE_INV_GIVE"))
+			return
+		count = args[1].to_int()
+
+	# 顯示用的 item_id 要轉義，傳給 add_item() 的那份保持原樣
+	var shown_id := _escape_bbcode(item_id)
+
+	var reason := player.inventory.add_item(item_id, count)
+	if reason != Inventory.ADD_OK:
+		_error(L10n.tf("CON_INV_GIVE_FAILED", {"item": shown_id, "reason": reason}))
+		return
+
+	_print(L10n.tf("CON_INV_GIVE_OK", {
+		"name": player.character_name, "count": count, "item": shown_id
+	}))
+
+# money <amount>   正數走 add_money()，負數走 spend()
+#
+# 沒有查詢用法：金錢已經在 status 的輸出裡，任何角色都查得到。
+# 這條指令只做「改」，而且刻意兩個方向都能走——扣款那條路有餘額檢查，
+# 只能加錢的話 MONEY_NOT_ENOUGH 就沒有辦法從主控台測到
+func _cmd_money(args: PackedStringArray) -> void:
+	# is_valid_int() 對 "0" 成立，但 0 兩邊都不是合法異動，要自己擋
+	if args.size() != 1 or not args[0].is_valid_int() or args[0].to_int() == 0:
+		_error(L10n.t("CON_USAGE_MONEY"))
+		return
+
+	var player := _get_player()
+	if player == null:
+		return
+
+	if player.inventory == null:
+		_error(L10n.tf("CON_NO_INVENTORY", {"name": player.character_name}))
+		return
+
+	var amount := args[0].to_int()
+	var reason := (
+		player.inventory.add_money(amount) if amount > 0
+		else player.inventory.spend(-amount)
+	)
+	if reason != Inventory.MONEY_OK:
+		_error(L10n.tf("CON_MONEY_FAILED", {"reason": reason}))
+		return
+
+	_print(L10n.tf("CON_MONEY_OK", {
+		"name": player.character_name, "money": player.inventory.get_money()
+	}))
+
 # 主控台自己算一個呼叫方，用固定 id 才吃得到 AIService 的速率限制 ——
 # 手動測試如果不受限，就測不出正式呼叫端會遇到的行為
 const AI_REQUESTER_ID := "debug_console"
 const AI_PROBE_SYSTEM := "You are a connection probe. Reply with JSON only, no prose, no code fence: {\"ok\": true, \"echo\": \"<the text field you were given>\"}"
 const AI_PROBE_TEXT := "hello from ailley"
 
-# ai                    用預設探針句打一次（走 SCHEDULED，吃 30 秒冷卻）
-# ai <文字>             改用這段文字當探針
-# ai dialogue [<文字>]  走 CONVERSATION，驗證對話輪次確實豁免冷卻與配額
+# ai                          用預設探針句打一次（走 SCHEDULED，吃 30 秒冷卻）
+# ai <文字>                   改用這段文字當探針
+# ai dialogue [<文字>]        走 CONVERSATION，驗證對話輪次確實豁免冷卻與配額
+# ai @<provider> [<文字>]     指定要測哪個 provider（不指定用 default_provider）
+# ai dialogue @<provider> [<文字>]  兩者可以並用，順序固定：dialogue 在前
 #
-# 兩種都留著才測得出差別：連打兩次 ai 第二次應該被擋，
+# @provider 這個記法是為了不跟探針文字本身混淆——文字通常是一句話，
+# 用 @ 開頭這種明顯不像自然語言開頭的記法，判斷「這個 token 是不是指定
+# provider」不用去猜文字內容像不像 provider 名稱
+#
+# dialogue／SCHEDULED 兩種都留著才測得出差別：連打兩次 ai 第二次應該被擋，
 # 連打兩次 ai dialogue 應該兩次都過
 #
 # 每次都先 reload_config()，玩家剛寫完 user://ai_config.json 不用重開遊戲
@@ -430,9 +608,28 @@ func _cmd_ai(args: PackedStringArray) -> void:
 	# 第一個參數是 dialogue 就切成對話政策，其餘參數仍然是探針句
 	var policy := AIService.Policy.SCHEDULED
 	var rest := args
-	if args.size() > 0 and args[0].to_lower() == "dialogue":
+	if rest.size() > 0 and rest[0].to_lower() == "dialogue":
 		policy = AIService.Policy.CONVERSATION
-		rest = args.slice(1)
+		rest = rest.slice(1)
+
+	# @provider 記法指定要測哪個 provider，不指定就用 default_provider——
+	# 順序固定排在 dialogue 之後，跟 usage 註解裡寫的一樣
+	var provider_name := ""
+	if rest.size() > 0 and rest[0].begins_with("@"):
+		provider_name = rest[0].substr(1)
+		rest = rest.slice(1)
+
+		# 光打一個 @ 要當成打錯，不能放行：has_provider("") 會因為退回
+		# default_provider 而回 true，等於一個明顯的手誤被靜默送去預設服務
+		if provider_name.is_empty():
+			_error("@ 後面要接 provider 名稱，設定檔裡有：%s" % ", ".join(config.providers.keys()))
+			return
+
+		if not config.has_provider(provider_name):
+			_error("找不到 provider「%s」，設定檔裡有：%s" % [
+				provider_name, ", ".join(config.providers.keys())
+			])
+			return
 
 	var usage: Dictionary = AIService.get_usage(AI_REQUESTER_ID)
 	_print("[color=888888]  %s[/color]" % L10n.tf("CON_AI_USAGE", {
@@ -452,12 +649,13 @@ func _cmd_ai(args: PackedStringArray) -> void:
 		"payload": {"type": "ping", "text": text},
 	}
 
-	_print("[color=888888]→ [%s] %s[/color]" % [
+	_print("[color=888888]→ [%s → %s] %s[/color]" % [
 		L10n.t("CON_POLICY_CONVERSATION" if policy == AIService.Policy.CONVERSATION else "CON_POLICY_SCHEDULED"),
+		provider_name if not provider_name.is_empty() else config.default_provider,
 		JSON.stringify(envelope["payload"]),
 	])
 
-	var result: Dictionary = await AIService.request(envelope, AI_REQUESTER_ID, policy)
+	var result: Dictionary = await AIService.request(envelope, AI_REQUESTER_ID, policy, provider_name)
 	if not result["ok"]:
 		_error("← " + L10n.tf("CON_AI_FAILED", {"error": result["error"]}))
 		return
@@ -515,13 +713,17 @@ func _cmd_help(_args: PackedStringArray) -> void:
 		if name == "ai":
 			_help_line("ai dialogue [text]", "HELP_AI_DIALOGUE")
 
-# usage 欄的方括號要轉義成 [lb]，否則會被當成 BBCode 標籤吃掉 ——
+# 方括號要轉義成 [lb]，否則會被當成 BBCode 標籤吃掉 ——
 # 「locale [code]」裡的 [code] 剛好是 RichTextLabel 真的認得的標籤，
-# 不轉義的話整行會渲染成「locale [/color]」。這裡一律轉義，
-# 之後加指令就不必去記哪些字剛好撞名
+# 不轉義的話整行會渲染成「locale [/color]」。凡是要進 _print() 的
+# 非固定字串（usage 欄、使用者打進來的參數）都經過這裡，
+# 就不必去記哪些字剛好撞名
+func _escape_bbcode(text: String) -> String:
+	return text.replace("[", "[lb]")
+
 func _help_line(usage: String, key: String) -> void:
 	_print("[color=88ccff]%s[/color]\n  [color=888888]%s[/color]" % [
-		usage.replace("[", "[lb]"), L10n.t(key)
+		_escape_bbcode(usage), L10n.t(key)
 	])
 
 func _cmd_clear(_args: PackedStringArray) -> void:

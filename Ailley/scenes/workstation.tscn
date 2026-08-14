@@ -1,0 +1,22 @@
+[gd_scene load_steps=3 format=3 uid="uid://c5fffesir3r4v"]
+
+[ext_resource type="Script" uid="uid://jkwrbwolvne7" path="res://scripts/world/workstation.gd" id="1_f6vdx"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_iqqjh"]
+size = Vector2(16, 10)
+
+[node name="Workstation" type="StaticBody2D"]
+script = ExtResource("1_f6vdx")
+
+[node name="Polygon2D" type="Polygon2D" parent="."]
+color = Color(0.3647059, 0.2901961, 0.21960784, 1)
+polygon = PackedVector2Array(-8, -5, 8, -5, 8, 5, -8, 5)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("RectangleShape2D_iqqjh")
+
+[node name="Highlight" type="Line2D" parent="."]
+visible = false
+points = PackedVector2Array(-10, -7, 10, -7, 10, 7, -10, 7)
+closed = true
+width = 1.0
