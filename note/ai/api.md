@@ -175,13 +175,17 @@ func get_facing_direction() -> Vector2       # Character 基底，facing/flip_h 
 func _get_interact_candidates() -> Dictionary  # {workstation, machine, other, to_work, to_machine, to_other}
 ```
 
-```
+```text
 輸入優先：一按方向鍵就 stop_moving() 中斷 A*
+販賣機選單開著時（vending_menu.is_open()）：interact(E) 整段跳過，事件原樣
+  往下傳給 vending_menu.gd 自己的 _unhandled_input 處理；_process() 清空
+  全部互動高亮並直接 return——選單不擋移動，這時候走位/轉向不該讓高亮亂跳
 interact(E)：對話中→leave_conversation()；否則呼叫 _get_interact_candidates()，
-  workstation/machine/other 三個候選比 to_* 分數，近的先試，失敗（OCCUPIED/BUSY…）
-  再退回另一個。兩邊都失敗只 push_warning
+  workstation/machine/other 三個候選比 to_* 分數，分數最低的先試。workstation
+  失敗（OCCUPIED/BUSY）只 push_warning，不會改試 machine，直接掉到
+  talk_to(other)；machine 成功只是開商品選單，不算「完成互動」
 _process()：每幀重算 _get_interact_candidates()，跟 E 會打到誰同一套判斷，
-  更新 Workstation/VendingMachine 的 Highlight 節點與 Character.set_highlighted()
+  更新 Workstation/VendingMachine 的 Highlight 節點與 Character.set_interact_highlighted()
   ——玩家即時看得到「E 現在會打到誰」（issue #81）
 make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不會冒 !?
 † gui_get_focus_owner() != null 時 get_input_direction() 回 ZERO

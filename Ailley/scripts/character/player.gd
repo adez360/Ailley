@@ -132,9 +132,9 @@ func _priority_distance(target: Vector2) -> float:
 ## 框架，兩個物件不值得先蓋一層抽象」，Workstation／VendingMachine 本來就是
 ## 兩個獨立腳本、沒有共用基底
 func _get_interact_candidates() -> Dictionary:
-	var workstation := find_nearest_workstation()
-	var machine := find_nearest_vending_machine()
-	var other := find_nearest_character()
+	var workstation := _nearest_by_priority("workstations", WORK_RANGE, func(n): return n.global_position) as Workstation
+	var machine := _nearest_by_priority("vending_machines", BUY_RANGE, func(n): return n.global_position) as VendingMachine
+	var other := _nearest_by_priority("characters", TALK_RANGE, func(n): return (n as Character).get_body_position()) as Character
 
 	# 不在範圍內的候選距離是 INF，直接輸掉比較，不用另外再寫一層 null 判斷
 	return {
@@ -145,6 +145,32 @@ func _get_interact_candidates() -> Dictionary:
 		"to_machine": _priority_distance(machine.global_position) if machine != null else INF,
 		"to_other": _priority_distance(other.get_body_position()) if other != null else INF,
 	}
+
+## 同一類（工作站／販賣機／角色）裡，`_priority_distance()` 分數最低的那個。
+## **不是**用 `Character.find_nearest_workstation()` 那系列——那些是純比物理
+## 距離選一個，會讓較近但沒被面向的候選在選取那一步就把較遠但被面向的候選
+## 擋掉，永遠沒機會進入分數比較（CodeRabbit review 抓到：兩隻 Agent 站在
+## 玩家前後時，背後 8px 沒被面向的那隻會讓正前方 20px 被面向的那隻完全不
+## 參與比較）。範圍篩選仍然用物理距離（沒面向的候選被判「超出範圍」不合理，
+## 面向懲罰只該影響同樣在範圍內的候選之間怎麼排序，不該影響在不在範圍內）
+func _nearest_by_priority(group: String, max_distance: float, position_of: Callable) -> Node2D:
+	var best: Node2D = null
+	var best_score := INF
+
+	for node in get_tree().get_nodes_in_group(group):
+		if node == self:
+			continue
+
+		var target: Vector2 = position_of.call(node)
+		if get_body_position().distance_to(target) > max_distance:
+			continue
+
+		var score := _priority_distance(target)
+		if score < best_score:
+			best_score = score
+			best = node
+
+	return best
 
 # 每幀重算一次「E 現在會打到誰」並更新高亮，跟 selection.gd::_update_hover()
 # 同一種寫法——目標沒變就不重複呼叫 set_highlighted()。對話中不顯示任何
@@ -213,11 +239,13 @@ func _set_highlighted_machine(target: VendingMachine) -> void:
 func _set_highlighted_other(target: Character) -> void:
 	if target == _highlighted_other:
 		return
+	# 用 set_interact_highlighted() 不是 set_highlighted()：後者是滑鼠 hover
+	# （selection.gd）在用的欄位，兩邊合用會互相蓋掉對方還想要的高亮狀態
 	if is_instance_valid(_highlighted_other):
-		_highlighted_other.set_highlighted(false)
+		_highlighted_other.set_interact_highlighted(false)
 	_highlighted_other = target
 	if _highlighted_other != null:
-		_highlighted_other.set_highlighted(true)
+		_highlighted_other.set_interact_highlighted(true)
 
 # 讀取 WASD 輸入，回傳正規化後的方向（斜向不會加速）
 func get_input_direction() -> Vector2:

@@ -102,6 +102,14 @@ var _path := PackedVector2Array()
 var _path_index := 0
 var _stuck_timer := 0.0
 var _conversation: Node = null
+
+# 滑鼠 hover（selection.gd）跟 E 鍵目前的互動目標（player.gd）是兩個獨立的
+# 高亮來源，任一個成立就該顯示描邊。分開存，不是合用一個布林值——CodeRabbit
+# review 抓到的問題：合用的話，一邊把它關掉（例如滑鼠移開）會連帶關掉另一邊
+# 還想要的描邊（例如玩家還面向著這個人），而且兩邊都是「目標沒變就不重呼叫」
+# 的 edge-triggered 寫法，被對方關掉之後不會自己補回來
+var _mouse_highlighted := false
+var _interact_highlighted := false
 var _highlighted := false
 var _outline: ShaderMaterial = null
 
@@ -533,9 +541,20 @@ func get_pick_rect() -> Rect2:
 func is_highlighted() -> bool:
 	return _highlighted
 
-# 描一圈邊表示滑鼠正指著這個角色。
-# 材質是第一次要用才建，沒被指到過的角色不會多背一份
+# 滑鼠指到時呼叫（selection.gd）
 func set_highlighted(on: bool) -> void:
+	_mouse_highlighted = on
+	_apply_highlight()
+
+# 目前是不是 E 鍵的互動目標時呼叫（player.gd）
+func set_interact_highlighted(on: bool) -> void:
+	_interact_highlighted = on
+	_apply_highlight()
+
+# 描一圈邊表示滑鼠指到、或是目前的互動目標，兩者任一成立即可。
+# 材質是第一次要用才建，沒被指到過的角色不會多背一份
+func _apply_highlight() -> void:
+	var on := _mouse_highlighted or _interact_highlighted
 	if on == _highlighted:
 		return
 
