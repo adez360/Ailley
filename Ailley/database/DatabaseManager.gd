@@ -206,15 +206,37 @@ func insert(
 		return false
 
 
+	# Validate table name
+	if not _is_valid_identifier(table):
+
+		push_error(
+			"[Database] Invalid table name: "
+			+ table
+		)
+
+		return false
+
+
 	var columns: Array[String] = []
 	var values: Array[String] = []
 
 
 	for key in data.keys():
 
-		columns.append(
-			str(key)
-		)
+		var column := str(key)
+
+		# Validate column name
+		if not _is_valid_identifier(column):
+
+			push_error(
+				"[Database] Invalid column name: "
+				+ column
+			)
+
+			return false
+
+
+		columns.append(column)
 
 		values.append(
 			_sql_value(data[key])
@@ -271,15 +293,39 @@ func update(
 		return false
 
 
+	# Validate table name
+	if not _is_valid_identifier(table):
+
+		push_error(
+			"[Database] Invalid table name: "
+			+ table
+		)
+
+		return false
+
+
 	var assignments: Array[String] = []
 
 
 	for key in data.keys():
 
+		var column := str(key)
+
+		# Validate column name
+		if not _is_valid_identifier(column):
+
+			push_error(
+				"[Database] Invalid column name: "
+				+ column
+			)
+
+			return false
+
+
 		assignments.append(
 			"%s = %s"
 			% [
-				str(key),
+				column,
 				_sql_value(data[key])
 			]
 		)
@@ -321,6 +367,17 @@ func delete(
 
 		push_error(
 			"[Database] DELETE requires WHERE clause."
+		)
+
+		return false
+
+
+	# Validate table name
+	if not _is_valid_identifier(table):
+
+		push_error(
+			"[Database] Invalid table name: "
+			+ table
 		)
 
 		return false
@@ -437,3 +494,26 @@ func _escape_string(
 		"'",
 		"''"
 	)
+
+
+# ======================================================
+# SQL Identifier Validation
+# ======================================================
+
+func _is_valid_identifier(
+	identifier: String
+) -> bool:
+
+	# SQLite identifiers: alphanumeric + underscore
+	# Must start with letter or underscore
+	# No whitespace, quotes, or special SQL chars
+
+	if identifier.is_empty():
+		return false
+
+
+	var regex := RegEx.new()
+	regex.compile("^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+	return regex.search(identifier) != null

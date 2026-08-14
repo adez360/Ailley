@@ -595,6 +595,26 @@ static func update_memory(
 
 
 	# --------------------------------------------------------
+	# Whitelist allowed columns for memories table
+	# --------------------------------------------------------
+
+	const ALLOWED_COLUMNS := [
+		"level",
+		"content",
+		"valence",
+		"importance",
+		"decay_value",
+		"embedding"
+	]
+
+
+	# Remove any columns not in whitelist
+	for key in update_data.keys():
+		if not key in ALLOWED_COLUMNS:
+			update_data.erase(key)
+
+
+	# --------------------------------------------------------
 	# 驗證
 	# --------------------------------------------------------
 

@@ -15,10 +15,10 @@ static func create(db) -> bool:
 		slot INTEGER NOT NULL,
 
 		item_id TEXT NOT NULL,
-		
+
 		-- 數量
-		count INTEGER NOT NULL DEFAULT 0
-			CHECK (count >= 0),
+		count INTEGER NOT NULL DEFAULT 1
+			CHECK (count > 0),
 			
 		-- 腐壞值，100 = 完全腐壞
 		decay INTEGER NOT NULL DEFAULT 0

@@ -9,9 +9,9 @@ static func create(db) -> bool:
 
 		transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
 
-		from_npc_id INTEGER,
+		from_npc_id TEXT,
 
-		to_npc_id INTEGER,
+		to_npc_id TEXT,
 
 		amount INTEGER NOT NULL,
 
@@ -23,11 +23,11 @@ static func create(db) -> bool:
 
 		FOREIGN KEY (from_npc_id)
 			REFERENCES npc(npc_id)
-			ON DELETE SET NULL,
+			ON DELETE CASCADE,
 
 		FOREIGN KEY (to_npc_id)
 			REFERENCES npc(npc_id)
-			ON DELETE SET NULL,
+			ON DELETE CASCADE,
 
 		CHECK (amount > 0),
 

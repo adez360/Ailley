@@ -30,7 +30,7 @@ static func create(db) -> bool:
 		words_to_creator TEXT DEFAULT '',
 
 		-- 角色對造物主的話是否已說出
-		is_spoken INTEGER NOT NULL DEFAULT 1
+		is_spoken INTEGER NOT NULL DEFAULT 0
 			CHECK (
 				is_spoken IN (0, 1)
 			),

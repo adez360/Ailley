@@ -13,7 +13,7 @@ static func create(db) -> bool:
 	var sql := """
 	CREATE TABLE IF NOT EXISTS npc_condition (
 
-		npc_id TEXT PRIMARY KEY,
+		npc_id TEXT NOT NULL,
 
 		-- 生理衍生（由 state.physical 自動觸發） / 社會狀態 / 行動佔用 / 終局狀態
 		type TEXT NOT NULL
@@ -37,7 +37,10 @@ static func create(db) -> bool:
 			),
 
 		-- 剩餘 tick。-1 表示持續到條件解除為止
-		turns_left INTEGER NOT NULL DEFAULT 0,
+		turns_left INTEGER NOT NULL DEFAULT 0
+			CHECK (turns_left >= -1),
+
+		PRIMARY KEY (npc_id, type),
 
 		updated_at TEXT NOT NULL
 			DEFAULT CURRENT_TIMESTAMP,

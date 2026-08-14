@@ -25,11 +25,11 @@ static func create(db) -> bool:
 
 		FOREIGN KEY (from_npc_id)
 			REFERENCES npc(npc_id)
-			ON DELETE SET NULL,
+			ON DELETE RESTRICT,
 
 		FOREIGN KEY (to_npc_id)
 			REFERENCES npc(npc_id)
-			ON DELETE SET NULL,
+			ON DELETE RESTRICT,
 
 		FOREIGN KEY (item_id)
 			REFERENCES item(item_id)
