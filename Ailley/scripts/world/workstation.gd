@@ -16,9 +16,19 @@ extends StaticBody2D
 
 var occupant: Character = null
 
+## E 鍵現在會打到誰的即時提示（issue #81）——player.gd 每幀算一次「E 會先試
+## 誰」，是這個工作站就打開它。不是 Character，沒有 character_outline.gdshader
+## 那套可用（shader 靠 sprite 圖集的 alpha 邊界抓輪廓，這裡的 Polygon2D 是
+## 純色填滿，沒有邊界可抓），改用場景裡另外擺的 Line2D 描一圈白框
+@onready var highlight: Line2D = get_node_or_null("Highlight")
+
 
 func _ready() -> void:
 	add_to_group("workstations")
+
+func set_highlighted(on: bool) -> void:
+	if highlight != null:
+		highlight.visible = on
 
 # 用 is_instance_valid() 不用 `occupant != null`：Godot 4 裡被 free 掉的物件
 # `!= null` 仍然成立，所以佔用者被移除（換場景、日後的 despawn）之後，工作站會

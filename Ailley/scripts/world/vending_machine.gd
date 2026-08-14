@@ -23,9 +23,17 @@ const CATALOG := {
 	"ale": 10,
 }
 
+## E 鍵現在會打到誰的即時提示（issue #81），跟 workstation.gd 同一招——見它
+## 的 highlight 欄位註解
+@onready var highlight: Line2D = get_node_or_null("Highlight")
+
 
 func _ready() -> void:
 	add_to_group("vending_machines")
+
+func set_highlighted(on: bool) -> void:
+	if highlight != null:
+		highlight.visible = on
 
 # 找不到的 item_id 回 -1，不是 0——0 是合法的免費商品價格，不能拿來當「沒有」的哨兵值
 func get_price(item_id: String) -> int:

@@ -96,6 +96,7 @@ const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 @export var character_name := ""             # 顯示名，可改可撞，留空→節點名小寫
 static func generate_id() -> String           # RFC 4122 v4，不帶語意，別解析它
 var facing := "front"                        # front|back|right
+func get_facing_direction() -> Vector2       # facing/sprite.flip_h 重建成單位向量
 
 # 元件（子節點，皆 get_node_or_null，沒掛不會壞）
 stats: Stats · relationships: Relationships · bubble: Node2D · vision: Vision · inventory: Inventory
@@ -171,20 +172,35 @@ get_state_snapshot() -> {
 
 ```gdscript
 func get_input_direction() -> Vector2        # WASD 正規化
+func get_facing_direction() -> Vector2       # Character 基底，facing/flip_h 重建方向向量
+func _get_interact_candidates() -> Dictionary  # {workstation, machine, other, to_work, to_machine, to_other}
 ```
 
 ```text
 輸入優先：一按方向鍵就 stop_moving() 中斷 A*
-interact(E)：對話中→leave_conversation()；否則→工作站與最近的人**比距離**，近的先試，
-  失敗（OCCUPIED / BUSY…）再退回另一個。兩邊都失敗只 push_warning
+販賣機選單開著時（vending_menu.is_open()）：interact(E) 整段跳過，事件原樣
+  往下傳給 vending_menu.gd 自己的 _unhandled_input 處理；_process() 清空
+  全部互動高亮並直接 return——選單不擋移動，這時候走位/轉向不該讓高亮亂跳
+interact(E)：對話中→leave_conversation()；否則呼叫 _get_interact_candidates()，
+  workstation/machine/other 三個候選比 to_* 分數，分數最低的先試。workstation
+  失敗（OCCUPIED/BUSY）只 push_warning，不會改試 machine，直接掉到
+  talk_to(other)；machine 成功只是開商品選單，不算「完成互動」
+_process()：每幀重算 _get_interact_candidates()，跟 E 會打到誰同一套判斷，
+  更新 Workstation/VendingMachine 的 Highlight 節點與 Character.set_interact_highlighted()
+  ——玩家即時看得到「E 現在會打到誰」（issue #81）
 make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不會冒 !?
 † gui_get_focus_owner() != null 時 get_input_direction() 回 ZERO
   Input.get_axis() 讀全域狀態，LineEdit 攔不住
-⚠ E 不能無條件讓工作站優先 — 桌子很容易落在地點錨點的互動半徑內
-  （main.tscn 那張距 `square` 23px < WORK_RANGE 32），而 agent 行程正好把人帶去錨點，
-  那個點上的搭話會整個死掉
+† 候選先被 _is_facing()（cone 判定）篩過一輪，沒被玩家面向的直接不算候選——
+  即使範圍內只有它一個、沒有別的候選能比，沒面向就是選不到。to_work/to_machine/
+  to_other 是通過面向篩選後剩下候選的原始距離
+⚠ 純比距離會讓工作站/販賣機永遠打不到——桌子/販賣機很容易落在地點錨點的
+  互動半徑內，agent 行程正好把人帶去那個錨點，NPC 幾乎必然比物件更近
+⚠ 面向判定不是萬能解，四個真實朝向裡仍有一組會選錯（見 [[工作站]]），
+  這是即時高亮存在的理由，不是純粹的裝飾
 ⚠ work_at() 失敗必須往下掉到搭話，不能 return — 否則工作站被佔用時 E 完全沒反應
 搭話失敗對玩家靜默，只有主控台印原因碼
+→ 技術/工作站（E 鍵優先序與即時高亮）
 ```
 
 ## Agent — scripts/character/agent.gd · extends Character
@@ -393,6 +409,7 @@ var occupant: Character                      # 目前佔用者，沒人是 null
 func is_occupied() -> bool                   # is_instance_valid(occupant)
 func try_occupy(character) -> bool           # 已被佔用回 false
 func release(character) -> void              # 只有目前佔用者叫得動
+func set_highlighted(on: bool) -> void       # 切換 Highlight（Line2D）節點的 visible
 ```
 
 ```text
