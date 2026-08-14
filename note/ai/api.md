@@ -190,8 +190,9 @@ _process()：每幀重算 _get_interact_candidates()，跟 E 會打到誰同一�
 make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不會冒 !?
 † gui_get_focus_owner() != null 時 get_input_direction() 回 ZERO
   Input.get_axis() 讀全域狀態，LineEdit 攔不住
-† to_work/to_machine/to_other 不是原始距離，是 _priority_distance()：候選沒被
-  玩家面向（cone 判定，_is_facing()）就加大懲罰值，面向優先於距離
+† 候選先被 _is_facing()（cone 判定）篩過一輪，沒被玩家面向的直接不算候選——
+  即使範圍內只有它一個、沒有別的候選能比，沒面向就是選不到。to_work/to_machine/
+  to_other 是通過面向篩選後剩下候選的原始距離
 ⚠ 純比距離會讓工作站/販賣機永遠打不到——桌子/販賣機很容易落在地點錨點的
   互動半徑內，agent 行程正好把人帶去那個錨點，NPC 幾乎必然比物件更近
 ⚠ 面向判定不是萬能解，四個真實朝向裡仍有一組會選錯（見 [[工作站]]），

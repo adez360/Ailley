@@ -95,11 +95,6 @@ func _unhandled_input(event: InputEvent) -> void:
 # 半圓都算數（那樣就跟沒篩選一樣）
 const FACING_DOT_THRESHOLD := 0.5
 
-# 沒被面向的候選要加多少距離懲罰，才能保證面向著的候選一定贏。
-# 場景裡任何互動距離（TALK_RANGE/WORK_RANGE/BUY_RANGE）都是 32px，
-# 這個值只要遠大於場景尺寸就夠，不需要精算
-const UNFACED_DISTANCE_PENALTY := 10000.0
-
 # target 是不是落在玩家目前面向的方向上。target 就在腳下（距離 0，理論上
 # 不會發生，但除以零要擋）視為面向著，避免這種邊界情況把候選判掉
 func _is_facing(target: Vector2) -> bool:
@@ -108,66 +103,65 @@ func _is_facing(target: Vector2) -> bool:
 		return true
 	return get_facing_direction().dot(to_target.normalized()) >= FACING_DOT_THRESHOLD
 
-# 給互動優先序比較用的「有效距離」：面向著就是原始距離，沒面向就加懲罰值，
-# 讓「有沒有被面向」變成比較時的第一層篩選，見呼叫端的說明
-func _priority_distance(target: Vector2) -> float:
-	var distance := get_body_position().distance_to(target)
-	return distance if _is_facing(target) else distance + UNFACED_DISTANCE_PENALTY
-
-## 找出目前附近的三種互動候選（工作站／販賣機／可搭話的人）跟各自的優先序
-## 分數。`_unhandled_input()`（按 E 真的觸發）跟 `_process()`（每幀更新高亮）
-## 共用這個函式——兩邊要看到同一個答案，不然會出現「亮的是這個，按下去卻
-## 打到另一個」的狀況，比原本沒有高亮更誤導人。
+## 找出目前附近的三種互動候選（工作站／販賣機／可搭話的人）跟各自的距離。
+## `_unhandled_input()`（按 E 真的觸發）跟 `_process()`（每幀更新高亮）共用
+## 這個函式——兩邊要看到同一個答案，不然會出現「亮的是這個，按下去卻打到
+## 另一個」的狀況，比原本沒有高亮更誤導人。
 ##
 ## 純比距離會撞到 issue #81：桌子與販賣機都是擺在世界裡的固定物件，很容易
 ## 落在某個地點錨點的互動半徑內（`square` 那張距錨點 21px < WORK_RANGE 32），
 ## agent 的行程又正好把 NPC 帶去那些錨點，NPC 幾乎必然比物件更近，物件因此
-## 永遠打不到。改成先比「有沒有面向它」（見 _priority_distance()），距離只在
-## 同樣有沒有被面向的候選之間才決勝負；都沒人被面向時（例如玩家側身站在
-## 中間，沒有明確對著誰）大家一起加懲罰值，排序不變，自然退回純比距離那套
-## ——這是刻意保留的保底，不然一般搭話情境會被這次改動連坐弄壞。
+## 永遠打不到。改成先用 `_is_facing()` 把沒面向的候選直接排除，玩家沒面向
+## 任何東西時三個候選都是 null——這是刻意拍板的硬性門檻，不是「面向只影響
+## 排序」：站在物件正上方但背對著，不該選得到它，玩家得自己轉身面對。
 ##
 ## 這套判斷沒有做成套用任何「可互動物件」共通分類的通用系統，是延續 #63
 ## 的決定，不是這次漏做——見 note/技術/販賣機.md：「不做一套通用的互動物件
 ## 框架，兩個物件不值得先蓋一層抽象」，Workstation／VendingMachine 本來就是
 ## 兩個獨立腳本、沒有共用基底
 func _get_interact_candidates() -> Dictionary:
-	var workstation := _nearest_by_priority("workstations", WORK_RANGE, func(n): return n.global_position) as Workstation
-	var machine := _nearest_by_priority("vending_machines", BUY_RANGE, func(n): return n.global_position) as VendingMachine
-	var other := _nearest_by_priority("characters", TALK_RANGE, func(n): return (n as Character).get_body_position()) as Character
+	var workstation := _nearest_facing("workstations", WORK_RANGE, func(n): return n.global_position) as Workstation
+	var machine := _nearest_facing("vending_machines", BUY_RANGE, func(n): return n.global_position) as VendingMachine
+	var other := _nearest_facing("characters", TALK_RANGE, func(n): return (n as Character).get_body_position()) as Character
 
-	# 不在範圍內的候選距離是 INF，直接輸掉比較，不用另外再寫一層 null 判斷
+	# 不在範圍內／沒被面向的候選距離是 INF，直接輸掉比較，不用另外再寫一層
+	# null 判斷
 	return {
 		"workstation": workstation,
 		"machine": machine,
 		"other": other,
-		"to_work": _priority_distance(workstation.global_position) if workstation != null else INF,
-		"to_machine": _priority_distance(machine.global_position) if machine != null else INF,
-		"to_other": _priority_distance(other.get_body_position()) if other != null else INF,
+		"to_work": get_body_position().distance_to(workstation.global_position) if workstation != null else INF,
+		"to_machine": get_body_position().distance_to(machine.global_position) if machine != null else INF,
+		"to_other": get_body_position().distance_to(other.get_body_position()) if other != null else INF,
 	}
 
-## 同一類（工作站／販賣機／角色）裡，`_priority_distance()` 分數最低的那個。
+## 同一類（工作站／販賣機／角色）裡，玩家面向著的、距離最近的那個。沒面向
+## 的候選直接跳過，不進距離比較——即使範圍內只有這一個候選，沒面向就是
+## 沒面向，不會因為沒有對手就選到它。
+##
 ## **不是**用 `Character.find_nearest_workstation()` 那系列——那些是純比物理
 ## 距離選一個，會讓較近但沒被面向的候選在選取那一步就把較遠但被面向的候選
-## 擋掉，永遠沒機會進入分數比較（CodeRabbit review 抓到：兩隻 Agent 站在
+## 擋掉，永遠沒機會進入距離比較（CodeRabbit review 抓到：兩隻 Agent 站在
 ## 玩家前後時，背後 8px 沒被面向的那隻會讓正前方 20px 被面向的那隻完全不
-## 參與比較）。範圍篩選仍然用物理距離（沒面向的候選被判「超出範圍」不合理，
-## 面向懲罰只該影響同樣在範圍內的候選之間怎麼排序，不該影響在不在範圍內）
-func _nearest_by_priority(group: String, max_distance: float, position_of: Callable) -> Node2D:
+## 參與比較）
+func _nearest_facing(group: String, max_distance: float, position_of: Callable) -> Node2D:
 	var best: Node2D = null
-	var best_score := INF
+	var best_distance := INF
 
 	for node in get_tree().get_nodes_in_group(group):
 		if node == self:
 			continue
 
 		var target: Vector2 = position_of.call(node)
-		if get_body_position().distance_to(target) > max_distance:
+		if not _is_facing(target):
 			continue
 
-		var score := _priority_distance(target)
-		if score < best_score:
-			best_score = score
+		var distance := get_body_position().distance_to(target)
+		if distance > max_distance:
+			continue
+
+		if distance < best_distance:
+			best_distance = distance
 			best = node
 
 	return best
