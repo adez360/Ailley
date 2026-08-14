@@ -1,4 +1,4 @@
-[gd_scene load_steps=29 format=4 uid="uid://bianwxowjctjk"]
+[gd_scene load_steps=30 format=4 uid="uid://bianwxowjctjk"]
 
 [ext_resource type="Script" path="res://scripts/ui/pause.gd" id="1_a8y0u"]
 [ext_resource type="PackedScene" uid="uid://v21qv1icuh5m" path="res://scenes/player.tscn" id="1_ljsu2"]
@@ -22,6 +22,7 @@
 [ext_resource type="Script" path="res://scripts/ui/hotbar.gd" id="17_muem4"]
 [ext_resource type="Script" path="res://scripts/ui/vending_menu.gd" id="21_jscy8"]
 [ext_resource type="Script" uid="uid://cbam2d1y61423" path="res://database/DatabaseManager.gd" id="22_jscy8"]
+[ext_resource type="Script" uid="uid://batlioqp1v1a6" path="res://database/InventoryDatabaseSync.gd" id="23_pm3ni"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_pl1ev"]
 texture = ExtResource("3_y8peb")
@@ -461,3 +462,6 @@ horizontal_alignment = 1
 
 [node name="SQLite" type="Node" parent="."]
 script = ExtResource("22_jscy8")
+
+[node name="InventoryDatabaseSync" type="Node" parent="."]
+script = ExtResource("23_pm3ni")
