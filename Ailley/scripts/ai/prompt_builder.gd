@@ -94,7 +94,7 @@ static func _self_block(character: Character) -> Dictionary:
 		"id": snapshot["id"],
 		"name": snapshot["name"],
 		"stats": snapshot.get("stats", {}),
-		"reputation": snapshot.get("reputation", 0),
+		"reputation": snapshot["reputation"],
 		"time": {"hour": GameClock.hour, "minute": GameClock.minute},
 		"place": schedule.get("place", ""),
 		"current_action": schedule.get("state", ""),
@@ -109,6 +109,7 @@ static func _listener_block(speaker: Character, listener: Character) -> Dictiona
 
 	return {
 		"name": listener.character_name,
+		"reputation": listener.reputation,
 		"affinity": affinity,
 		"met_count": met_count,
 	}
