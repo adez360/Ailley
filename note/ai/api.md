@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-13
+updated: 2026-08-14
 ---
 
 # api
@@ -312,7 +312,10 @@ mood     心情    0.5    50      50     ✗        ""
 
 ```gdscript
 const AFFINITY_MIN := -100.0 · AFFINITY_MAX := 100.0
-const DEFAULT_RECORD := {"affinity": 0.0, "met_count": 0}
+const TRUST_MIN := 0.0 · TRUST_MAX := 100.0
+const FAMILIARITY_MIN := 0.0 · FAMILIARITY_MAX := 100.0
+const DEBT_MIN := -100.0 · DEBT_MAX := 100.0
+const DEFAULT_RECORD := {"affinity": 0.0, "trust": 20.0, "familiarity": 0.0, "debt": 0.0, "met_count": 0}
 var records := {}                            # other_id -> record
 
 # 唯讀 — 不會建立紀錄
@@ -320,11 +323,17 @@ func has_met(other_id) -> bool               # met_count > 0，只認 note_meeti
 func has_record(other_id) -> bool            # 有沒有任何紀錄（見過但沒講完 = true/false）
 func get_record(other_id) -> Dictionary      # 副本，改它不會動到內部
 func get_affinity(other_id) -> float         # 沒紀錄回 0.0
+func get_trust(other_id) -> float            # 沒紀錄回 20.0（不是 0——初識不是完全不信任）
+func get_familiarity(other_id) -> float      # 沒紀錄回 0.0
+func get_debt(other_id) -> float             # 沒紀錄回 0.0；正=我欠他，負=他欠我
 func get_met_count(other_id) -> int
 func known_ids() -> Array
 
-# 寫入 — 走私有的 _ensure_record()
-func add_affinity(other_id, delta) -> float  # 回夾限後的新值
+# 寫入 — 走私有的 _ensure_record()，四維都回夾限後的新值
+func add_affinity(other_id, delta) -> float
+func add_trust(other_id, delta) -> float
+func add_familiarity(other_id, delta) -> float
+func add_debt(other_id, delta) -> float
 func note_meeting(other_id) -> void          # has_met() 為真的唯一來源
 ```
 
@@ -334,6 +343,10 @@ func note_meeting(other_id) -> void          # has_met() 為真的唯一來源
 ⚠ 讀寫必須分開：get_affinity() 曾經走「沒有就當場建一筆」，於是 conversation.gd
   開場問一次好感度就讓 has_met() 永遠為真而 met_count 還是 0
   → agent.gd 的「第一次看到陌生人」永遠不成立
+† trust/familiarity/debt 範圍與預設值照規格《01》3-1 表定死，不是隨意選的
+  （trust 預設 20 尤其容易看錯，別跟其餘三維一樣當成 0）
+† 這四維實際被哪些行動讀寫（persuade 用 trust、give 影響 debt……）還沒接線，
+  見 99 待規劃；目前只有欄位本身、查詢與寫入函式
 → 技術/talk 動作設計
 ```
 
