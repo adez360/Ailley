@@ -117,24 +117,12 @@ static func create(db) -> bool:
 	-- Index
 	-- =====================================================
 
-	CREATE INDEX IF NOT EXISTS
-	idx_npc_death_npc
-	ON npc_death(npc_id);
-
+	-- npc_id 是 NOT NULL UNIQUE，SQLite 自己就會建 index，不用再建一次。
+	-- is_dead / is_buried 只有兩種值，query planner 不會用。
 
 	CREATE INDEX IF NOT EXISTS
 	idx_npc_death_location
 	ON npc_death(death_location_id);
-
-
-	CREATE INDEX IF NOT EXISTS
-	idx_npc_death_dead
-	ON npc_death(is_dead);
-
-
-	CREATE INDEX IF NOT EXISTS
-	idx_npc_death_buried
-	ON npc_death(is_buried);
 	"""
 
 

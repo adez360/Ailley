@@ -52,7 +52,7 @@ static func create(db) -> bool:
 		-- 一個 NPC 對應一筆人格
 		-- =================================================
 
-		npc_id INTEGER NOT NULL UNIQUE,
+		npc_id TEXT NOT NULL UNIQUE,
 
 
 		-- =================================================

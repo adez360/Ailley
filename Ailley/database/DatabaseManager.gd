@@ -2,16 +2,17 @@ extends Node
 
 ## Ailley SQLite Database Manager
 ##
-## 負責：
-## 1. 開啟 SQLite
-## 2. 建立資料庫 Schema
-## 3. 執行 SQL
-## 4. SELECT
-## 5. INSERT
-## 6. UPDATE
-## 7. DELETE
-## 8. Transaction
-## 9. 執行初始資料 Seeder
+## 只負責三件事：
+## 1. 開啟 user://game.db
+## 2. 建立所有資料表（實際內容在 DatabaseSchema）
+## 3. 把 godot-sqlite 的 CRUD 轉出去
+##
+## CRUD 一律走 addon 的 insert_row / select_rows / update_rows / delete_rows，
+## 值會由 addon 綁定成參數。不要自己把值拼進 SQL 字串 ——
+## 這個專案的記憶內容是 LLM 產的，拼字串等於把它交給模型改寫。
+##
+## conditions 參數是 WHERE 子句（不含 WHERE 關鍵字），它是原始 SQL，
+## 只能由程式碼自己組，不可以放模型或玩家輸入的字串。
 
 
 const DATABASE_PATH := "user://game.db"
@@ -22,418 +23,135 @@ var is_ready := false
 
 
 func _ready() -> void:
-
-	print("[Database] Initializing database...")
-
-
-	# ==================================================
-	# 建立 SQLite
-	# ==================================================
-
 	db = SQLite.new()
-
 	db.path = DATABASE_PATH
 
-
-	# ==================================================
-	# 開啟資料庫
-	# ==================================================
+	# 必須在 open_db() 之前設定：addon 是在開檔時才送出 PRAGMA foreign_keys
+	db.foreign_keys = true
 
 	if not db.open_db():
-
 		push_error(
-			"[Database] Failed to open database: "
-			+ DATABASE_PATH
+			"[Database] Failed to open %s: %s"
+			% [DATABASE_PATH, db.error_message]
 		)
-
 		return
 
+	if not DatabaseSchema.initialize(db):
+		db.close_db()
+		return
 
 	is_ready = true
 
-
-	print(
-		"[Database] Database opened successfully: ",
-		DATABASE_PATH
-	)
+	print("[Database] Ready: ", DATABASE_PATH)
 
 
-	# ==================================================
-	# 啟用 Foreign Key
-	# ==================================================
-
-	if not db.query(
-		"PRAGMA foreign_keys = ON;"
-	):
-
-		push_error(
-			"[Database] Failed to enable foreign keys."
-		)
-
-		is_ready = false
-
-		return
+func _exit_tree() -> void:
+	if db != null:
+		db.close_db()
 
 
-	print(
-		"[Database] Foreign keys enabled."
-	)
-
-
-	# ==================================================
-	# 建立資料表
-	# ==================================================
-
-	if not DatabaseSchema.initialize(db):
-
-		push_error(
-			"[Database] Database schema initialization failed."
-		)
-
-		is_ready = false
-
-		return
-
-
-	print(
-		"[Database] Database schema initialized."
-	)
-
-
-	# ==================================================
-	# Seeder
-	# ==================================================
-
-	if not DatabaseSeeder.initialize(db):
-
-		push_error(
-			"[Database] Database seeding failed."
-		)
-
-		is_ready = false
-
-		return
-
-
-	print(
-		"[Database] Database initialization completed."
-	)
-
-
-# ======================================================
-# Execute
-# ======================================================
-
-func execute(query: String) -> bool:
-
-	if not is_ready:
-
-		push_error(
-			"[Database] Database is not ready."
-		)
-
+## 執行任意 SQL。值放進 bindings，不要拼進 sql。
+func query(sql: String, bindings: Array = []) -> bool:
+	if not _require_ready():
 		return false
 
+	if db.query_with_bindings(sql, bindings):
+		return true
 
-	var success := db.query(query)
-
-
-	if not success:
-
-		push_error(
-			"[Database] SQL query failed:\n"
-			+ query
-		)
-
-		return false
+	push_error(
+		"[Database] Query failed: %s\n%s"
+		% [db.error_message, sql]
+	)
+	return false
 
 
-	return true
+## 上一次 query() / select() 的原始結果。
+func get_last_result() -> Array:
+	return db.query_result if db != null else []
 
 
-# ======================================================
-# SELECT
-# ======================================================
-
-func select(query: String) -> Array:
-
-	if not is_ready:
-
-		push_error(
-			"[Database] Database is not ready."
-		)
-
-		return []
-
-
-	if not db.query(query):
-
-		push_error(
-			"[Database] SELECT query failed:\n"
-			+ query
-		)
-
-		return []
-
-
-	return db.query_result
-
-
-# ======================================================
-# INSERT
-# ======================================================
-
-func insert(
+func select(
 	table: String,
-	data: Dictionary
-) -> bool:
+	conditions: String = "",
+	columns: Array = ["*"]
+) -> Array:
+	if not _require_ready():
+		return []
 
-	if not is_ready:
+	return db.select_rows(table, conditions, columns)
 
-		push_error(
-			"[Database] Database is not ready."
-		)
 
+func insert(table: String, data: Dictionary) -> bool:
+	if not _require_ready():
 		return false
 
+	if db.insert_row(table, data):
+		return true
 
-	if data.is_empty():
+	push_error(
+		"[Database] INSERT INTO %s failed: %s"
+		% [table, db.error_message]
+	)
+	return false
 
-		push_error(
-			"[Database] INSERT data is empty."
-		)
-
-		return false
-
-
-	var columns: Array[String] = []
-	var values: Array[String] = []
-
-
-	for key in data.keys():
-
-		columns.append(
-			str(key)
-		)
-
-		values.append(
-			_sql_value(data[key])
-		)
-
-
-	var query := """
-		INSERT INTO %s (%s)
-		VALUES (%s);
-	""" % [
-		table,
-		", ".join(columns),
-		", ".join(values)
-	]
-
-
-	return execute(query)
-
-
-# ======================================================
-# UPDATE
-# ======================================================
 
 func update(
 	table: String,
 	data: Dictionary,
-	where_clause: String
+	conditions: String
 ) -> bool:
-
-	if not is_ready:
-
-		push_error(
-			"[Database] Database is not ready."
-		)
-
+	if not _require_ready():
 		return false
 
-
-	if data.is_empty():
-
-		push_error(
-			"[Database] UPDATE data is empty."
-		)
-
+	# 空 conditions 會變成「更新整張表」，不是呼叫端想要的
+	if conditions.strip_edges().is_empty():
+		push_error("[Database] UPDATE requires conditions.")
 		return false
 
+	if db.update_rows(table, conditions, data):
+		return true
 
-	if where_clause.strip_edges().is_empty():
-
-		push_error(
-			"[Database] UPDATE requires WHERE clause."
-		)
-
-		return false
-
-
-	var assignments: Array[String] = []
-
-
-	for key in data.keys():
-
-		assignments.append(
-			"%s = %s"
-			% [
-				str(key),
-				_sql_value(data[key])
-			]
-		)
-
-
-	var query := """
-		UPDATE %s
-		SET %s
-		WHERE %s;
-	""" % [
-		table,
-		", ".join(assignments),
-		where_clause
-	]
-
-
-	return execute(query)
-
-
-# ======================================================
-# DELETE
-# ======================================================
-
-func delete(
-	table: String,
-	where_clause: String
-) -> bool:
-
-	if not is_ready:
-
-		push_error(
-			"[Database] Database is not ready."
-		)
-
-		return false
-
-
-	if where_clause.strip_edges().is_empty():
-
-		push_error(
-			"[Database] DELETE requires WHERE clause."
-		)
-
-		return false
-
-
-	var query := """
-		DELETE FROM %s
-		WHERE %s;
-	""" % [
-		table,
-		where_clause
-	]
-
-
-	return execute(query)
-
-
-# ======================================================
-# Table Exists
-# ======================================================
-
-func table_exists(
-	table_name: String
-) -> bool:
-
-	if not is_ready:
-
-		return false
-
-
-	var result := select(
-		"""
-		SELECT name
-		FROM sqlite_master
-		WHERE type = 'table'
-		AND name = '%s';
-		"""
-		% _escape_string(table_name)
+	push_error(
+		"[Database] UPDATE %s failed: %s"
+		% [table, db.error_message]
 	)
+	return false
 
 
-	return not result.is_empty()
+func delete(table: String, conditions: String) -> bool:
+	if not _require_ready():
+		return false
 
+	# 空 conditions 會清空整張表
+	if conditions.strip_edges().is_empty():
+		push_error("[Database] DELETE requires conditions.")
+		return false
 
-# ======================================================
-# Transaction
-# ======================================================
+	if db.delete_rows(table, conditions):
+		return true
+
+	push_error(
+		"[Database] DELETE FROM %s failed: %s"
+		% [table, db.error_message]
+	)
+	return false
+
 
 func begin_transaction() -> bool:
-
-	return execute(
-		"BEGIN TRANSACTION;"
-	)
+	return query("BEGIN TRANSACTION;")
 
 
 func commit_transaction() -> bool:
-
-	return execute(
-		"COMMIT;"
-	)
+	return query("COMMIT;")
 
 
 func rollback_transaction() -> bool:
-
-	return execute(
-		"ROLLBACK;"
-	)
+	return query("ROLLBACK;")
 
 
-# ======================================================
-# SQL Value
-# ======================================================
+func _require_ready() -> bool:
+	if is_ready:
+		return true
 
-func _sql_value(
-	value: Variant
-) -> String:
-
-	if value == null:
-
-		return "NULL"
-
-
-	if value is bool:
-
-		return "1" if value else "0"
-
-
-	if value is int or value is float:
-
-		return str(value)
-
-
-	if value is String:
-
-		return "'%s'" % _escape_string(
-			str(value)
-		)
-
-
-	return "'%s'" % _escape_string(
-		str(value)
-	)
-
-
-# ======================================================
-# SQL String Escape
-# ======================================================
-
-func _escape_string(
-	value: String
-) -> String:
-
-	return value.replace(
-		"'",
-		"''"
-	)
+	push_error("[Database] Database is not ready.")
+	return false

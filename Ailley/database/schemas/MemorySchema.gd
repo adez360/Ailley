@@ -76,10 +76,7 @@ static func create(db) -> bool:
 			ON DELETE CASCADE
 	);
 
-	CREATE INDEX IF NOT EXISTS
-	idx_memories_npc_id
-	ON memories(npc_id);
-
+	-- 單獨的 npc_id index 不用建：它是 idx_memories_npc_level 的前綴。
 	CREATE INDEX IF NOT EXISTS
 	idx_memories_npc_level
 	ON memories(npc_id, level);
@@ -141,10 +138,7 @@ static func create(db) -> bool:
 		CHECK(npc_id IS NOT NULL)
 	);
 
-	CREATE INDEX IF NOT EXISTS
-	idx_memory_related_npcs_memory
-	ON memory_related_npcs(memory_id);
-
+	-- memory_id 是 PRIMARY KEY (memory_id, npc_id) 的前綴，不用另外建。
 	CREATE INDEX IF NOT EXISTS
 	idx_memory_related_npcs_npc
 	ON memory_related_npcs(npc_id);

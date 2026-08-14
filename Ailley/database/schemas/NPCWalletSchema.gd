@@ -9,7 +9,7 @@ static func create(db) -> bool:
 
 		wallet_id INTEGER PRIMARY KEY AUTOINCREMENT,
 
-		npc_id INTEGER NOT NULL UNIQUE,
+		npc_id TEXT NOT NULL UNIQUE,
 
 		money INTEGER NOT NULL DEFAULT 300,
 

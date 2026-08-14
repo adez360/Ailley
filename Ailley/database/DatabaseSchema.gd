@@ -5,55 +5,23 @@ extends RefCounted
 ## =====================================================
 ## DatabaseSchema
 ##
-## Ailley Database Schema Controller
-##
 ## 職責：
 ## 1. 統一管理所有資料表 Schema
 ## 2. 決定資料表建立順序
 ## 3. 將 SQLite db 傳給各個 Schema
 ## 4. 不直接撰寫資料表 SQL
 ##
-## 每張資料表應該獨立存在：
+## 每張資料表一支 .gd，各自提供：
 ##
-## LocationSchema.gd
-## NPCSchema.gd
-## NPCStateSchema.gd
-## ...
-##
-## 每個 Schema 都必須提供：
-##
-## static func create(db) -> bool
+##     static func create(db) -> bool
 ##
 ## =====================================================
 
-
-## =====================================================
-## 初始化所有資料表
-## =====================================================
 
 static func initialize(db) -> bool:
-
-	print(
-		"[DatabaseSchema] initialize() entered."
-	)
-
-
-	# =================================================
-	# 檢查 Database
-	# =================================================
-
 	if db == null:
-
-		push_error(
-			"[DatabaseSchema] Database object is null."
-		)
-
+		push_error("[DatabaseSchema] Database object is null.")
 		return false
-
-
-	print(
-		"[DatabaseSchema] Creating database schema..."
-	)
 
 
 	# =================================================
@@ -104,11 +72,13 @@ static func initialize(db) -> bool:
 		NPCDailyPlanSchema,
 		NPCLastActionSchema,
 
+
 		# -------------------------------------------------
 		# 05. NPC Memory
 		# -------------------------------------------------
 
 		MemorySchema,
+
 
 		# -------------------------------------------------
 		# 06. NPC Death
@@ -121,14 +91,14 @@ static func initialize(db) -> bool:
 
 
 		# -------------------------------------------------
-		# 06. Item
+		# 07. Item
 		# -------------------------------------------------
 
 		ItemSchema,
 
 
 		# -------------------------------------------------
-		# 07. Inventory / Storage
+		# 08. Inventory / Storage
 		# -------------------------------------------------
 
 		NPCInventorySchema,
@@ -136,14 +106,14 @@ static func initialize(db) -> bool:
 
 
 		# -------------------------------------------------
-		# 08. Relations
+		# 09. Relations
 		# -------------------------------------------------
 
 		NPCRelationsSchema,
 
 
 		# -------------------------------------------------
-		# 09. Economy
+		# 10. Economy
 		# -------------------------------------------------
 
 		NPCWalletSchema,
@@ -152,72 +122,54 @@ static func initialize(db) -> bool:
 	]
 
 
-	print(
-		"[DatabaseSchema] Schema count: ",
-		schemas.size()
-	)
-
-
 	# =================================================
-	# 逐一建立資料表
+	# 整批包在一個 transaction 裡。
+	#
+	# SQLite 的 DDL 可以進 transaction，所以中間任何一張表失敗
+	# 就整個回滾。否則會留下一個建到一半的資料庫，而且因為用的是
+	# CREATE TABLE IF NOT EXISTS，下次開機也不會自己修好。
 	# =================================================
 
-	for i in range(schemas.size()):
+	if not db.query("BEGIN TRANSACTION;"):
+		push_error(
+			"[DatabaseSchema] BEGIN failed: "
+			+ db.error_message
+		)
+		return false
 
-		var schema = schemas[i]
 
+	for schema in schemas:
+		if schema.create(db):
+			continue
 
-		print(
-			"[DatabaseSchema] [",
-			i + 1,
-			"/",
-			schemas.size(),
-			"] Creating: ",
-			schema
+		push_error(
+			"[DatabaseSchema] Failed to create %s: %s"
+			% [_schema_name(schema), db.error_message]
 		)
 
-
-		# ---------------------------------------------
-		# Schema 是否存在
-		# ---------------------------------------------
-
-		if schema == null:
-
-			push_error(
-				"[DatabaseSchema] Schema is null at index "
-				+ str(i)
-			)
-
-			return false
+		db.query("ROLLBACK;")
+		return false
 
 
-		# ---------------------------------------------
-		# 建立資料表
-		# ---------------------------------------------
-
-		if not schema.create(db):
-
-			push_error(
-				"[DatabaseSchema] Failed to create schema: "
-				+ str(schema)
-			)
-
-			return false
-
-
-		print(
-			"[DatabaseSchema] Successfully created: ",
-			schema
+	if not db.query("COMMIT;"):
+		push_error(
+			"[DatabaseSchema] COMMIT failed: "
+			+ db.error_message
 		)
 
+		db.query("ROLLBACK;")
+		return false
 
-	# =================================================
-	# 完成
-	# =================================================
 
 	print(
-		"[DatabaseSchema] All tables created successfully."
+		"[DatabaseSchema] %d schemas created."
+		% schemas.size()
 	)
-
 
 	return true
+
+
+## schema 是 GDScript class，直接 str() 出來會是 <GDScript#...>，
+## 看不出是哪張表。
+static func _schema_name(schema) -> String:
+	return str(schema.resource_path).get_file().get_basename()

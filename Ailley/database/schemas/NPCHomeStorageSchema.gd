@@ -25,7 +25,7 @@ static func create(db) -> bool:
 		durability INTEGER NOT NULL DEFAULT 100
 			CHECK (durability BETWEEN 0 AND 100),
 
-		slot_index INTEGER,
+		slot_index INTEGER NOT NULL,
 
 		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -37,9 +37,8 @@ static func create(db) -> bool:
 			REFERENCES item(item_id)
 			ON DELETE RESTRICT,
 
-		CHECK (count > 0),
-
-		UNIQUE (npc_id, item_id, slot_index)
+		-- 一格放一疊，跟 npc_inventory 的 UNIQUE (npc_id, slot) 同一個形狀
+		UNIQUE (npc_id, slot_index)
 	);
 	"""
 

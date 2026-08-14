@@ -3,6 +3,10 @@
 entry_symbol = "sqlite_library_init"
 compatibility_minimum = "4.5"
 
+; 只保留桌面平台的二進位檔。上游 release 附的 ios / android / web 版本共 303 MB，
+; 其中 271 MB 是 ios 的 libgodot-cpp 靜態庫（只有 iOS 匯出時才會用到）。
+; 之後真的要出這些平台，再從上游 release 補回對應的 bin/ 檔案與這裡的設定。
+
 [libraries]
 
 macos.debug = "res://addons/godot-sqlite/bin/libgdsqlite.macos.template_debug.framework"
@@ -11,22 +15,3 @@ windows.debug.x86_64 = "res://addons/godot-sqlite/bin/libgdsqlite.windows.templa
 windows.release.x86_64 = "res://addons/godot-sqlite/bin/libgdsqlite.windows.template_release.x86_64.dll"
 linux.debug.x86_64 = "res://addons/godot-sqlite/bin/libgdsqlite.linux.template_debug.x86_64.so"
 linux.release.x86_64 = "res://addons/godot-sqlite/bin/libgdsqlite.linux.template_release.x86_64.so"
-android.debug.arm64 = "res://addons/godot-sqlite/bin/libgdsqlite.android.template_debug.arm64.so"
-android.release.arm64 = "res://addons/godot-sqlite/bin/libgdsqlite.android.template_release.arm64.so"
-android.debug.x86_64 = "res://addons/godot-sqlite/bin/libgdsqlite.android.template_debug.x86_64.so"
-android.release.x86_64 = "res://addons/godot-sqlite/bin/libgdsqlite.android.template_release.x86_64.so"
-ios.debug = "res://addons/godot-sqlite/bin/libgdsqlite.ios.template_debug.xcframework"
-ios.release = "res://addons/godot-sqlite/bin/libgdsqlite.ios.template_release.xcframework"
-web.debug.threads.wasm32 = "res://addons/godot-sqlite/bin/libgdsqlite.web.template_debug.wasm32.wasm"
-web.release.threads.wasm32 = "res://addons/godot-sqlite/bin/libgdsqlite.web.template_release.wasm32.wasm"
-web.debug.wasm32 = "res://addons/godot-sqlite/bin/libgdsqlite.web.template_debug.wasm32.nothreads.wasm"
-web.release.wasm32 = "res://addons/godot-sqlite/bin/libgdsqlite.web.template_release.wasm32.nothreads.wasm"
-
-[dependencies]
-
-ios.debug = { 
-    "res://addons/godot-sqlite/bin/libgodot-cpp.ios.template_debug.xcframework": "" 
-}
-ios.release = { 
-    "res://addons/godot-sqlite/bin/libgodot-cpp.ios.template_release.xcframework": "" 
-}

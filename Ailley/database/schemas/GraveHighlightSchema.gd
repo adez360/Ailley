@@ -27,10 +27,8 @@ static func create(db) -> bool:
 		)
 	);
 
-
-	CREATE INDEX IF NOT EXISTS
-	idx_grave_highlights_grave
-	ON grave_highlights(grave_id);
+	-- grave_id 是 UNIQUE (grave_id, highlight_order) 的前綴，
+	-- SQLite 為那個 UNIQUE 建的 index 已經涵蓋單獨查 grave_id。
 	"""
 
 

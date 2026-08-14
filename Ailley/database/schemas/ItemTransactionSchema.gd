@@ -9,11 +9,11 @@ static func create(db) -> bool:
 
 		transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
 
-		from_npc_id INTEGER,
+		from_npc_id TEXT,
 
-		to_npc_id INTEGER,
+		to_npc_id TEXT,
 
-		item_id INTEGER NOT NULL,
+		item_id TEXT NOT NULL,
 
 		quantity INTEGER NOT NULL,
 

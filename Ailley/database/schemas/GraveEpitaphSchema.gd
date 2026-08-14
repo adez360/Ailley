@@ -40,10 +40,7 @@ static func create(db) -> bool:
 	);
 
 
-	CREATE INDEX IF NOT EXISTS
-	idx_grave_epitaphs_grave
-	ON grave_epitaphs(grave_id);
-
+	-- grave_id 是 UNIQUE (grave_id, npc_id) 的前綴，不用另外建。
 
 	CREATE INDEX IF NOT EXISTS
 	idx_grave_epitaphs_npc

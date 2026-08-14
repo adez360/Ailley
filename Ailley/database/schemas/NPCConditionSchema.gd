@@ -13,7 +13,9 @@ static func create(db) -> bool:
 	var sql := """
 	CREATE TABLE IF NOT EXISTS npc_condition (
 
-		npc_id TEXT PRIMARY KEY,
+		condition_id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+		npc_id TEXT NOT NULL,
 
 		-- 生理衍生（由 state.physical 自動觸發） / 社會狀態 / 行動佔用 / 終局狀態
 		type TEXT NOT NULL
@@ -44,8 +46,16 @@ static func create(db) -> bool:
 
 		FOREIGN KEY (npc_id)
 			REFERENCES npc(npc_id)
-			ON DELETE CASCADE
+			ON DELETE CASCADE,
+
+		-- 同一個 NPC 身上多種 condition 會並存（injured + working），
+		-- 但同一種不重複
+		UNIQUE (npc_id, type)
 	);
+
+	CREATE INDEX IF NOT EXISTS
+	idx_npc_condition_npc_id
+	ON npc_condition(npc_id);
 	"""
 
 	if not db.query(sql):
