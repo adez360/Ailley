@@ -182,6 +182,16 @@ static func validate_tasks(data: Dictionary) -> Dictionary:
 		if task.has("params") and not task["params"] is Dictionary:
 			return _fail(ERROR_BAD_SHAPE)
 
+		# talk 是目前唯一逐欄位驗證 params 的動作（#90 接了執行層，其餘動作
+		# 還沒有）：沒有 target 的 talk 任務會被 _pursue_talk_task() 誤判成
+		# 「目標不存在」一路帶進任務池才發現，不如在這一層就擋掉，跟這個檔案
+		# 「外來內容一律不信任」的原則一致，不等到執行層才發現資料是空的
+		if task["action"] == "talk":
+			var talk_params: Dictionary = task.get("params", {})
+			var target: Variant = talk_params.get("target")
+			if not target is String or (target as String).strip_edges().is_empty():
+				return _fail(ERROR_BAD_SHAPE)
+
 		if task.has("expires_at") and not (task["expires_at"] is int or task["expires_at"] is float):
 			return _fail(ERROR_BAD_SHAPE)
 

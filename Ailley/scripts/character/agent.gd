@@ -96,10 +96,15 @@ var _pursuit_done := false
 var _talk_pursuit_stuck_ticks := 0
 var _talk_pursuit_last_distance := INF
 
-# 自己成功發起、目前正在進行中的 talk 任務 id。只在 talk_to() 真的成功那一刻
-# 設值，exit_conversation() 靠這個而不是「當下的 _current_task」判斷對話結束
-# 時該清掉哪一筆——理由見 exit_conversation() 自己的註解
+# 自己成功發起、目前正在進行中的 talk 任務 id／來源。只在 talk_to() 真的成功
+# 那一刻設值，exit_conversation() 靠這個而不是「當下的 _current_task」判斷對話
+# 結束時該清掉哪一筆——理由見 exit_conversation() 自己的註解。
+#
+# source 額外存一份是因為任務從池子移除後就查不到它原本的 source 了——
+# exit_conversation() 要知道這筆任務是不是 llm 來源，才能決定要不要在這裡
+# 觸發下一次決策請求
 var _active_talk_task_id := ""
+var _active_talk_task_source := ""
 
 # 正在對陌生人做「！」反應。那 2 秒刻意站著不動，期間不重新起步——
 # GameClock 一個遊戲分鐘就是 1 現實秒，不擋的話 1 秒後就被送回路上，
@@ -294,12 +299,24 @@ func exit_conversation() -> void:
 	super()
 
 	if not _active_talk_task_id.is_empty():
+		var was_llm := _active_talk_task_source == "llm"
+
 		_remove_task(_active_talk_task_id)
 		if _current_task.get("id", "") == _active_talk_task_id:
 			_current_task = {}
 			current_place = ""
 			current_state = "idle"
 		_active_talk_task_id = ""
+		_active_talk_task_source = ""
+
+		# 這筆任務「做完了」的訊號是對話結束，不是 _reevaluate() 那段替沒有
+		# 天然結束訊號的動作（eat/rest 那類）準備的 duration 下限——talk 有
+		# 更準確的訊號就該用它，不要等 duration 事後才補觸發下一次決策。
+		# 對話期間 _reevaluate() 那段其實被下面的 _current_task.get("id","")
+		# != _active_talk_task_id 這個新條件擋住了，不會搶先觸發，這裡才是
+		# 唯一真正觸發的地方
+		if was_llm and llm_decision_enabled and not _awaiting_decision:
+			_request_next_decision()
 
 	_reevaluate()
 
@@ -526,11 +543,18 @@ func _reevaluate() -> void:
 	# 不空等、不卡頓，是《10》§5.1 講的「天然容錯」
 	if llm_decision_enabled and not _awaiting_decision \
 			and _current_task.get("source", "") == "llm" \
+			and _current_task.get("id", "") != _active_talk_task_id \
 			and now_minutes - _current_task_started_at >= int(_current_task.get("duration", 0.0)):
 		# 做完的那筆要先離開池子。llm 任務沒有 window，不像 schedule 靠時間窗
 		# 自然退場——留著的話它會用原本的分數繼續參加下一輪算分，被重新選中，
 		# 變成同一件事做完又做。_current_task 是同一個 Dictionary 的參照，
 		# 移出池子不影響它，等待決策回來的期間照樣可以繼續執行
+		#
+		# 上面 id != _active_talk_task_id 這條擋掉一種情況：talk 任務正在
+		# 撐著一場對話時，套用過下限的 duration 可能比對話實際講完的時間短，
+		# 這裡搶先把它從池子清掉、觸發下一次決策，會跟 exit_conversation()
+		# 真正該做的事打架（見那裡的註解）——talk 任務的完成訊號是對話結束，
+		# 不是這個給沒有天然結束訊號的動作用的 duration 下限
 		_remove_task(_current_task.get("id", ""))
 		_request_next_decision()
 
@@ -719,6 +743,7 @@ func _pursue_talk_task() -> void:
 			# 不能靠「對話結束當下的 _current_task」，因為對話期間 _reevaluate()
 			# 照樣可能把 _current_task 換成別的（見 exit_conversation() 的註解）
 			_active_talk_task_id = _current_task.get("id", "")
+			_active_talk_task_source = _current_task.get("source", "")
 		else:
 			# 失敗不放棄任務，下個遊戲分鐘再試——對方可能只是暫時忙碌（TARGET_BUSY
 			# 等），跟 move_to() 走不到只 push_warning 不整筆放棄是同一種態度
