@@ -266,8 +266,19 @@ func _is_preemptible() -> bool:
 
 # 對話結束後重算一次「現在該做什麼」，而不是接續原本那條路 ——
 # 對話期間可能已經跨過了行程的整點
+#
+# 目前這筆任務如果是 talk（自己主動發起的搭話），對話結束就代表這筆任務的
+# 目的已經達成，要連任務帶目前狀態一起清掉——不清的話 id 沒變，_reevaluate()
+# 會選到同一筆再打一次，變成每次重算都重新搭話一次的無限迴圈（#90）
 func exit_conversation() -> void:
 	super()
+
+	if _current_task.get("action", "") == "talk":
+		_remove_task(_current_task.get("id", ""))
+		_current_task = {}
+		current_place = ""
+		current_state = "idle"
+
 	_reevaluate()
 
 ## 對話中要開口，打 AIService 要一句台詞。requester_id 用 character_id，不是
@@ -402,9 +413,11 @@ func _has_llm_task() -> bool:
 func _task_pool_summary() -> Array[Dictionary]:
 	var summary: Array[Dictionary] = []
 	for task in _tasks:
+		var params: Dictionary = task.get("params", {})
 		summary.append({
 			"action": task.get("action", ""),
-			"place": task.get("params", {}).get("place", ""),
+			"place": params.get("place", ""),
+			"target": params.get("target", ""),
 			"source": task.get("source", ""),
 		})
 	return summary
@@ -607,6 +620,12 @@ func _pursue_current_task() -> void:
 	if _reacting:
 		return
 
+	# talk 任務的目標是另一個角色，不是固定地點——current_place 對它一律是空的
+	# （params 裝的是 target 不是 place），要另外分流，不能落進下面的地點判斷
+	if current_state == "talk":
+		_pursue_talk_task()
+		return
+
 	if current_place.is_empty():
 		return
 
@@ -646,6 +665,51 @@ func _pursue_current_task() -> void:
 	if not move_to(target):
 		push_warning("Agent %s: 走不到 %s" % [character_name, current_place])
 		_pursuit_done = true
+
+# talk 任務的執行（#90）：目標是會動的角色，不是靜止的地點錨點，所以不能沿用
+# 上面那套「走一次、_pursuit_done 收斂」的邏輯——每次重算都重新問一次
+# 「他現在在哪」，距離內就直接搭話，不是只起步一次。
+#
+# 借用 _pursued_place／_pursuit_done 當「上一次抱怨過同一個目標」的去重鍵——
+# talk 任務跟 place 任務不會同時是目前任務，語意上不衝突，不用另外開欄位
+func _pursue_talk_task() -> void:
+	var target_name: String = str(_current_task.get("params", {}).get("target", ""))
+	var target := _find_character_by_name(target_name)
+
+	if target == null:
+		# 找不到人只報一次，理由跟「地點打錯只報一次」一樣——這個函式每個
+		# 遊戲分鐘跑一次，目標一直不存在的話不能每分鐘洗一次錯誤
+		if target_name != _pursued_place:
+			push_error("Agent %s: 找不到搭話對象 %s" % [character_name, target_name])
+			_pursued_place = target_name
+			_pursuit_done = true
+		return
+
+	if get_body_position().distance_to(target.get_body_position()) <= TALK_RANGE:
+		stop_moving()
+		var failure := talk_to(target)
+		# 失敗不放棄任務，下個遊戲分鐘再試——對方可能只是暫時忙碌（TARGET_BUSY
+		# 等），跟 move_to() 走不到只 push_warning 不整筆放棄是同一種態度。
+		# 成功的話 talk_to() 內部已經同步進入對話，之後這個函式會被
+		# is_in_conversation() 擋在最前面，不會再被呼叫到
+		if failure != Character.TALK_OK:
+			push_warning("Agent %s: 搭話 %s 失敗（%s）" % [
+				character_name, target.character_name, failure
+			])
+		return
+
+	move_to(target.get_body_position())
+
+# 按顯示名找角色，不分大小寫的規則跟 debug_console.gd::_get_character() 不同——
+# 那裡要處理玩家手打、可能撞名的情形；這裡的 target 是 LLM 從 context.visible
+# 抄回來的名字，來源單一，先用最單純的完全比對，真的撞名再處理
+func _find_character_by_name(target_name: String) -> Character:
+	if target_name.is_empty():
+		return null
+	for node in get_tree().get_nodes_in_group("characters"):
+		if node != self and node.character_name == target_name:
+			return node as Character
+	return null
 
 # 站得夠近，或者已經站在目標所在的那一格。
 #
