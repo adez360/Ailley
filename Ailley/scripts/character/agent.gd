@@ -96,6 +96,11 @@ var _pursuit_done := false
 var _talk_pursuit_stuck_ticks := 0
 var _talk_pursuit_last_distance := INF
 
+# 自己成功發起、目前正在進行中的 talk 任務 id。只在 talk_to() 真的成功那一刻
+# 設值，exit_conversation() 靠這個而不是「當下的 _current_task」判斷對話結束
+# 時該清掉哪一筆——理由見 exit_conversation() 自己的註解
+var _active_talk_task_id := ""
+
 # 正在對陌生人做「！」反應。那 2 秒刻意站著不動，期間不重新起步——
 # GameClock 一個遊戲分鐘就是 1 現實秒，不擋的話 1 秒後就被送回路上，
 # 2 秒的愣住實際上只有 1 秒
@@ -275,17 +280,26 @@ func _is_preemptible() -> bool:
 # 對話結束後重算一次「現在該做什麼」，而不是接續原本那條路 ——
 # 對話期間可能已經跨過了行程的整點
 #
-# 目前這筆任務如果是 talk（自己主動發起的搭話），對話結束就代表這筆任務的
-# 目的已經達成，要連任務帶目前狀態一起清掉——不清的話 id 沒變，_reevaluate()
-# 會選到同一筆再打一次，變成每次重算都重新搭話一次的無限迴圈（#90）
+# 自己主動發起搭話成功時觸發的那筆 talk 任務，對話結束要連任務帶目前狀態
+# 一起清掉——不清的話 id 沒變，_reevaluate() 會選到同一筆再打一次，變成
+# 每次重算都重新搭話一次的無限迴圈（#90）。
+#
+# 靠 _active_talk_task_id 認，不是看「當下」的 _current_task：對話期間
+# _reevaluate() 照樣會跑完整套選任務邏輯（只有移動被 is_in_conversation()
+# 擋住，選任務本身沒被擋），_current_task 完全可能在對話進行中被換成別的
+# 任務。憑當下的 _current_task 判斷會有兩種撲空：真正該清的那筆任務已經
+# 不是 _current_task、清不到；或是被別人搭話時，自己另一筆不相干的待辦
+# talk 任務剛好是 _current_task，被誤刪
 func exit_conversation() -> void:
 	super()
 
-	if _current_task.get("action", "") == "talk":
-		_remove_task(_current_task.get("id", ""))
-		_current_task = {}
-		current_place = ""
-		current_state = "idle"
+	if not _active_talk_task_id.is_empty():
+		_remove_task(_active_talk_task_id)
+		if _current_task.get("id", "") == _active_talk_task_id:
+			_current_task = {}
+			current_place = ""
+			current_state = "idle"
+		_active_talk_task_id = ""
 
 	_reevaluate()
 
@@ -700,11 +714,14 @@ func _pursue_talk_task() -> void:
 	if distance <= TALK_RANGE:
 		stop_moving()
 		var failure := talk_to(target)
-		# 失敗不放棄任務，下個遊戲分鐘再試——對方可能只是暫時忙碌（TARGET_BUSY
-		# 等），跟 move_to() 走不到只 push_warning 不整筆放棄是同一種態度。
-		# 成功的話 talk_to() 內部已經同步進入對話，之後這個函式會被
-		# is_in_conversation() 擋在最前面，不會再被呼叫到
-		if failure != Character.TALK_OK:
+		if failure == Character.TALK_OK:
+			# 記住是這筆任務讓對話成立的——exit_conversation() 靠這個 id 清任務，
+			# 不能靠「對話結束當下的 _current_task」，因為對話期間 _reevaluate()
+			# 照樣可能把 _current_task 換成別的（見 exit_conversation() 的註解）
+			_active_talk_task_id = _current_task.get("id", "")
+		else:
+			# 失敗不放棄任務，下個遊戲分鐘再試——對方可能只是暫時忙碌（TARGET_BUSY
+			# 等），跟 move_to() 走不到只 push_warning 不整筆放棄是同一種態度
 			push_warning("Agent %s: 搭話 %s 失敗（%s）" % [
 				character_name, target.character_name, failure
 			])
