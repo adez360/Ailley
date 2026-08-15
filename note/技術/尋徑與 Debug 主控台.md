@@ -5,7 +5,7 @@ tags:
   - 外掛修改
 scene: scenes/main.tscn
 status: 已實作
-updated: 2026-08-08
+updated: 2026-08-13
 ---
 
 # 尋徑與 Debug 主控台
@@ -33,7 +33,9 @@ signal player.move_finished(reached: bool)
 
 ## 指令（按 `` ` `` 開關，Esc 關閉，上下鍵翻歷史）
 
-- `goto <x> <y>`：走到世界座標
+- `goto <name> <x> <y>`：指定角色走到世界座標——繞過 `agent.gd` 的仲裁器直接呼叫
+  `character.move_to()`，完成時發的 `move_finished` 訊號跟仲裁器自己那份共用同一個
+  訊號，靠 `last_move_target` 比對目標才不會互相誤判，見 [[行程佇列與任務仲裁]]
 - `stop`：停止移動
 - `pos`：顯示座標與所在格
 - `nav rebuild`：重建尋徑網格（改完地圖不用重開遊戲）

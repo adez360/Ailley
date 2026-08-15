@@ -1,6 +1,5 @@
 extends Node
 
-var places = {}
 var npc_data = {}
 
 # 節點名 -> schedule_template。行程模板是「用哪份資料」，而它跟角色的對應
@@ -11,21 +10,7 @@ var npc_data = {}
 var schedule_assignments = {}
 
 func _ready():
-	load_places()
 	load_npc_data()
-
-func load_places():
-	var file = FileAccess.open(
-		"res://data/places.json",
-		FileAccess.READ
-	)
-	if file == null:
-		print("找不到 places.json")
-		return
-
-	var data = JSON.parse_string(file.get_as_text())
-	file.close()
-	places = data["places"]
 
 # 讀取NPC行程
 func load_npc_data():
@@ -58,8 +43,3 @@ func get_npc(id:String):
 # 這個角色該用哪份行程模板。沒有指定就回空字串，由呼叫端決定怎麼退回
 func get_schedule_template(node_name:String)->String:
 	return str(schedule_assignments.get(node_name, ""))
-
-func get_place_data(place_name:String):
-	if !places.has(place_name):
-		return null
-	return places[place_name]

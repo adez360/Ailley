@@ -14,3 +14,9 @@ polygon = PackedVector2Array(-8, -5, 8, -5, 8, 5, -8, 5)
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
 shape = SubResource("RectangleShape2D_iqqjh")
+
+[node name="Highlight" type="Line2D" parent="."]
+visible = false
+points = PackedVector2Array(-10, -7, 10, -7, 10, 7, -10, 7)
+closed = true
+width = 1.0

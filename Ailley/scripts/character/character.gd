@@ -8,6 +8,7 @@ extends CharacterBody2D
 
 signal move_finished(reached: bool)
 signal noise_heard(source: Character)		# 收到的那一方會發，見 make_noise()
+signal spoke(line: String)			# 講出任何一句話都會發，日後寫逐字稿/記憶系統的接點
 
 const SPEED = 80.0
 const ARRIVE_DISTANCE = 2.0		# 距離 waypoint 多近算抵達
@@ -84,10 +85,31 @@ const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader
 # 最後一次的面向：front / back / right，停下時用來挑 idle 動畫
 var facing := "front"
 
+# 把 facing／sprite.flip_h 重建成單位向量，給互動優先序這類「候選是不是在我
+# 正對著的方向上」的判斷用（見 player.gd 的 _is_facing()）。跟
+# update_animation()／face_towards() 寫入這兩個欄位時用的方向對稱：
+# front=下、back=上、right 依 flip_h 分左右
+func get_facing_direction() -> Vector2:
+	match facing:
+		"back":
+			return Vector2.UP
+		"right":
+			return Vector2.LEFT if sprite.flip_h else Vector2.RIGHT
+		_:
+			return Vector2.DOWN
+
 var _path := PackedVector2Array()
 var _path_index := 0
 var _stuck_timer := 0.0
 var _conversation: Node = null
+
+# 滑鼠 hover（selection.gd）跟 E 鍵目前的互動目標（player.gd）是兩個獨立的
+# 高亮來源，任一個成立就該顯示描邊。分開存，不是合用一個布林值——CodeRabbit
+# review 抓到的問題：合用的話，一邊把它關掉（例如滑鼠移開）會連帶關掉另一邊
+# 還想要的描邊（例如玩家還面向著這個人），而且兩邊都是「目標沒變就不重呼叫」
+# 的 edge-triggered 寫法，被對方關掉之後不會自己補回來
+var _mouse_highlighted := false
+var _interact_highlighted := false
 var _highlighted := false
 var _outline: ShaderMaterial = null
 
@@ -144,7 +166,7 @@ func _find_id_holder(id: String) -> Character:
 # ---- 移動 ----
 
 # 這次 move_to() 的目標世界座標。move_to() 的呼叫端不只一個（仲裁器、
-# debug 主控台的 goto 類指令、R&D 線的 village_sim_decision.gd 都會直接呼叫），
+# debug 主控台的 goto 類指令都會直接呼叫），
 # 但 move_finished 訊號是同一個，收到訊號的一方得自己有辦法分辨「這是不是
 # 我剛才發出的那個請求」——靠比對這個欄位跟自己期待的目標位置
 var last_move_target := Vector2.ZERO
@@ -191,10 +213,14 @@ func get_body_position() -> Vector2:
 func is_in_conversation() -> bool:
 	return _conversation != null
 
-# 目前在做的事可不可以被打斷。工作中一律不行——work_at() 擋掉「對話中的人去工作」，
+# 能不能被搭話打斷。工作中一律不行——work_at() 擋掉「對話中的人去工作」，
 # 這裡是對稱的另一半：擋掉「把工作中的人拉進對話」。只做單邊的話，角色會同時冒
-# 氣泡跟進度條，而且工作照樣走完、錢照領。Agent 再依行程加上自己的條件
-func is_interruptible() -> bool:
+# 氣泡跟進度條，而且工作照樣走完、錢照領。Agent 再依行程加上自己的條件。
+#
+# 只管「搭話」。仲裁器搶占目前任務是另一個不相干的問題（見 Agent 的
+# _is_preemptible()）——這兩個問題曾經共用同一個 is_interruptible()，
+# 是意外共用不是設計決定，issue #113 把它們拆開成各自獨立的判斷
+func is_talk_interruptible() -> bool:
 	return not _working
 
 # 對某人搭話。成功回傳 TALK_OK（空字串），否則回傳失敗原因碼
@@ -204,12 +230,12 @@ func talk_to(other: Character) -> String:
 	if other == self:
 		return TALK_TARGET_IS_SELF
 	# 自己在工作中也算忙。少了這條，E 鍵在 work_at() 回 WORK_BUSY 之後退回搭話，
-	# 工作中的角色就開得起對話——正好繞過上面 is_interruptible() 要擋的那件事
+	# 工作中的角色就開得起對話——正好繞過上面 is_talk_interruptible() 要擋的那件事
 	if is_in_conversation() or _working or other.is_in_conversation():
 		return TALK_TARGET_BUSY
 	if get_body_position().distance_to(other.get_body_position()) > TALK_RANGE:
 		return TALK_TOO_FAR
-	if not other.is_interruptible():
+	if not other.is_talk_interruptible():
 		return TALK_TARGET_UNINTERRUPTIBLE
 
 	# 用 load 而不是 preload：conversation.gd 反過來也要 Character 型別，
@@ -249,9 +275,28 @@ func leave_conversation() -> void:
 	if _conversation != null:
 		_conversation.interrupt()
 
-func say(line: String) -> void:
-	if bubble != null:
-		bubble.say(line)
+## interrupt=true 立刻蓋掉正在顯示/排隊中的內容（LLM 回應等待中的「…」要被
+## 真正的台詞立刻換掉，不能排在它後面等它自己的顯示時間跑完）。
+## 預設 false 維持原本「不打斷正在講的話」的排隊語意，其餘呼叫端不用改
+func say(line: String, interrupt: bool = false) -> void:
+	if bubble == null:
+		return
+	if interrupt:
+		bubble.clear()
+	bubble.say(line)
+	spoke.emit(line)
+
+## 這個角色對話中的下一句話由誰產生、內容是什麼。基底不知道答案——
+## 本機玩家要等打字（見 player.gd），本機 Agent 要打 AIService（見 agent.gd），
+## 兩者由子類別覆寫。conversation.gd 只問「輪到你了，下一句是什麼」，不問
+## 「你是誰」，之後要接遠端角色（伺服器轉發）也只是再多一個覆寫，會話層不用改。
+##
+## 回傳 {"ok": bool, "line": String, "end": bool}：ok=false 代表這一輪要不到
+## 台詞（LLM 停用/逾時/驗證失敗），呼叫端（conversation.gd）要轉去 fallback，
+## 不是把空字串當成正常台詞講出去
+func next_line(_listener: Character, _turns: Array[Dictionary], _max_turns: int) -> Dictionary:
+	push_error("%s: next_line() 沒有被子類別覆寫" % character_name)
+	return {"ok": false}
 
 # 這句話大概會佔多久，讓對話狀態機知道什麼時候換人講
 func speech_duration(line: String) -> float:
@@ -500,9 +545,20 @@ func get_pick_rect() -> Rect2:
 func is_highlighted() -> bool:
 	return _highlighted
 
-# 描一圈邊表示滑鼠正指著這個角色。
-# 材質是第一次要用才建，沒被指到過的角色不會多背一份
+# 滑鼠指到時呼叫（selection.gd）
 func set_highlighted(on: bool) -> void:
+	_mouse_highlighted = on
+	_apply_highlight()
+
+# 目前是不是 E 鍵的互動目標時呼叫（player.gd）
+func set_interact_highlighted(on: bool) -> void:
+	_interact_highlighted = on
+	_apply_highlight()
+
+# 描一圈邊表示滑鼠指到、或是目前的互動目標，兩者任一成立即可。
+# 材質是第一次要用才建，沒被指到過的角色不會多背一份
+func _apply_highlight() -> void:
+	var on := _mouse_highlighted or _interact_highlighted
 	if on == _highlighted:
 		return
 

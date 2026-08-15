@@ -1,0 +1,17 @@
+[configuration]
+
+entry_symbol = "sqlite_library_init"
+compatibility_minimum = "4.5"
+
+; 只保留桌面平台的二進位檔。上游 release 附的 ios / android / web 版本共 303 MB，
+; 其中 271 MB 是 ios 的 libgodot-cpp 靜態庫（只有 iOS 匯出時才會用到）。
+; 之後真的要出這些平台，再從上游 release 補回對應的 bin/ 檔案與這裡的設定。
+
+[libraries]
+
+macos.debug = "res://addons/godot-sqlite/bin/libgdsqlite.macos.template_debug.framework"
+macos.release = "res://addons/godot-sqlite/bin/libgdsqlite.macos.template_release.framework"
+windows.debug.x86_64 = "res://addons/godot-sqlite/bin/libgdsqlite.windows.template_debug.x86_64.dll"
+windows.release.x86_64 = "res://addons/godot-sqlite/bin/libgdsqlite.windows.template_release.x86_64.dll"
+linux.debug.x86_64 = "res://addons/godot-sqlite/bin/libgdsqlite.linux.template_debug.x86_64.so"
+linux.release.x86_64 = "res://addons/godot-sqlite/bin/libgdsqlite.linux.template_release.x86_64.so"

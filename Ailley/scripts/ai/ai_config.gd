@@ -68,6 +68,14 @@ class Provider extends RefCounted:
 	var valid := false
 	var status_reason := ""
 
+	## 這個 provider 送 response_format 的 json_schema 有沒有意義。預設 true——
+	## 已知本機 llama-server 支援 OpenAI 相容的 response_format，並在內部自己把
+	## schema 轉成 grammar 約束（決策迴圈實測 2.5-4 秒延遲主要就花在這步），
+	## 雲端主流 provider 也支援。只有極少數不支援 json_schema 的 provider
+	## 需要在設定檔把這個關掉，關掉後三層保證退到 layer 2（prompt 裡明寫
+	## schema）跟 layer 3（AISchema 硬驗證），不送 response_format 欄位
+	var supports_json_schema := true
+
 	# 唯一准許把金鑰帶進輸出的路徑。頭尾各留 MASK_KEEP 碼，中間一律省略
 	func masked_key() -> String:
 		if api_key.is_empty():
@@ -197,6 +205,7 @@ func _parse_provider(provider_name: String, data: Dictionary) -> Provider:
 	provider.model = str(data.get("model", DEFAULT_MODEL)).strip_edges()
 	provider.timeout = float(data.get("timeout", DEFAULT_TIMEOUT))
 	provider.api_key = str(data.get("api_key", "")).strip_edges()
+	provider.supports_json_schema = bool(data.get("supports_json_schema", true))
 
 	# 空金鑰是合法的：本機 llama-server／ollama 這類服務根本不驗 Authorization，
 	# 逼它填一把假金鑰只是在替一條不合身的規則寫解法。金鑰空的時候

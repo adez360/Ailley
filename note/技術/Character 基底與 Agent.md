@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-10
+updated: 2026-08-13
 ---
 
 # Character 基底與 Agent
@@ -114,10 +114,8 @@ id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存
 （`home_001` / `farm` / `restaurant` / `square`），時段刻意跟 `npc001` 錯開，
 兩隻才走得出不同的軌跡 —— 接 LLM 對話時需要這個對照組。
 
-> [!warning] `npc002`~`npc005` 仍然指向不存在的地點
-> 它們用 `shop` / `temple` / `home_002`… 這些**沒有錨點**，
-> 到點時只會 `push_error` 然後原地不動。目前沒有任何角色被指派到它們，
-> 但 `assignments` 一旦指過去就會踩到。要用之前得先補錨點或改寫那幾份行程。
+`npc002`~`npc005` 這四份範本曾經用 `shop` / `temple` / `home_002`… 這些沒有
+錨點的地點，`assignments` 也沒有指派到它們——issue #87 判定為死資料整份移除了。
 
 ## 決策
 
@@ -126,11 +124,8 @@ id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存
 > 曾經有八向（含斜向）的切法，但同一張 `16x16 Walk-Sheet.png` 撐不出斜向的辨識度，
 > 維護成本卻翻倍。
 
-> [!important] 地點座標用場景錨點，不吃 `places.json`
-> `places.json` 的座標（x 最遠到 1120）綁死在一張已經不存在的舊地圖尺寸上，
-> 而現在的可走區只有 18 格寬 —— 所有地點都落在界外。
->
-> 改成在 `Node2D/PlaceAnchors`（group `place_anchors`）底下放與地點同名的 Marker2D，
+> [!important] 地點座標用場景錨點
+> 在 `Node2D/PlaceAnchors`（group `place_anchors`）底下放與地點同名的 Marker2D，
 > 那是座標的唯一事實來源：`agent.gd` 只認錨點，沒有就 `push_error` 且不動身。
 >
 > 這也是多場景（家園／交誼區）本來就需要的：全域絕對座標在多張地圖下必然是錯的。

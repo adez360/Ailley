@@ -1,12 +1,10 @@
 extends Character
 
 ## 由任務池 + 仲裁器驅動的角色。
-## 這一版只有 schedule 來源的任務（從 npc_schedule.json 轉換），仲裁器本身
-## 已經是通用的——LLM 決策迴圈接上後，只要把任務丟進 _tasks 就會跟 schedule
-## 任務公平競爭，不用再改這個檔案的仲裁邏輯。設計見 [[行程佇列與任務仲裁]]。
-##
-## 這一版刻意不接 LLM：先確保任務池/仲裁器重構完，行為跟舊版 cron 完全一致，
-## 之後接 LLM 若行為跑歪，才分得出是這次重構寫錯還是 LLM 給的決策爛。
+## 任務有兩個來源：schedule（從 npc_schedule.json 轉換，開場建立一次不再變動）
+## 跟 llm（`llm_decision_enabled` 開啟後，決策迴圈依《10》§5.1 事件驅動觸發，
+## 見 _request_next_decision()），兩者用同一套仲裁邏輯公平競爭，不分軌處理。
+## 設計見 [[行程佇列與任務仲裁]]。
 
 ## 初始行程模板，對應 npc_schedule.json 的鍵（例如 "npc001"）。
 ## 這是「用哪份資料」而不是「我是誰」，所以刻意不共用 character_id ——
@@ -21,16 +19,12 @@ extends Character
 ## 看到陌生人之後愣住多久（現實秒）
 const NOTICE_PAUSE := 2.0
 
-## demo 用的手動開關：這隻 Agent 看到玩家時，要不要打 village_sim_client
-## 問一次真實決策（見 VillageSimDecision）。刻意預設關閉、要逐隻手動開，
-## 不是全體 Agent 一起開——[[LLM 串接與 AI 服務層]] 明講過「先從一隻角色
-## 開始，不要一次對所有 Agent 開放」，這是那條原則的落實。
-@export var village_ai_enabled := false
-
-## village_ai_enabled 開啟時，這隻 Agent 對應到 poc_village_sim 的哪個內部
-## id（alan/zhou/mei/tie/aji）。跟 village_ai_enabled 一樣，這是 demo 用的
-## 暫時欄位，不是正式的角色身分對照方案。
-@export var poc_character_id := ""
+## 決策迴圈開關（#88）：開啟後 LLM 任務完成時會觸發下一次決策請求，
+## 經 AISchema 驗證後推進 _tasks，跟仲裁器裡其他來源的任務公平競爭。
+## 刻意預設關閉、要逐隻手動開，不是全體 Agent 一起開——
+## [[LLM 串接與 AI 服務層]] 明講過「先從一隻角色開始，不要一次對所有
+## Agent 開放」，這是那條原則的落實
+@export var llm_decision_enabled := false
 
 ## schedule 任務給中間值，靠 time_bonus 拉開跟其他來源的差距，
 ## 不是靠 base priority 本身——見 [[行程佇列與任務仲裁]] 的「待決」那節
@@ -47,6 +41,24 @@ const HYSTERESIS := 5.0
 ## 最短承諾時間（遊戲分鐘）：任務至少要做滿這麼久才允許被非 reflex 任務搶走，
 ## 防止兩個分數接近的任務讓角色來回抖動
 const MIN_COMMIT := 2.0
+
+## 等待決策回覆期間，蓋掉上面的 MIN_COMMIT 用這個值。本地 LLM 已知延遲
+## 2.5-4 秒（見 note/技術/LLM 串接與 AI 服務層.md 的延遲章節），比一般
+## MIN_COMMIT（2.0 秒）長——等待決策期間退回任務池的 fallback 任務如果只受
+## 一般 MIN_COMMIT 保護，幾乎每個決策週期都會在 fallback 才做不到一半、
+## LLM 決策準時抵達的那一刻被切掉，變成規律性抖動而不是偶發的。
+## 起始值抓 5.0，跟 MIN_COMMIT／HYSTERESIS 一樣是待實跑校準的暫定值
+const LLM_WAIT_MIN_COMMIT := 5.0
+
+## LLM 任務的 duration 引擎端下限（遊戲分鐘）：不管模型回傳什麼，實際套用值
+## 一律不低於這個下限，避免呼叫頻率沒有上界保護。起始值抓 10，在地端已知延遲
+## 2.5-4 秒的前提下留有緩衝，實跑同機測試後再校準，不是理論算出來的定案值
+const MIN_ACTION_DURATION := 10.0
+
+## _tasks 池子的 LLM 來源總量上限（不含 schedule 來源，那批是開場建立一次
+## 就不變的固定集合）。跟每遊戲日最多 20 次 AI 請求同量級——見
+## [[行程佇列與任務仲裁]] 的「池子的守則」
+const LLM_TASK_POOL_CAP := 20
 
 ## 候選任務池。這一版只在 _load_schedule() 建立一次就不再變動——
 ## 「到點才可用」靠仲裁時的 window 過濾，不是把任務從池子裡搬進搬出
@@ -81,6 +93,17 @@ var _pursuit_done := false
 # 2 秒的愣住實際上只有 1 秒
 var _reacting := false
 
+# 目前有沒有一份決策請求還沒回來。_reevaluate() 靠它避免同一份請求還在飛時
+# 又觸發第二份（同一個 LLM 任務完成的當下可能被重算好幾次），
+# _consider_switch() 靠它決定要用 MIN_COMMIT 還是 LLM_WAIT_MIN_COMMIT
+var _awaiting_decision := false
+
+# LLM 任務 id 的流水號。不能拿 Time.get_ticks_msec() 當唯一值——一次回應最多
+# 五筆是在同一個同步迴圈裡建的，同毫秒是常態不是例外，撞 id 之後
+# _consider_switch() 的 best.id == _current_task.id 會把不同任務當成同一筆，
+# 直接 return 不切換
+var _next_llm_task_id := 0
+
 
 func _ready() -> void:
 	super()
@@ -108,12 +131,17 @@ func _ready() -> void:
 	# 每次重算都是仲裁器從候選裡挑分數最高的那個
 	_reevaluate()
 
+	# 《10》§5.1「世界開始時，所有角色依序發起決策請求」——只在還沒有任何
+	# LLM 來源任務時補這一次，避免重進場景（例如換場）時重複發起
+	if llm_decision_enabled and not _has_llm_task():
+		_request_next_decision()
+
 # 一趟移動有結論了：走到了，或 _check_stuck() 判定走不動而放棄。
 # 兩種都代表「這個地點不必再起步一次」，_pursue_current_task() 靠它收斂。
 #
-# move_finished 不是只有仲裁器自己會觸發——debug 主控台的 goto 類指令、
-# R&D 線的 village_sim_decision.gd 都會繞過仲裁器直接呼叫 character.move_to()，
-# 完成時一樣會發這個訊號。只有這次完成的目標剛好是仲裁器自己現在要去的
+# move_finished 不是只有仲裁器自己會觸發——debug 主控台的 goto 類指令也會繞過
+# 仲裁器直接呼叫 character.move_to()，完成時一樣會發這個訊號。
+# 只有這次完成的目標剛好是仲裁器自己現在要去的
 # 地方（current_place 對應的錨點座標），才算數；不是的話代表這次完成的
 # 是別人發的請求，不該影響仲裁器自己的追逐狀態
 func _on_move_finished(_reached: bool) -> void:
@@ -211,20 +239,175 @@ func _warn_if_node_name_shared() -> void:
 			])
 			return
 
-# super() 顧「工作中不能被搭話」；`interruptible` 是任務層級的判斷，睡覺不可
-# 被打斷就是靠 sleep 這筆任務的 interruptible = false 表達的。
+# 能不能被搭話打斷。super() 顧「工作中不能被搭話」；`interruptible` 是任務層級
+# 的判斷，睡覺不可被打斷就是靠 sleep 這筆任務的 interruptible = false 表達的。
 #
 # 這裡不另外比對 current_state == "sleep"：_select() 把 action 寫進 current_state，
 # 而 interruptible 是從同一個 action 算出來的（見 _tasks_from_schedule_json()），
 # 兩者恆等——多寫一項只會讓人以為 sleep 有額外的特例
-func is_interruptible() -> bool:
+#
+# 只管「搭話」，不管仲裁器搶占——那是 _is_preemptible() 的事。兩者在現有的
+# 任務類型上算出同一個公式是刻意維持，不是巧合（見 _is_preemptible() 的
+# 註解），issue #113 把它們拆成兩個獨立函式之前，這裡曾經一函兩用
+func is_talk_interruptible() -> bool:
 	return super() and _current_task.get("interruptible", true)
+
+# 仲裁器搶占檢查：目前任務能不能被更高分的候選換掉。跟上面的搭話中斷是兩個
+# 不同的問題——這裡不呼叫 super()／is_talk_interruptible()，兩個判斷刻意各自
+# 獨立算，不要再透過共用函式綁在一起（那正是 issue #113 要拆開的意外共用）。
+#
+# 公式跟 is_talk_interruptible() 現在剛好一樣（not _working and 任務的
+# interruptible），這是刻意維持拆分前的合併結果，不是巧合——純重構不改變
+# 現有任務類型的實際中斷/搶占行為。「工作該不該被攻擊強制打斷」「AI 能不能
+# 為了緊急需求主動放棄工作」這類語意判斷留給《AI自主性審查清單》PM 拍板後
+# 的後續 issue，屆時兩個判斷要各自往哪個方向改會很清楚，這裡不動它
+func _is_preemptible() -> bool:
+	return not _working and _current_task.get("interruptible", true)
 
 # 對話結束後重算一次「現在該做什麼」，而不是接續原本那條路 ——
 # 對話期間可能已經跨過了行程的整點
 func exit_conversation() -> void:
 	super()
 	_reevaluate()
+
+## 對話中要開口，打 AIService 要一句台詞。requester_id 用 character_id，不是
+## 節點名或別的字串——這是這隻角色自己的成本控管，換節點名/場景重擺都不該
+## 讓額度重算。ok=false 涵蓋 AI 未啟用/逾時/驗證失敗全部情況，呼叫端
+## （conversation.gd）一律轉去 fallback，不細分是哪一種——細分沒有意義，
+## 三種都是「這次要不到台詞」，處理方式完全一樣
+const AI_THINKING_TEXT := "…"
+
+func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) -> Dictionary:
+	# 立刻蓋掉正在顯示的東西，讓玩家知道「這個角色在想」，不是卡住。
+	# AIService.request() 還沒送出就已經先顯示——冷卻/配額檢查也算在等待時間裡，
+	# 玩家看到「…」的時間可能比實際打網路的時間長，這是刻意的：早一點給回饋
+	# 比精準對齊網路延遲更重要
+	say(AI_THINKING_TEXT, true)
+
+	var envelope := PromptBuilder.build_dialogue_envelope(self, listener, turns, max_turns)
+	var result: Dictionary = await AIService.request(envelope, character_id, AIService.Policy.CONVERSATION)
+	if not result["ok"]:
+		return {"ok": false}
+
+	var parsed := AISchema.parse_completion(result["data"])
+	if not parsed["ok"]:
+		return {"ok": false}
+
+	var validated := AISchema.validate_dialogue(parsed["data"])
+	if not validated["ok"]:
+		return {"ok": false}
+
+	return {
+		"ok": true,
+		"line": validated["data"]["line"],
+		"end": validated["data"]["end"],
+	}
+
+## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
+## AIService、parse_completion、validate_*，任何一關失敗都靜默放棄，任務池
+## fallback 頂著，下次任務完成再試。跟 next_line() 不一樣的是這裡失敗不用
+## 特別回報給呼叫端：next_line() 的呼叫端（conversation.gd）當下就在等一句話
+## 沒有就要走 fallback 台詞；這裡的呼叫端只是「該不該重算」，仲裁器本來就會
+## 自己從池子挑 fallback，不需要一個回傳值告訴它失敗了
+func _request_next_decision() -> void:
+	if _awaiting_decision:
+		return
+	_awaiting_decision = true
+
+	var visible: Array[Character] = vision.get_visible_characters() if vision != null else []
+	var envelope := PromptBuilder.build_plan_envelope(self, visible, _task_pool_summary())
+	var result: Dictionary = await AIService.request(envelope, character_id, AIService.Policy.SCHEDULED)
+	_awaiting_decision = false
+
+	if not result["ok"]:
+		return
+
+	var parsed := AISchema.parse_completion(result["data"])
+	if not parsed["ok"]:
+		return
+
+	var validated := AISchema.validate_tasks(parsed["data"])
+	if not validated["ok"]:
+		return
+
+	# reasoning／inner_monologue 印出來給人排查，跟 _trigger_village_ai() 的
+	# print() 除錯模式一致；不進遊戲內 UI。決策準不準沒有系統性驗證，
+	# 目前只能肉眼看這兩個欄位判斷合不合理
+	print("[llm_decision] %s reasoning: %s" % [character_name, validated["data"].get("reasoning", "")])
+	print("[llm_decision] %s inner_monologue: %s" % [character_name, validated["data"].get("inner_monologue", "")])
+
+	_push_llm_tasks(validated["data"]["tasks"], validated["data"])
+	_reevaluate()
+
+## 把驗證過的 LLM 任務推進 _tasks，補上仲裁器需要、但 LLM 不用填的欄位。
+## response 帶的是同一次決策回應的 reasoning／inner_monologue，複製一份到
+## 這批裡的每一筆 Task，讓「這個任務是為什麼被排進來的」跟任務本身綁在一起，
+## 供之後《12》規格書的記憶系統直接從 Task 讀，不用另外對照決策回應的歷史記錄
+func _push_llm_tasks(tasks: Array[Dictionary], response: Dictionary) -> void:
+	var now_minutes := _now_minutes()
+
+	for task in tasks:
+		var params: Dictionary = task.get("params", {})
+		var dedup_key: String = str(task.get("action", "")) + "|" \
+			+ str(params.get("target", params.get("place", "")))
+
+		# dedup：同一個 action+target/place 新的覆蓋舊的，不並存兩筆——
+		# 見 [[行程佇列與任務仲裁]]「池子的守則」，沒有這條的話被搭話幾次
+		# 之後池子就會塞滿重複的「回訪某某」
+		for i in range(_tasks.size() - 1, -1, -1):
+			if _tasks[i].get("source", "") != "llm":
+				continue
+			var existing_params: Dictionary = _tasks[i].get("params", {})
+			var existing_key: String = str(_tasks[i].get("action", "")) + "|" \
+				+ str(existing_params.get("target", existing_params.get("place", "")))
+			if existing_key == dedup_key:
+				_tasks.remove_at(i)
+
+		if _llm_task_count() >= LLM_TASK_POOL_CAP:
+			push_warning("Agent %s: LLM 任務池已滿（上限 %d），丟棄新任務 %s" % [
+				character_name, LLM_TASK_POOL_CAP, task.get("action", "")
+			])
+			continue
+
+		_next_llm_task_id += 1
+		task["id"] = "llm_%d_%d" % [now_minutes, _next_llm_task_id]
+		task["source"] = "llm"
+		task["created_at"] = now_minutes
+		task["duration"] = maxf(float(task.get("duration", 0.0)), MIN_ACTION_DURATION)
+		task["reasoning"] = response.get("reasoning", "")
+		task["inner_monologue"] = response.get("inner_monologue", "")
+		_tasks.append(task)
+
+func _llm_task_count() -> int:
+	var count := 0
+	for task in _tasks:
+		if task.get("source", "") == "llm":
+			count += 1
+	return count
+
+func _remove_task(id: String) -> void:
+	if id.is_empty():
+		return
+	for i in range(_tasks.size() - 1, -1, -1):
+		if _tasks[i].get("id", "") == id:
+			_tasks.remove_at(i)
+			return
+
+func _has_llm_task() -> bool:
+	return _llm_task_count() > 0
+
+## 目前任務池的摘要，給 PromptBuilder 組 plan 信封用——只給 LLM 需要知道的
+## 「排程本身在做什麼」，不是完整 Task 結構（分數拆項那些是給人 debug 看的，
+## 不該佔掉 prompt 的 token）
+func _task_pool_summary() -> Array[Dictionary]:
+	var summary: Array[Dictionary] = []
+	for task in _tasks:
+		summary.append({
+			"action": task.get("action", ""),
+			"place": task.get("params", {}).get("place", ""),
+			"source": task.get("source", ""),
+		})
+	return summary
 
 # 工作結束後同理：那 5 個遊戲分鐘可能已經跨過行程的整點，而 work_at() 開頭的
 # stop_moving() 把原本的路徑清掉了，不重算的話會一路站到下一個整點字串吻合為止
@@ -248,18 +431,6 @@ func get_state_snapshot() -> Dictionary:
 # 判斷放在這裡而不是 Vision 裡：感知回報「看到誰」，要不要有反應是人格與關係的事，
 # 接 LLM 之後這整段會換成「把 visible 放進 context 讓模型決定」
 func _on_spotted(other: Character) -> void:
-	# 玩家靠近時觸發一次真的 AI 決策——跟下面「陌生人才會『！』」那段是獨立的
-	# 兩件事：AI 觸發不看認不認識（老朋友走近一樣想問問 AI 現在會怎麼決策），
-	# 只看是不是玩家、這隻 Agent 有沒有開這個開關。目前只支援玩家觸發，
-	# Agent 對 Agent 互相觸發是後續才要處理的範圍（見 [[LLM 串接與 AI 服務層]]
-	# 的斷點記錄）。
-	#
-	# 呼叫 _trigger_village_ai() 而不是直接 await decide_and_act()：這裡故意
-	# 不擋住下面的「！」反應——網路呼叫可能要幾秒，「！」反應應該要即時，
-	# 不該被 AI 呼叫拖慢
-	if village_ai_enabled and other.is_in_group("player") and not is_in_conversation():
-		_trigger_village_ai()
-
 	if is_in_conversation() or _noticed.has(other.character_id):
 		return
 
@@ -282,40 +453,6 @@ func _on_spotted(other: Character) -> void:
 	# 這次重算會重新起步
 	if not is_in_conversation():
 		_reevaluate()
-
-# 之前吃過虧：decide_and_act() 完全沒有可見的回饋，跑失敗或跑成功但
-# 剛好沒事發生（沒話、動作不是 move_to）看起來一模一樣，使用者分不出來
-# 「壞了」還是「這次剛好沒事」。這裡一律 print()——不進遊戲內 UI，
-# 印到 Godot 的 Output 面板／終端機，跟 debug 主控台的 _cmd_village_ai_act
-# 是兩個不同的可見管道，但至少有一個能看
-func _trigger_village_ai() -> void:
-	print("[village_ai] %s 看到玩家，觸發自動決策（poc_character_id=%s）" % [character_name, poc_character_id])
-	var result: Dictionary = await VillageSimDecision.decide(self, poc_character_id)
-
-	if not result["ok"]:
-		print("[village_ai] %s 決策失敗：%s" % [character_name, result["error"]])
-		return
-
-	var data: Dictionary = result["data"]
-	var output: Dictionary = data.get("output", {})
-	print("[village_ai] %s 決策完成：action_en=%s speech=%s" % [
-		character_name, data.get("action_en", ""), output.get("speech")
-	])
-	print("[village_ai]   reasoning: %s" % output.get("reasoning", ""))
-	# 現在已經接上 physiology_override（見 VillageSimDecision._build_physiology_override()），
-	# 這裡重印一次真實的 Stats.SPEC 數值，方便對照 reasoning 判斷這次決策
-	# 合不合理——只轉得出 hunger/energy(stamina)/fun(boredom) 三項，
-	# social/mood 沒有對應欄位，thirst/health/money 這三項 Godot 沒有資料
-	# 來源，AI 那邊沿用 poc 角色檔案原本的值，不是這隻角色的真實狀態
-	print("[village_ai]   godot stats（僅供對照，非全部都送出去了）: %s" % get_state_snapshot().get("stats", {}))
-
-	# 執行動作/說話留在這裡自己呼叫，不讓 VillageSimDecision 幫忙做——
-	# 副作用要留在角色自己的程式碼路徑，理由見 village_sim_decision.gd 的檔頭註解
-	#
-	# 這條路目前完全繞過任務池/仲裁器（不進 _tasks，也不動 _current_task），
-	# 跟下面的仲裁器是兩個獨立機制，會互相覆蓋——見 [[行程佇列與任務仲裁]]
-	# 的已知並存說明，這則重構不含把這條路接進仲裁器
-	VillageSimDecision.apply(self, poc_character_id, result)
 
 # 範圍內有人發出聲音（見 character.gd 的 make_noise()）。
 # 跟 _on_spotted 不同，這裡不記錄「已經反應過」——聲音是一次性事件，
@@ -346,11 +483,26 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 # 代價是 _pursue_current_task() 得自己認得「這個地點已經在處理了」，
 # 見它自己的註解
 func _reevaluate() -> void:
+	var now_minutes := _now_minutes()
+
+	# 事件驅動觸發：LLM 來源的目前任務做滿引擎套用過下限的 duration 就算完成，
+	# 發起下一次決策請求。等待期間不 return——照樣往下跑完整套仲裁流程，
+	# 從池子（schedule 任務、上一輪還沒被選中的 llm 任務）挑 fallback 頂著，
+	# 不空等、不卡頓，是《10》§5.1 講的「天然容錯」
+	if llm_decision_enabled and not _awaiting_decision \
+			and _current_task.get("source", "") == "llm" \
+			and now_minutes - _current_task_started_at >= int(_current_task.get("duration", 0.0)):
+		# 做完的那筆要先離開池子。llm 任務沒有 window，不像 schedule 靠時間窗
+		# 自然退場——留著的話它會用原本的分數繼續參加下一輪算分，被重新選中，
+		# 變成同一件事做完又做。_current_task 是同一個 Dictionary 的參照，
+		# 移出池子不影響它，等待決策回來的期間照樣可以繼續執行
+		_remove_task(_current_task.get("id", ""))
+		_request_next_decision()
+
 	if _tasks.is_empty():
 		return
 
 	var now := "%02d:%02d" % [GameClock.hour, GameClock.minute]
-	var now_minutes := _now_minutes()
 
 	var best: Dictionary = {}
 	var best_score := -INF
@@ -374,10 +526,11 @@ func _reevaluate() -> void:
 	elif not _current_task.is_empty() \
 			and (_is_expired(_current_task, now_minutes) or not _in_window_or_unwindowed(_current_task, now)):
 		# 一個候選都沒有，而目前這筆自己已經過期或窗口過了：清掉，不要留著。
-		# 留著的話 sleep（interruptible = false）會讓 is_interruptible() 永遠回
-		# false，角色再也搭不了話——跟「窗口過期還被 interruptible 擋住」是同一
-		# 個坑，只是從 best 為空這條路徑進來，走不到 _consider_switch() 那關。
-		# schedule 任務的窗口由建構方式保證連續，碰不到；有間隔的任務才會
+		# 留著的話 sleep（interruptible = false）會讓 is_talk_interruptible() 與
+		# _is_preemptible() 都永遠回 false，角色再也搭不了話、任務也永遠搶不走
+		# ——跟「窗口過期還被 interruptible 擋住」是同一個坑，只是從 best 為空
+		# 這條路徑進來，走不到 _consider_switch() 那關。schedule 任務的窗口由
+		# 建構方式保證連續，碰不到；有間隔的任務才會
 		_current_task = {}
 		current_place = ""
 		current_state = "idle"
@@ -401,18 +554,21 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 		# 承諾檢查（含 interruptible）只保護「還沒過期、還在自己時間窗內」的
 		# 目前任務。過期或窗口已經過期的任務不受保護，該讓位就讓位——否則
 		# sleep（interruptible=false）會卡死，永遠醒不過來，因為每次重算都在
-		# 「不可中斷」這關直接 return，連「自己早就該結束了」都沒機會判斷到。
+		# 「不可搶占」這關直接 return，連「自己早就該結束了」都沒機會判斷到。
 		# interruptible 管的是「有沒有更高分的候選能搶」，不該管「自己是不是
 		# 早就該結束了」，這是兩件事
-		if not is_interruptible():
+		if not _is_preemptible():
 			return
 
 		var current_score := _score(_current_task, now)
 		if best_score < current_score + HYSTERESIS:
 			return
 
+		# 等待決策回覆期間，fallback 任務吃比較長的承諾期——見 LLM_WAIT_MIN_COMMIT
+		# 自己的註解：一般 MIN_COMMIT 比本地 LLM 已知延遲短，撐不了到答案回來
 		var committed_for: int = now_minutes - _current_task_started_at
-		if _current_task.get("source", "") != "reflex" and committed_for < MIN_COMMIT:
+		var min_commit := LLM_WAIT_MIN_COMMIT if _awaiting_decision else MIN_COMMIT
+		if _current_task.get("source", "") != "reflex" and committed_for < min_commit:
 			return
 
 	_select(best, now_minutes)
@@ -443,7 +599,7 @@ func _pursue_current_task() -> void:
 
 	# 工作中不要把自己走離工作站：_run_work() 每個遊戲分鐘重驗距離，走開就中止
 	# 而且不撥款（見 character.gd 的 _run_work()）。_consider_switch() 那邊已經
-	# 靠 is_interruptible()（含 not _working）擋住換任務，移動這半邊也要一致
+	# 靠 _is_preemptible()（含 not _working）擋住換任務，移動這半邊也要一致
 	if is_working():
 		return
 

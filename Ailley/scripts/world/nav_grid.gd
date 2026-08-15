@@ -25,16 +25,25 @@ func _ready() -> void:
 	if tile_map == null:
 		tile_map = _find_sibling_tile_map()
 
-	# TileMapDual 的顯示層是執行時生成的，地形碰撞體不會在第一幀就進到物理空間。
-	# 掃到障礙就停，都沒掃到就重試到上限（真的沒障礙的地圖也只是多掃幾次）
+	# TileMapDual 的顯示層是執行時生成的，地形碰撞體不會在第一幀就進到物理空間；
+	# 場景裡手動放的 StaticBody2D（workstation、vending_machine 等）則從第一幀就是
+	# 實體，掃到障礙不代表地形也就位了——「掃到就停」在有這種靜態物件時會太早 break。
+	# 改成連續兩次掃到同樣的 solid_count 才停：地形填完後計數會穩定下來，
+	# 靜態物件從頭到尾都算在計數裡，不需要另外區分來源。
+	var previous_solid := -1
+	var stabilized := false
 	for attempt in BUILD_ATTEMPTS:
 		await get_tree().physics_frame
 		rebuild()
-		if solid_count > 0:
+		if tile_map != null and solid_count == previous_solid:
+			stabilized = true
 			break
+		previous_solid = solid_count
 
-	built = true
-	grid_built.emit()
+	# 只有在 tile_map 存在且計數穩定時才視為建置成功
+	if stabilized:
+		built = true
+		grid_built.emit()
 
 # 角色本身也是碰撞體，掃格時要排除，否則玩家腳下那格會被當成障礙
 func _actor_body_rids() -> Array[RID]:
