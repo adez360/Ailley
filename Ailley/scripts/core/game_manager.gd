@@ -70,7 +70,12 @@ func load_character_templates():
 
 	character_templates.clear()
 	for template in data.get("templates", []):
-		character_templates[template["template_id"]] = template
+		var template_id: String = template["template_id"]
+		# 撞號靜默覆蓋會讓前一筆模板悄悄從角色庫消失，跟
+		# character.gd::_ensure_unique_id() 撞 id 一律報錯的原則不一致
+		if character_templates.has(template_id):
+			push_warning("character_templates.json: template_id 重複 %s，後面那筆蓋掉前面" % template_id)
+		character_templates[template_id] = template
 
 # 查詢角色庫模板，沒有回 null 讓呼叫端自己判斷要不要報錯
 func get_character_template(template_id: String):
