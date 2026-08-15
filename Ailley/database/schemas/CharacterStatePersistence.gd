@@ -91,7 +91,17 @@ func _save_character(character: Character) -> bool:
 		"character_id": character_id,
 		"character_type": character_type,
 
+		# 八項生理數值（規格書 §4.1）
 		"hunger": character.stats.get_value("hunger"),
+		"thirst": character.stats.get_value("thirst"),
+		"stamina": character.stats.get_value("stamina"),
+		"sleepiness": character.stats.get_value("sleepiness"),
+		"hygiene": character.stats.get_value("hygiene"),
+		"alcohol": character.stats.get_value("alcohol"),
+		"health": character.stats.get_value("health"),
+		"injury": character.stats.get_value("injury"),
+
+		# 保留舊欄位（Stats.gd 待遷移到規格書定義）
 		"energy": character.stats.get_value("energy"),
 		"social": character.stats.get_value("social"),
 		"fun": character.stats.get_value("fun"),
@@ -136,15 +146,18 @@ func _save_character(character: Character) -> bool:
 
 	if updated:
 		print(
-			"[CharacterStatePersistence] UPDATE %s (%s) hunger=%.2f energy=%.2f social=%.2f fun=%.2f mood=%.2f"
+			"[CharacterStatePersistence] UPDATE %s (%s) hunger=%.2f thirst=%.2f stamina=%.2f sleepiness=%.2f hygiene=%.2f alcohol=%.2f health=%.2f injury=%.2f"
 			% [
 				character.character_name,
 				character_type,
 				data["hunger"],
-				data["energy"],
-				data["social"],
-				data["fun"],
-				data["mood"]
+				data["thirst"],
+				data["stamina"],
+				data["sleepiness"],
+				data["hygiene"],
+				data["alcohol"],
+				data["health"],
+				data["injury"]
 			]
 		)
 
@@ -183,7 +196,16 @@ func get_all_states() -> Array:
 		[
 			"character_id",
 			"character_type",
+			# 八項生理數值
 			"hunger",
+			"thirst",
+			"stamina",
+			"sleepiness",
+			"hygiene",
+			"alcohol",
+			"health",
+			"injury",
+			# 舊欄位（向後相容）
 			"energy",
 			"social",
 			"fun",
