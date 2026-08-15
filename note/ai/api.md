@@ -560,14 +560,15 @@ static func closing(listener_name: String, affinity: float) -> String
 ## AIService — scripts/ai/ai_service.gd · autoload · Node
 
 ```gdscript
+enum Policy { SCHEDULED, CONVERSATION }      # SCHEDULED 吃速率限制，CONVERSATION 豁免冷卻與每日配額但照樣計數
+
 const POOL_SIZE := 3                         # HTTPRequest 節點數
-const MIN_INTERVAL_SEC := 30.0               # 同 requester_id 最短真實間隔
-const MAX_CALLS_PER_GAME_DAY := 20
 const RETRY_LIMIT := 1
 const MAX_ERROR_CHARS := 200
 
 const ERROR_DISABLED := "disabled"
 const ERROR_NO_REQUESTER := "no_requester_id"
+const ERROR_NO_PROVIDER := "no_provider"
 const ERROR_RATE_LIMITED := "rate_limited"
 const ERROR_DAILY_QUOTA := "daily_quota"
 const ERROR_TIMEOUT := "timeout"
@@ -578,7 +579,7 @@ const ERROR_BAD_JSON := "bad_json"
 var config: AIConfig
 
 func reload_config() -> void
-func request(envelope: Dictionary, requester_id: String) -> Dictionary   # 一律 await
+func request(envelope: Dictionary, requester_id: String, policy: Policy = Policy.SCHEDULED, provider_name: String = "") -> Dictionary   # 一律 await
 func get_usage(requester_id: String) -> Dictionary
 ```
 
@@ -588,6 +589,7 @@ envelope  system:String          人格/規則/輸出 schema/動作白名單
           payload:Dictionary     字串化成 user 訊息
           model:String           選填，覆寫設定
           response_format:Dict   選填 json_schema；各模型支援度不一，預設不帶
+provider_name  空字串 ⇒ 用設定檔的 default_provider；速率限制/配額算在 requester_id 上，不分 provider
 get_usage -> {game_day, calls_today, max_calls, queued, in_flight}   # game_day 讀 GameClock.day
 
 † 全專案唯一碰網路的地方 ⇒ 成本上限/金鑰/防注入入口只有一處要顧
@@ -595,6 +597,8 @@ get_usage -> {game_day, calls_today, max_calls, queued, in_flight}   # game_day 
 † 速率限制掛 requester_id 不掛全域（多人版帳單逐個擁有者算）
 † 用真實秒不用遊戲時間（要擋的帳單與 provider rate limit 都活在真實時間）
 † 金鑰只在組 Authorization header 時碰得到，其餘一律過 _scrub()
+† 速率限制的實際數值（冷卻秒數/每日上限/對話豁免開關）不是這裡的常數，
+  是可調的旋鈕，見下方 AIConfig
 → 技術/LLM 串接與 AI 服務層
 ```
 
@@ -606,9 +610,15 @@ const EXAMPLE_PATH := "res://data/ai_config.example.json"
 const DEFAULT_BASE_URL := "https://openrouter.ai/api/v1"
 const DEFAULT_MODEL := "openai/gpt-4o-mini"
 const DEFAULT_TIMEOUT := 10.0
+const DEFAULT_MIN_INTERVAL_SEC := 30.0       # 同 requester_id 最短真實間隔，玩家可調，0＝不限
+const DEFAULT_MAX_CALLS_PER_GAME_DAY := 20   # 玩家可調，0＝不限
+const DEFAULT_DIALOGUE_EXEMPT := true        # 對話輪次要不要豁免上面兩條限制，玩家可調
 const MASK_KEEP := 4
 
 var enabled := false · base_url · model · timeout · status_reason · api_key
+var min_interval_sec := DEFAULT_MIN_INTERVAL_SEC
+var max_calls_per_game_day := DEFAULT_MAX_CALLS_PER_GAME_DAY
+var dialogue_exempt := DEFAULT_DIALOGUE_EXEMPT
 
 static func load_from_user() -> AIConfig     # 讀不到→enabled=false 的物件
 func masked_key() -> String
@@ -621,6 +631,8 @@ func completions_url() -> String
   會 push_error 的只有「檔案在但內容壞」
 † 任何 log/錯誤/主控台輸出一律走 masked_key()，_to_string() 也只吐遮蔽版
 † 換 Ollama 只要改 base_url，程式不動
+† 速率限制三個旋鈕是「花多少錢」的決定，不是程式常數，寫進 user://ai_config.json
+  才會被 load_from_user() 覆寫；規格數值本身見《13》§5
 ```
 
 ## AISchema — scripts/ai/ai_schema.gd · class_name · RefCounted
