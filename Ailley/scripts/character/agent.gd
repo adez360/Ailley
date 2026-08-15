@@ -122,6 +122,25 @@ var _awaiting_decision := false
 # 直接 return 不切換
 var _next_llm_task_id := 0
 
+## 今日計畫（#89，《10》§5.4）：「想做的事」，不是排定的行程，引擎不強制
+## 執行，只當 prompt context 用。跟 Task 是不同語意的東西，不要跟 _tasks
+## 混在一起——那是引擎真的會去執行的排程單位。
+##
+## 欄位形狀對齊 database/schemas/NPCDailyPlanSchema.gd 的 npc_daily_plan
+## 表（npc_id 那份存的是 plan_id/text/is_done），這裡還沒接存檔（#21～#23），
+## 先用同樣的形狀存在記憶體，之後接存檔不用改欄位名
+var _today_plan: Array[Dictionary] = []		# [{id, text, is_done}]
+var _next_plan_id := 0
+
+## 上一輪決策回應有沒有問「下次能不能讓我改 today_plan」——見
+## _request_next_decision() 開頭怎麼消費它。這是四個開放時機裡的「AI 主動
+## 申請」：不是每次決策都能改，得先問過、下一輪才真的給
+var _plan_update_requested := false
+
+## 這次重算「進來的時候」current_state 是不是 sleep——用來偵測「剛睡醒」
+## 那個轉換瞬間，見 _reevaluate() 怎麼用它
+var _was_sleeping := false
+
 
 func _ready() -> void:
 	super()
@@ -150,9 +169,11 @@ func _ready() -> void:
 	_reevaluate()
 
 	# 《10》§5.1「世界開始時，所有角色依序發起決策請求」——只在還沒有任何
-	# LLM 來源任務時補這一次，避免重進場景（例如換場）時重複發起
+	# LLM 來源任務時補這一次，避免重進場景（例如換場）時重複發起。
+	# 允許附帶 update_plan：開場 _today_plan 一定是空的，跟「意圖全數完成」
+	# 那個時機（#89 觸發 2）是同一種狀況——沒有計畫，需要一份新的
 	if llm_decision_enabled and not _has_llm_task():
-		_request_next_decision()
+		_request_next_decision(true)
 
 # 一趟移動有結論了：走到了，或 _check_stuck() 判定走不動而放棄。
 # 兩種都代表「這個地點不必再起步一次」，_pursue_current_task() 靠它收斂。
@@ -359,13 +380,23 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 ## 特別回報給呼叫端：next_line() 的呼叫端（conversation.gd）當下就在等一句話
 ## 沒有就要走 fallback 台詞；這裡的呼叫端只是「該不該重算」，仲裁器本來就會
 ## 自己從池子挑 fallback，不需要一個回傳值告訴它失敗了
-func _request_next_decision() -> void:
+##
+## allow_update_plan 是這次呼叫端自己判斷「現在是不是 #89 講的四個開放時機
+## 之一」（呼叫端各自的理由見各呼叫處的註解）。這裡另外 or 上
+## _plan_update_requested：上一輪模型如果申請過，這裡兌現、用完就消費掉——
+## 不管呼叫端這次是為了什麼理由觸發，欠的那次都在這裡還
+func _request_next_decision(allow_update_plan: bool = false) -> void:
 	if _awaiting_decision:
 		return
 	_awaiting_decision = true
 
+	var effective_allow_update_plan := allow_update_plan or _plan_update_requested
+	_plan_update_requested = false
+
 	var visible: Array[Character] = vision.get_visible_characters() if vision != null else []
-	var envelope := PromptBuilder.build_plan_envelope(self, visible, _task_pool_summary())
+	var envelope := PromptBuilder.build_plan_envelope(
+		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan
+	)
 	var result: Dictionary = await AIService.request(envelope, character_id, AIService.Policy.SCHEDULED)
 	_awaiting_decision = false
 
@@ -376,7 +407,7 @@ func _request_next_decision() -> void:
 	if not parsed["ok"]:
 		return
 
-	var validated := AISchema.validate_tasks(parsed["data"])
+	var validated := AISchema.validate_tasks(parsed["data"], effective_allow_update_plan)
 	if not validated["ok"]:
 		return
 
@@ -387,7 +418,54 @@ func _request_next_decision() -> void:
 	print("[llm_decision] %s inner_monologue: %s" % [character_name, validated["data"].get("inner_monologue", "")])
 
 	_push_llm_tasks(validated["data"]["tasks"], validated["data"])
+
+	# 不管這輪有沒有拿到 update_plan 許可，模型都可能問「下次讓我改」——記
+	# 下來，下一次不管是哪個理由觸發 _request_next_decision() 都會兌現
+	if validated["data"].get("request_plan_update", false):
+		_plan_update_requested = true
+
+	# null 代表這次沒有 update_plan（不管是沒許可、還是有許可但模型選擇不用）；
+	# 空陣列 [] 是模型明確給的合法值（today_plan 清空），兩者不可混淆，見
+	# AISchema.validate_tasks() 用 null 分辨「沒提供」與「提供了空陣列」
+	var update_plan: Variant = validated["data"].get("update_plan")
+	if update_plan != null:
+		_apply_today_plan(update_plan)
+
 	_reevaluate()
+
+## update_plan 回應整份取代 _today_plan，不是逐筆增刪改——四個開放時機語意上
+## 都是「重寫」，不需要模型追蹤既有項目的 id 才能局部編輯，形狀跟驗證都簡單
+## 很多。id 是這裡自己重新配發的本機序號，跟
+## database/schemas/NPCDailyPlanSchema.gd 的 plan_id（存檔接上之後才有意義）
+## 是兩回事，不能拿模型回應裡的任何值當它
+func _apply_today_plan(items: Array[Dictionary]) -> void:
+	_today_plan.clear()
+	for item in items:
+		_next_plan_id += 1
+		_today_plan.append({
+			"id": _next_plan_id,
+			"text": item.get("text", ""),
+			"is_done": item.get("is_done", false),
+		})
+
+## today_plan 是不是「沒事可做，需要新目標」（#89 觸發時機之一）：一片空白
+## 也算——開場或剛被清空過，跟「全部項目都做完了」是同一種狀況，都需要
+## 一份新計畫
+func _today_plan_needs_new_goal() -> bool:
+	if _today_plan.is_empty():
+		return true
+	for item in _today_plan:
+		if not item.get("is_done", false):
+			return false
+	return true
+
+## 給 PromptBuilder 組 plan 信封用的精簡版——只給 text／is_done，內部的本機
+## id 不出現在 prompt 裡，那是引擎自己記帳用的，模型不需要知道也不該回傳它
+func _today_plan_summary() -> Array[Dictionary]:
+	var summary: Array[Dictionary] = []
+	for item in _today_plan:
+		summary.append({"text": item.get("text", ""), "is_done": item.get("is_done", false)})
+	return summary
 
 ## 把驗證過的 LLM 任務推進 _tasks，補上仲裁器需要、但 LLM 不用填的欄位。
 ## response 帶的是同一次決策回應的 reasoning／inner_monologue，複製一份到
@@ -537,6 +615,11 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 func _reevaluate() -> void:
 	var now_minutes := _now_minutes()
 
+	# 剛睡醒的偵測要在這裡的任何選任務邏輯跑之前先記下「進來的時候是不是
+	# 在睡」——選任務邏輯本身就可能把 current_state 從 sleep 換掉，這個
+	# 函式結尾要拿它跟「換完之後」比較，才抓得到真正的轉換瞬間
+	_was_sleeping = current_state == "sleep"
+
 	# 事件驅動觸發：LLM 來源的目前任務做滿引擎套用過下限的 duration 就算完成，
 	# 發起下一次決策請求。等待期間不 return——照樣往下跑完整套仲裁流程，
 	# 從池子（schedule 任務、上一輪還沒被選中的 llm 任務）挑 fallback 頂著，
@@ -556,7 +639,10 @@ func _reevaluate() -> void:
 		# 真正該做的事打架（見那裡的註解）——talk 任務的完成訊號是對話結束，
 		# 不是這個給沒有天然結束訊號的動作用的 duration 下限
 		_remove_task(_current_task.get("id", ""))
-		_request_next_decision()
+		# 允許附帶 update_plan：today_plan 沒事可做時，這正是「意圖全數完成」
+		# 那個開放時機（#89 觸發 2）——這個事件驅動迴圈本來就是每個 llm 任務
+		# 做完就重問一次，剛好是檢查這件事最自然的時間點
+		_request_next_decision(_today_plan_needs_new_goal())
 
 	if _tasks.is_empty():
 		return
@@ -593,6 +679,13 @@ func _reevaluate() -> void:
 		_current_task = {}
 		current_place = ""
 		current_state = "idle"
+
+	# 剛睡醒（#89 觸發時機之一，重寫整份 today_plan）：這次重算進來的時候
+	# 在睡，選完任務之後不再是了，就是這個轉換瞬間。只在真正換出 sleep 的
+	# 那一次觸發，不會每個遊戲分鐘都重問——_was_sleeping 是這次呼叫一開頭
+	# 記的，只反映「這一次」的轉換，不是累積狀態
+	if _was_sleeping and current_state != "sleep" and llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(true)
 
 	_pursue_current_task()
 
