@@ -232,7 +232,7 @@ Task 結構（_tasks 的元素，來源目前只有 schedule）
   3 不管換沒換，都再跑一次「往 current_place 前進」
 † 換任務要同時過三關：分數贏 HYSTERESIS、現任務 _is_preemptible()、
   現任務已做滿 MIN_COMMIT（source == "reflex" 豁免最後一關）
-† _is_preemptible() 跟 is_talk_interruptible() 是兩個獨立函式（issue #113），
+† _is_preemptible() 跟 is_talk_interruptible() 是兩個獨立函式，
   不互相呼叫；在現有任務類型上算出同一個公式是刻意維持，不是巧合
 † 三關只保護「還在自己 window 內」的現任務。窗口過了就該讓位——
   否則 sleep（interruptible=false）會在窗口結束後卡死，永遠醒不過來
