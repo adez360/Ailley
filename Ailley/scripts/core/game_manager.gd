@@ -96,6 +96,11 @@ func get_character_template(template_id: String):
 func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 	var character := scene.instantiate() as Character
 
+	# identity 沒給（或給空字串）character_name 時，character.gd::_ready() 會
+	# 用「當下節點名」fallback——但那時候節點名還是下面那個臨時值，不是這裡
+	# add_child() 之後才同步回去的最終 character_id，記下來給重算用
+	var name_given := not str(identity.get("character_name", "")).is_empty()
+
 	if identity.has("character_id"):
 		character.character_id = identity["character_id"]
 	if identity.has("character_name"):
@@ -108,5 +113,10 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 
 	get_tree().current_scene.add_child(character, true)
 	character.name = character.character_id
+
+	# _ready() 期間 character_name 的 fallback 撿到的是上面那個臨時節點名，
+	# 跟自己最終的 character_id 對不上——用最終節點名重算一次補回正確值
+	if not name_given:
+		character.character_name = character.name.to_lower()
 
 	return character
