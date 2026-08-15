@@ -116,6 +116,17 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 		else Character.generate_id()
 	)
 
+	# agent.tscn 根節點的 schedule_template 匯出值烘焙成 "npc001"，不是
+	# agent.gd 原始碼寫的空字串預設值（見 issue #132）。Agent/Agent2 不受
+	# 影響——assignments 查表命中一律覆蓋這個欄位；但動態生成的角色節點名
+	# 是 UUID，assignments 必然查不到，_load_schedule() 會退回這個殘留值，
+	# 讓每一隻動態角色都載入同一份 npc001 行程。這裡只清掉這個 instance
+	# 自己的值，不改場景檔——場景檔本身要不要清是 #132 的範圍，不是這裡。
+	# 用 get()/set() 而不是型別轉型：schedule_template 是 agent.gd 才有的
+	# 欄位，spawn_character() 收的是泛型 Character，不該假設一定是 Agent
+	if character.get("schedule_template") != null:
+		character.set("schedule_template", "")
+
 	get_tree().current_scene.add_child(character, true)
 	character.name = character.character_id
 
