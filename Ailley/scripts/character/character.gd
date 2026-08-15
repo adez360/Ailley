@@ -213,10 +213,14 @@ func get_body_position() -> Vector2:
 func is_in_conversation() -> bool:
 	return _conversation != null
 
-# 目前在做的事可不可以被打斷。工作中一律不行——work_at() 擋掉「對話中的人去工作」，
+# 能不能被搭話打斷。工作中一律不行——work_at() 擋掉「對話中的人去工作」，
 # 這裡是對稱的另一半：擋掉「把工作中的人拉進對話」。只做單邊的話，角色會同時冒
-# 氣泡跟進度條，而且工作照樣走完、錢照領。Agent 再依行程加上自己的條件
-func is_interruptible() -> bool:
+# 氣泡跟進度條，而且工作照樣走完、錢照領。Agent 再依行程加上自己的條件。
+#
+# 只管「搭話」。仲裁器搶占目前任務是另一個不相干的問題（見 Agent 的
+# _is_preemptible()）——這兩個問題曾經共用同一個 is_interruptible()，
+# 是意外共用不是設計決定，issue #113 把它們拆開成各自獨立的判斷
+func is_talk_interruptible() -> bool:
 	return not _working
 
 # 對某人搭話。成功回傳 TALK_OK（空字串），否則回傳失敗原因碼
@@ -226,12 +230,12 @@ func talk_to(other: Character) -> String:
 	if other == self:
 		return TALK_TARGET_IS_SELF
 	# 自己在工作中也算忙。少了這條，E 鍵在 work_at() 回 WORK_BUSY 之後退回搭話，
-	# 工作中的角色就開得起對話——正好繞過上面 is_interruptible() 要擋的那件事
+	# 工作中的角色就開得起對話——正好繞過上面 is_talk_interruptible() 要擋的那件事
 	if is_in_conversation() or _working or other.is_in_conversation():
 		return TALK_TARGET_BUSY
 	if get_body_position().distance_to(other.get_body_position()) > TALK_RANGE:
 		return TALK_TOO_FAR
-	if not other.is_interruptible():
+	if not other.is_talk_interruptible():
 		return TALK_TARGET_UNINTERRUPTIBLE
 
 	# 用 load 而不是 preload：conversation.gd 反過來也要 Character 型別，

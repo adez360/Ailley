@@ -239,14 +239,30 @@ func _warn_if_node_name_shared() -> void:
 			])
 			return
 
-# super() 顧「工作中不能被搭話」；`interruptible` 是任務層級的判斷，睡覺不可
-# 被打斷就是靠 sleep 這筆任務的 interruptible = false 表達的。
+# 能不能被搭話打斷。super() 顧「工作中不能被搭話」；`interruptible` 是任務層級
+# 的判斷，睡覺不可被打斷就是靠 sleep 這筆任務的 interruptible = false 表達的。
 #
 # 這裡不另外比對 current_state == "sleep"：_select() 把 action 寫進 current_state，
 # 而 interruptible 是從同一個 action 算出來的（見 _tasks_from_schedule_json()），
 # 兩者恆等——多寫一項只會讓人以為 sleep 有額外的特例
-func is_interruptible() -> bool:
+#
+# 只管「搭話」，不管仲裁器搶占——那是 _is_preemptible() 的事。兩者在現有的
+# 任務類型上算出同一個公式是刻意維持，不是巧合（見 _is_preemptible() 的
+# 註解），issue #113 把它們拆成兩個獨立函式之前，這裡曾經一函兩用
+func is_talk_interruptible() -> bool:
 	return super() and _current_task.get("interruptible", true)
+
+# 仲裁器搶占檢查：目前任務能不能被更高分的候選換掉。跟上面的搭話中斷是兩個
+# 不同的問題——這裡不呼叫 super()／is_talk_interruptible()，兩個判斷刻意各自
+# 獨立算，不要再透過共用函式綁在一起（那正是 issue #113 要拆開的意外共用）。
+#
+# 公式跟 is_talk_interruptible() 現在剛好一樣（not _working and 任務的
+# interruptible），這是刻意維持拆分前的合併結果，不是巧合——純重構不改變
+# 現有任務類型的實際中斷/搶占行為。「工作該不該被攻擊強制打斷」「AI 能不能
+# 為了緊急需求主動放棄工作」這類語意判斷留給《AI自主性審查清單》PM 拍板後
+# 的後續 issue，屆時兩個判斷要各自往哪個方向改會很清楚，這裡不動它
+func _is_preemptible() -> bool:
+	return not _working and _current_task.get("interruptible", true)
 
 # 對話結束後重算一次「現在該做什麼」，而不是接續原本那條路 ——
 # 對話期間可能已經跨過了行程的整點
@@ -510,10 +526,11 @@ func _reevaluate() -> void:
 	elif not _current_task.is_empty() \
 			and (_is_expired(_current_task, now_minutes) or not _in_window_or_unwindowed(_current_task, now)):
 		# 一個候選都沒有，而目前這筆自己已經過期或窗口過了：清掉，不要留著。
-		# 留著的話 sleep（interruptible = false）會讓 is_interruptible() 永遠回
-		# false，角色再也搭不了話——跟「窗口過期還被 interruptible 擋住」是同一
-		# 個坑，只是從 best 為空這條路徑進來，走不到 _consider_switch() 那關。
-		# schedule 任務的窗口由建構方式保證連續，碰不到；有間隔的任務才會
+		# 留著的話 sleep（interruptible = false）會讓 is_talk_interruptible() 與
+		# _is_preemptible() 都永遠回 false，角色再也搭不了話、任務也永遠搶不走
+		# ——跟「窗口過期還被 interruptible 擋住」是同一個坑，只是從 best 為空
+		# 這條路徑進來，走不到 _consider_switch() 那關。schedule 任務的窗口由
+		# 建構方式保證連續，碰不到；有間隔的任務才會
 		_current_task = {}
 		current_place = ""
 		current_state = "idle"
@@ -537,10 +554,10 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 		# 承諾檢查（含 interruptible）只保護「還沒過期、還在自己時間窗內」的
 		# 目前任務。過期或窗口已經過期的任務不受保護，該讓位就讓位——否則
 		# sleep（interruptible=false）會卡死，永遠醒不過來，因為每次重算都在
-		# 「不可中斷」這關直接 return，連「自己早就該結束了」都沒機會判斷到。
+		# 「不可搶占」這關直接 return，連「自己早就該結束了」都沒機會判斷到。
 		# interruptible 管的是「有沒有更高分的候選能搶」，不該管「自己是不是
 		# 早就該結束了」，這是兩件事
-		if not is_interruptible():
+		if not _is_preemptible():
 			return
 
 		var current_score := _score(_current_task, now)
@@ -582,7 +599,7 @@ func _pursue_current_task() -> void:
 
 	# 工作中不要把自己走離工作站：_run_work() 每個遊戲分鐘重驗距離，走開就中止
 	# 而且不撥款（見 character.gd 的 _run_work()）。_consider_switch() 那邊已經
-	# 靠 is_interruptible()（含 not _working）擋住換任務，移動這半邊也要一致
+	# 靠 _is_preemptible()（含 not _working）擋住換任務，移動這半邊也要一致
 	if is_working():
 		return
 

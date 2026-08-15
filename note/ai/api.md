@@ -118,7 +118,7 @@ func _on_work_finished() -> void             # 子類覆寫點；Agent 用它重
 func talk_to(other: Character) -> String     # TALK_OK 或原因碼
 func find_nearest_character() -> Character   # TALK_RANGE 內最近；無→null
 func is_in_conversation() -> bool
-func is_interruptible() -> bool              # 基底 `not _working`；Agent 覆寫 super() and 任務 interruptible
+func is_talk_interruptible() -> bool          # 基底 `not _working`；Agent 覆寫 super() and 任務 interruptible
 func enter_conversation(conversation: Node) -> void
 func exit_conversation() -> void
 func leave_conversation() -> void
@@ -225,7 +225,8 @@ var _current_task: Dictionary
 var current_place: String                    # 目前任務要去的地點
 var current_state: String                    # 目前任務的 action，沒任務是 "idle"
 
-func is_interruptible() -> bool              # 覆寫：super() and 目前任務的 interruptible
+func is_talk_interruptible() -> bool          # 覆寫：super() and 目前任務的 interruptible
+func _is_preemptible() -> bool                # 私有，仲裁器搶占檢查；跟上面獨立算，不共用
 func exit_conversation() -> void             # 覆寫：講完重算一次
 func next_line(listener, turns, max_turns) -> Dictionary   # 對話台詞，見下方
 func get_task_debug_info() -> Array[Dictionary]            # tasks 指令用
@@ -245,8 +246,10 @@ Task 結構（_tasks 的元素，來源目前只有 schedule）
   2 score = priority + time_bonus + need_bonus + age_bonus，取最高分
     time_bonus = 窗內 100 / 窗外 0；need_bonus 與 age_bonus 這一版恆為 0
   3 不管換沒換，都再跑一次「往 current_place 前進」
-† 換任務要同時過三關：分數贏 HYSTERESIS、現任務 is_interruptible()、
+† 換任務要同時過三關：分數贏 HYSTERESIS、現任務 _is_preemptible()、
   現任務已做滿 MIN_COMMIT（source == "reflex" 豁免最後一關）
+† _is_preemptible() 跟 is_talk_interruptible() 是兩個獨立函式，
+  不互相呼叫；在現有任務類型上算出同一個公式是刻意維持，不是巧合
 † 三關只保護「還在自己 window 內」的現任務。窗口過了就該讓位——
   否則 sleep（interruptible=false）會在窗口結束後卡死，永遠醒不過來
 ```
