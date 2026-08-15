@@ -88,6 +88,24 @@ var _pursued_place := ""
 # 變成每秒一次的卡住／放棄迴圈
 var _pursuit_done := false
 
+# talk 任務用的卡住偵測（#90）。目標是會動的角色，每次重算都要重新
+# move_to()，不能沿用上面 _pursued_place／_pursuit_done 那套「地點沒換就不
+# 重下指令」的節流——但這也表示不能靠 Character._stuck_timer：那個計時器在
+# move_to() 一開頭就會被歸零，每個遊戲分鐘重下一次指令等於它永遠沒機會累積
+# 到 STUCK_TIME。這裡自己算：距離沒有明顯縮短就算一次沒有進展
+var _talk_pursuit_stuck_ticks := 0
+var _talk_pursuit_last_distance := INF
+
+# 自己成功發起、目前正在進行中的 talk 任務 id／來源。只在 talk_to() 真的成功
+# 那一刻設值，exit_conversation() 靠這個而不是「當下的 _current_task」判斷對話
+# 結束時該清掉哪一筆——理由見 exit_conversation() 自己的註解。
+#
+# source 額外存一份是因為任務從池子移除後就查不到它原本的 source 了——
+# exit_conversation() 要知道這筆任務是不是 llm 來源，才能決定要不要在這裡
+# 觸發下一次決策請求
+var _active_talk_task_id := ""
+var _active_talk_task_source := ""
+
 # 正在對陌生人做「！」反應。那 2 秒刻意站著不動，期間不重新起步——
 # GameClock 一個遊戲分鐘就是 1 現實秒，不擋的話 1 秒後就被送回路上，
 # 2 秒的愣住實際上只有 1 秒
@@ -266,8 +284,40 @@ func _is_preemptible() -> bool:
 
 # 對話結束後重算一次「現在該做什麼」，而不是接續原本那條路 ——
 # 對話期間可能已經跨過了行程的整點
+#
+# 自己主動發起搭話成功時觸發的那筆 talk 任務，對話結束要連任務帶目前狀態
+# 一起清掉——不清的話 id 沒變，_reevaluate() 會選到同一筆再打一次，變成
+# 每次重算都重新搭話一次的無限迴圈（#90）。
+#
+# 靠 _active_talk_task_id 認，不是看「當下」的 _current_task：對話期間
+# _reevaluate() 照樣會跑完整套選任務邏輯（只有移動被 is_in_conversation()
+# 擋住，選任務本身沒被擋），_current_task 完全可能在對話進行中被換成別的
+# 任務。憑當下的 _current_task 判斷會有兩種撲空：真正該清的那筆任務已經
+# 不是 _current_task、清不到；或是被別人搭話時，自己另一筆不相干的待辦
+# talk 任務剛好是 _current_task，被誤刪
 func exit_conversation() -> void:
 	super()
+
+	if not _active_talk_task_id.is_empty():
+		var was_llm := _active_talk_task_source == "llm"
+
+		_remove_task(_active_talk_task_id)
+		if _current_task.get("id", "") == _active_talk_task_id:
+			_current_task = {}
+			current_place = ""
+			current_state = "idle"
+		_active_talk_task_id = ""
+		_active_talk_task_source = ""
+
+		# 這筆任務「做完了」的訊號是對話結束，不是 _reevaluate() 那段替沒有
+		# 天然結束訊號的動作（eat/rest 那類）準備的 duration 下限——talk 有
+		# 更準確的訊號就該用它，不要等 duration 事後才補觸發下一次決策。
+		# 對話期間 _reevaluate() 那段其實被下面的 _current_task.get("id","")
+		# != _active_talk_task_id 這個新條件擋住了，不會搶先觸發，這裡才是
+		# 唯一真正觸發的地方
+		if was_llm and llm_decision_enabled and not _awaiting_decision:
+			_request_next_decision()
+
 	_reevaluate()
 
 ## 對話中要開口，打 AIService 要一句台詞。requester_id 用 character_id，不是
@@ -402,9 +452,11 @@ func _has_llm_task() -> bool:
 func _task_pool_summary() -> Array[Dictionary]:
 	var summary: Array[Dictionary] = []
 	for task in _tasks:
+		var params: Dictionary = task.get("params", {})
 		summary.append({
 			"action": task.get("action", ""),
-			"place": task.get("params", {}).get("place", ""),
+			"place": params.get("place", ""),
+			"target": params.get("target", ""),
 			"source": task.get("source", ""),
 		})
 	return summary
@@ -491,11 +543,18 @@ func _reevaluate() -> void:
 	# 不空等、不卡頓，是《10》§5.1 講的「天然容錯」
 	if llm_decision_enabled and not _awaiting_decision \
 			and _current_task.get("source", "") == "llm" \
+			and _current_task.get("id", "") != _active_talk_task_id \
 			and now_minutes - _current_task_started_at >= int(_current_task.get("duration", 0.0)):
 		# 做完的那筆要先離開池子。llm 任務沒有 window，不像 schedule 靠時間窗
 		# 自然退場——留著的話它會用原本的分數繼續參加下一輪算分，被重新選中，
 		# 變成同一件事做完又做。_current_task 是同一個 Dictionary 的參照，
 		# 移出池子不影響它，等待決策回來的期間照樣可以繼續執行
+		#
+		# 上面 id != _active_talk_task_id 這條擋掉一種情況：talk 任務正在
+		# 撐著一場對話時，套用過下限的 duration 可能比對話實際講完的時間短，
+		# 這裡搶先把它從池子清掉、觸發下一次決策，會跟 exit_conversation()
+		# 真正該做的事打架（見那裡的註解）——talk 任務的完成訊號是對話結束，
+		# 不是這個給沒有天然結束訊號的動作用的 duration 下限
 		_remove_task(_current_task.get("id", ""))
 		_request_next_decision()
 
@@ -580,6 +639,10 @@ func _select(task: Dictionary, now_minutes: int) -> void:
 	_current_task_started_at = now_minutes
 	current_place = str(task.get("params", {}).get("place", ""))
 	current_state = str(task.get("action", ""))
+	# 換了新任務就是換了新的追逐目標，talk 任務自己的卡住偵測要歸零重算——
+	# 不歸零的話舊目標留下的「沒進展」次數會誤算進新目標的偵測
+	_talk_pursuit_stuck_ticks = 0
+	_talk_pursuit_last_distance = INF
 
 # 往 _current_task 的方向前進。無條件每次重算都跑一次，不管這次有沒有
 # 剛選定新任務——對話中會在這裡先返回、不移動，等下一次重算（對話結束後
@@ -605,6 +668,12 @@ func _pursue_current_task() -> void:
 
 	# 對陌生人「！」的那 2 秒刻意站著不動
 	if _reacting:
+		return
+
+	# talk 任務的目標是另一個角色，不是固定地點——current_place 對它一律是空的
+	# （params 裝的是 target 不是 place），要另外分流，不能落進下面的地點判斷
+	if current_state == "talk":
+		_pursue_talk_task()
 		return
 
 	if current_place.is_empty():
@@ -646,6 +715,71 @@ func _pursue_current_task() -> void:
 	if not move_to(target):
 		push_warning("Agent %s: 走不到 %s" % [character_name, current_place])
 		_pursuit_done = true
+
+# talk 任務的執行（#90）：目標是會動的角色，不是靜止的地點錨點，所以不能沿用
+# 上面那套「走一次、_pursued_place／_pursuit_done 收斂」的節流——每次重算都
+# 要重新問一次「他現在在哪」，距離內就直接搭話，不是只起步一次
+func _pursue_talk_task() -> void:
+	var target_name: String = str(_current_task.get("params", {}).get("target", ""))
+	var target := _find_character_by_name(target_name)
+
+	if target == null:
+		# 找不到人只報一次，理由跟「地點打錯只報一次」一樣——這個函式每個
+		# 遊戲分鐘跑一次，目標一直不存在的話不能每分鐘洗一次錯誤。借用
+		# _pursued_place 當去重鍵：talk 任務跟 place 任務不會同時是目前任務，
+		# 語意上不衝突，不用另外開欄位
+		if target_name != _pursued_place:
+			push_error("Agent %s: 找不到搭話對象 %s" % [character_name, target_name])
+			_pursued_place = target_name
+		return
+
+	var distance := get_body_position().distance_to(target.get_body_position())
+
+	if distance <= TALK_RANGE:
+		stop_moving()
+		var failure := talk_to(target)
+		if failure == Character.TALK_OK:
+			# 記住是這筆任務讓對話成立的——exit_conversation() 靠這個 id 清任務，
+			# 不能靠「對話結束當下的 _current_task」，因為對話期間 _reevaluate()
+			# 照樣可能把 _current_task 換成別的（見 exit_conversation() 的註解）
+			_active_talk_task_id = _current_task.get("id", "")
+			_active_talk_task_source = _current_task.get("source", "")
+		else:
+			# 失敗不放棄任務，下個遊戲分鐘再試——對方可能只是暫時忙碌（TARGET_BUSY
+			# 等），跟 move_to() 走不到只 push_warning 不整筆放棄是同一種態度
+			push_warning("Agent %s: 搭話 %s 失敗（%s）" % [
+				character_name, target.character_name, failure
+			])
+		return
+
+	# 找不到路徑要講出來——跟地點式任務一樣，不然「永遠追不到人」在 log 裡
+	# 完全沒有線索，只看得到角色站著不動
+	if not move_to(target.get_body_position()):
+		push_warning("Agent %s: 走不到搭話對象 %s" % [character_name, target.character_name])
+		_talk_pursuit_stuck_ticks = 0
+		return
+
+	# 距離沒有明顯縮短（容許一點量測誤差）就算一次沒進展；連續幾次才報一次，
+	# 不是每次都報——偶爾一次量測誤差不該洗警告
+	if distance >= _talk_pursuit_last_distance - 1.0:
+		_talk_pursuit_stuck_ticks += 1
+	else:
+		_talk_pursuit_stuck_ticks = 0
+	_talk_pursuit_last_distance = distance
+
+	if _talk_pursuit_stuck_ticks == 3:
+		push_warning("Agent %s: 追不上搭話對象 %s，可能被卡住" % [character_name, target.character_name])
+
+# 按顯示名找角色，不分大小寫的規則跟 debug_console.gd::_get_character() 不同——
+# 那裡要處理玩家手打、可能撞名的情形；這裡的 target 是 LLM 從 context.visible
+# 抄回來的名字，來源單一，先用最單純的完全比對，真的撞名再處理
+func _find_character_by_name(target_name: String) -> Character:
+	if target_name.is_empty():
+		return null
+	for node in get_tree().get_nodes_in_group("characters"):
+		if node != self and node.character_name == target_name:
+			return node as Character
+	return null
 
 # 站得夠近，或者已經站在目標所在的那一格。
 #
