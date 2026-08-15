@@ -63,6 +63,12 @@ const MAX_TASKS_PER_RESPONSE := 5
 # 會頂到
 const MAX_PLAN_ITEMS := 10
 
+# 單筆 text 最長幾字（#89，CodeRabbit review）。MAX_PLAN_ITEMS 只擋筆數，
+# 沒擋單筆長度——today_plan 每次決策都會重新壓成句子塞回 prompt
+# （_today_plan_sentence()），單筆文字要是無上限，被誘導或壞掉的回應可以
+# 讓 prompt 越長越大。跟 MAX_LINE_CHARS 一樣的道理，數字也直接沿用
+const MAX_PLAN_TEXT_CHARS := MAX_LINE_CHARS
+
 const ERROR_NOT_JSON := "not_json"
 const ERROR_NOT_OBJECT := "not_object"
 const ERROR_NO_CONTENT := "no_content"
@@ -265,8 +271,11 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) ->
 				return _fail(ERROR_BAD_SHAPE)
 
 			var plan_item := item as Dictionary
-			if not plan_item.has("text") or not plan_item["text"] is String \
-					or (plan_item["text"] as String).strip_edges().is_empty():
+			if not plan_item.has("text") or not plan_item["text"] is String:
+				return _fail(ERROR_BAD_SHAPE)
+
+			var plan_text: String = (plan_item["text"] as String).strip_edges()
+			if plan_text.is_empty() or plan_text.length() > MAX_PLAN_TEXT_CHARS:
 				return _fail(ERROR_BAD_SHAPE)
 
 			var is_done := false
@@ -276,7 +285,7 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) ->
 				is_done = plan_item["is_done"]
 
 			plan_items.append({
-				"text": (plan_item["text"] as String).strip_edges(),
+				"text": plan_text,
 				"is_done": is_done,
 			})
 
@@ -343,7 +352,7 @@ static func plan_response_schema(allow_update_plan: bool = false) -> Dictionary:
 			"items": {
 				"type": "object",
 				"properties": {
-					"text": {"type": "string"},
+					"text": {"type": "string", "maxLength": MAX_PLAN_TEXT_CHARS},
 					"is_done": {"type": "boolean"},
 				},
 				"required": ["text"],
