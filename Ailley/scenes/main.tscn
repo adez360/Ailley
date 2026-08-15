@@ -1,6 +1,6 @@
 [gd_scene load_steps=28 format=4 uid="uid://bianwxowjctjk"]
 
-[ext_resource type="Script" uid="uid://djdfer2luq3s5" path="res://scripts/ui/pause.gd" id="1_a8y0u"]
+[ext_resource type="Script" path="res://scripts/ui/pause.gd" id="1_a8y0u"]
 [ext_resource type="PackedScene" uid="uid://v21qv1icuh5m" path="res://scenes/player.tscn" id="1_ljsu2"]
 [ext_resource type="Script" uid="uid://bhds0h8vwl2g5" path="res://scripts/world/follow_camera.gd" id="2_a52xk"]
 [ext_resource type="Material" uid="uid://cmbcfxlkxxnwq" path="res://addons/TileMapDual/ghost_material.tres" id="2_kvyyq"]
@@ -16,11 +16,11 @@
 [ext_resource type="PackedScene" uid="uid://c5fffesir3r4v" path="res://scenes/workstation.tscn" id="12_0ld40"]
 [ext_resource type="Script" uid="uid://bnxsowwm2cpvd" path="res://scripts/world/places.gd" id="12_sc7p8"]
 [ext_resource type="PackedScene" uid="uid://bta26yf1ol1rm" path="res://scenes/vending_machine.tscn" id="13_yc10j"]
-[ext_resource type="Script" uid="uid://dej3fk4srven5" path="res://scripts/ui/status_panel.gd" id="15_jbj1t"]
+[ext_resource type="Script" path="res://scripts/ui/status_panel.gd" id="15_jbj1t"]
 [ext_resource type="Texture2D" uid="uid://b06f01r4ovc0r" path="res://assets/ui/Setting menu.png" id="16_muem4"]
-[ext_resource type="Script" uid="uid://bghlt4yqp6xrt" path="res://scripts/ui/inventory_panel.gd" id="17_dp3eg"]
-[ext_resource type="Script" uid="uid://hism2nudt3ss" path="res://scripts/ui/hotbar.gd" id="17_muem4"]
-[ext_resource type="Script" uid="uid://dm5y3oyvsultm" path="res://scripts/ui/vending_menu.gd" id="21_jscy8"]
+[ext_resource type="Script" path="res://scripts/ui/inventory_panel.gd" id="17_dp3eg"]
+[ext_resource type="Script" path="res://scripts/ui/hotbar.gd" id="17_muem4"]
+[ext_resource type="Script" path="res://scripts/ui/vending_menu.gd" id="21_jscy8"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_pl1ev"]
 texture = ExtResource("3_y8peb")

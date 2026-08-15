@@ -51,6 +51,8 @@ static func initialize(db) -> bool:
 		NPCStateSchema,
 		NPCScheduleSchema,
 
+		# Player + NPC 共用即時狀態
+		CharacterStateSchema,
 
 		# -------------------------------------------------
 		# 03. NPC Profile
