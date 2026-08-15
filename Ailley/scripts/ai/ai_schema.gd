@@ -58,6 +58,17 @@ const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep"]
 # 跨多次回應累積的防線，這裡管的是單次回應本身
 const MAX_TASKS_PER_RESPONSE := 5
 
+# update_plan 一次最多幾項（#89）。today_plan 是「今天想做的事」，不是待辦
+# 清單軟體，一天塞得下的意圖不會太多，這裡當個寬鬆的上限防禦，不是真的預期
+# 會頂到
+const MAX_PLAN_ITEMS := 10
+
+# 單筆 text 最長幾字（#89，CodeRabbit review）。MAX_PLAN_ITEMS 只擋筆數，
+# 沒擋單筆長度——today_plan 每次決策都會重新壓成句子塞回 prompt
+# （_today_plan_sentence()），單筆文字要是無上限，被誘導或壞掉的回應可以
+# 讓 prompt 越長越大。跟 MAX_LINE_CHARS 一樣的道理，數字也直接沿用
+const MAX_PLAN_TEXT_CHARS := MAX_LINE_CHARS
+
 const ERROR_NOT_JSON := "not_json"
 const ERROR_NOT_OBJECT := "not_object"
 const ERROR_NO_CONTENT := "no_content"
@@ -159,7 +170,11 @@ static func validate_dialogue(data: Dictionary) -> Dictionary:
 # eat 對地點、give 要 target+item），真的要嚴格 per-action schema 會讓這個
 # 函式暴增，v1 先只驗證 params 存在且是 Dictionary，逐欄位驗證留給
 # 各動作真的接執行層那個 issue 一起做
-static func validate_tasks(data: Dictionary) -> Dictionary:
+#
+# allow_update_plan 跟呼叫端組信封時傳給 PromptBuilder.build_plan_envelope()
+# 的是同一個值——不是這裡自己重新判斷「現在該不該開放」，那是 agent.gd 的
+# 職責，這裡只負責「如果不開放，多出來的 update_plan 要不要理」
+static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) -> Dictionary:
 	if not data.has("tasks") or not data["tasks"] is Array:
 		return _fail(ERROR_BAD_SHAPE)
 
@@ -227,10 +242,61 @@ static func validate_tasks(data: Dictionary) -> Dictionary:
 	if inner_monologue == null:
 		return _fail(ERROR_BAD_SHAPE)
 
+	# request_plan_update：模型「下次能不能讓我改 today_plan」的申請信號
+	# （#89 觸發時機「AI 主動申請」）。任何時候都可以問，不受 allow_update_plan
+	# 影響——這欄位本來就是為了「這輪不開放」的情況存在的，缺席視為 false
+	var request_plan_update := false
+	if data.has("request_plan_update"):
+		if not data["request_plan_update"] is bool:
+			return _fail(ERROR_BAD_SHAPE)
+		request_plan_update = data["request_plan_update"]
+
+	# update_plan：只有 allow_update_plan 為真時才驗證／放行。allow_update_plan
+	# 為假時就算模型硬塞了這個欄位也整包忽略、不因此讓回應失敗——模型不該
+	# 知道規則、送錯東西不是它的錯，跟這個檔案對 extra fields 的一貫態度一致。
+	# null 代表「這次沒有 update_plan」，跟合法的空陣列 [] 分開，呼叫端用
+	# null 判斷要不要套用（見 agent.gd::_request_next_decision()）
+	var update_plan: Variant = null
+	if allow_update_plan and data.has("update_plan"):
+		if not data["update_plan"] is Array:
+			return _fail(ERROR_BAD_SHAPE)
+
+		var raw_plan := data["update_plan"] as Array
+		if raw_plan.size() > MAX_PLAN_ITEMS:
+			return _fail(ERROR_BAD_SHAPE)
+
+		var plan_items: Array[Dictionary] = []
+		for item in raw_plan:
+			if not item is Dictionary:
+				return _fail(ERROR_BAD_SHAPE)
+
+			var plan_item := item as Dictionary
+			if not plan_item.has("text") or not plan_item["text"] is String:
+				return _fail(ERROR_BAD_SHAPE)
+
+			var plan_text: String = (plan_item["text"] as String).strip_edges()
+			if plan_text.is_empty() or plan_text.length() > MAX_PLAN_TEXT_CHARS:
+				return _fail(ERROR_BAD_SHAPE)
+
+			var is_done := false
+			if plan_item.has("is_done"):
+				if not plan_item["is_done"] is bool:
+					return _fail(ERROR_BAD_SHAPE)
+				is_done = plan_item["is_done"]
+
+			plan_items.append({
+				"text": plan_text,
+				"is_done": is_done,
+			})
+
+		update_plan = plan_items
+
 	return _ok({
 		"tasks": tasks,
 		"reasoning": reasoning,
 		"inner_monologue": inner_monologue,
+		"request_plan_update": request_plan_update,
+		"update_plan": update_plan,
 	})
 
 
@@ -252,32 +318,54 @@ static func _validated_optional_line(data: Dictionary, key: String) -> Variant:
 # response_format 用的 JSON Schema。跟 validate_tasks() 驗證的形狀對齊，
 # 一個地方維護兩者一致——schema 改了就會同時影響送出去的約束跟收回來的驗證，
 # 不會漏改其中一邊
-static func plan_response_schema() -> Dictionary:
+#
+# update_plan 是條件式欄位（#89，《12》§2.4）：allow_update_plan 為假時
+# properties 裡完全沒有這個 key——不是「有欄位但要求不要填」，是模型的
+# response_format 契約裡文法上就不存在這個選項，跟 validate_tasks() 收到
+# 誤填也整包忽略是一致的立場，只是一個在輸出端擋、一個在輸入端擋
+static func plan_response_schema(allow_update_plan: bool = false) -> Dictionary:
+	var properties := {
+		"reasoning": {"type": "string"},
+		"inner_monologue": {"type": "string"},
+		"request_plan_update": {"type": "boolean"},
+		"tasks": {
+			"type": "array",
+			"maxItems": MAX_TASKS_PER_RESPONSE,
+			"items": {
+				"type": "object",
+				"properties": {
+					"action": {"type": "string", "enum": ALLOWED_ACTIONS},
+					"params": {"type": "object"},
+					"priority": {"type": "number"},
+					"duration": {"type": "number"},
+					"expires_at": {"type": "number"},
+				},
+				"required": ["action"],
+			},
+		},
+	}
+
+	if allow_update_plan:
+		properties["update_plan"] = {
+			"type": "array",
+			"maxItems": MAX_PLAN_ITEMS,
+			"items": {
+				"type": "object",
+				"properties": {
+					"text": {"type": "string", "maxLength": MAX_PLAN_TEXT_CHARS},
+					"is_done": {"type": "boolean"},
+				},
+				"required": ["text"],
+			},
+		}
+
 	return {
 		"type": "json_schema",
 		"json_schema": {
 			"name": "plan_response",
 			"schema": {
 				"type": "object",
-				"properties": {
-					"reasoning": {"type": "string"},
-					"inner_monologue": {"type": "string"},
-					"tasks": {
-						"type": "array",
-						"maxItems": MAX_TASKS_PER_RESPONSE,
-						"items": {
-							"type": "object",
-							"properties": {
-								"action": {"type": "string", "enum": ALLOWED_ACTIONS},
-								"params": {"type": "object"},
-								"priority": {"type": "number"},
-								"duration": {"type": "number"},
-								"expires_at": {"type": "number"},
-							},
-							"required": ["action"],
-						},
-					},
-				},
+				"properties": properties,
 				"required": ["tasks"],
 			},
 		},
