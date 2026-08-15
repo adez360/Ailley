@@ -21,6 +21,11 @@ func get_character(id: String) -> Dictionary:
 
 
 ## 寫入一個角色的完整資料（整包覆蓋，不做局部欄位更新）
+##
+## 實作需求（見《規格書 14》§2）：
+##   - 並行寫入保護：需 version 欄位 ＋ compare-and-swap 或鎖定式 read-modify-write 交易
+##   - 版本衝突處理：定義失敗／重試行為，成功時遞增 version
+##   - 返回 true（成功）或 false（失敗，含版本衝突）
 func save_character(id: String, data: Dictionary) -> bool:
 	push_error("SaveService: save_character 未實作")
 	return false
