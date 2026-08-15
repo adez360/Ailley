@@ -335,9 +335,14 @@ func exit_conversation() -> void:
 		# 更準確的訊號就該用它，不要等 duration 事後才補觸發下一次決策。
 		# 對話期間 _reevaluate() 那段其實被下面的 _current_task.get("id","")
 		# != _active_talk_task_id 這個新條件擋住了，不會搶先觸發，這裡才是
-		# 唯一真正觸發的地方
+		# 唯一真正觸發的地方。
+		#
+		# 允許附帶 update_plan 的判斷方式要跟 _reevaluate() 那段一致（#89
+		# 觸發 2：意圖全數完成）——這裡也是「一筆任務完成」的事件，talk
+		# 剛好完成的這一刻如果 today_plan 已經全部做完，同樣該給重寫的機會，
+		# 不用等到下一次 duration 到期或睡醒才補上
 		if was_llm and llm_decision_enabled and not _awaiting_decision:
-			_request_next_decision()
+			_request_next_decision(_today_plan_needs_new_goal())
 
 	_reevaluate()
 
