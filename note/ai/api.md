@@ -825,15 +825,20 @@ static func turn_entry(speaker_name: String, text: String) -> Dictionary
 ```
 
 ```
-dialogue payload    {type:"dialogue", self, context:{listener, turns, max_turns}}
-plan payload        {type:"plan", self, context:{visible, pool}}
+dialogue payload    {type:"dialogue", self, context:{listener, turns, max_turns, memory}}
+plan payload        {type:"plan", self, context:{visible, pool, today_plan, memory}}
 reflection payload  {type:"reflection", self, context:{events: Array[String]}}   # #168
+memory 區塊          {recent: Array[String], core: Array[String]}   # L2/L4 內容，#169
 † self 區塊三者共用（_self_block()，沿用 Character.get_state_snapshot()），不重新蒐集一次
 † PLAN_SYSTEM 的動作清單用 AISchema.ALLOWED_ACTIONS 動態組，不另外抄一份字串
   ——兩份清單各自維護會漂移，白名單改了這裡忘記跟著改，模型看到的允許清單就對不上驗證的
 † plan_response_schema()（AISchema）當 response_format 送出，跟 validate_tasks() 驗證的形狀對齊
 † reflection 的 events 是純客觀事實句（agent.gd 的 _daily_events），importance/valence
   完全交給 LLM 判斷（reflection_response_schema()），不在這裡或引擎端預先計算
+† memory 固定全量帶入 L2+L4（《99》P-03 方案 A，不做情境篩選），放在 context 不放
+  system——system 段要逐字元不變才能吃到 provider 的 prompt cache，已用 game_eval
+  驗證：記憶內容變了，system 字串仍逐字元相同。只帶 content 字串，不帶
+  valence/importance/decay_value 這些引擎內部欄位
 → 技術/記憶與睡眠反思
 ```
 
