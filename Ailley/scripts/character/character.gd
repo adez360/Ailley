@@ -606,22 +606,25 @@ func _current_frame_texture() -> Texture2D:
 
 # ---- 每幀 ----
 
-# 依移動方向切換 walk / idle；沒有 left 素材，往左用 flip_h 翻轉 right
-func update_animation() -> void:
-	var dir := velocity.normalized()
+# 依移動方向切換 walk / idle；沒有 left 素材，往左用 flip_h 翻轉 right。
+#
+# facing 讀 desired_velocity（move_and_slide() 解算前、_decide_velocity() 的原始輸出），
+# 不是解算後的 velocity——貼平物件時想往物件方向走，move_and_slide() 會把那個分量
+# 直接歸零，若 facing 也照 velocity 判斷就會卡在貼上去之前的方向，永遠轉不過來面對
+# 眼前的東西（#108）。walk / idle 動畫另外照解算後的 velocity 判斷：貼平時人確實
+# 沒有在動，播 idle 才對，只是 facing 要跟上輸入方向
+func update_animation(desired_velocity: Vector2) -> void:
+	var dir := desired_velocity.normalized()
 
-	if dir == Vector2.ZERO:
-		sprite.play("idle_" + facing)
-		return
+	if dir != Vector2.ZERO:
+		# 垂直位移比水平大就用背面／正面，否則用側面
+		if abs(dir.y) > abs(dir.x):
+			facing = "back" if dir.y < 0 else "front"
+		else:
+			facing = "right"
+			sprite.flip_h = dir.x < 0
 
-	# 垂直位移比水平大就用背面／正面，否則用側面
-	if abs(dir.y) > abs(dir.x):
-		facing = "back" if dir.y < 0 else "front"
-	else:
-		facing = "right"
-		sprite.flip_h = dir.x < 0
-
-	sprite.play("walk_" + facing)
+	sprite.play(("walk_" if velocity != Vector2.ZERO else "idle_") + facing)
 
 # 這一幀要用的速度。基底只跟隨 A* 路徑，子類別覆寫來加上自己的驅動來源。
 # 對話中不自動移動 —— 但 Player 的輸入會蓋過這裡，走遠了由距離判定自然散場
@@ -661,9 +664,10 @@ func _check_stuck(delta: float) -> void:
 		move_finished.emit(false)
 
 func _physics_process(delta: float) -> void:
-	velocity = _decide_velocity()
+	var desired_velocity := _decide_velocity()
+	velocity = desired_velocity
 	move_and_slide()
-	update_animation()
+	update_animation(desired_velocity)
 
 	if is_moving():
 		_check_stuck(delta)

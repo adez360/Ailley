@@ -2,9 +2,9 @@ class_name InventorySlotButton
 extends TextureButton
 
 ## 快捷欄／背包共用的格子按鈕。在原本純點擊選取的 TextureButton 上疊一層
-## 文字，把格子裡有什麼東西秀出來——專案還沒有 item 定義檔可以查真正的圖示
-## 跟顯示名稱（見 #54），先印 item_id 前三碼＋數量頂著用，真正的圖示系統
-## 做出來之後這塊要整個換掉，不是拿去微調。
+## 文字，把格子裡有什麼東西秀出來——item 定義檔已有（`scripts/core/item_database.gd`
+## 查 `data/items.json`），但還沒有物品圖示素材可畫，這裡先印 item_id 前三碼＋
+## 數量頂著用（見 #84），真正的圖示系統做出來之後這塊要整個換掉，不是拿去微調。
 ##
 ## slot_index 是這格對應到 Inventory.slots 的絕對索引（0-35，快捷欄 0-8、
 ## 主背包 9-35，見 inventory.gd）。跟 hotbar.gd／inventory_panel.gd 一樣不快取
