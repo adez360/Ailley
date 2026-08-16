@@ -1104,6 +1104,13 @@ func _pursue_talk_task() -> void:
 			_current_task = {}
 			current_place = ""
 			current_state = "idle"
+			# 這筆若是最後一筆 llm 任務，_reevaluate() 的 duration 完成分支
+			# 不會再被觸發（那筆任務在這裡就已經被移除，不是被 duration 判定
+			# 完成的），Agent 會乾等到某個不相干的事件才重新決策。跟
+			# exit_conversation() 對「llm 任務因為別的理由結束」的處理一致，
+			# 這裡也要主動補一次請求（max 等級 code review 抓到）
+			if llm_decision_enabled and not _awaiting_decision:
+				_request_next_decision(_today_plan_needs_new_goal())
 			return
 
 	var target_name: String = str(_current_task.get("params", {}).get("target", ""))

@@ -252,9 +252,11 @@ resolve() -> {"success": bool, "reason": String}   # reason 成功是空字串�
 † _select() 對 llm 來源任務先驗證可執行動作白名單（AISchema.IMPLEMENTED_ACTIONS）：
   不在白名單上的動作直接不 commit 並移除，不使用 SUCCESS_PARAMS 當白名單——
   _roll_success() 對不在表上的動作恆成功，缺執行邏輯時會靜默不做事
-† SUCCESS_PARAMS 表上的動作才會擲骰（《01-2》§2 公式），move_to/sleep/
-  nap/rest/wash/idle/eat 不在表上、也沒有硬規則要擋，恆成功；talk 同樣不在
-  表上（不擲骰），但有硬規則檢查（目標存在性與歧義檢查），不是恆成功
+† 先通過 AISchema.IMPLEMENTED_ACTIONS 的動作才會進入 LLM 任務流程；在已實作
+  動作中，SUCCESS_PARAMS 表上的才會擲骰（《01-2》§2 公式），不在表上且無
+  硬規則的動作固定成功。move_to/sleep 屬於這種。talk 不擲骰，但仍檢查目標
+  存在性與歧義；nap/rest/wash/idle/eat 目前都不在 IMPLEMENTED_ACTIONS，
+  根本進不到 resolve()，不是「恆成功」
 † stamina 缺欄位時（#115 未落地）當中性值 50 處理，不吃到假懲罰；
   injury/alcohol 公式本來就是從 0 起算才扣分，缺欄位回傳的 0.0 剛好是
   中性值，不用特別處理
@@ -847,7 +849,7 @@ static func build_dialogue_envelope(speaker: Character, listener: Character,
                                      turns: Array[Dictionary], max_turns: int) -> Dictionary
 static func build_plan_envelope(character: Character, visible: Array[Character],
                                  pool: Array[Dictionary]) -> Dictionary
-static func build_reflection_envelope(character: Character, daily_events: Array[String]) -> Dictionary
+static func build_reflection_envelope(character: Character, daily_events: Array[Dictionary]) -> Dictionary
 static func turn_entry(speaker_name: String, text: String) -> Dictionary
 ```
 
