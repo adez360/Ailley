@@ -166,7 +166,7 @@ updated: 2026-08-16
         "npc_id": "npc_003",
         "name": "NEON",
         "appearance_text": "他綁著一頭紅色長髮，穿著沾滿油汙的工作服。",
-        "relation": { "affinity": -40, "trust": 15, "familiarity": 72, "debt": -20 }
+        "relation": { "trust": 15 }
       }
     ],
     "available_actions": ["gather", "move", "talk", "rest", "eat", "steal"],
