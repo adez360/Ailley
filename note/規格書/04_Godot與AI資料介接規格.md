@@ -189,7 +189,7 @@ updated: 2026-08-16
 | `request_id` | ✔ | 房主機產生，回應必須帶回同一個 |
 | `tick` | ✔ | 全域 tick 計數，僅供時間顯示，不是觸發依據（見《00》§3） |
 | `npc_id` | ✔ | 本次決策請求的角色，單一角色一次 |
-| `physical.*.value` | ✔ | 數值本體；`hunger` 這欄傳的是換算過的**飢餓度**（`100 − hunger`），不是內部原始值，其餘 7 項傳原始值（見《01》§4-1、《99》P-07） |
+| `physical.*.value` | ✔ | 數值本體。這裡的 `hunger`／`thirst`／`sleepiness` 是**換算過的顯示概念**（飢餓度／口渴度／睡意），不是內部儲存欄位名——內部儲存分別叫 `satiety`／`hydration`／`wakefulness`，方向相反（見《01》§4-1）。換算式：`hunger = 100 − satiety`、`thirst = 100 − hydration`、`sleepiness = 100 − wakefulness`。`stamina`／`hygiene`／`alcohol`／`health`／`injury` 內部與顯示同名同方向，直接傳原始值（見《99》P-07） |
 | `physical.*.label` | ✔ | **中文形容詞，缺一不可**，5 級距對照表見《99》P-07 |
 | `today_plan[].done` | ✔ | 每筆標記完成／未完成，不限筆數（見《10》§5.4） |
 | `fact_lines` | ✔ | 引擎產生的事實句陣列，無則傳 `[]` |
@@ -243,7 +243,7 @@ updated: 2026-08-16
 
 失敗（逾時／格式錯誤／模型失效）時房主機不會收到 `decision`，改依《12》§6 走 `DecisionError` 流程，見本文件 §6。
 
-> ⚠️ 回應中**不得包含任何數值變更**。Provider 不可回傳 `hunger`、`money`、`relations` 等欄位——那些一律由房主機計算。
+> ⚠️ 回應中**不得包含任何數值變更**。Provider 不可回傳 `satiety`、`money`、`relations` 等欄位——那些一律由房主機計算。
 > 
 
 ---

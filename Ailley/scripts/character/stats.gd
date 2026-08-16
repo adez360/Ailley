@@ -24,7 +24,7 @@ const MAX := 100.0
 const CRITICAL := 30.0		# 低於這個值算「該處理了」
 
 const SPEC := {
-	"hunger": {"label": "STAT_HUNGER", "drift": 3.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "restaurant"},
+	"satiety": {"label": "STAT_SATIETY", "drift": 3.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "restaurant"},
 	"energy": {"label": "STAT_ENERGY", "drift": 1.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "home_001"},
 	"social": {"label": "STAT_SOCIAL", "drift": 0.5, "toward": 0.0, "start": 100.0, "is_need": true, "place": "square"},
 	"fun": {"label": "STAT_FUN", "drift": 0.2, "toward": 0.0, "start": 100.0, "is_need": true, "place": "square"},

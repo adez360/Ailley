@@ -150,7 +150,7 @@ id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存
 ——蒐集邏輯原本糊在 `debug_console.gd` 裡，任何人想重用都得先拆掉格式。
 
 > [!important] key/value 一律是識別字，不可以是翻譯過的字
-> `Stats.SPEC` 的 `label` 存的是翻譯 key（如 `STAT_HUNGER`），snapshot 照樣只放
+> `Stats.SPEC` 的 `label` 存的是翻譯 key（如 `STAT_SATIETY`），snapshot 照樣只放
 > key 不放翻譯後的文字。這批資料以後會直接進 LLM 的 prompt
 > （見 [[LLM 串接與 AI 服務層]] 的 payload 設計），不該隨玩家介面語系跑掉。
 
