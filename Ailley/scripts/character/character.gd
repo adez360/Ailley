@@ -544,8 +544,16 @@ func get_save_data() -> Dictionary:
 
 	return data
 
+# 已經在 characters 群組裡（_ready() 跑過）才重驗 id 唯一性——存檔的 character_id
+# 可能撞到另一隻已經在場上的角色，覆寫後兩隻共用同一個 id 就會共用關係與記憶
+# （_ensure_unique_id() 註解講的那個坑）。還沒進 tree 就不用管，接下來的 _ready()
+# 本來就會做這件事，這裡搶著做反而會在 get_tree() 是 null 時炸掉
 func load_save_data(data: Dictionary) -> void:
 	character_id = data.get("character_id", character_id)
+	if character_id.is_empty():
+		character_id = generate_id()
+	if is_inside_tree():
+		_ensure_unique_id()
 	character_name = data.get("character_name", character_name)
 
 	if stats != null and data.has("stats"):
