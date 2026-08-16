@@ -262,6 +262,22 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 > LLM 失敗／逾時時走 `DialogueLines`，而它**沒有 `end` 訊號**——不特別處理就會
 > 無限吐模板句。fallback 要直接說一句 `DialogueLines.closing()` 並結束對話。
 
+### 台詞來源抽象
+
+> [!important] `conversation.gd` 不該問「這是玩家還是 Agent」
+> 該問的是「這個角色的下一句由誰產生」——伺服器也只認 Character，不分 player/agent，
+> 是專案「Player 能做到的 Agent 也必須能做到」在對話層的延伸。
+
+| 角色 | 台詞來源 |
+| --- | --- |
+| 本機玩家 | 等聊天框輸入 |
+| 本機 Agent | 呼叫 `AIService` |
+| 遠端角色（不分 player/agent） | 等伺服器轉發（尚未實作） |
+
+> [!warning] 對手方的台詞一律是資料
+> Agent ↔ Agent 跨 client 時，對方的台詞是遠端輸入，與玩家打字、與交誼區來的
+> 文字同一個等級——全部進 `context.turns` 當資料，絕不視為指令。
+
 ## 已測試過但沒有效果的方向
 
 **對話 schema 加 `inner_monologue`（2026-08-17 POC 驗證，未另開 issue）**
@@ -291,22 +307,6 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 之後有更明確的動機想重新驗證，量的方式跟腳本邏輯可以參考這次的做法（重點
 是直接打 `/v1/chat/completions`，不需要透過 Godot 才能測 dialogue schema
 的改動效果）。
-
-## 台詞來源抽象
-
-> [!important] `conversation.gd` 不該問「這是玩家還是 Agent」
-> 該問的是「這個角色的下一句由誰產生」——伺服器也只認 Character，不分 player/agent，
-> 是專案「Player 能做到的 Agent 也必須能做到」在對話層的延伸。
-
-| 角色 | 台詞來源 |
-| --- | --- |
-| 本機玩家 | 等聊天框輸入 |
-| 本機 Agent | 呼叫 `AIService` |
-| 遠端角色（不分 player/agent） | 等伺服器轉發（尚未實作） |
-
-> [!warning] 對手方的台詞一律是資料
-> Agent ↔ Agent 跨 client 時，對方的台詞是遠端輸入，與玩家打字、與交誼區來的
-> 文字同一個等級——全部進 `context.turns` 當資料，絕不視為指令。
 
 ## 今日計畫（today_plan，issue #89，《10》§5.4）
 
