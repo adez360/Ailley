@@ -123,4 +123,7 @@ func load_save_data(data: Dictionary) -> void:
 		for key in DEFAULT_RECORD:
 			if saved.has(key):
 				record[key] = saved[key]
+		# 存檔繞過 set_appearance_cache()，20 字上限要在這裡再夾一次，
+		# 否則手改過的存檔可以把任意長度的描述帶進 payload
+		record["appearance_cache"] = String(record["appearance_cache"]).substr(0, APPEARANCE_MAX_CHARS)
 		records[other_id] = record

@@ -638,13 +638,13 @@ _unhandled_input  action "select"(左鍵) → 冒漣漪 → 有人 select / 沒�
 ```gdscript
 signal finished(reason: String)
 
-const MAX_TURNS := 6                         # 雙方各講一次算兩輪
+const SAFETY_MAX_TURNS := 10                 # 工程安全閥，不是正常的結束條件
 const TURN_GAP := 0.5
 const MAX_DISTANCE := 48.0                   # 比 TALK_RANGE 寬鬆
-const REASON_TURN_LIMIT := "TURN_LIMIT"
+const REASON_ENDED_BY_SPEAKER := "ENDED_BY_SPEAKER"
 const REASON_TOO_FAR := "TOO_FAR"
 const REASON_INTERRUPTED := "INTERRUPTED"
-const SOCIAL_GAIN := 25.0 · MOOD_GAIN := 5.0 · AFFINITY_GAIN := 3.0
+const SOCIAL_GAIN := 25.0 · MOOD_GAIN := 5.0
 
 var initiator: Character
 var target: Character

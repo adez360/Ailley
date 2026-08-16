@@ -89,8 +89,8 @@ key 用對方的 `character_id` 而不是 name —— name 會改，用它當 ke
 
 > [!important] 查詢不可以建立紀錄
 > `Relationships` 的讀寫是分開的：`get_trust()` / `get_record()` / `has_met()`
-> 全部唯讀，`get_record()` 甚至回的是副本；只有 `add_trust()` 與 `note_meeting()`
-> 會走私有的 `_ensure_record()` 建立紀錄。
+> 全部唯讀，`get_record()` 甚至回的是副本；只有 `add_trust()`、`set_appearance_cache()`
+> 與 `note_meeting()` 會走私有的 `_ensure_record()` 建立紀錄。
 >
 > 這條是踩出來的：原本查詢走「沒有就當場建一筆」的 `get_record()`，
 > 而 `conversation.gd` 開場就會問一次關係 ——

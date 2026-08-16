@@ -35,7 +35,7 @@ AI 專用。**筆記庫裡唯一可以寫「原本是什麼」的地方。**
   理由是「單一好感度做不出『我討厭他，但我信任他的專業』」。
   `conversation.gd` 講完一場加 `affinity +3`，`DialogueLines` 依好感挑開場／收尾句，
   `prompt_builder.gd` 把 `affinity` 送進 LLM payload
-- **現在**：只留 `trust`（persuade 讀它算成功率），另加 `appearance_cache`
+- **現在**：只留 `trust`（規格上由 persuade 讀它算成功率，還沒接線），另加 `appearance_cache`
   （《99》P-08 的外觀快取）。台詞不再分親疏，payload 送 `trust`，
   對話結束只記 `note_meeting()`
 - **為什麼**：全庫查過一輪引擎消費者，那三維從沒被任何公式讀過，只被寫入再餵給
