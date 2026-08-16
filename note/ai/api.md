@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-14
+updated: 2026-08-17
 ---
 
 # api
@@ -96,6 +96,7 @@ const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 @export var character_name := ""             # 顯示名，可改可撞，留空→節點名小寫
 static func generate_id() -> String           # RFC 4122 v4，不帶語意，別解析它
 var facing := "front"                        # front|back|right
+var last_action_result := ""                 # #120 resolve() 判定結果，中文，成功是空字串
 func get_facing_direction() -> Vector2       # facing/sprite.flip_h 重建成單位向量
 
 # 元件（子節點，皆 get_node_or_null，沒掛不會壞）
@@ -219,6 +220,7 @@ const MIN_COMMIT := 2.0                      # 遊戲分鐘；做不滿就不讓
 const LLM_WAIT_MIN_COMMIT := 5.0             # 等待決策回覆期間蓋掉 MIN_COMMIT
 const MIN_ACTION_DURATION := 10.0            # llm 任務 duration 引擎端下限（遊戲分鐘）
 const LLM_TASK_POOL_CAP := 20                # 只算 source=="llm" 的筆數
+const SUCCESS_PARAMS := {}                   # 《01-2》§3 成功率表，含尚未接執行邏輯的動作（#120）
 
 var _tasks: Array[Dictionary]                # 候選池，schedule 開場建立一次，llm 用 _push_llm_tasks() 加
 var _current_task: Dictionary
@@ -229,8 +231,22 @@ func is_talk_interruptible() -> bool          # 覆寫：super() and 目前任�
 func _is_preemptible() -> bool                # 私有，仲裁器搶占檢查；跟上面獨立算，不共用
 func exit_conversation() -> void             # 覆寫：講完重算一次
 func next_line(listener, turns, max_turns) -> Dictionary   # 對話台詞，見下方
+func resolve(action: String, params: Dictionary) -> Dictionary   # 決策執行前檢查層（#120），見下方
 func get_task_debug_info() -> Array[Dictionary]            # tasks 指令用
 func get_current_task_elapsed_minutes() -> int             # 目前任務做了幾遊戲分鐘
+```
+
+```text
+resolve() -> {"success": bool, "reason": String}   # reason 成功是空字串，失敗是中文具體原因
+† 只管 llm 來源任務——schedule 是引擎自己的固定行程，不是 LLM 宣告的意圖，
+  不套用硬規則檢查
+† 掛在 _select()：resolve() 判定失敗的任務不 commit、直接從 _tasks 移除，
+  不留著佔位重試
+† SUCCESS_PARAMS 表上的動作才會擲骰（《01-2》§2 公式），move_to/talk/sleep/
+  nap/rest/wash/idle/eat 不在表上，恆成功
+⚠ stamina/injury/alcohol 現在不存在於 Stats.SPEC（#115 未落地），
+  Stats.get_value() 對不存在的 key 回傳 0.0，SUCCESS_PARAMS 目前沒有動作
+  真的會被呼叫到，接下一個表上動作前要先確認 #115 落地
 ```
 
 ```text
