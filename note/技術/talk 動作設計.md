@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/dialogue/conversation.gd
 status: 進行中
-updated: 2026-08-14
+updated: 2026-08-16
 ---
 
 # talk 動作設計
@@ -108,6 +108,7 @@ key 用對方的 `character_id` 而不是 name —— name 會改，用它當 ke
 | 互動鍵 | `E` | |
 | 被搭話者的行程 | 暫停後重算 | 不是接續原路 |
 | 回補 | social +25、mood +5、affinity +3 | 只有正常講完才發 |
+| 等待對方回話逾時 | **暫定 8 秒**（AI 對 AI） | 沒有既有數值可參照，比照《04》`/event` 逾時（8秒建議值）抓同一量級，比一般 `/decide`（5秒）寬鬆，對話生成通常較長。逾時走 fallback（`DialogueLines.closing()`）。真人玩家的回話等待秒數留到 MVP-2 玩家加入後再定——現在真人不參與 `talk`，不急 |
 
 ## 呈現層的坑
 
