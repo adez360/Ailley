@@ -72,6 +72,11 @@ const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader
 ## 留空就沿用節點名 —— 不能退回 character_id，那是一串沒人讀得懂的 UUID
 @export var character_name := ""
 
+## 最近一次 LLM 決策的動作被 resolve() 判定的結果，中文自然語言，成功是空字串
+## （#120，《01-2》§1 流程圖的「④ 寫回 last_action_result」）。目前只有 Agent
+## 會寫這個欄位，Player 沒有 LLM 決策，留在 Character 是給 UI/debug 共用的掛點
+var last_action_result := ""
+
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
 @onready var stats: Stats = get_node_or_null("Stats")

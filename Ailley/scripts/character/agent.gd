@@ -730,9 +730,111 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 
 	_select(best, now_minutes)
 
+## 《01-2》§3 完整表格，數字照抄，含目前還沒接上執行邏輯的動作（#159 等落地時
+## 直接呼叫 _roll_success()，不用重寫一次成功率公式）。struggle 例外太多
+## （不擲骰、搭 haul 檢查點），不套用這裡，見《01-2》§3 附註
+const SUCCESS_PARAMS := {
+	"hunt_small": {"base": 0.60, "trait": "courage", "coef": 0.002},
+	"hunt_large": {"base": 0.30, "trait": "courage", "coef": 0.003},
+	"gather": {"base": 0.80, "trait": "diligence", "coef": 0.001},
+	"fish": {"base": 0.55, "trait": "diligence", "coef": 0.0015},
+	"steal": {"base": 0.35, "trait": "courage", "coef": 0.0025},
+	"persuade": {"base": 0.40, "trait": "sociability", "coef": 0.003},
+	"perform": {"base": 0.70, "trait": "romanticism", "coef": 0.003},
+	"attack": {"base": 0.50, "trait": "courage", "coef": 0.0025},
+}
+
+## 《01-2》§2 通用成功率公式，純數學，跟哪個動作無關——不在 SUCCESS_PARAMS
+## 表上的動作（move_to/talk/sleep/nap/rest/wash/idle/eat 全部不在表上）不是
+## 技能檢定，直接放行。
+##
+## ⚠ stamina/injury/alcohol 現在不存在於 Stats.SPEC（#115 還沒落地），
+## Stats.get_value() 對不存在的 key 回傳 0.0，不是中間值——在 #115 做完前，
+## 任何真的呼叫到這裡的動作都會吃到「體力 0」的幽靈 -10% 懲罰。目前
+## SUCCESS_PARAMS 沒有一個動作真的會被 resolve() 呼叫到，先不修，但接下
+## 一個表上動作（例如 #159 attack）之前要先確認 #115 落地
+func _roll_success(action: String, character: Character, environment_risk: float) -> Dictionary:
+	var params: Dictionary = SUCCESS_PARAMS.get(action, {})
+	if params.is_empty():
+		return {"success": true, "reason": ""}
+
+	var trait_value := 0.0  # 人格資料還沒接上（#117），先固定 0
+	var injury_term := -character.stats.get_value("injury") * 0.004
+	var alcohol_term := -maxf(0.0, character.stats.get_value("alcohol") - 30.0) * 0.005
+	var stamina_term := (character.stats.get_value("stamina") - 50.0) * 0.002
+	var chance: float = params["base"] \
+		+ trait_value * float(params["coef"]) \
+		+ stamina_term + injury_term + alcohol_term - environment_risk
+	chance = clampf(chance, 0.05, 0.95)
+
+	var success := randf() < chance
+	if success:
+		return {"success": true, "reason": ""}
+	return {"success": false, "reason": _failure_reason(injury_term, alcohol_term, stamina_term, environment_risk)}
+
+## 《01-2》§5：失敗原因要具體到 AI 能調整策略，不能給一句放諸四海皆準的
+## 「運氣不好」——找出扣最多分的修正項，講出具體理由。四個修正項全部
+## 是負值或 0（environment_risk 本身以正值代表風險，取負號比較），取最負
+## 的那個當主因；都沒扣分時才是真的手氣不好
+func _failure_reason(injury_term: float, alcohol_term: float, stamina_term: float, environment_risk: float) -> String:
+	var worst := "luck"
+	var worst_value := 0.0
+	for pair in [["injury", injury_term], ["alcohol", alcohol_term], ["stamina", stamina_term], ["environment", -environment_risk]]:
+		if float(pair[1]) < worst_value:
+			worst_value = pair[1]
+			worst = pair[0]
+
+	match worst:
+		"injury":
+			return "傷勢太重，這個動作做不利索"
+		"alcohol":
+			return "喝多了，手腳不聽使喚"
+		"stamina":
+			return "體力撐不住，中途沒了力氣"
+		"environment":
+			return "現場條件不利，沒能成功"
+		_:
+			return "手氣不好，這次沒抓到訣竅"
+
+## 環境風險由呼叫端依動作/情境算好傳入（正值代表風險，數字越大成功率扣越多）。
+## SUCCESS_PARAMS 目前沒有動作會走到這裡，之後接動作時（例如 steal 的目擊者
+## 風險）再補實際算法
+func _environment_risk(_action: String, _params: Dictionary) -> float:
+	return 0.0
+
+## 決策執行前的檢查層（#120，《00》原則一：LLM 決定想做什麼，引擎決定做不做得到）。
+## 只管兩件事：目標/前提是不是真的存在（硬規則），以及擲不擲得過成功率——語意
+## 驗證/白名單那些是 AISchema 的事，這裡假設 action/params 已經過白名單
+func resolve(action: String, params: Dictionary) -> Dictionary:
+	match action:
+		"talk":
+			var target_name: String = str(params.get("target", ""))
+			if _find_character_by_name(target_name) == null:
+				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
+		# move_to/sleep/nap/rest/wash/idle/eat 目前都沒有額外的硬規則要擋
+		# （eat 落地後要在這裡加「宣稱吃了背包裡沒有的食物」的檢查，見 #114）
+		_:
+			pass
+
+	return _roll_success(action, self, _environment_risk(action, params))
+
 # 用 .get() 而不是硬取 key，跟計分那幾個函式同一種寫法——檔頭承諾「把任務丟進
-# _tasks 就會公平競爭，不用再改這個檔案」，那新來源少填一個欄位就不該讓這裡崩掉
+# _tasks 就會公平競爭，不用再改這個檔案」，那新來源少填一個欄位就不該讓這裡崩掉。
+#
+# resolve() 只管 llm 來源的任務——schedule 任務是引擎自己的固定行程，不是 LLM
+# 宣告的意圖，沒有「宣告不存在的東西」這個風險，套用硬規則檢查只是白白多一層
+# 可能誤判的機會
 func _select(task: Dictionary, now_minutes: int) -> void:
+	if task.get("source", "") == "llm":
+		var result := resolve(str(task.get("action", "")), task.get("params", {}))
+		last_action_result = result["reason"]
+		if not result["success"]:
+			# resolve() 判定失敗的任務不 commit，也不留在池子裡繼續佔位——
+			# 不移除的話下次重算分數不變，會馬上又選到同一筆，變成每分鐘
+			# 重試一次同樣失敗的無限迴圈
+			_remove_task(task.get("id", ""))
+			return
+
 	_current_task = task
 	_current_task_started_at = now_minutes
 	current_place = str(task.get("params", {}).get("place", ""))
