@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-13
+updated: 2026-08-16
 ---
 
 # Character 基底與 Agent
@@ -191,6 +191,27 @@ accessor，不用 `get_record()`：後者每筆都 `duplicate(true)` 深拷一�
 > 它掃可走性時會排除場上的 CharacterBody2D，但查詢用 mask 1，
 > 而角色已經在 layer 2，本來就掃不到。留著沒壞處（還擋著 RigidBody2D），
 > 只是不再必要。
+
+## 固定 NPC 的身份指派（2026-08-16 拍板，見 issue #69）
+
+Agent/Agent2 目前每次開遊戲都重新生成 `character_id`，`character_name` 退回節點名小寫——
+這是 #69 要解決的問題。之前 PR #70 想改 `npc_schedule.json` 的 `assignments` 塞進
+`{character_id, character_name}` 物件，卡在 `village_sim_locale.gd` 拿 `character_name`
+當 join key、改成中文顯示名會讓 R&D 的 `village_ai` 視線清單悄悄清空——那支腳本已在
+issue #96 整支移除，這個地雷不在了。
+
+**決定**：不新增資料檔、不動場景，重用 `schedule_template` 已經在用的 lookup 模式——
+`npc_schedule.json` 的 `villagers[].id`（如 `npc001`）本來就是穩定的手寫識別碼，
+直接拿來當 `character_id` 的來源（格式對齊《01》§1-1 的 `npc_XXX`）；`character_name`
+需要在 `villagers` 資料上補一個顯示名欄位。`character.gd::_ready()` 在走隨機 UUID
+那條 fallback 之前，要先問 `GameManager` 這個節點名有沒有對應的固定身份——跟
+`agent.gd::_load_schedule()` 問 `get_schedule_template()` 是同一種資料流向，只是
+問的時間點要提前到基底的 `_ready()`，不能等 `agent.gd` 才問（Player 沒有 schedule
+概念，但也需要走同一套身份 fallback）。
+
+不走 #73 的 `spawn_character()`：那是給動態生成角色用的（identity 當參數傳），
+Agent/Agent2 是場景裡的靜態節點，`_ready()` 時自己查表更貼近現有架構，
+不用為了兩隻寫死的示範 NPC 去改場景結構。
 
 ## 未做
 
