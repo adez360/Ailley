@@ -36,7 +36,7 @@ static func reply(stats: Stats, affinity: float, _turn: int) -> String:
 
 	if stats.get_value(lowest) < Stats.CRITICAL:
 		match lowest:
-			"hunger":
+			"satiety":
 				return L10n.t("DLG_NEED_HUNGER")
 			"energy":
 				return L10n.t("DLG_NEED_ENERGY")

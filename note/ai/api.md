@@ -315,7 +315,7 @@ func get_lowest_need_place() -> String
 
 ```text
 key      label  drift  toward  start  is_need  place
-hunger   飢餓    3.0    0       100    ✓        restaurant
+satiety  飽足感  3.0    0       100    ✓        restaurant
 energy   精力    1.0    0       100    ✓        home_001
 social   社交    0.5    0       100    ✓        square
 fun      娛樂    0.2    0       100    ✓        square

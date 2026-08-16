@@ -162,7 +162,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
   "type": "dialogue",
   "self": {
     "id": "agent", "name": "小明",
-    "stats": {"hunger": 42.0, "energy": 88.0, "social": 12.0, "fun": 60.0, "mood": 55.0},
+    "stats": {"satiety": 42.0, "energy": 88.0, "social": 12.0, "fun": 60.0, "mood": 55.0},
     "time": {"hour": 9, "minute": 30},
     "place": "farm",
     "current_action": "work"
@@ -246,8 +246,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 「聊得越久越該收尾」。代價是兩隻 Agent 都禮貌性不收尾就會一直聊下去，而每輪都是
 一次付費請求——**對話呼叫本身豁免每遊戲日的呼叫上限**（`CONVERSATION` policy，見
 `ai/api.md`／規格書《13》§5），走獨立的 `_dialogue_calls_today` 計數但沒有自己的封頂值，
-等於完全無防護。已拍板：先上線實測拿到平均輪數的數據，再回頭評估要不要訂上限（見
-`交流/決策.md`）。
+等於完全無防護。已拍板：先上線實測拿到平均輪數的數據，再回頭評估要不要訂上限。
 
 > [!important] 但 fallback 一定要能終止
 > LLM 失敗／逾時時走 `DialogueLines`，而它**沒有 `end` 訊號**——不特別處理就會
@@ -425,7 +424,7 @@ Godot 端也沒有任何程式呼叫它。下面是驗證期間量到、**還在
 
 | Godot `Stats.SPEC` | poc_village_sim `physiology` | 換算 |
 | --- | --- | --- |
-| `hunger`（100=飽→0=餓） | `hunger`（0=飽→100=餓） | **方向相反**：`poc_hunger = 100 - godot_hunger` |
+| `satiety`（100=飽→0=餓，原欄位名 `hunger`，2026-08-16 改名，見《99》P-32） | `hunger`（0=飽→100=餓） | **方向相反**：`poc_hunger = 100 - godot_satiety` |
 | `energy`（100=飽滿→0=沒力） | `stamina`（同方向） | 直接映射，不用轉 |
 | `fun`（100=不無聊→0=無聊） | `boredom`（方向相反） | **方向相反**：`poc_boredom = 100 - godot_fun` |
 | `social` | 無對應欄位 | poc 沒有獨立追蹤社交需求 |
@@ -436,7 +435,7 @@ Godot 端也沒有任何程式呼叫它。下面是驗證期間量到、**還在
 > 如果那份重寫照抄了 poc_village_sim 已驗證過的門檻邏輯（`characters.py` 的
 > `_tier_adjective`、`if hunger >= 90` 這類具體數字），**移植的當下方向要反過來
 > 翻**——poc 的 `hunger >= 90`「快撐不住」，翻成 Godot 自己的方向要變成
-> `hunger <= 10` 才是同一個意思。這是移植當下要抓對的一次性正確性問題，
+> `satiety <= 10` 才是同一個意思。這是移植當下要抓對的一次性正確性問題，
 > 寫完的 GDScript 版本應該全部用 Godot 自己的方向自洽，不需要執行時轉換。
 
 ## poc_village_sim 輸出 JSON vs 規格書《06 資料欄位對應表》的差異
