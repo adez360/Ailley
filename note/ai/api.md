@@ -96,6 +96,7 @@ const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 @export var character_name := ""             # 顯示名，可改可撞，留空→查 identities→節點名小寫
 static func generate_id() -> String           # RFC 4122 v4，不帶語意，別解析它
 var facing := "front"                        # front|back|right
+var last_action_result := ""                 # #120 resolve() 判定結果，中文，成功是空字串
 func get_facing_direction() -> Vector2       # facing/sprite.flip_h 重建成單位向量
 
 # 元件（子節點，皆 get_node_or_null，沒掛不會壞）
@@ -223,6 +224,7 @@ const MIN_COMMIT := 2.0                      # 遊戲分鐘；做不滿就不讓
 const LLM_WAIT_MIN_COMMIT := 5.0             # 等待決策回覆期間蓋掉 MIN_COMMIT
 const MIN_ACTION_DURATION := 10.0            # llm 任務 duration 引擎端下限（遊戲分鐘）
 const LLM_TASK_POOL_CAP := 20                # 只算 source=="llm" 的筆數
+const SUCCESS_PARAMS := {}                   # 《01-2》§3 成功率表，含尚未接執行邏輯的動作（#120）
 
 var _tasks: Array[Dictionary]                # 候選池，schedule 開場建立一次，llm 用 _push_llm_tasks() 加
 var _current_task: Dictionary
@@ -233,10 +235,31 @@ func is_talk_interruptible() -> bool          # 覆寫：super() and 目前任�
 func _is_preemptible() -> bool                # 私有，仲裁器搶占檢查；跟上面獨立算，不共用
 func exit_conversation() -> void             # 覆寫：講完重算一次
 func next_line(listener, turns, max_turns) -> Dictionary   # 對話台詞，見下方
+func resolve(action: String, params: Dictionary) -> Dictionary   # 決策執行前檢查層（#120），見下方
 func request_sleep_reflection() -> Dictionary               # {"ok": bool}，睡眠反思，見下方
 func get_task_debug_info() -> Array[Dictionary]            # tasks 指令用
 func get_current_task_elapsed_minutes() -> int             # 目前任務做了幾遊戲分鐘
 func get_daily_events() -> Array[String]                   # reflect 指令用，見下方
+```
+
+```text
+resolve() -> {"success": bool, "reason": String}   # reason 成功是空字串，失敗是中文具體原因
+† 只管 llm 來源任務——schedule 是引擎自己的固定行程，不是 LLM 宣告的意圖，
+  不套用硬規則檢查
+† 延後到 _pursue_talk_task()（talk 動作）等各動作即將產生副作用的位置才呼叫，
+  避免移動期間提前消耗 _roll_success() 或使用過期狀態；失敗的任務直接從
+  _tasks 移除並記錄 last_action_result，不留著佔位重試
+† _select() 對 llm 來源任務先驗證可執行動作白名單（AISchema.IMPLEMENTED_ACTIONS）：
+  不在白名單上的動作直接不 commit 並移除，不使用 SUCCESS_PARAMS 當白名單——
+  _roll_success() 對不在表上的動作恆成功，缺執行邏輯時會靜默不做事
+† 先通過 AISchema.IMPLEMENTED_ACTIONS 的動作才會進入 LLM 任務流程；在已實作
+  動作中，SUCCESS_PARAMS 表上的才會擲骰（《01-2》§2 公式），不在表上且無
+  硬規則的動作固定成功。move_to/sleep 屬於這種。talk 不擲骰，但仍檢查目標
+  存在性與歧義；nap/rest/wash/idle/eat 目前都不在 IMPLEMENTED_ACTIONS，
+  根本進不到 resolve()，不是「恆成功」
+† stamina 缺欄位時（#115 未落地）當中性值 50 處理，不吃到假懲罰；
+  injury/alcohol 公式本來就是從 0 起算才扣分，缺欄位回傳的 0.0 剛好是
+  中性值，不用特別處理
 ```
 
 ```text
@@ -826,7 +849,7 @@ static func build_dialogue_envelope(speaker: Character, listener: Character,
                                      turns: Array[Dictionary], max_turns: int) -> Dictionary
 static func build_plan_envelope(character: Character, visible: Array[Character],
                                  pool: Array[Dictionary]) -> Dictionary
-static func build_reflection_envelope(character: Character, daily_events: Array[String]) -> Dictionary
+static func build_reflection_envelope(character: Character, daily_events: Array[Dictionary]) -> Dictionary
 static func turn_entry(speaker_name: String, text: String) -> Dictionary
 ```
 

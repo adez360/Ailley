@@ -878,13 +878,130 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 
 	_select(best, now_minutes)
 
+## 《01-2》§3 完整表格，數字照抄，含目前還沒接上執行邏輯的動作（#159 等落地時
+## 直接呼叫 _roll_success()，不用重寫一次成功率公式）。struggle 例外太多
+## （不擲骰、搭 haul 檢查點），不套用這裡，見《01-2》§3 附註
+const SUCCESS_PARAMS := {
+	"hunt_small": {"base": 0.60, "trait": "courage", "coef": 0.002},
+	"hunt_large": {"base": 0.30, "trait": "courage", "coef": 0.003},
+	"gather": {"base": 0.80, "trait": "diligence", "coef": 0.001},
+	"fish": {"base": 0.55, "trait": "diligence", "coef": 0.0015},
+	"steal": {"base": 0.35, "trait": "courage", "coef": 0.0025},
+	"persuade": {"base": 0.40, "trait": "sociability", "coef": 0.003},
+	"perform": {"base": 0.70, "trait": "romanticism", "coef": 0.003},
+	"attack": {"base": 0.50, "trait": "courage", "coef": 0.0025},
+}
+
+## 《01-2》§2 通用成功率公式，純數學，跟哪個動作無關——不在 SUCCESS_PARAMS
+## 表上的動作（move_to/talk/sleep/nap/rest/wash/idle/eat 全部不在表上）不是
+## 技能檢定，直接放行。
+##
+## stamina/injury/alcohol 現在不存在於 Stats.SPEC（#115 還沒落地）。injury／
+## alcohol 兩項公式本來就是「從 0 起算才扣分」，缺欄位時 Stats.get_value()
+## 回傳的 0.0 剛好是中性值，不用特別處理；stamina 公式基準點是 50，函式內部
+## 有另外判斷 Stats.SPEC.has("stamina")，缺欄位時當中性值 50 用，不會吃到假的
+## 懲罰。等 #115 把 stamina 加進 SPEC，這裡不用改，自動開始吃到真實數值
+func _roll_success(action: String, character: Character, environment_risk: float) -> Dictionary:
+	var params: Dictionary = SUCCESS_PARAMS.get(action, {})
+	if params.is_empty():
+		return {"success": true, "reason": ""}
+
+	var trait_value := 0.0  # 人格資料還沒接上（#117），先固定 0
+
+	# injury/alcohol 兩項的公式本來就是「從 0 起算才扣分」，Stats.get_value()
+	# 對不存在的 key 回傳的 0.0 剛好就是中性值，不用特別處理。stamina 不一樣——
+	# 公式基準點是 50 不是 0，缺欄位時硬套 get_value() 的 0.0 會變成一個假的
+	# -10% 懲罰（QA review 抓到）。改成：SPEC 裡真的有這個欄位才讀實際值，
+	# 沒有就當作中性的 50，貢獻 0——等 #115 把 stamina 加進 SPEC，這裡不用改，
+	# 自動開始吃到真實數值
+	var stamina: float = character.stats.get_value("stamina") if Stats.SPEC.has("stamina") else 50.0
+	var injury_term := -character.stats.get_value("injury") * 0.004
+	var alcohol_term := -maxf(0.0, character.stats.get_value("alcohol") - 30.0) * 0.005
+	var stamina_term := (stamina - 50.0) * 0.002
+	var chance: float = params["base"] \
+		+ trait_value * float(params["coef"]) \
+		+ stamina_term + injury_term + alcohol_term - environment_risk
+	chance = clampf(chance, 0.05, 0.95)
+
+	var success := randf() < chance
+	if success:
+		return {"success": true, "reason": ""}
+	return {"success": false, "reason": _failure_reason(injury_term, alcohol_term, stamina_term, environment_risk)}
+
+## 《01-2》§5：失敗原因要具體到 AI 能調整策略，不能給一句放諸四海皆準的
+## 「運氣不好」——找出扣最多分的修正項，講出具體理由。四個修正項全部
+## 是負值或 0（environment_risk 本身以正值代表風險，取負號比較），取最負
+## 的那個當主因；都沒扣分時才是真的手氣不好
+func _failure_reason(injury_term: float, alcohol_term: float, stamina_term: float, environment_risk: float) -> String:
+	var worst := "luck"
+	var worst_value := 0.0
+	for pair in [["injury", injury_term], ["alcohol", alcohol_term], ["stamina", stamina_term], ["environment", -environment_risk]]:
+		if float(pair[1]) < worst_value:
+			worst_value = pair[1]
+			worst = pair[0]
+
+	match worst:
+		"injury":
+			return "傷勢太重，這個動作做不利索"
+		"alcohol":
+			return "喝多了，手腳不聽使喚"
+		"stamina":
+			return "體力撐不住，中途沒了力氣"
+		"environment":
+			return "現場條件不利，沒能成功"
+		_:
+			return "手氣不好，這次沒抓到訣竅"
+
+## 環境風險由呼叫端依動作/情境算好傳入（正值代表風險，數字越大成功率扣越多）。
+## SUCCESS_PARAMS 目前沒有動作會走到這裡，之後接動作時（例如 steal 的目擊者
+## 風險）再補實際算法
+func _environment_risk(_action: String, _params: Dictionary) -> float:
+	return 0.0
+
+## 決策執行前的檢查層（#120，《00》原則一：LLM 決定想做什麼，引擎決定做不做得到）。
+## 只管兩件事：目標/前提是不是真的存在（硬規則），以及擲不擲得過成功率——語意
+## 驗證/白名單那些是 AISchema 的事，這裡假設 action/params 已經過白名單
+func resolve(action: String, params: Dictionary) -> Dictionary:
+	match action:
+		"talk":
+			var target_name: String = str(params.get("target", ""))
+			var matches := _find_all_characters_by_name(target_name)
+			if matches.is_empty():
+				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
+			if matches.size() > 1:
+				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
+		# move_to/sleep/nap/rest/wash/idle/eat 目前都沒有額外的硬規則要擋
+		# （eat 落地後要在這裡加「宣稱吃了背包裡沒有的食物」的檢查，見 #114）
+		_:
+			pass
+
+	return _roll_success(action, self, _environment_risk(action, params))
+
 # 用 .get() 而不是硬取 key，跟計分那幾個函式同一種寫法——檔頭承諾「把任務丟進
-# _tasks 就會公平競爭，不用再改這個檔案」，那新來源少填一個欄位就不該讓這裡崩掉
+# _tasks 就會公平競爭，不用再改這個檔案」，那新來源少填一個欄位就不該讓這裡崩掉。
+#
+# llm 來源任務需通過可執行動作白名單檢查（IMPLEMENTED_ACTIONS）——不在白名單上的
+# 動作直接不 commit 並移除，避免選到後靜默不執行或每分鐘重試的無限迴圈。
+# SUCCESS_PARAMS 不能當白名單：_roll_success() 對不在表上的動作直接放行（見
+# _roll_success() 自己的註解），那些動作缺少執行邏輯時會靜默不做事，不符合
+# 「不被允許」與「還沒做」要分開失敗的設計原則
 func _select(task: Dictionary, now_minutes: int) -> void:
+	if task.get("source", "") == "llm":
+		var action: String = str(task.get("action", ""))
+		if not AISchema.is_implemented_action(action):
+			last_action_result = "這個動作還沒有實作，暫時做不了"
+			_remove_task(task.get("id", ""))
+			return
+
 	_current_task = task
 	_current_task_started_at = now_minutes
 	current_place = str(task.get("params", {}).get("place", ""))
 	current_state = str(task.get("action", ""))
+	# resolve() 現在只在 _pursue_talk_task() 裡對 talk 任務呼叫——換成別的
+	# 動作（move_to/sleep 等）時沒有人會再寫入 last_action_result，舊任務
+	# 留下的失敗原因會一直卡著，讓 LLM 看到跟目前任務無關的過期訊息。這裡
+	# 統一歸零，talk 任務會在下一次 _pursue_talk_task() 立刻覆蓋成真正結果
+	last_action_result = ""
 	# 換了新任務就是換了新的追逐目標，talk 任務自己的卡住偵測要歸零重算——
 	# 不歸零的話舊目標留下的「沒進展」次數會誤算進新目標的偵測
 	_talk_pursuit_stuck_ticks = 0
@@ -966,6 +1083,36 @@ func _pursue_current_task() -> void:
 # 上面那套「走一次、_pursued_place／_pursuit_done 收斂」的節流——每次重算都
 # 要重新問一次「他現在在哪」，距離內就直接搭話，不是只起步一次
 func _pursue_talk_task() -> void:
+	# resolve() 判定前置檢查：只針對 llm 來源任務，在即將產生副作用（talk_to）
+	# 前執行，避免移動期間提前消耗 _roll_success() 或使用過期狀態。
+	# ⚠ _pursue_current_task() 每個遊戲分鐘都會跑到這裡，talk 現在能這樣寫
+	# 是因為它不在 SUCCESS_PARAMS 上、resolve() 對它只會走硬規則檢查（純函式、
+	# 沒有隨機性），每分鐘重算結果都一樣，等同只是重新確認前置條件沒變。
+	# 之後如果哪個會擲骰的 SUCCESS_PARAMS 動作也要做成「追逐中執行」，不能照抄
+	# 這個寫法——resolve() 裡的 _roll_success() 每呼叫一次就重骰一次，搬進這種
+	# 每分鐘都跑的函式會變成「重骰到成功為止」，跟《01-2》§2「一次決策一次骰」
+	# 的公式前提不符。那種情況要另外做「這個任務實例只骰一次」的保護（例如
+	# 記一個 _resolved_task_id，骰過就不再骰，只重驗真的需要每次重查的部分）
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		if not result["success"]:
+			# resolve() 判定失敗的任務不留在池子裡繼續佔位——不移除的話
+			# 下次重算分數不變，會馬上又選到同一筆，變成每分鐘重試一次
+			# 同樣失敗的無限迴圈。移除後記錄失敗原因，停止執行
+			_remove_task(_current_task.get("id", ""))
+			_current_task = {}
+			current_place = ""
+			current_state = "idle"
+			# 這筆若是最後一筆 llm 任務，_reevaluate() 的 duration 完成分支
+			# 不會再被觸發（那筆任務在這裡就已經被移除，不是被 duration 判定
+			# 完成的），Agent 會乾等到某個不相干的事件才重新決策。跟
+			# exit_conversation() 對「llm 任務因為別的理由結束」的處理一致，
+			# 這裡也要主動補一次請求（max 等級 code review 抓到）
+			if llm_decision_enabled and not _awaiting_decision:
+				_request_next_decision(_today_plan_needs_new_goal())
+			return
+
 	var target_name: String = str(_current_task.get("params", {}).get("target", ""))
 	var target := _find_character_by_name(target_name)
 
@@ -1015,6 +1162,16 @@ func _pursue_talk_task() -> void:
 
 	if _talk_pursuit_stuck_ticks == 3:
 		push_warning("Agent %s: 追不上搭話對象 %s，可能被卡住" % [character_name, target.character_name])
+
+# 按顯示名找所有符合的角色，用於偵測撞名（resolve() 的歧義檢查）
+func _find_all_characters_by_name(target_name: String) -> Array[Character]:
+	var matches: Array[Character] = []
+	if target_name.is_empty():
+		return matches
+	for node in get_tree().get_nodes_in_group("characters"):
+		if node != self and node.character_name == target_name:
+			matches.append(node as Character)
+	return matches
 
 # 按顯示名找角色，不分大小寫的規則跟 debug_console.gd::_get_character() 不同——
 # 那裡要處理玩家手打、可能撞名的情形；這裡的 target 是 LLM 從 context.visible

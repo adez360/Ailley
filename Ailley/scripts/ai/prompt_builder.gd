@@ -180,6 +180,10 @@ static func _self_block(character: Character) -> Dictionary:
 		"time": {"hour": GameClock.hour, "minute": GameClock.minute},
 		"place": schedule.get("place", ""),
 		"current_action": schedule.get("state", ""),
+		# resolve()（#120）判定結果，中文自然語言，成功是空字串。沒有這欄的話
+		# last_action_result 寫回 Character 就只是存著沒人看，違背《01-2》§1
+		# 「寫回失敗原因讓 AI 能調整策略」的設計目的（QA review 抓到）
+		"last_action_result": snapshot.get("last_action_result", ""),
 	}
 
 ## L2（近期）＋ L4（核心）記憶固定全量帶入，不做情境篩選（#169，《99》P-03
