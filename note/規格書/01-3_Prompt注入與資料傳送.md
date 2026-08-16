@@ -158,7 +158,7 @@ Pass 1：Tier 0 + Tier 1 + 一個 request_info 欄位
 
 ## 5. 不需決策、建議直接做的優化
 
-`system_prompt` 段固定不變 → 在 llama-server（`--parallel 5`）下每個 slot 各自的 KV cache 可直接命中。
+`system_prompt` 段固定不變 → 在 llama-server（`--parallel 3`）下每個 slot 各自的 KV cache 可直接命中。
 
 **條件**：system 段永遠排在 prompt 最前面且**逐字元一致**（含空白與換行）。
 

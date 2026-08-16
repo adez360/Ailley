@@ -36,7 +36,7 @@ updated: 2026-08-16
                             │  HumanInput 不經網路，RemotePlayer 見《12》§3.4
                             ▼
 ┌──────────────────────────────────────────────────────────────┐
-│  LocalLLM: llama-server（127.0.0.1:8080，--parallel 5, ctx 16000）│
+│  LocalLLM: llama-server（127.0.0.1:8080，--parallel 3, ctx 16000）│
 │  RemoteLLM: 雲端 API（OpenRouter 等，見 `ai/api.md` AIConfig）   │
 └──────────────────────────────────────────────────────────────┘
 ```
