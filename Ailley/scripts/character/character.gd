@@ -115,9 +115,20 @@ var _outline: ShaderMaterial = null
 
 
 func _ready() -> void:
+	# 場景裡固定的 NPC，身分是設計時決定好的資料——先用節點名查 npc_schedule.json 的
+	# identities（跟 agent.gd::_load_schedule() 查 assignments 同一個模式）。查到就用，
+	# 讓 character_id 跨場次穩定（relationships 拿它當 key，每次重開都變等於認識的人全歸零）。
+	# @export 手擺的值優先（測試角色）；兩者都空才落回生成 UUID／節點名，這條保留給
+	# Player 與動態生成的角色
+	var identity := GameManager.get_npc_identity(name)
+
+	if character_id.is_empty():
+		character_id = str(identity.get("character_id", ""))
 	if character_id.is_empty():
 		character_id = generate_id()
 
+	if character_name.is_empty():
+		character_name = str(identity.get("character_name", ""))
 	if character_name.is_empty():
 		character_name = name.to_lower()
 
