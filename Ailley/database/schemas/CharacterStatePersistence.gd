@@ -89,7 +89,6 @@ func _save_character(character: Character) -> bool:
 	if not _ensure_npc_record(character):
 		return false
 
-
 	# -------------------------------------------------
 	# 2. 讀取目前 Stats
 	# -------------------------------------------------
@@ -100,7 +99,14 @@ func _save_character(character: Character) -> bool:
 	var sleepiness := character.stats.get_value("sleepiness")
 	var hygiene := character.stats.get_value("hygiene")
 	var alcohol := character.stats.get_value("alcohol")
+	var health := character.stats.get_value("health")
 	var injury := character.stats.get_value("injury")
+
+	# 保留舊欄位（Stats.gd 待遷移到規格書定義）
+	var energy := character.stats.get_value("energy")
+	var social := character.stats.get_value("social")
+	var fun := character.stats.get_value("fun")
+	var mood := character.stats.get_value("mood")
 
 	# -------------------------------------------------
 	# 3. Stats 0~100
@@ -113,6 +119,7 @@ func _save_character(character: Character) -> bool:
 	var sleepiness_db := _round_2(clampf(sleepiness / 100.0, 0.0, 1.0))
 	var hygiene_db := _round_2(clampf(hygiene / 100.0, 0.0, 1.0))
 	var alcohol_db := _round_2(clampf(alcohol / 100.0, 0.0, 1.0))
+	var health_db := _round_2(clampf(health / 100.0, 0.0, 1.0))
 	var injury_db := _round_2(clampf(injury / 100.0, 0.0, 1.0))
 
 	# -------------------------------------------------
@@ -178,12 +185,18 @@ func _save_character(character: Character) -> bool:
 
 	if updated:
 		print(
-			"[CharacterStatePersistence] UPDATE npc_state: %s | %s | hunger=%.2f stamina=%.2f"
+			"[CharacterStatePersistence] UPDATE %s (%s) hunger=%.2f thirst=%.2f stamina=%.2f sleepiness=%.2f hygiene=%.2f alcohol=%.2f health=%.2f injury=%.2f"
 			% [
 				character.character_name,
 				_get_character_type(character),
 				hunger_db,
-				stamina_db
+				thirst_db,
+				stamina_db,
+				sleepiness_db,
+				hygiene_db,
+				alcohol_db,
+				health_db,
+				injury_db
 			]
 		)
 
@@ -294,7 +307,9 @@ func get_all_states() -> Array:
 		STATE_TABLE,
 		"",
 		[
-			"npc_id",
+			"character_id",
+			"character_type",
+			# 八項生理數值
 			"hunger",
 			"thirst",
 			"stamina",
@@ -303,7 +318,14 @@ func get_all_states() -> Array:
 			"alcohol",
 			"health",
 			"injury",
-			"location_id"
+			# 舊欄位（向後相容）
+			"energy",
+			"social",
+			"fun",
+			"mood",
+			"last_day",
+			"last_hour",
+			"last_minute"
 		]
 	)
 
