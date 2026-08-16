@@ -27,7 +27,7 @@ updated: 2026-08-16
 | 會話 | 狀態機、輪次、結束條件 | `conversation.gd` | 不變 |
 | 內容 | 講什麼 | `dialogue_lines.gd` 依角色狀態組模板句 | 換掉這一個檔 |
 | 呈現 | 氣泡 | `bubble.gd` + `bubble.tscn` | 不變 |
-| 後果 | 數值回補、好感度、記憶 | social / mood / affinity | 加記憶寫入 |
+| 後果 | 數值回補、記憶 | social / mood / note_meeting | 加記憶寫入 |
 
 > [!important] 這個分層是整個設計的重點
 > 內容層以外的四層跟「誰產生台詞」無關。切乾淨的話，接 LLM 那天只換內容層一個檔。
@@ -78,22 +78,25 @@ updated: 2026-08-16
 
 **加一項數值只要加一列**，連主控台的顯示都會自己跟上（它直接掃 `Stats.SPEC` 讀 `label`）。
 
-好感度是「關係」而不是「數值」，所以獨立成 `Relationships`，
+關係是「對某個人」而不是「角色自己的數值」，所以獨立成 `Relationships`，
 key 用對方的 `character_id` 而不是 name —— name 會改，用它當 key 等於改名即失憶。
-每筆存成 Dictionary 而不是單一浮點數：欄位是 `affinity`／`trust`／`familiarity`／
-`debt`／`met_count` 五項（規格《01》3-1），之後要加最後見面時間、印象標籤
-也一樣不用改結構。
+每筆存成 Dictionary 而不是單一浮點數：欄位是 `trust`／`met_count`／
+`appearance_cache` 三項（規格《01》3-1、《99》P-08），之後要加最後見面時間、
+印象標籤也一樣不用改結構。
+
+好感、熟悉、虧欠不是引擎欄位：沒有任何公式讀過它們（《00》原則三），
+那三件事交給《03》記憶系統自己記、自己判斷、自己演。
 
 > [!important] 查詢不可以建立紀錄
-> `Relationships` 的讀寫是分開的：`get_affinity()` / `get_record()` / `has_met()`
-> 全部唯讀，`get_record()` 甚至回的是副本；只有 `add_affinity()` 與 `note_meeting()`
+> `Relationships` 的讀寫是分開的：`get_trust()` / `get_record()` / `has_met()`
+> 全部唯讀，`get_record()` 甚至回的是副本；只有 `add_trust()` 與 `note_meeting()`
 > 會走私有的 `_ensure_record()` 建立紀錄。
 >
-> 這條是踩出來的：原本 `get_affinity()` 走「沒有就當場建一筆」的 `get_record()`，
-> 而 `conversation.gd` 開場就會問一次好感度 ——
+> 這條是踩出來的：原本查詢走「沒有就當場建一筆」的 `get_record()`，
+> 而 `conversation.gd` 開場就會問一次關係 ——
 > 於是**只要對話開始過，`has_met()` 就永遠為真，而 `met_count` 還是 0**。
 > 症狀是 [[視覺感測]] 那個「第一次看到陌生人才愣一下」再也不會發生
-> （搭話後立刻走開就足以觸發），而主控台會印出「好感 player 0.0（0 次）」這種自相矛盾的東西。
+> （搭話後立刻走開就足以觸發），而主控台會印出「player 信任 20.0（0 次）」這種自相矛盾的東西。
 >
 > 「認識」的唯一來源是 `note_meeting()`，也就是**好好講完一場話**。
 > 這件事接 LLM 之後更要緊：`met_count` 與「認不認識」是要送進 payload 的事實，
@@ -127,7 +130,7 @@ schema 欄位名稱、是否要額外佔用一次 AI 呼叫頻率配額（見《
 | 面對面 | 不要求 | 操作上太苛 |
 | 互動鍵 | `E` | |
 | 被搭話者的行程 | 暫停後重算 | 不是接續原路 |
-| 回補 | social +25、mood +5、affinity +3 | 只有正常講完才發 |
+| 回補 | social +25、mood +5 | 只有正常講完才發；關係只記 `note_meeting()`，不動 `trust` |
 | 等待對方回話逾時 | **暫定 8 秒**（AI 對 AI） | 沒有既有數值可參照，比照《04》`/event` 逾時（8秒建議值）抓同一量級，比一般 `/decide`（5秒）寬鬆，對話生成通常較長。逾時走 fallback（`DialogueLines.closing()`）。真人玩家的回話等待秒數留到 MVP-2 玩家加入後再定——現在真人不參與 `talk`，不急 |
 
 ## 呈現層的坑

@@ -340,16 +340,16 @@ func _cmd_status(args: PackedStringArray) -> void:
 	if snapshot.has("money"):
 		_field("CON_FIELD_MONEY", "%d" % int(snapshot["money"]))
 
-	if snapshot.has("affinity"):
+	if snapshot.has("relations"):
 		var lines: Array[String] = []
-		for other_id in snapshot["affinity"]:
-			var record: Dictionary = snapshot["affinity"][other_id]
-			lines.append(L10n.tf("CON_AFFINITY_ENTRY", {
+		for other_id in snapshot["relations"]:
+			var record: Dictionary = snapshot["relations"][other_id]
+			lines.append(L10n.tf("CON_RELATION_ENTRY", {
 				"id": other_id,
-				"affinity": "%.1f" % record["affinity"],
+				"trust": "%.1f" % record["trust"],
 				"count": record["met_count"],
 			}))
-		_field("CON_FIELD_AFFINITY", SEP.join(lines))
+		_field("CON_FIELD_RELATIONS", SEP.join(lines))
 
 	if snapshot.has("schedule"):
 		_field("CON_FIELD_SCHEDULE", L10n.tf("CON_SCHEDULE_BODY", {

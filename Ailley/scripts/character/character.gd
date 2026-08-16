@@ -491,7 +491,7 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 # （見 note/技術/LLM 串接與 AI 服務層.md）要的也是同一批資料。
 #
 # key/value 一律是識別字，不可以是翻譯過的字 —— Stats.SPEC 的 label 存的是
-# 翻譯 key，這裡照樣只放 key，翻譯留給顯示端做。stats/affinity 只有掛了對應
+# 翻譯 key，這裡照樣只放 key，翻譯留給顯示端做。stats/relations 只有掛了對應
 # 元件才會出現在回傳值裡，呼叫端用 has() 判斷。
 #
 # 子類別自己的欄位由子類別 override 這個方法補上（agent.gd 補 schedule），
@@ -520,20 +520,20 @@ func get_state_snapshot() -> Dictionary:
 	if inventory != null:
 		snapshot["money"] = inventory.get_money()
 
-	# 欄名跟 relationships.gd 的 record 一致（affinity / met_count），
+	# 欄名跟 relationships.gd 的 record 一致（trust / met_count），
 	# 不要在這裡改名——同一個數值有兩個名字，讀過 relationships.gd 的人
-	# 會在 snapshot 上找不到 affinity。用純量 accessor 不用 get_record()，
+	# 會在 snapshot 上找不到 trust。用純量 accessor 不用 get_record()，
 	# 後者每筆都 duplicate(true) 深拷一份只為了讀兩個數字
 	if relationships != null:
 		var known := relationships.known_ids()
 		if not known.is_empty():
-			var affinity := {}
+			var relations := {}
 			for other_id in known:
-				affinity[other_id] = {
-					"affinity": relationships.get_affinity(other_id),
+				relations[other_id] = {
+					"trust": relationships.get_trust(other_id),
 					"met_count": relationships.get_met_count(other_id),
 				}
-			snapshot["affinity"] = affinity
+			snapshot["relations"] = relations
 
 	return snapshot
 

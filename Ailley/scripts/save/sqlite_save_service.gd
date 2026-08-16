@@ -133,8 +133,7 @@ func save_world(id: String, data: Dictionary) -> bool:
 ## 世界層整層沒有表     world_id / day / allow_player_join 無處可存，
 ##                      get_world()／save_world() 現在只搬得動 location 與 item
 ## npc 沒有 version     《14》§2 要求的並行寫入保護沒有掛靠欄位
-## npc_relations        多了 affinity / familiarity / debt 三欄，《06》已把它們
-##                      拿掉（見《99》2026-08-16 01§3-1）；少了 appearance_cache
+## npc_relations        少了 met_count（引擎有、《06》沒有，要先拍板存不存）
 ## npc_appearance       是 hair_id / face_id / clothes_id /
 ##                      decoration1_id / decoration2_id 五個定欄，
 ##                      《06》的 appearance 是 { slot, item_id, label } 陣列
