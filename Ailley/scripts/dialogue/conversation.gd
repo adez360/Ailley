@@ -16,8 +16,7 @@ extends Node
 
 signal finished(reason: String)
 
-## 工程安全閥，不是設計上的輪數上限（那條已經拿掉，收尾交給回應的 end 欄位決定）。
-## 值的理由見 note/技術/LLM 串接與 AI 服務層.md 的「對話由 Agent 自己決定何時結束」§界線
+## 工程安全閥。理由見 note/技術/LLM 串接與 AI 服務層.md 的「對話由 Agent 自己決定何時結束」§界線
 const SAFETY_MAX_TURNS := 10
 
 const TURN_GAP := 0.5			# 一句講完到下一句之間的空檔（秒）
