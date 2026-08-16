@@ -1,7 +1,7 @@
 ---
 tags: [規格書, 架構]
 status: 大致定案
-updated: 2026-08-16
+updated: 2026-08-17
 ---
 
 # 04_Godot與AI資料介接規格
@@ -216,7 +216,8 @@ updated: 2026-08-16
     "emotion": { "type": "neutral", "intensity": 30 },
     "current_goal": "把藥草賣掉，換錢買一把好一點的刀",
     "update_plan": null,
-    "appointment": null
+    "appointment": null,
+    "persuaded": null
   },
   "meta": {
     "source_model": "local-7b",
@@ -239,6 +240,7 @@ updated: 2026-08-16
 | `current_goal` | string | AI 可隨時改寫，上限 40 字 |
 | `update_plan` | array \| 不存在 | 僅在《10》§5.4 列出的時機，schema 才含此欄位（見《12》§2.4） |
 | `appointment` | object \| null | `with` / `location` / `game_time`，結構見《10》§5.5 |
+| `persuaded` | boolean \| 不存在 | 僅在 `fact_lines` 含待回應的說服事實句時，schema 才含此欄位；語意比照 `believed`（見 §4-3），AI 自行判斷、房主機不驗證、不二次判定（見《00》原則四、《01-2》§3-1） |
 | `meta.source_model` | string | Provider 實際使用的模型名稱，供《10》B33 結算揭露 |
 
 失敗（逾時／格式錯誤／模型失效）時房主機不會收到 `decision`，改依《12》§6 走 `DecisionError` 流程，見本文件 §6。
