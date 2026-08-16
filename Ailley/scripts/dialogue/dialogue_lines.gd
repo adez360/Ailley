@@ -19,19 +19,14 @@ extends RefCounted
 ## 一來避免 character.gd -> conversation.gd -> dialogue_lines.gd -> character.gd 的循環相依，
 ## 二來逼自己把「產生台詞需要哪些資訊」講清楚，之後那就是要送給 LLM 的 context。
 
-const AFFINITY_FRIEND := 30.0
-const AFFINITY_DISLIKE := -20.0
-
-
-static func opening(listener_name: String, stats: Stats, affinity: float) -> String:
-	if affinity <= AFFINITY_DISLIKE:
-		return L10n.t("DLG_OPENING_DISLIKE")
-	if affinity >= AFFINITY_FRIEND:
-		return L10n.tf("DLG_OPENING_FRIEND", {"name": listener_name})
+# fallback 台詞拉平成一種語氣：affinity 已隨《01》3-1 拍板移除，好感度的
+# friend／dislike 分支沒有訊號可依。fallback 的職責是「保證有一句、能收尾」，
+# 語氣的細膩度交給 LLM 路徑（next_line()），不在這條備援線上重建
+static func opening(listener_name: String) -> String:
 	return L10n.tf("DLG_OPENING_NEUTRAL", {"name": listener_name})
 
 # turn 從 0 開始算，目前沒用到，之後要做「話題會推進」時會需要
-static func reply(stats: Stats, affinity: float, _turn: int) -> String:
+static func reply(stats: Stats, _turn: int) -> String:
 	var lowest := stats.get_lowest_need()
 
 	if stats.get_value(lowest) < Stats.CRITICAL:
@@ -51,14 +46,7 @@ static func reply(stats: Stats, affinity: float, _turn: int) -> String:
 	if mood <= 30.0:
 		return L10n.t("DLG_MOOD_LOW")
 
-	if affinity >= AFFINITY_FRIEND:
-		return L10n.t("DLG_REPLY_FRIEND")
-
 	return L10n.t("DLG_REPLY_NEUTRAL")
 
-static func closing(listener_name: String, affinity: float) -> String:
-	if affinity <= AFFINITY_DISLIKE:
-		return L10n.t("DLG_CLOSING_DISLIKE")
-	if affinity >= AFFINITY_FRIEND:
-		return L10n.tf("DLG_CLOSING_FRIEND", {"name": listener_name})
+static func closing() -> String:
 	return L10n.t("DLG_CLOSING_NEUTRAL")

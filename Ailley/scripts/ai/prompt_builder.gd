@@ -141,14 +141,15 @@ static func _self_block(character: Character) -> Dictionary:
 	}
 
 static func _listener_block(speaker: Character, listener: Character) -> Dictionary:
-	var affinity := 0.0
+	# 不再送 affinity（《01》3-1 拍板移除）。「初始觀感」本來要改送 listener 的
+	# reputation 附中文形容詞讓 AI 自己判斷，但 reputation 目前只在 DB schema、
+	# runtime 的 Character 還沒有這個欄位（等存檔系統，見 #69）——有了 runtime
+	# 來源再補進這個 block，現在先只給 name／met_count
 	var met_count := 0
 	if speaker.relationships != null:
-		affinity = speaker.relationships.get_affinity(listener.character_id)
 		met_count = speaker.relationships.get_met_count(listener.character_id)
 
 	return {
 		"name": listener.character_name,
-		"affinity": affinity,
 		"met_count": met_count,
 	}
