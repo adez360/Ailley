@@ -92,8 +92,8 @@ const TALK_TOO_FAR := "TOO_FAR"
 const TALK_TARGET_BUSY := "TARGET_BUSY"
 const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 
-@export var character_id := ""               # 唯一身分，留空→生成 UUID v4（正常路徑）
-@export var character_name := ""             # 顯示名，可改可撞，留空→節點名小寫
+@export var character_id := ""               # 唯一身分，留空→查 identities→生成 UUID v4
+@export var character_name := ""             # 顯示名，可改可撞，留空→查 identities→節點名小寫
 static func generate_id() -> String           # RFC 4122 v4，不帶語意，別解析它
 var facing := "front"                        # front|back|right
 func get_facing_direction() -> Vector2       # facing/sprite.flip_h 重建成單位向量
@@ -152,7 +152,9 @@ get_state_snapshot() -> {
 † TALK_* ≠ Conversation.REASON_*
   前者=搭話失敗，後者=對話正常結束。混用會讓 AI 反覆重試成功的動作
 † character_id 撞到就換一個新的 + push_error，不是只偵測。共用 id = 共用關係與記憶
-† character_id 未持久化：每次開遊戲重新生成，關係紀錄一重開就指向不存在的人
+† character_id 三層 fallback：@export → npc_schedule.json identities[節點名] → 生成 UUID
+  走 identities 的固定 NPC（Agent/Agent2）跨場次穩定；走 UUID 的每次重開都變，
+  關係紀錄一重開就指向不存在的人
 † 動畫只有 front/back/right 三向，往左用 flip_h 翻轉 right
 † get_pick_rect 用 sprite 影格不用碰撞形狀：後者只有腳下小圓，點頭部會落空
 ⚠ set_highlighted 訂 frame_changed **與** animation_changed 兩個訊號
@@ -272,7 +274,7 @@ noise_heard 且 !is_in_conversation() → say("!?")，無去重，每次都會�
   只比距離的話 2..11px 是死角：距離說沒到，find_path() 卻因同格只回一個點
   → move_to() false → 假的「走不到」。每次重算行程都會噴
 † schedule_template ≠ character_id：前者是「用哪份資料」，後者是「我是誰」
-† assignments 的 key 是節點名不是 character_id（id 是 UUID，json 裡手寫不出來）
+† assignments 與 identities 的 key 都是節點名，兩塊分開：前者「用哪份行程」，後者「我是誰」
   查不到 → 退回 @export 並 push_warning（預設值 instance 共用，靜默退回會兩隻同行程）
   節點名只在同一層唯一，不同父節點下撞名 → push_error（兩隻會查到同一筆）
 † move_finished 要比對 last_move_target：debug 主控台的 goto 也會發同一個訊號，
