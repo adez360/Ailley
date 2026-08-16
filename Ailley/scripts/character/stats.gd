@@ -15,7 +15,7 @@ extends Node
 ##            的 PlaceAnchors 解析 —— Stats 不可以依賴場景，否則就沒辦法
 ##            在沒有場景的情況下（例如日後的存檔／單元測試）使用
 ##
-## energy 的 place 是寫死的 home_001，這是從舊 villager.gd 照搬過來的。
+## stamina 的 place 是寫死的 home_001，這是從舊 villager.gd 照搬過來的。
 ## 每個角色的家其實不一樣，正確作法是讀該角色自己的家 —— 等行程表改由 AI
 ## 維護（計畫 §5.1）時一併處理，那時「家在哪」本來就要變成角色的屬性
 
@@ -25,7 +25,10 @@ const CRITICAL := 30.0		# 低於這個值算「該處理了」
 
 const SPEC := {
 	"hunger": {"label": "STAT_HUNGER", "drift": 3.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "restaurant"},
-	"energy": {"label": "STAT_ENERGY", "drift": 1.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "home_001"},
+	"thirst":{"label": "STAT_THIRST", "drift": 0.5, "toward": 0.0, "start": 100.0, "is_need": true, "place": "restaurant"},
+	"stamina": {"label": "STAT_STAMINA", "drift": 1.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "home_001"},
+	"sleepiness": {"label": "STAT_SLEEPINESS", "drift": 1.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "home_001"},
+	"hygiene": {"label": "STAT_HYGIENE", "drift": 1.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "home_001"},
 	"social": {"label": "STAT_SOCIAL", "drift": 0.5, "toward": 0.0, "start": 100.0, "is_need": true, "place": "square"},
 	"fun": {"label": "STAT_FUN", "drift": 0.2, "toward": 0.0, "start": 100.0, "is_need": true, "place": "square"},
 	"mood": {"label": "STAT_MOOD", "drift": 0.5, "toward": 50.0, "start": 50.0, "is_need": false, "place": ""},
