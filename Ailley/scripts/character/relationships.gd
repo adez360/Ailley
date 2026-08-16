@@ -127,3 +127,19 @@ func _ensure_record(other_id: String) -> Dictionary:
 	if not records.has(other_id):
 		records[other_id] = DEFAULT_RECORD.duplicate(true)
 	return records[other_id]
+
+
+# ---- 存檔 ----
+
+func get_save_data() -> Dictionary:
+	return records.duplicate(true)
+
+# 缺的維度用 DEFAULT_RECORD 補（trust/familiarity/debt 都是後來才加的），
+# 不當成錯誤。直接寫進 records 本體，不經 _ensure_record()——這裡在還原存檔，
+# 不是查詢，「查詢不可以建立紀錄」那條規則管的是別的事
+func load_save_data(data: Dictionary) -> void:
+	records.clear()
+	for other_id in data:
+		var record: Dictionary = DEFAULT_RECORD.duplicate(true)
+		record.merge(data[other_id], true)
+		records[other_id] = record
