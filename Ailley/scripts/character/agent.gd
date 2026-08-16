@@ -26,6 +26,11 @@ const NOTICE_PAUSE := 2.0
 ## Agent 開放」，這是那條原則的落實
 @export var llm_decision_enabled := false
 
+## 佔位欄位：決策來源（《06》decision_source，正式資料結構見 #122）。
+## 先用常數驗證 DecisionProvider 選取邏輯是對的，欄位落地後這裡改吃真正的角色資料。
+@export var decision_source := "local"		# "local" / "cloud"
+@export var model_name := ""				# decision_source == "cloud" 時，AIConfig 的 provider 名字
+
 ## schedule 任務給中間值，靠 time_bonus 拉開跟其他來源的差距，
 ## 不是靠 base priority 本身——見 [[行程佇列與任務仲裁]] 的「待決」那節
 const SCHEDULE_BASE_PRIORITY := 10.0
@@ -141,10 +146,16 @@ var _plan_update_requested := false
 ## 那個轉換瞬間，見 _reevaluate() 怎麼用它
 var _was_sleeping := false
 
+## 這隻角色的決策來源，出生時決定一次，之後所有決策/對話呼叫都透過它——
+## 跟《06》「decision_source／model_name 投放後不可改」的規則一致，不做成每次呼叫
+## 才判斷（#155）
+var _provider: DecisionProvider
+
 
 func _ready() -> void:
 	super()
 	add_to_group("agents")
+	_provider = _make_provider()
 	_load_schedule()
 
 	if vision != null:
@@ -174,6 +185,21 @@ func _ready() -> void:
 	# 那個時機（#89 觸發 2）是同一種狀況——沒有計畫，需要一份新的
 	if llm_decision_enabled and not _has_llm_task():
 		_request_next_decision(true)
+
+## 依 decision_source 建一次決策提供者（#155）。打錯字／空字串一律安靜退回 LocalLLMProvider，
+## 但寫一行 push_warning 帶原因——跟 _load_schedule() 找不到 assignment 時的處理是同一種
+## 「資料異常先警告、遊戲照跑」的慣例，不讓一個資料錯字讓角色整個決策啞掉
+func _make_provider() -> DecisionProvider:
+	if decision_source == "cloud":
+		if model_name.is_empty():
+			push_warning("Agent %s: decision_source 'cloud' 但 model_name 是空的，退回 local" % character_name)
+		else:
+			return RemoteLLMProvider.new(model_name)
+	elif decision_source != "local":
+		push_warning("Agent %s: decision_source '%s' 不是已知值，退回 local" % [
+			character_name, decision_source
+		])
+	return LocalLLMProvider.new()
 
 # 一趟移動有結論了：走到了，或 _check_stuck() 判定走不動而放棄。
 # 兩種都代表「這個地點不必再起步一次」，_pursue_current_task() 靠它收斂。
@@ -353,6 +379,37 @@ func exit_conversation() -> void:
 ## 三種都是「這次要不到台詞」，處理方式完全一樣
 const AI_THINKING_TEXT := "…"
 
+## 呼叫 provider 決策並驗證內容，失敗時依 provider.max_validation_retries() 重試（#152）。
+## 只有「拿到回應但內容不合格式」才重試（parse_completion／validate 失敗）；AIService
+## 層級的失敗（逾時、連線失敗、停用、額度）不重試，原樣回傳給呼叫端走 fallback——
+## 那類是「這次問不到」，不是「問到了但答案壞掉」，是《12》§6.1 講的不同兩種情境。
+##
+## validator 是呼叫端包好的驗證函式：next_line() 傳 AISchema.validate_dialogue，
+## _request_next_decision() 傳一個包住 allow_update_plan 的 lambda 呼叫 validate_tasks。
+## 這裡不用管兩邊 schema 形狀不同，只管「驗證過不過」
+func _decide_with_retry(envelope: Dictionary, policy: AIService.Policy, validator: Callable) -> Dictionary:
+	var attempts := _provider.max_validation_retries() + 1
+	for attempt in attempts:
+		var result: Dictionary = await _provider.decide(envelope, character_id, policy)
+		if not result["ok"]:
+			return result
+
+		var parsed := AISchema.parse_completion(result["data"])
+		if not parsed["ok"]:
+			if attempt < attempts - 1:
+				continue
+			return {"ok": false, "data": {}, "error": parsed["error"]}
+
+		var validated: Dictionary = validator.call(parsed["data"])
+		if not validated["ok"]:
+			if attempt < attempts - 1:
+				continue
+			return {"ok": false, "data": {}, "error": validated["error"]}
+
+		return {"ok": true, "data": validated["data"], "error": ""}
+
+	return {"ok": false, "data": {}, "error": "unreachable"}
+
 func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) -> Dictionary:
 	# 立刻蓋掉正在顯示的東西，讓玩家知道「這個角色在想」，不是卡住。
 	# AIService.request() 還沒送出就已經先顯示——冷卻/配額檢查也算在等待時間裡，
@@ -361,22 +418,14 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 	say(AI_THINKING_TEXT, true)
 
 	var envelope := PromptBuilder.build_dialogue_envelope(self, listener, turns, max_turns)
-	var result: Dictionary = await AIService.request(envelope, character_id, AIService.Policy.CONVERSATION)
+	var result := await _decide_with_retry(envelope, AIService.Policy.CONVERSATION, AISchema.validate_dialogue)
 	if not result["ok"]:
-		return {"ok": false}
-
-	var parsed := AISchema.parse_completion(result["data"])
-	if not parsed["ok"]:
-		return {"ok": false}
-
-	var validated := AISchema.validate_dialogue(parsed["data"])
-	if not validated["ok"]:
 		return {"ok": false}
 
 	return {
 		"ok": true,
-		"line": validated["data"]["line"],
-		"end": validated["data"]["end"],
+		"line": result["data"]["line"],
+		"end": result["data"]["end"],
 	}
 
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
@@ -402,37 +451,34 @@ func _request_next_decision(allow_update_plan: bool = false) -> void:
 	var envelope := PromptBuilder.build_plan_envelope(
 		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan
 	)
-	var result: Dictionary = await AIService.request(envelope, character_id, AIService.Policy.SCHEDULED)
+	var validator := func(data: Dictionary) -> Dictionary:
+		return AISchema.validate_tasks(data, effective_allow_update_plan)
+
+	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	_awaiting_decision = false
 
 	if not result["ok"]:
 		return
 
-	var parsed := AISchema.parse_completion(result["data"])
-	if not parsed["ok"]:
-		return
-
-	var validated := AISchema.validate_tasks(parsed["data"], effective_allow_update_plan)
-	if not validated["ok"]:
-		return
+	var data: Dictionary = result["data"]
 
 	# reasoning／inner_monologue 印出來給人排查，跟 _trigger_village_ai() 的
 	# print() 除錯模式一致；不進遊戲內 UI。決策準不準沒有系統性驗證，
 	# 目前只能肉眼看這兩個欄位判斷合不合理
-	print("[llm_decision] %s reasoning: %s" % [character_name, validated["data"].get("reasoning", "")])
-	print("[llm_decision] %s inner_monologue: %s" % [character_name, validated["data"].get("inner_monologue", "")])
+	print("[llm_decision] %s reasoning: %s" % [character_name, data.get("reasoning", "")])
+	print("[llm_decision] %s inner_monologue: %s" % [character_name, data.get("inner_monologue", "")])
 
-	_push_llm_tasks(validated["data"]["tasks"], validated["data"])
+	_push_llm_tasks(data["tasks"], data)
 
 	# 不管這輪有沒有拿到 update_plan 許可，模型都可能問「下次讓我改」——記
 	# 下來，下一次不管是哪個理由觸發 _request_next_decision() 都會兌現
-	if validated["data"].get("request_plan_update", false):
+	if data.get("request_plan_update", false):
 		_plan_update_requested = true
 
 	# null 代表這次沒有 update_plan（不管是沒許可、還是有許可但模型選擇不用）；
 	# 空陣列 [] 是模型明確給的合法值（today_plan 清空），兩者不可混淆，見
 	# AISchema.validate_tasks() 用 null 分辨「沒提供」與「提供了空陣列」
-	var update_plan: Variant = validated["data"].get("update_plan")
+	var update_plan: Variant = data.get("update_plan")
 	if update_plan != null:
 		_apply_today_plan(update_plan)
 

@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-14
+updated: 2026-08-16
 ---
 
 # api
@@ -210,6 +210,8 @@ make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不
 ```gdscript
 @export var schedule_template := ""          # npc_schedule.json 的鍵，如 "npc001"
 @export var llm_decision_enabled := false    # 決策迴圈開關（issue #88），逐隻手動開
+@export var decision_source := "local"       # "local"/"cloud"，佔位欄位，真正資料結構見 #122
+@export var model_name := ""                 # decision_source=="cloud" 時的 AIConfig provider 名字
 
 const NOTICE_PAUSE := 2.0
 const SCHEDULE_BASE_PRIORITY := 10.0         # schedule 任務的 base 分數
@@ -663,6 +665,42 @@ get_usage -> {game_day, calls_today, max_calls, dialogue_today, total_today,
 → 技術/LLM 串接與 AI 服務層
 ```
 
+## DecisionProvider — scripts/ai/decision_provider.gd · class_name · RefCounted
+
+```gdscript
+func decide(envelope: Dictionary, requester_id: String, policy: AIService.Policy) -> Dictionary
+func max_validation_retries() -> int          # 基底回 0
+```
+
+```text
+decide() -> {"ok": bool, "data": Dictionary, "error": String}  # 形狀對齊 AIService.request()
+† agent.gd 只認得這個介面，不知道背後是本機模型還是雲端模型（《12》§3、§5.1）
+† 語意驗證/成功失敗判定不在這裡——decide() 只管格式轉換/送出/解析/逾時，驗證留給呼叫端的 AISchema
+† HumanInput／RemotePlayer 兩種來源尚未實作
+→ 技術/LLM 串接與 AI 服務層
+```
+
+## LocalLLMProvider — scripts/ai/local_llm_provider.gd · class_name · extends DecisionProvider
+
+```gdscript
+const PROVIDER_NAME := "local"                # 固定打 AIConfig 裡名叫 "local" 的 provider
+func decide(envelope, requester_id, policy) -> Dictionary   # 包 AIService.request(..., "local")
+# max_validation_retries() 沿用基底的 0，不覆寫——本地無重試語意
+```
+
+## RemoteLLMProvider — scripts/ai/remote_llm_provider.gd · class_name · extends DecisionProvider
+
+```gdscript
+func _init(provider_name: String) -> void     # 建構時決定打哪個 AIConfig provider，之後不變
+func decide(envelope, requester_id, policy) -> Dictionary   # 包 AIService.request(..., _provider_name)
+func max_validation_retries() -> int          # 回 2（《12》§3.4，P-22 #3）
+```
+
+```text
+† _provider_name 對應《06》model_name 欄位——建角面板下拉選的是 AIConfig 裡已設定好的 provider 名字
+† 投放後不可改，跟 decision_source 同一條規則，所以做成建構子帶入、不是每次呼叫才傳
+```
+
 ## AIConfig — scripts/ai/ai_config.gd · class_name · RefCounted
 
 ```gdscript
@@ -943,4 +981,9 @@ noise_heard 對話中會被吞掉；睡覺中的 Agent 沒有排除，一樣會�
 character_id 與 GameClock.day 都未持久化，重開就重來
 AIService 已接對話（conversation.gd 非同步）與行程（agent.gd 任務池＋決策迴圈，
   llm_decision_enabled 開關）；決策內容有效性未實跑真實 provider 驗證過（見驗收清單）
+DecisionProvider 介面已存在（scripts/ai/decision_provider.gd），agent.gd 透過
+  LocalLLMProvider／RemoteLLMProvider 呼叫，不再直接呼叫 AIService；decision_source／
+  model_name 是 Agent 上的佔位 @export（#122 落地前的假資料，不是真正的角色資料）
+雲端驗證失敗重試已實作（agent.gd _decide_with_retry()，RemoteLLMProvider 2 次／
+  LocalLLMProvider 0 次）；HumanInput／RemotePlayer 兩種來源尚未實作
 ```
