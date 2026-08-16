@@ -239,6 +239,15 @@ func has_provider(provider_name: String) -> bool:
 	return get_provider(provider_name) != null
 
 
+## 「這個名字真的打得出去嗎」。has_provider() 只查設定項存不存在，但 AIService.request()
+## 擋的條件是 `provider == null or not provider.valid`——只用 has_provider() 事前檢查的
+## 呼叫端，會放行一個存在但 base_url/model 沒填齊的設定項，然後每次請求都安靜收到
+## ERROR_NO_PROVIDER。要在建立階段判斷「能不能用這個 provider」一律用這個
+func has_valid_provider(provider_name: String) -> bool:
+	var provider := get_provider(provider_name)
+	return provider != null and provider.valid
+
+
 # 印出去給人看的整份摘要，每個 provider 各一行，名字在前面標出來
 # （名字是識別字，不翻譯，跟主控台指令名同一個道理）。刻意不用單一
 # _to_string()：provider 有好幾個，塞進一行字串反而更難讀

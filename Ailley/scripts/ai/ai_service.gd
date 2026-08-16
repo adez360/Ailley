@@ -118,6 +118,7 @@ func request(
 	requester_id: String,
 	policy: Policy = Policy.SCHEDULED,
 	provider_name: String = "",
+	is_retry: bool = false,
 ) -> Dictionary:
 	if not config.enabled:
 		# 沒設定金鑰是預設狀態不是錯誤，所以安靜地回，不 push_error
@@ -134,7 +135,13 @@ func request(
 		# 能自己判斷的事，交給 AIConfig 那層算好的 valid 旗標
 		return _fail(ERROR_NO_PROVIDER)
 
-	var limit_error := _check_rate_limit(requester_id, policy)
+	# is_retry 只跳過冷卻檢查，不跳過每日配額——同一次決策內的重試是同一份
+	# 邏輯請求的延續，不該被自己造成的冷卻擋下（agent.gd::_decide_with_retry()
+	# 重試間隔只有幾秒，遠低於預設 30 秒冷卻，SCHEDULED policy 沒有 CONVERSATION
+	# 那種豁免，不加這個旗標的話《12》§3.4 要求的重試在 SCHEDULED 路徑上
+	# 實際永遠只跑得到 1 次就被 ERROR_RATE_LIMITED 擋死，見 PR #176 review）；
+	# 每日配額照樣算，因為重試仍然是真的網路請求，有真的成本
+	var limit_error := _check_rate_limit(requester_id, policy, is_retry)
 	if not limit_error.is_empty():
 		return _fail(limit_error)
 
@@ -177,12 +184,12 @@ func _is_exempt(policy: Policy) -> bool:
 	return policy == Policy.CONVERSATION and config.dialogue_exempt
 
 
-func _check_rate_limit(requester_id: String, policy: Policy) -> String:
+func _check_rate_limit(requester_id: String, policy: Policy, skip_cooldown: bool = false) -> String:
 	if _is_exempt(policy):
 		return ""
 
 	# 0 代表不限。設定檔可以把兩條限制各自關掉
-	if config.min_interval_sec > 0.0 and _last_call_msec.has(requester_id):
+	if not skip_cooldown and config.min_interval_sec > 0.0 and _last_call_msec.has(requester_id):
 		var elapsed := Time.get_ticks_msec() - int(_last_call_msec[requester_id])
 		if elapsed < int(config.min_interval_sec * 1000.0):
 			return ERROR_RATE_LIMITED

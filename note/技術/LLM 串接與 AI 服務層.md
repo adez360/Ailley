@@ -19,9 +19,12 @@ updated: 2026-08-17
 ## 現況：只有一條線
 
 LLM 一律走 `AIService`（`scripts/ai/ai_service.gd`）→ Godot ↔ Sidecar
-（`llama-server`），不經任何 Python 中間層。Step 0-3 全部完成：底層、
-`conversation.gd` 非同步對話（issue #82）、`agent.gd` 任務池＋仲裁器（issue #71）、
-決策迴圈（issue #88，`llm_decision_enabled` 開關）。細節見下方「正式線實作順序」。
+（`llama-server`），不經任何 Python 中間層。`agent.gd` 不直接呼叫
+`AIService`，透過 `DecisionProvider`（`LocalLLMProvider`／`RemoteLLMProvider`）
+呼叫。Step 0-4 全部完成：底層、`conversation.gd` 非同步對話（issue #82）、
+`agent.gd` 任務池＋仲裁器（issue #71）、決策迴圈（issue #88，
+`llm_decision_enabled` 開關）、DecisionProvider 介面與雲端驗證失敗重試
+（issue #155／#152）。細節見下方「正式線實作順序」。
 
 > [!success] 架構決定：出貨不走 Python 後端
 > 三六零否決「隨遊戲出貨 Python 後端」：自架中繼伺服器已被否決過（AI 呼叫要跑在
@@ -353,7 +356,7 @@ schema 跟系統提示裡，其餘時候模型的 response_format 契約裡文�
 > 引擎驗證（幫每筆計畫項目建立可比對身分、Task 完成時自動回寫），是比這次
 > 大得多的工程，不在 #89 這輪範圍內。
 
-## 正式線實作順序（Step 0-3 全部完成）
+## 正式線實作順序（Step 0-4 全部完成）
 
 ### Step 0 — 底層 ✅ 完成
 
@@ -407,9 +410,56 @@ autoload 已註冊，主控台加了 `ai` 指令。
    `expires_at` 到期清除沿用既有的 `_is_expired()`（issue #92）
 5. 搶佔／`retries` 遞增：**還沒接**——這一版被搶佔的 llm 任務直接留在池子裡
    或被仲裁器自然汰換，`retries` 欄位存在但沒有任何呼叫端遞增它
-6. 逾時 fallback：`_request_next_decision()` 任何一關失敗（AI 停用、逾時、
-   驗證失敗）都靜默放棄，`_awaiting_decision` 重置，Agent 靠任務池 fallback
-   （schedule 任務或上一輪還沒被選中的 llm 任務）頂著，不是標記 `pending`
+6. 逾時 fallback：`AIService` 層級失敗（AI 停用、逾時、連線失敗、額度）不重試，
+   `_request_next_decision()` 直接靜默放棄，`_awaiting_decision` 重置，Agent 靠
+   任務池 fallback（schedule 任務或上一輪還沒被選中的 llm 任務）頂著，不是標記
+   `pending`；內容驗證失敗（拿到回應但格式不合）走 Step 4 的重試
+
+### Step 4 — DecisionProvider 介面與雲端驗證失敗重試 ✅ 完成（issue #155／#152）
+
+`agent.gd` 不再直接呼叫 `AIService`，改透過 `DecisionProvider`（`scripts/ai/
+decision_provider.gd`）：`LocalLLMProvider` 打 AIConfig 的 `"local"`
+provider，`RemoteLLMProvider` 建構時帶入要打哪個 provider 名字（對應《06》
+`model_name`），兩者都是 `AIService.request()` 的薄包裝，行為不變。
+
+玩家的 `ai_config.json` 不保證真的有一個可用的 `"local"`——可能只設了
+`default_provider`、取了別的名字，或有這個項目但 `base_url`／`model` 沒填齊。
+`LocalLLMProvider._init()` 因此先用 `AIConfig.has_valid_provider("local")`
+解析一次：不成立就 `push_warning` 並改傳空字串，交給 `default_provider`。
+硬傳 `"local"` 的話這些情況一律是 `ERROR_NO_PROVIDER`，角色決策整個安靜啞掉。
+解析放在 `_init()` 而不是 `decide()`：設定在一場遊戲內不會變，放 `decide()`
+的話設定真的缺 `"local"` 時每次決策都洗一行警告。
+
+檢查一律用 `has_valid_provider()` 而不是 `has_provider()`——後者只查設定項
+存不存在，但 `AIService.request()` 擋的條件是 `provider == null or not
+provider.valid`，只查存在會放行設定不全的項目、然後每次請求安靜失敗。
+
+每隻 Agent 出生時依 `decision_source`（`@export`，#122 落地前的佔位欄位，
+不是真實角色資料）建一次 provider，存成 `_provider` 成員變數，之後所有決策
+／對話呼叫都用它——對應《06》「`decision_source`／`model_name` 投放後不可改」，
+不是每次呼叫才重新判斷。三種資料異常都安靜退回 `LocalLLMProvider`、
+`push_warning` 帶原因：`decision_source` 打錯字／空字串；`"cloud"` 但
+`model_name` 是空的；`"cloud"` 但 `model_name` 不是可用的 provider。
+空字串要跟打錯字分開判斷，是因為不擋住的話它會被 `AIConfig.get_provider()`
+解析成 `default_provider`，讓角色實際打本機模型、卻頂著 `RemoteLLMProvider`
+的身分（連帶套用錯的重試次數），而且沒有任何警告。
+
+`agent.gd::_decide_with_retry()` 集中處理「decide → parse_completion →
+validate」，內容驗證失敗（`parse_completion()` 或 `AISchema.validate_*()`
+回傳 `ok=false`）時依 `DecisionProvider.max_validation_retries()` 重試：
+`RemoteLLMProvider` 2 次（《12》§3.4／P-22 #3），`LocalLLMProvider` 0 次
+（GBNF 已在文法層保證格式，出錯代表更根本的問題，重試沒有意義）。
+`LocalLLMProvider` 退回 `default_provider` 的那條路例外，一樣給 2 次——
+打到的多半不是 GBNF 端點，「文法層已保證格式」這個前提不成立。
+`AIService` 層級的失敗（見上方第 6 點）不進這個重試迴圈，直接回傳給呼叫端
+走 fallback——「這次問不到」與「問到了但答案壞掉」是兩種不同情境。
+
+`next_line()`／`_request_next_decision()` 呼叫這一個共用函式，各自傳自己的
+`AISchema.validate_dialogue`／`validate_tasks` 當 validator，其餘邏輯不變。
+
+**不在這一版**：模型失效後「視同離線走入眠流程」（《10》§4.5／《12》§6.1）
+——牽涉 `Stats` 暫停衰減、持續性 UI 顯示，範圍超出決策來源介面，留給之後
+另開的 issue。
 
 `response_format` 依 provider 分岔（原規劃的 GBNF／response_format 二選一）
 簡化成單一路徑：`AIConfig.Provider.supports_json_schema`（預設 `true`）決定
@@ -432,8 +482,8 @@ JSON Schema → GBNF 的轉換器。
 - `preconditions` 求值 —— 結構留欄位，v1 一律通過
 - 白名單中除 `move_to` / `talk` / `sleep` 外的動作實作——白名單本身已經是
   《07》《11》拍板的 22 個（issue #88），但 `IMPLEMENTED_ACTIONS` 沒有跟著擴
-- `speech` 觸發對話交接（issue #90）、約定機制、
-  `DecisionProvider` 物件化重構（issue #73）
+- `speech` 觸發對話交接（issue #90）、約定機制
+- `HumanInput`／`RemotePlayer`（《12》§3.3 另外兩種 DecisionProvider 來源）
 
 ## 待決（正式線）
 
