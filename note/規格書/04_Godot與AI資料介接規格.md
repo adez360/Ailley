@@ -18,7 +18,7 @@ updated: 2026-08-16
 
 **沒有獨立的 Python AI 後端。** Godot（房主機兼玩家端）本身就是《12》定義的房主機權威——`AIService`（見《技術/LLM 串接與 AI 服務層》）在 Godot 行程內完成 prompt／schema 組裝、佇列排程、驗證與狀態套用，只有「實際生成文字」這一步會呼叫外部的 `DecisionProvider`：`LocalLLM` 是本機 `llama-server`（HTTP，同機 localhost）、`RemoteLLM` 是雲端 API（HTTP，走網際網路）、`HumanInput` 是本機決策面板（無 HTTP）。多人模式下 `RemotePlayer` 才會有 Godot↔Godot 的網路連線，完整職責邊界見《12》§5。
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
 │              房主機（Godot 4.x，權威／操控層一體）               │
 │  ────────────────────────────────────────────────────────    │
