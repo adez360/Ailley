@@ -231,8 +231,10 @@ func is_talk_interruptible() -> bool          # 覆寫：super() and 目前任�
 func _is_preemptible() -> bool                # 私有，仲裁器搶占檢查；跟上面獨立算，不共用
 func exit_conversation() -> void             # 覆寫：講完重算一次
 func next_line(listener, turns, max_turns) -> Dictionary   # 對話台詞，見下方
+func request_sleep_reflection() -> void                    # 睡眠反思，見下方
 func get_task_debug_info() -> Array[Dictionary]            # tasks 指令用
 func get_current_task_elapsed_minutes() -> int             # 目前任務做了幾遊戲分鐘
+func get_daily_events() -> Array[String]                   # reflect 指令用，見下方
 ```
 
 ```text
@@ -295,6 +297,25 @@ character_id, Policy.CONVERSATION) → AISchema.parse_completion → validate_di
 † requester_id 用 character_id 不是節點名：額度算在這隻角色頭上
 † ok=false 不分原因（未啟用/逾時/驗證失敗都一樣），呼叫端一律走 fallback
 → 技術/LLM 串接與 AI 服務層
+```
+
+```gdscript
+func request_sleep_reflection() -> void   # #168，《03》§5
+```
+
+```text
+_daily_events（純客觀事實句陣列，DAILY_EVENTS_CAP=30 FIFO）→
+  PromptBuilder.build_reflection_envelope() → AIService.request(Policy.SCHEDULED)
+  → validate_reflection() → 逐筆 memory.add_candidate(content, importance, valence)
+  → 成功才清空 _daily_events
+† 目前 3 個事件觸發點：對話結束（exit_conversation()）、完成一段工作站工作
+  （_on_work_finished()）、第一次注意到陌生人（_on_spotted()）——都只寫客觀事實句，
+  不判斷正負面／重不重要，那是 LLM 在反思時的工作（《00》原則二）
+† 失敗（rate_limited/驗證失敗）不清空 _daily_events，留著等下次反思重試，
+  不會因為一次失敗就遺失今天的事
+† 目前只能靠 debug_console.gd 的 `reflect <name>` 指令手動觸發——真正的睡眠
+  動作（#112）落地後，在角色進入睡眠那個時間點呼叫這個函式即可，不用改這裡
+→ 技術/記憶與睡眠反思
 ```
 
 
@@ -799,17 +820,21 @@ static func build_dialogue_envelope(speaker: Character, listener: Character,
                                      turns: Array[Dictionary], max_turns: int) -> Dictionary
 static func build_plan_envelope(character: Character, visible: Array[Character],
                                  pool: Array[Dictionary]) -> Dictionary
+static func build_reflection_envelope(character: Character, daily_events: Array[String]) -> Dictionary
 static func turn_entry(speaker_name: String, text: String) -> Dictionary
 ```
 
 ```
-dialogue payload  {type:"dialogue", self, context:{listener, turns, max_turns}}
-plan payload      {type:"plan", self, context:{visible, pool}}
-† self 區塊兩者共用（_self_block()，沿用 Character.get_state_snapshot()），不重新蒐集一次
+dialogue payload    {type:"dialogue", self, context:{listener, turns, max_turns}}
+plan payload        {type:"plan", self, context:{visible, pool}}
+reflection payload  {type:"reflection", self, context:{events: Array[String]}}   # #168
+† self 區塊三者共用（_self_block()，沿用 Character.get_state_snapshot()），不重新蒐集一次
 † PLAN_SYSTEM 的動作清單用 AISchema.ALLOWED_ACTIONS 動態組，不另外抄一份字串
   ——兩份清單各自維護會漂移，白名單改了這裡忘記跟著改，模型看到的允許清單就對不上驗證的
 † plan_response_schema()（AISchema）當 response_format 送出，跟 validate_tasks() 驗證的形狀對齊
-→ 技術/LLM 串接與 AI 服務層
+† reflection 的 events 是純客觀事實句（agent.gd 的 _daily_events），importance/valence
+  完全交給 LLM 判斷（reflection_response_schema()），不在這裡或引擎端預先計算
+→ 技術/記憶與睡眠反思
 ```
 
 ## AISchema — scripts/ai/ai_schema.gd · class_name · RefCounted
@@ -836,6 +861,8 @@ static func parse_completion(response: Dictionary) -> Dictionary
 static func validate_dialogue(data: Dictionary) -> Dictionary
 static func validate_tasks(data: Dictionary) -> Dictionary   # -> {tasks, reasoning, inner_monologue}
 static func plan_response_schema() -> Dictionary             # response_format 用，跟 validate_tasks() 對齊
+static func validate_reflection(data: Dictionary) -> Dictionary   # -> {summary, events:[{content,valence,importance}]}
+static func reflection_response_schema() -> Dictionary       # response_format 用，跟 validate_reflection() 對齊
 static func is_allowed_action(action: String) -> bool
 static func is_implemented_action(action: String) -> bool
 ```
@@ -856,6 +883,8 @@ static func is_implemented_action(action: String) -> bool
   schedule 來源的 work 任務不經過這裡驗證，不受影響——只影響 LLM 不能自己決定叫角色去打工
 † reasoning／inner_monologue 選填、缺席給空字串、型別錯整包拒絕、超長截斷不拒絕
   ——跟 dialogue 的 line 用同一種寬鬆度，但語意不同（可以不存在、可以是空字串）
+† validate_reflection() 的 importance/valence 只做形狀檢查（範圍夾限、enum 檢查），
+  不重新計算或覆寫數值——LLM 給的分數就是最終分數，引擎不二次評分（《00》原則二）
 ```
 
 ---

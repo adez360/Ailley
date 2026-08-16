@@ -39,6 +39,9 @@ func _ready() -> void:
 		# 同上，help 留空：#167 驗證記憶結構用的 debug 入口，之後有正式的
 		# 角色資訊面板（《15》）接上之後再收進正式指令表
 		"memory": {"run": _cmd_memory, "usage": "memory <name>", "help": ""},
+		# 同上，help 留空：#168 手動觸發睡眠反思的 debug 入口。真正的睡眠動作
+		# （#112）落地前，這是端到端測試整條反思管線唯一的方式
+		"reflect": {"run": _cmd_reflect, "usage": "reflect <name>", "help": ""},
 		# 同上，help 留空：#73 驗證 GameManager.spawn_character() 管線用的
 		# debug 入口，之後有正式的建角面板/角色庫 UI（#122）接上之後再收進
 		# 正式指令表
@@ -444,6 +447,38 @@ func _cmd_memory(args: PackedStringArray) -> void:
 				entry.get("valence", "?"), entry.get("importance", 0),
 				entry.get("decay_value", 0), entry.get("content", ""),
 			])
+
+# reflect <name>：手動觸發一次睡眠反思（#168）。印出反思前的事件緩衝區
+# 內容、await 完成、再印出反思後的記憶列表，方便一次看到「送了什麼、
+# 分到哪一層」的完整前後對照
+func _cmd_reflect(args: PackedStringArray) -> void:
+	if args.size() != 1:
+		_error("reflect <name>")
+		return
+
+	var character := _get_character(args[0])
+	if character == null:
+		return
+
+	if not character.is_in_group("agents"):
+		_error("%s 不是 Agent，沒有反思機制" % character.character_name)
+		return
+
+	var daily_events: Array[String] = character.get_daily_events()
+	if daily_events.is_empty():
+		_print("[color=888888]（今天還沒發生任何事，沒東西可以反思）[/color]")
+		return
+
+	_print("[color=88ccff]%s[/color][color=888888]  反思前，今天發生了 %d 件事[/color]" % [
+		character.character_name, daily_events.size()
+	])
+	for event in daily_events:
+		_print("[color=888888]  · %s[/color]" % event)
+
+	await character.request_sleep_reflection()
+
+	_print("[color=888888]反思完成，記憶列表：[/color]")
+	_cmd_memory(args)
 
 # spawn <template_id>
 #

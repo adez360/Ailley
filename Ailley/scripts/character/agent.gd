@@ -151,6 +151,21 @@ var _was_sleeping := false
 ## 才判斷（#155）
 var _provider: DecisionProvider
 
+## 今天發生的事，純客觀事實句，睡前反思（request_sleep_reflection()）一次
+## 送給 LLM 評分後清空（#168，《03》§5）。跟 Memory.l1 不是同一回事——l1 是
+## 固定 8 條的滾動視窗，這裡是「睡前都留著」的緩衝區，語意不同不共用。
+## 每句只寫事實，不判斷正負面／重不重要，那是 LLM 在反思時的工作
+## （《00》原則二：引擎只給事件，不給情緒）
+const DAILY_EVENTS_CAP := 30
+var _daily_events: Array[String] = []
+
+## 加一筆今天發生的事。滿了就丟掉最舊的一筆，不是拒絕新的——今天最新發生的
+## 事沒理由因為緩衝區滿了就進不去，跟 Memory.push_l1() 的 FIFO 取捨一樣
+func _push_daily_event(content: String) -> void:
+	_daily_events.append(content)
+	if _daily_events.size() > DAILY_EVENTS_CAP:
+		_daily_events.pop_front()
+
 
 func _ready() -> void:
 	super()
@@ -352,6 +367,13 @@ func _is_preemptible() -> bool:
 # 不是 _current_task、清不到；或是被別人搭話時，自己另一筆不相干的待辦
 # talk 任務剛好是 _current_task，被誤刪
 func exit_conversation() -> void:
+	# 事件事實句要在 super() 把 _conversation 清成 null 之前先讀——這裡只記
+	# 客觀事實（跟誰講完話），不記對話內容好壞，那是睡前反思時 LLM 自己判斷的事
+	if _conversation != null:
+		var other: Character = _conversation.target if _conversation.initiator == self else _conversation.initiator
+		if other != null:
+			_push_daily_event("你跟 %s 講完話了" % other.character_name)
+
 	super()
 
 	if not _active_talk_task_id.is_empty():
@@ -440,6 +462,31 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 		"line": result["data"]["line"],
 		"end": result["data"]["end"],
 	}
+
+## 睡眠反思（#168，《03》§5）：把今天的事實句丟給 LLM，換回摘要跟逐筆評分，
+## 交給 memory 分級寫入。importance/valence 完全由 LLM 決定（見 validate_reflection()
+## 的註解），這裡不重算或覆寫這兩個值。
+##
+## 失敗（網路/驗證）時不清空 _daily_events——今天的事還沒被評過分，清空等於
+## 直接遺失，留著等下次睡眠反思重試，最壞情況是被 DAILY_EVENTS_CAP 的 FIFO
+## 擠掉，不會比現在更糟
+##
+## 觸發時機目前只有 debug_console.gd 的 `reflect` 指令手動呼叫——真正的睡眠
+## 動作（#112）落地後，在角色進入睡眠那個時間點呼叫這個函式，這裡不用改
+func request_sleep_reflection() -> void:
+	if memory == null or _daily_events.is_empty():
+		return
+
+	var envelope := PromptBuilder.build_reflection_envelope(self, _daily_events)
+	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, AISchema.validate_reflection)
+	if not result["ok"]:
+		return
+
+	var data: Dictionary = result["data"]
+	for event in data["events"]:
+		memory.add_candidate(event["content"], event["importance"], event["valence"])
+
+	_daily_events.clear()
 
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
 ## AIService、parse_completion、validate_*，任何一關失敗都靜默放棄，任務池
@@ -606,6 +653,10 @@ func _task_pool_summary() -> Array[Dictionary]:
 # 工作結束後同理：那 5 個遊戲分鐘可能已經跨過行程的整點，而 work_at() 開頭的
 # stop_moving() 把原本的路徑清掉了，不重算的話會一路站到下一個整點字串吻合為止
 func _on_work_finished() -> void:
+	# 不寫「賺了多少錢」——_on_work_finished() 提早離開工作站（半途走開）也會
+	# 觸發，那種情況沒有真的撥款（見 character.gd 的 _run_work()／_end_work()），
+	# 寫死賺錢金額會變成一句不一定為真的事實句
+	_push_daily_event("你剛結束了一段工作站的工作")
 	_reevaluate()
 
 # 基底的快照加上行程表這一段。schedule/current_place/current_state 宣告在這裡，
@@ -632,6 +683,8 @@ func _on_spotted(other: Character) -> void:
 
 	if relationships != null and relationships.has_met(other.character_id):
 		return
+
+	_push_daily_event("你第一次注意到 %s" % other.character_name)
 
 	say(L10n.t("DLG_SURPRISE"))
 	stop_moving()
@@ -1032,3 +1085,8 @@ func get_current_task_elapsed_minutes() -> int:
 	if _current_task.is_empty():
 		return 0
 	return _now_minutes() - _current_task_started_at
+
+## Debug 用：今天累積了哪些事件，給 reflect 指令在呼叫 request_sleep_reflection()
+## 前先印出來看
+func get_daily_events() -> Array[String]:
+	return _daily_events

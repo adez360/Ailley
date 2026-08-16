@@ -75,6 +75,16 @@ const ERROR_NO_CONTENT := "no_content"
 const ERROR_BAD_SHAPE := "bad_shape"
 const ERROR_ACTION_NOT_ALLOWED := "action_not_allowed"
 
+# 睡眠反思（#168，《03》§2-3）。valence 三選一——引擎不猜「這件事是好是壞」，
+# 這是 LLM 唯一被允許填的分類欄位，跟 importance 一樣是 LLM 自行判斷，不是
+# 引擎預先貼的標籤（見 CLAUDE.md「遊戲機制規格：AI 自主性自檢」）
+const VALID_VALENCES := ["positive", "negative", "neutral"]
+
+# 一次反思最多評幾件事。跟 Agent._daily_events 的緩衝上限（DAILY_EVENTS_CAP）
+# 同一個數字——反思本來就是針對緩衝區裡的每一筆給分，回應筆數不該超過
+# 緩衝區能裝的量
+const MAX_REFLECTION_EVENTS := 30
+
 
 
 # 把一段文字當 JSON 物件解析。null 檢查與型別檢查分開回報，
@@ -300,6 +310,61 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) ->
 	})
 
 
+# 睡眠反思回應的驗證（#168）。summary 是必填的一句話當日摘要；events 每筆
+# 對應 _daily_events 緩衝區裡的一件事，content/valence/importance 都是 LLM
+# 自己填的——這裡只驗證形狀合不合法，不重新計算或覆寫 importance 的數值，
+# 那樣做就等於引擎自己又做了一次《00》原則二禁止的主觀評分
+static func validate_reflection(data: Dictionary) -> Dictionary:
+	var summary: Variant = _validated_optional_line(data, "summary")
+	if summary == null:
+		return _fail(ERROR_BAD_SHAPE)
+
+	if not data.has("events") or not data["events"] is Array:
+		return _fail(ERROR_BAD_SHAPE)
+
+	var raw_events := data["events"] as Array
+	if raw_events.size() > MAX_REFLECTION_EVENTS:
+		return _fail(ERROR_BAD_SHAPE)
+
+	var events: Array[Dictionary] = []
+	for item in raw_events:
+		if not item is Dictionary:
+			return _fail(ERROR_BAD_SHAPE)
+
+		var event := item as Dictionary
+		if not event.has("content") or not event["content"] is String:
+			return _fail(ERROR_BAD_SHAPE)
+
+		var content: String = (event["content"] as String).strip_edges()
+		if content.is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+		# Memory.CONTENT_MAX_CHARS 也會再截一次——這裡先截是為了不讓超長內容
+		# 混進驗證通過的資料裡佔用不必要的記憶體/傳輸量，兩邊各自有各自的理由
+		if content.length() > MAX_LINE_CHARS:
+			content = content.substr(0, MAX_LINE_CHARS)
+
+		if not event.has("importance"):
+			return _fail(ERROR_BAD_SHAPE)
+		var importance_value: Variant = event["importance"]
+		if not (importance_value is int or importance_value is float):
+			return _fail(ERROR_BAD_SHAPE)
+		var importance: int = clampi(int(importance_value), 0, 100)
+
+		var valence := "neutral"
+		if event.has("valence"):
+			if not event["valence"] is String or not VALID_VALENCES.has(event["valence"]):
+				return _fail(ERROR_BAD_SHAPE)
+			valence = event["valence"]
+
+		events.append({
+			"content": content,
+			"valence": valence,
+			"importance": importance,
+		})
+
+	return _ok({"summary": summary, "events": events})
+
+
 # 選填字串欄位的共用驗證：缺席回空字串、型別錯回 null（呼叫端用 null 判斷失敗，
 # 因為合法值本身可以是空字串，不能拿空字串當失敗信號）、超長截斷不拒絕。
 # validate_dialogue() 的 line 沒有共用這個，因為它是必填且不可為空，跟這裡
@@ -367,6 +432,38 @@ static func plan_response_schema(allow_update_plan: bool = false) -> Dictionary:
 				"type": "object",
 				"properties": properties,
 				"required": ["tasks"],
+			},
+		},
+	}
+
+
+# 反思回應的 JSON Schema，跟 validate_reflection() 驗證的形狀對齊（#168）。
+# importance 用 number 不用 integer——不是所有 provider 的 JSON Schema 支援度
+# 都區分兩者，跟 plan_response_schema() 的 priority/duration 用 number 同一個理由
+static func reflection_response_schema() -> Dictionary:
+	return {
+		"type": "json_schema",
+		"json_schema": {
+			"name": "reflection_response",
+			"schema": {
+				"type": "object",
+				"properties": {
+					"summary": {"type": "string"},
+					"events": {
+						"type": "array",
+						"maxItems": MAX_REFLECTION_EVENTS,
+						"items": {
+							"type": "object",
+							"properties": {
+								"content": {"type": "string", "maxLength": MAX_LINE_CHARS},
+								"valence": {"type": "string", "enum": VALID_VALENCES},
+								"importance": {"type": "number"},
+							},
+							"required": ["content", "importance"],
+						},
+					},
+				},
+				"required": ["summary", "events"],
 			},
 		},
 	}
