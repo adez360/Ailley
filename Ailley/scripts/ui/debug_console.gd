@@ -36,6 +36,10 @@ func _ready() -> void:
 		# help 留空：先不進 locale/console.csv，避免動到翻譯資源匯入（這台機器上
 		# 曾經卡住），純 debug 用途，之後真的要收進正式指令表再補翻譯
 		"tasks": {"run": _cmd_tasks, "usage": "tasks <name>", "help": ""},
+		# 同上，help 留空：#73 驗證 GameManager.spawn_character() 管線用的
+		# debug 入口，之後有正式的建角面板/角色庫 UI（#122）接上之後再收進
+		# 正式指令表
+		"spawn": {"run": _cmd_spawn, "usage": "spawn <template_id>", "help": ""},
 		"help": {"run": _cmd_help, "usage": "help", "help": ""},
 		"clear": {"run": _cmd_clear, "usage": "clear", "help": "HELP_CLEAR"},
 	}
@@ -404,6 +408,31 @@ func _cmd_tasks(args: PackedStringArray) -> void:
 		_print("[color=888888]    score=%.1f = base %.1f + time %.1f + need %.1f + age %.1f[/color]" % [
 			score["total"], score["base"], score["time"], score["need"], score["age"],
 		])
+
+# spawn <template_id>
+#
+# #73 驗證用：從 GameManager 的角色庫模板動態生成一隻角色、投放進場景樹。
+# 沿用 agent.tscn（跟 Agent/Agent2 同一份場景）——動態生成的角色目前沒有
+# schedule 來源，_load_schedule() 查不到節點名對應的 assignments 會噴一次
+# 警告一次錯誤，那是誠實反映「這隻角色還沒有行程表」，不是這個指令壞了
+const AGENT_SCENE := preload("res://scenes/agent.tscn")
+
+func _cmd_spawn(args: PackedStringArray) -> void:
+	if args.size() != 1:
+		_error("spawn <template_id>")
+		return
+
+	var template = GameManager.get_character_template(args[0])
+	if template == null:
+		_error("找不到模板 %s" % args[0])
+		return
+
+	var identity := {"character_name": template.get("character_name", "")}
+	var character := GameManager.spawn_character(AGENT_SCENE, identity)
+
+	_print("[color=88ff88]生成角色 %s[/color][color=888888]  id %s[/color]" % [
+		character.character_name, character.character_id
+	])
 
 func _get_overlay() -> Node:
 	var overlay := get_tree().get_first_node_in_group("debug_overlay")

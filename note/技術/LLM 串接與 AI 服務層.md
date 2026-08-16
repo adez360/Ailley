@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-13
+updated: 2026-08-15
 ---
 
 # LLM 串接與 AI 服務層
@@ -175,7 +175,9 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 }
 ```
 
-`type: "plan"` 時 `context` 換成 `{trigger, pool, places, actions}`。
+`type: "plan"` 時 `context` 換成 `{visible, pool, today_plan}`：`visible` 是
+目前看得到的角色（`Vision.get_visible_characters()`），`pool` 是任務池摘要，
+`today_plan` 是今日計畫壓成的一句自然語言（見下方「今日計畫」）。
 `self` 區塊兩者完全相同，由 `prompt_builder.gd` 同一個函式產生。
 
 > [!important] `stats` 由 `Stats.SPEC` 走訪產生，不要手寫欄位
@@ -186,7 +188,10 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 
 - `dialogue` → `{"line": "...", "end": false}` —— 一律逐輪；`end` 省略視為 `false`，
   為真時說完這句就結束對話
-- `plan` → `{"tasks": [ <Task struct> ]}`；**空陣列 ＝ 不更新**
+- `plan` → `{"tasks": [ <Task struct> ], "reasoning", "inner_monologue", "request_plan_update"}`；
+  `tasks` 空陣列 ＝ 不更新。`request_plan_update` 是模型「下次能不能讓我改
+  today_plan」的申請信號，任何時候都能回。`update_plan` 是條件式欄位，只在
+  呼叫端判斷現在是開放時機時才出現在 schema 裡，見下方「今日計畫」
 
 ### 三層保證，只有第三層是真的保證
 
@@ -263,6 +268,51 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 > Agent ↔ Agent 跨 client 時，對方的台詞是遠端輸入，與玩家打字、與交誼區來的
 > 文字同一個等級——全部進 `context.turns` 當資料，絕不視為指令。
 
+## 今日計畫（today_plan，issue #89，《10》§5.4）
+
+**定位**：「想做的事」，不是排定的行程——引擎不強制執行，只當 prompt
+context 用，跟 `agent.gd` 的 `_tasks`（引擎真的會執行的排程單位）是不同
+語意的東西。
+
+**資料形狀**：`Agent._today_plan`，`Array[Dictionary]`，每筆
+`{id, text, is_done}`。欄位對齊 `database/schemas/NPCDailyPlanSchema.gd`
+的 `npc_daily_plan` 表（`plan_id`/`text`/`is_done`）——存檔（#21～#23）
+還沒接上這張表，先用同樣的形狀存在記憶體，之後接上不用改欄位名。`id` 是
+`agent.gd` 自己配發的本機序號，跟資料庫的 `plan_id`（真的落地才有意義）
+是兩回事。
+
+**輸入端**：一律注入，壓成一句自然語言（`PromptBuilder._today_plan_sentence()`），
+不是原始欄位列表。
+
+**輸出端（`update_plan`）**：條件式欄位（《12》§2.4）——只在
+`AISchema.plan_response_schema(allow_update_plan)` 收到 `true` 時才出現在
+schema 跟系統提示裡，其餘時候模型的 response_format 契約裡文法上就不存在
+這個選項。回應語意是**整份取代**，不是逐筆增刪改：四個開放時機都是「重寫」，
+不用讓模型追蹤既有項目的 id 才能局部編輯。
+
+四個開放時機，目前接了三個：
+
+| # | 時機 | 觸發點 | 狀態 |
+| --- | --- | --- | --- |
+| 1 | 意圖全數完成 | `Agent._today_plan_needs_new_goal()`——空的或全部 `is_done` 都算，世界開場（`_today_plan` 必為空）是這個狀況的degenerate case | ✅（見下方限制） |
+| 2 | 睡覺反思 | `_reevaluate()` 偵測「這次進來時 `current_state == "sleep"`，選完任務後不是了」的轉換瞬間 | ✅ |
+| 3 | AI 主動申請 | 模型在任何一次回應裡回 `"request_plan_update": true`，記在 `Agent._plan_update_requested`，下一次不管哪個理由觸發 `_request_next_decision()` 都會兌現、用掉 | ✅ |
+| 4 | 意圖被事實推翻 | 角色實際執行動作時發現前提不成立（《10》§5.3：沒錢買東西、想找人講話但對方在忙這類）——目前只有 `talk`（issue #90）有執行層、有明確失敗原因碼可以掛，其餘動作（`buy`/`eat`/`work`…）還沒有執行層，無從偵測「失敗」 | ⏳ 待 #90 merge 後補 |
+
+> [!warning] `is_done` 是模型自我回報，不是引擎驗證過的事實
+> 唯一會寫 `is_done` 的地方是 `_apply_today_plan()`，也就是模型自己在
+> `update_plan` 回應裡講「這項完成了」——跟《10》§5.4 給的範例（「你今天原本
+> 打算：採藥草（**已完成**）」）是同一種語氣，角色自己回顧敘述，不是引擎拿
+> 「這筆計畫項目」去對照「哪個 Task 真的執行完成」逐筆核實。目前也沒有這種
+> 對照機制：`_tasks`（引擎真的執行的排程）跟 `_today_plan`（自我回報的意圖）
+> 之間完全沒有連結，任務池選中並跑完一筆 Task，不會自動把 today_plan 對應
+> 那項標成完成。
+>
+> 這代表「意圖全數完成」這個開放時機，實務上依賴模型自己願不願意、記不記得
+> 在某次 `update_plan` 裡把舊項目標完成——不是穩固的引擎事實。要做成真的
+> 引擎驗證（幫每筆計畫項目建立可比對身分、Task 完成時自動回寫），是比這次
+> 大得多的工程，不在 #89 這輪範圍內。
+
 ## 正式線實作順序（Step 0-3 全部完成）
 
 ### Step 0 — 底層 ✅ 完成
@@ -306,10 +356,10 @@ autoload 已註冊，主控台加了 `ai` 指令。
 1. `prompt_builder.gd` 的 plan 信封（`build_plan_envelope()`），沿用
    `_self_block()`，`context` 帶 `visible`（`Vision.get_visible_characters()`）
    跟 `pool`（目前任務池摘要）
-2. 觸發情境：這一版只接了「目前任務做滿引擎套用過下限的 `duration`」（事件驅動，
-   對應《10》§5.1）加上世界開場第一次；需求跌破閾值／被搭話／動作失敗／突發
-   事件／進出交誼區這五個還沒接，見 [[行程佇列與任務仲裁]] 的「什麼時候會
-   請 LLM 重排」
+2. 觸發情境：「目前任務做滿引擎套用過下限的 `duration`」（事件驅動，對應
+   《10》§5.1）、世界開場第一次、剛睡醒、模型申請下次改 today_plan（#89，
+   見上方「今日計畫」）都接了；需求跌破閾值／被搭話／動作失敗／突發事件／
+   進出交誼區還沒接，見 [[行程佇列與任務仲裁]] 的「什麼時候會請 LLM 重排」
 3. LLM 回傳的 Task 過 `ai_schema.gd::validate_tasks()` → `agent.gd::_push_llm_tasks()`
    push 進池子
 4. 池子守則：上限 `LLM_TASK_POOL_CAP`（20，只算 llm 來源）、單次回應另外有
@@ -342,7 +392,7 @@ JSON Schema → GBNF 的轉換器。
 - `preconditions` 求值 —— 結構留欄位，v1 一律通過
 - 白名單中除 `move_to` / `talk` / `sleep` 外的動作實作——白名單本身已經是
   《07》《11》拍板的 22 個（issue #88），但 `IMPLEMENTED_ACTIONS` 沒有跟著擴
-- `today_plan`（issue #89）、`speech` 觸發對話交接（issue #90）、約定機制、
+- `speech` 觸發對話交接（issue #90）、約定機制、
   `DecisionProvider` 物件化重構（issue #73）
 
 ## 待決（正式線）
