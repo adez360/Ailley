@@ -677,6 +677,9 @@ decide() -> {"ok": bool, "data": Dictionary, "error": String}  # 形狀對齊 AI
 † agent.gd 只認得這個介面，不知道背後是本機模型還是雲端模型（《12》§3、§5.1）
 † 語意驗證/成功失敗判定不在這裡——decide() 只管格式轉換/送出/解析/逾時，驗證留給呼叫端的 AISchema
 † HumanInput／RemotePlayer 兩種來源尚未實作
+⚠ Agent._make_provider() 目前把 decision_source == "human" 當成打錯字處理
+  （印「不是已知值」警告、退回 LocalLLMProvider）——《06》human 是合法的第三個值，
+  等 HumanInput provider 做出來時要把這個分支改掉，不要沿用「異常值才退回」的邏輯
 → 技術/LLM 串接與 AI 服務層
 ```
 
