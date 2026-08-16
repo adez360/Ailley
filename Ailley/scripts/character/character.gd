@@ -86,6 +86,7 @@ var last_action_result := ""
 @onready var inventory: Inventory = get_node_or_null("Inventory")
 @onready var work_progress: WorkProgress = get_node_or_null("WorkProgress")
 @onready var money_popup: MoneyPopup = get_node_or_null("MoneyPopup")
+@onready var memory: Memory = get_node_or_null("Memory")
 
 # 最後一次的面向：front / back / right，停下時用來挑 idle 動畫
 var facing := "front"
@@ -120,9 +121,20 @@ var _outline: ShaderMaterial = null
 
 
 func _ready() -> void:
+	# 場景裡固定的 NPC，身分是設計時決定好的資料——先用節點名查 npc_schedule.json 的
+	# identities（跟 agent.gd::_load_schedule() 查 assignments 同一個模式）。查到就用，
+	# 讓 character_id 跨場次穩定（relationships 拿它當 key，每次重開都變等於認識的人全歸零）。
+	# @export 手擺的值優先（測試角色）；兩者都空才落回生成 UUID／節點名，這條保留給
+	# Player 與動態生成的角色
+	var identity := GameManager.get_npc_identity(name)
+
+	if character_id.is_empty():
+		character_id = str(identity.get("character_id", ""))
 	if character_id.is_empty():
 		character_id = generate_id()
 
+	if character_name.is_empty():
+		character_name = str(identity.get("character_name", ""))
 	if character_name.is_empty():
 		character_name = name.to_lower()
 
@@ -530,6 +542,42 @@ func get_state_snapshot() -> Dictionary:
 			snapshot["affinity"] = affinity
 
 	return snapshot
+
+
+# ---- 存檔 ----
+
+# 給 SaveService 存的角色資料：身分、數值、關係。跟 get_state_snapshot() 是
+# 兩份不同的東西，不要互相包裝——snapshot 要描述現況給 LLM 看（含 facing、
+# 動畫這類衍生狀態），這裡要能還原（座標屬於世界存檔，見 #21，不在這裡）
+func get_save_data() -> Dictionary:
+	var data := {
+		"character_id": character_id,
+		"character_name": character_name,
+	}
+
+	if stats != null:
+		data["stats"] = stats.get_save_data()
+	if relationships != null:
+		data["relationships"] = relationships.get_save_data()
+
+	return data
+
+# 已經在 characters 群組裡（_ready() 跑過）才重驗 id 唯一性——存檔的 character_id
+# 可能撞到另一隻已經在場上的角色，覆寫後兩隻共用同一個 id 就會共用關係與記憶
+# （_ensure_unique_id() 註解講的那個坑）。還沒進 tree 就不用管，接下來的 _ready()
+# 本來就會做這件事，這裡搶著做反而會在 get_tree() 是 null 時炸掉
+func load_save_data(data: Dictionary) -> void:
+	character_id = data.get("character_id", character_id)
+	if character_id.is_empty():
+		character_id = generate_id()
+	if is_inside_tree():
+		_ensure_unique_id()
+	character_name = data.get("character_name", character_name)
+
+	if stats != null and data.has("stats"):
+		stats.load_save_data(data["stats"])
+	if relationships != null and data.has("relationships"):
+		relationships.load_save_data(data["relationships"])
 
 
 # ---- 滑鼠選取 ----

@@ -1,3 +1,4 @@
+class_name Agent
 extends Character
 
 ## 由任務池 + 仲裁器驅動的角色。
@@ -150,6 +151,37 @@ var _was_sleeping := false
 ## 跟《06》「decision_source／model_name 投放後不可改」的規則一致，不做成每次呼叫
 ## 才判斷（#155）
 var _provider: DecisionProvider
+
+## 上一次睡眠反思的當日摘要（《03》§5「當日摘要（一句話）」）。目前只給
+## debug 用（reflect 指令印出來看），沒有其他呼叫端讀它——先留著這個欄位
+## 而不是驗證完就丟掉，之後要做《15》UI 的 today_log／摘要面板時才有東西可接，
+## 不用回頭重寫 validate_reflection() 那層（max 等級 code review 抓到：
+## 原本驗證過的 summary 完全沒被讀取，白白花了 LLM 的輸出 token）
+var last_reflection_summary := ""
+
+## 今天發生的事，純客觀事實句，睡前反思（request_sleep_reflection()）一次
+## 送給 LLM 評分後清空（#168，《03》§5）。跟 Memory.l1 不是同一回事——l1 是
+## 固定 8 條的滾動視窗，這裡是「睡前都留著」的緩衝區，語意不同不共用。
+## 每句只寫事實，不判斷正負面／重不重要，那是 LLM 在反思時的工作
+## （《00》原則二：引擎只給事件，不給情緒）
+##
+## 每筆是 {id, content} 不是單純字串——反思是一趟真的打網路的非同步呼叫，
+## await 期間角色照樣可能觸發新事件、LLM 也可能漏評某幾筆。用穩定的 id
+## 讓 request_sleep_reflection() 只刪除「LLM 真的回傳評分結果」的那幾筆，
+## 不是用送出時的筆數概略估計（max 等級 code review 抓到：概略估計法在
+## LLM 漏評、或等待期間 FIFO 剛好把快照最前面幾筆擠掉時，還是可能誤刪
+## 沒被評到分的事件）
+const DAILY_EVENTS_CAP := 30
+var _daily_events: Array[Dictionary] = []
+var _next_daily_event_id := 0
+
+## 加一筆今天發生的事。滿了就丟掉最舊的一筆，不是拒絕新的——今天最新發生的
+## 事沒理由因為緩衝區滿了就進不去，跟 Memory.push_l1() 的 FIFO 取捨一樣
+func _push_daily_event(content: String) -> void:
+	_daily_events.append({"id": _next_daily_event_id, "content": content})
+	_next_daily_event_id += 1
+	if _daily_events.size() > DAILY_EVENTS_CAP:
+		_daily_events.pop_front()
 
 
 func _ready() -> void:
@@ -352,6 +384,13 @@ func _is_preemptible() -> bool:
 # 不是 _current_task、清不到；或是被別人搭話時，自己另一筆不相干的待辦
 # talk 任務剛好是 _current_task，被誤刪
 func exit_conversation() -> void:
+	# 事件事實句要在 super() 把 _conversation 清成 null 之前先讀——這裡只記
+	# 客觀事實（跟誰講完話），不記對話內容好壞，那是睡前反思時 LLM 自己判斷的事
+	if _conversation != null:
+		var other: Character = _conversation.target if _conversation.initiator == self else _conversation.initiator
+		if other != null:
+			_push_daily_event("你跟 %s 講完話了" % other.character_name)
+
 	super()
 
 	if not _active_talk_task_id.is_empty():
@@ -440,6 +479,50 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 		"line": result["data"]["line"],
 		"end": result["data"]["end"],
 	}
+
+## 睡眠反思（#168，《03》§5）：把今天的事實句丟給 LLM，換回摘要跟逐筆評分，
+## 交給 memory 分級寫入。importance/valence 完全由 LLM 決定（見 validate_reflection()
+## 的註解），這裡不重算或覆寫這兩個值。
+##
+## 回傳 {"ok": bool}：ok=false 代表這次沒有真的反思到（未啟用/逾時/驗證失敗/
+## 沒有事件可反思），last_reflection_summary 維持上一次成功的舊值不變——
+## 呼叫端不該把舊摘要誤當成「這次」的結果來顯示（max 等級 code review 抓到）
+##
+## 失敗時不清空 _daily_events——今天的事還沒被評過分，清空等於直接遺失，
+## 留著等下次睡眠反思重試，最壞情況是被 DAILY_EVENTS_CAP 的 FIFO 擠掉，
+## 不會比現在更糟
+##
+## 送出去反思的每筆事件都帶穩定 id（見 _push_daily_event()），不是單純比
+## 送出時的筆數：LLM 可能漏評某幾筆（合法的部分回應），await 期間（真的打
+## 網路，數百毫秒到數十秒都可能）角色也可能觸發新事件並 append 進
+## _daily_events。只刪除「LLM 這次真的回傳評分結果」的那幾個 id，其餘
+## （包含等待期間新增的、跟 LLM 沒評到的）留在 _daily_events 裡，
+## 下次反思會再送一次（max 等級 code review 抓到：純用送出筆數 pop_front()
+## 的近似法，在這兩種情況下都可能誤刪還沒被評到分的事件）
+##
+## 觸發時機目前只有 debug_console.gd 的 `reflect` 指令手動呼叫——真正的睡眠
+## 動作（#112）落地後，在角色進入睡眠那個時間點呼叫這個函式，這裡不用改
+func request_sleep_reflection() -> Dictionary:
+	if memory == null or _daily_events.is_empty():
+		return {"ok": false}
+
+	var events_sent := _daily_events.duplicate(true)
+	var envelope := PromptBuilder.build_reflection_envelope(self, events_sent)
+	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, AISchema.validate_reflection)
+	if not result["ok"]:
+		return {"ok": false}
+
+	var data: Dictionary = result["data"]
+	last_reflection_summary = data["summary"]
+
+	var scored_ids := {}
+	for event in data["events"]:
+		memory.add_candidate(event["content"], event["importance"], event["valence"])
+		scored_ids[event["id"]] = true
+
+	_daily_events = _daily_events.filter(func(e): return not scored_ids.has(e["id"]))
+
+	return {"ok": true}
 
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
 ## AIService、parse_completion、validate_*，任何一關失敗都靜默放棄，任務池
@@ -606,6 +689,10 @@ func _task_pool_summary() -> Array[Dictionary]:
 # 工作結束後同理：那 5 個遊戲分鐘可能已經跨過行程的整點，而 work_at() 開頭的
 # stop_moving() 把原本的路徑清掉了，不重算的話會一路站到下一個整點字串吻合為止
 func _on_work_finished() -> void:
+	# 不寫「賺了多少錢」——_on_work_finished() 提早離開工作站（半途走開）也會
+	# 觸發，那種情況沒有真的撥款（見 character.gd 的 _run_work()／_end_work()），
+	# 寫死賺錢金額會變成一句不一定為真的事實句
+	_push_daily_event("你剛結束了一段工作站的工作")
 	_reevaluate()
 
 # 基底的快照加上行程表這一段。schedule/current_place/current_state 宣告在這裡，
@@ -632,6 +719,8 @@ func _on_spotted(other: Character) -> void:
 
 	if relationships != null and relationships.has_met(other.character_id):
 		return
+
+	_push_daily_event("你第一次注意到 %s" % other.character_name)
 
 	say(L10n.t("DLG_SURPRISE"))
 	stop_moving()
@@ -1182,3 +1271,11 @@ func get_current_task_elapsed_minutes() -> int:
 	if _current_task.is_empty():
 		return 0
 	return _now_minutes() - _current_task_started_at
+
+## Debug 用：今天累積了哪些事件，給 reflect 指令在呼叫 request_sleep_reflection()
+## 前先印出來看。只回 content——debug 顯示不需要知道內部的 id
+func get_daily_events() -> Array[String]:
+	var contents: Array[String] = []
+	for event in _daily_events:
+		contents.append(event["content"])
+	return contents
