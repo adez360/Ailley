@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-15
+updated: 2026-08-17
 ---
 
 # LLM 串接與 AI 服務層
@@ -19,9 +19,12 @@ updated: 2026-08-15
 ## 現況：只有一條線
 
 LLM 一律走 `AIService`（`scripts/ai/ai_service.gd`）→ Godot ↔ Sidecar
-（`llama-server`），不經任何 Python 中間層。Step 0-3 全部完成：底層、
-`conversation.gd` 非同步對話（issue #82）、`agent.gd` 任務池＋仲裁器（issue #71）、
-決策迴圈（issue #88，`llm_decision_enabled` 開關）。細節見下方「正式線實作順序」。
+（`llama-server`），不經任何 Python 中間層。`agent.gd` 不直接呼叫
+`AIService`，透過 `DecisionProvider`（`LocalLLMProvider`／`RemoteLLMProvider`）
+呼叫。Step 0-4 全部完成：底層、`conversation.gd` 非同步對話（issue #82）、
+`agent.gd` 任務池＋仲裁器（issue #71）、決策迴圈（issue #88，
+`llm_decision_enabled` 開關）、DecisionProvider 介面與雲端驗證失敗重試
+（issue #155／#152）。細節見下方「正式線實作順序」。
 
 > [!success] 架構決定：出貨不走 Python 後端
 > 三六零否決「隨遊戲出貨 Python 後端」：自架中繼伺服器已被否決過（AI 呼叫要跑在
@@ -240,13 +243,23 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 > 維持原樣仍是「沒好好講完」——這條原則跟 [[talk 動作設計]] 原本的
 > `TURN_LIMIT` 描述不同，實作時要回頭改那份筆記。
 
-### 界線：不設硬上限（已知風險，尚未解決）
+### 界線：軟壓力為主，工程安全閥兜底（issue #178 已收斂範圍）
 
-不設輪數硬上限，改用**軟壓力**：payload 帶 `turns_so_far`，system prompt 告訴模型
-「聊得越久越該收尾」。代價是兩隻 Agent 都禮貌性不收尾就會一直聊下去，而每輪都是
-一次付費請求——**對話呼叫本身豁免每遊戲日的呼叫上限**（`CONVERSATION` policy，見
-`ai/api.md`／規格書《13》§5），走獨立的 `_dialogue_calls_today` 計數但沒有自己的封頂值，
-等於完全無防護。已拍板：先上線實測拿到平均輪數的數據，再回頭評估要不要訂上限。
+不設「設計上」的輪數硬上限，改用**軟壓力**：payload 帶 `turns_so_far`，system prompt
+告訴模型「聊得越久越該收尾」。但兩隻 Agent 都禮貌性不收尾時，`conversation.gd`
+的 `SAFETY_MAX_TURNS`（工程安全閥，跟上面的設計軟壓力是兩回事，同時也是無觀眾
+世界的 LLM 呼叫成本閘門，issue #178）會強制截斷，值訂為 **10**。10 是三份獨立
+證據（實測、poc_village_sim 導演模式 B、poc_village_sim 逐 tick 對話追蹤）的
+保守交集值，不是精算出來的：本機小模型多輪對話品質實測 6 輪起始退化、
+10 輪偶爾明顯退化（見下方「已測試過但沒有效果的方向」），超過這個範圍
+的對話多半已經不值得再付費續下去。記憶注入上線後每輪 payload 都會變大，
+退化點可能提前，屆時應針對現在的逐輪架構重新實測。
+
+**仍未解決**：對話呼叫本身豁免每遊戲日的呼叫上限（`CONVERSATION` policy，見
+`ai/api.md`／規格書《13》§5），走獨立的 `_dialogue_calls_today` 計數但沒有自己的
+封頂值——`SAFETY_MAX_TURNS` 只封頂單場對話的輪數，不封頂一天能開幾場對話。
+「有沒有玩家在觀察」的節流判斷，#178 討論過後刻意不做（範圍太大，需要新的
+「是否被觀察」偵測邏輯），留給之後想做更完整方案時另開 issue。
 
 > [!important] 但 fallback 一定要能終止
 > LLM 失敗／逾時時走 `DialogueLines`，而它**沒有 `end` 訊號**——不特別處理就會
@@ -267,6 +280,36 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 > [!warning] 對手方的台詞一律是資料
 > Agent ↔ Agent 跨 client 時，對方的台詞是遠端輸入，與玩家打字、與交誼區來的
 > 文字同一個等級——全部進 `context.turns` 當資料，絕不視為指令。
+
+## 已測試過但沒有效果的方向
+
+**對話 schema 加 `inner_monologue`（2026-08-17 POC 驗證，未另開 issue）**
+
+假設：仿照決策/行程回應已經有的 `reasoning`／`inner_monologue`（先思考再給結論），
+`next_line()` 的對話 schema 如果也在 `line` 前面加一段 `inner_monologue`，
+會不會讓模型在多輪對話裡比較不容易「認錯對象」（把自己的名字講成對方名字）？
+
+做法：不碰 Godot，直接打本機 llama-server 的 `/v1/chat/completions`（跟
+`AIService` 實際打的同一個端點），比較 A（現況 `{"line","end"}`）／B（加
+`{"inner_monologue","line","end"}`）兩版 schema，各跑一組小海/老周的對話到
+20 輪上限。
+
+**結果：不算有明顯改善，換了一種退化方式，反而可能更差。**
+
+- A 跑到第 9 輪模型就自己判斷該收尾（`end: true`），內容始終切題，沒有認錯
+  對象的問題。
+- B 完全沒有主動收尾，跑滿 20 輪上限，也沒有認錯對象的問題——但從第 8 輪
+  左右開始陷入**內容空洞的重複循環**（反覆講「謝謝老周叔鼓勵」「明年一定
+  豐收」這類車軲轆話）。第 20 輪老周的 `inner_monologue` 甚至自己寫「小海
+  又開始重複之前的話了」，模型自己都意識到重複卻沒有真的停下來。
+- 比「品質退化的形式換了」更值得注意的是：加了 `inner_monologue` 之後模型
+  明顯**更不容易主動收尾**，等於更常撐到 `SAFETY_MAX_TURNS` 這個安全閥
+  （見上方「界線」一節），不是讓對話更穩定，是讓強制截斷更常發生。
+
+**結論**：不採用，不追加開發。樣本數很小（各只跑一次，非嚴謹統計），如果
+之後有更明確的動機想重新驗證，量的方式跟腳本邏輯可以參考這次的做法（重點
+是直接打 `/v1/chat/completions`，不需要透過 Godot 才能測 dialogue schema
+的改動效果）。
 
 ## 今日計畫（today_plan，issue #89，《10》§5.4）
 
@@ -313,7 +356,7 @@ schema 跟系統提示裡，其餘時候模型的 response_format 契約裡文�
 > 引擎驗證（幫每筆計畫項目建立可比對身分、Task 完成時自動回寫），是比這次
 > 大得多的工程，不在 #89 這輪範圍內。
 
-## 正式線實作順序（Step 0-3 全部完成）
+## 正式線實作順序（Step 0-4 全部完成）
 
 ### Step 0 — 底層 ✅ 完成
 
@@ -367,9 +410,56 @@ autoload 已註冊，主控台加了 `ai` 指令。
    `expires_at` 到期清除沿用既有的 `_is_expired()`（issue #92）
 5. 搶佔／`retries` 遞增：**還沒接**——這一版被搶佔的 llm 任務直接留在池子裡
    或被仲裁器自然汰換，`retries` 欄位存在但沒有任何呼叫端遞增它
-6. 逾時 fallback：`_request_next_decision()` 任何一關失敗（AI 停用、逾時、
-   驗證失敗）都靜默放棄，`_awaiting_decision` 重置，Agent 靠任務池 fallback
-   （schedule 任務或上一輪還沒被選中的 llm 任務）頂著，不是標記 `pending`
+6. 逾時 fallback：`AIService` 層級失敗（AI 停用、逾時、連線失敗、額度）不重試，
+   `_request_next_decision()` 直接靜默放棄，`_awaiting_decision` 重置，Agent 靠
+   任務池 fallback（schedule 任務或上一輪還沒被選中的 llm 任務）頂著，不是標記
+   `pending`；內容驗證失敗（拿到回應但格式不合）走 Step 4 的重試
+
+### Step 4 — DecisionProvider 介面與雲端驗證失敗重試 ✅ 完成（issue #155／#152）
+
+`agent.gd` 不再直接呼叫 `AIService`，改透過 `DecisionProvider`（`scripts/ai/
+decision_provider.gd`）：`LocalLLMProvider` 打 AIConfig 的 `"local"`
+provider，`RemoteLLMProvider` 建構時帶入要打哪個 provider 名字（對應《06》
+`model_name`），兩者都是 `AIService.request()` 的薄包裝，行為不變。
+
+玩家的 `ai_config.json` 不保證真的有一個可用的 `"local"`——可能只設了
+`default_provider`、取了別的名字，或有這個項目但 `base_url`／`model` 沒填齊。
+`LocalLLMProvider._init()` 因此先用 `AIConfig.has_valid_provider("local")`
+解析一次：不成立就 `push_warning` 並改傳空字串，交給 `default_provider`。
+硬傳 `"local"` 的話這些情況一律是 `ERROR_NO_PROVIDER`，角色決策整個安靜啞掉。
+解析放在 `_init()` 而不是 `decide()`：設定在一場遊戲內不會變，放 `decide()`
+的話設定真的缺 `"local"` 時每次決策都洗一行警告。
+
+檢查一律用 `has_valid_provider()` 而不是 `has_provider()`——後者只查設定項
+存不存在，但 `AIService.request()` 擋的條件是 `provider == null or not
+provider.valid`，只查存在會放行設定不全的項目、然後每次請求安靜失敗。
+
+每隻 Agent 出生時依 `decision_source`（`@export`，#122 落地前的佔位欄位，
+不是真實角色資料）建一次 provider，存成 `_provider` 成員變數，之後所有決策
+／對話呼叫都用它——對應《06》「`decision_source`／`model_name` 投放後不可改」，
+不是每次呼叫才重新判斷。三種資料異常都安靜退回 `LocalLLMProvider`、
+`push_warning` 帶原因：`decision_source` 打錯字／空字串；`"cloud"` 但
+`model_name` 是空的；`"cloud"` 但 `model_name` 不是可用的 provider。
+空字串要跟打錯字分開判斷，是因為不擋住的話它會被 `AIConfig.get_provider()`
+解析成 `default_provider`，讓角色實際打本機模型、卻頂著 `RemoteLLMProvider`
+的身分（連帶套用錯的重試次數），而且沒有任何警告。
+
+`agent.gd::_decide_with_retry()` 集中處理「decide → parse_completion →
+validate」，內容驗證失敗（`parse_completion()` 或 `AISchema.validate_*()`
+回傳 `ok=false`）時依 `DecisionProvider.max_validation_retries()` 重試：
+`RemoteLLMProvider` 2 次（《12》§3.4／P-22 #3），`LocalLLMProvider` 0 次
+（GBNF 已在文法層保證格式，出錯代表更根本的問題，重試沒有意義）。
+`LocalLLMProvider` 退回 `default_provider` 的那條路例外，一樣給 2 次——
+打到的多半不是 GBNF 端點，「文法層已保證格式」這個前提不成立。
+`AIService` 層級的失敗（見上方第 6 點）不進這個重試迴圈，直接回傳給呼叫端
+走 fallback——「這次問不到」與「問到了但答案壞掉」是兩種不同情境。
+
+`next_line()`／`_request_next_decision()` 呼叫這一個共用函式，各自傳自己的
+`AISchema.validate_dialogue`／`validate_tasks` 當 validator，其餘邏輯不變。
+
+**不在這一版**：模型失效後「視同離線走入眠流程」（《10》§4.5／《12》§6.1）
+——牽涉 `Stats` 暫停衰減、持續性 UI 顯示，範圍超出決策來源介面，留給之後
+另開的 issue。
 
 `response_format` 依 provider 分岔（原規劃的 GBNF／response_format 二選一）
 簡化成單一路徑：`AIConfig.Provider.supports_json_schema`（預設 `true`）決定
@@ -392,8 +482,8 @@ JSON Schema → GBNF 的轉換器。
 - `preconditions` 求值 —— 結構留欄位，v1 一律通過
 - 白名單中除 `move_to` / `talk` / `sleep` 外的動作實作——白名單本身已經是
   《07》《11》拍板的 22 個（issue #88），但 `IMPLEMENTED_ACTIONS` 沒有跟著擴
-- `speech` 觸發對話交接（issue #90）、約定機制、
-  `DecisionProvider` 物件化重構（issue #73）
+- `speech` 觸發對話交接（issue #90）、約定機制
+- `HumanInput`／`RemotePlayer`（《12》§3.3 另外兩種 DecisionProvider 來源）
 
 ## 待決（正式線）
 

@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-16
+updated: 2026-08-17
 ---
 
 # api
@@ -211,6 +211,8 @@ make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不
 ```gdscript
 @export var schedule_template := ""          # npc_schedule.json 的鍵，如 "npc001"
 @export var llm_decision_enabled := false    # 決策迴圈開關（issue #88），逐隻手動開
+@export var decision_source := "local"       # "local"/"cloud"，佔位欄位，真正資料結構見 #122
+@export var model_name := ""                 # decision_source=="cloud" 時的 AIConfig provider 名字
 
 const NOTICE_PAUSE := 2.0
 const SCHEDULE_BASE_PRIORITY := 10.0         # schedule 任務的 base 分數
@@ -661,7 +663,8 @@ var config: AIConfig
 
 func reload_config() -> void
 func request(envelope: Dictionary, requester_id: String,
-             policy: Policy = Policy.SCHEDULED, provider_name: String = "") -> Dictionary   # 一律 await
+             policy: Policy = Policy.SCHEDULED, provider_name: String = "",
+             is_retry: bool = false) -> Dictionary   # 一律 await
 func get_usage(requester_id: String) -> Dictionary
 ```
 
@@ -681,7 +684,56 @@ get_usage -> {game_day, calls_today, max_calls, dialogue_today, total_today,
 † 用真實秒不用遊戲時間（要擋的帳單與 provider rate limit 都活在真實時間）
 † 金鑰只在組 Authorization header 時碰得到，其餘一律過 _scrub()
 † CONVERSATION 豁免冷卻/配額但照樣計數（_dialogue_calls_today）——豁免的是限制不是帳
+† is_retry=true 只跳過 min_interval_sec 冷卻，不跳過每日配額——同一次決策內容驗證
+  失敗重試（agent.gd::_decide_with_retry()）用，SCHEDULED policy 沒有 CONVERSATION
+  那種豁免，重試間隔只有幾秒，不加這個會被自己剛送出的呼叫冷卻擋死
 → 技術/LLM 串接與 AI 服務層
+```
+
+## DecisionProvider — scripts/ai/decision_provider.gd · class_name · RefCounted
+
+```gdscript
+func decide(envelope: Dictionary, requester_id: String, policy: AIService.Policy, is_retry: bool = false) -> Dictionary
+func max_validation_retries() -> int          # 基底回 0
+```
+
+```text
+decide() -> {"ok": bool, "data": Dictionary, "error": String}  # 形狀對齊 AIService.request()
+† agent.gd 只認得這個介面，不知道背後是本機模型還是雲端模型（《12》§3、§5.1）
+† 語意驗證/成功失敗判定不在這裡——decide() 只管格式轉換/送出/解析/逾時，驗證留給呼叫端的 AISchema
+† HumanInput／RemotePlayer 兩種來源尚未實作
+⚠ Agent._make_provider() 目前把 decision_source == "human" 當成打錯字處理
+  （印「不是已知值」警告、退回 LocalLLMProvider）——《06》human 是合法的第三個值，
+  等 HumanInput provider 做出來時要把這個分支改掉，不要沿用「異常值才退回」的邏輯
+→ 技術/LLM 串接與 AI 服務層
+```
+
+## LocalLLMProvider — scripts/ai/local_llm_provider.gd · class_name · extends DecisionProvider
+
+```gdscript
+const PROVIDER_NAME := "local"                # 打 AIConfig 裡名叫 "local" 的 provider
+func _init() -> void                          # 解析一次：has_valid_provider("local") 不成立就 push_warning + 退回 ""
+var _provider_name: String                    # "local" 或 ""（＝交給 AIConfig.default_provider）
+func decide(envelope, requester_id, policy, is_retry=false) -> Dictionary   # 包 AIService.request(..., _provider_name, is_retry)
+func max_validation_retries() -> int          # "local" 時 0（本地 GBNF 保證格式），退回 default_provider 時 2
+```
+
+```text
+† 解析放 _init() 不放 decide()：設定一場遊戲內不會變，放 decide() 的話缺 "local" 時每次決策洗一行警告
+† 退回 default_provider 之後打到的多半不是 GBNF 端點，「本地無重試語意」的前提不成立，所以改給 2 次
+```
+
+## RemoteLLMProvider — scripts/ai/remote_llm_provider.gd · class_name · extends DecisionProvider
+
+```gdscript
+func _init(provider_name: String) -> void     # 建構時決定打哪個 AIConfig provider，之後不變
+func decide(envelope, requester_id, policy, is_retry=false) -> Dictionary   # 包 AIService.request(..., _provider_name, is_retry)
+func max_validation_retries() -> int          # 回 2（《12》§3.4，P-22 #3）
+```
+
+```text
+† _provider_name 對應《06》model_name 欄位——建角面板下拉選的是 AIConfig 裡已設定好的 provider 名字
+† 投放後不可改，跟 decision_source 同一條規則，所以做成建構子帶入、不是每次呼叫才傳
 ```
 
 ## AIConfig — scripts/ai/ai_config.gd · class_name · RefCounted
@@ -709,7 +761,8 @@ var min_interval_sec · max_calls_per_game_day · dialogue_exempt      # 全域�
 
 static func load_from_user() -> AIConfig     # 讀不到→enabled=false 的物件
 func get_provider(provider_name: String) -> Provider   # 只有空字串會退回 default_provider，打錯名字回 null
-func has_provider(provider_name: String) -> bool
+func has_provider(provider_name: String) -> bool        # 只查設定項存不存在
+func has_valid_provider(provider_name: String) -> bool  # 存在且 valid ——「這個名字真的打得出去嗎」
 ```
 
 ```text
@@ -719,6 +772,9 @@ func has_provider(provider_name: String) -> bool
 † 任何 log/錯誤/主控台輸出一律走 masked_key()，_to_string() 也只吐遮蔽版
 † 多個具名 provider 可同時併用（例如 "local" 打本機 llama-server、"openrouter" 打雲端）
   ——這個類別只回答「provider 叫這個名字時連線資訊是什麼」，不管「誰該用哪個」
+⚠ 事前檢查「能不能用這個 provider」一律用 has_valid_provider()：AIService.request() 擋的條件是
+  `provider == null or not provider.valid`，只用 has_provider() 會放行設定不全的項目，
+  然後每次請求安靜收到 ERROR_NO_PROVIDER
 † enabled 只回答「設定檔結構完整、至少一個 provider」，不管 default_provider 好不好
   ——default 壞掉只影響沒指名 provider 的呼叫，不連累明確指名且填好的 provider
 ```
@@ -964,4 +1020,9 @@ noise_heard 對話中會被吞掉；睡覺中的 Agent 沒有排除，一樣會�
 character_id 與 GameClock.day 都未持久化，重開就重來
 AIService 已接對話（conversation.gd 非同步）與行程（agent.gd 任務池＋決策迴圈，
   llm_decision_enabled 開關）；決策內容有效性未實跑真實 provider 驗證過（見驗收清單）
+DecisionProvider 介面已存在（scripts/ai/decision_provider.gd），agent.gd 透過
+  LocalLLMProvider／RemoteLLMProvider 呼叫，不再直接呼叫 AIService；decision_source／
+  model_name 是 Agent 上的佔位 @export（#122 落地前的假資料，不是真正的角色資料）
+雲端驗證失敗重試已實作（agent.gd _decide_with_retry()，RemoteLLMProvider 2 次／
+  LocalLLMProvider 0 次，退回 default_provider 時 2 次）；HumanInput／RemotePlayer 兩種來源尚未實作
 ```
