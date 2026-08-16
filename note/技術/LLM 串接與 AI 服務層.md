@@ -244,15 +244,22 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 
 不設「設計上」的輪數硬上限，改用**軟壓力**：payload 帶 `turns_so_far`，system prompt
 告訴模型「聊得越久越該收尾」。但兩隻 Agent 都禮貌性不收尾時，`conversation.gd`
-的 `SAFETY_MAX_TURNS`（工程安全閥，跟上面的設計軟壓力是兩回事）會強制截斷，
-值訂為 **10**——本機小模型多輪對話品質實測 6 輪起始退化、10 輪偶爾明顯退化
-（見下方「已測試過但沒有效果的方向」），10 是保守但不離譜的交集值。
+的 `SAFETY_MAX_TURNS`（工程安全閥，跟上面的設計軟壓力是兩回事，同時也是無觀眾
+世界的 LLM 呼叫成本閘門，issue #178）會強制截斷，值訂為 **10**。10 是三份獨立
+證據（實測、poc_village_sim 導演模式 B、poc_village_sim 逐 tick 對話追蹤）的
+保守交集值：本機小模型多輪對話品質實測 6 輪起始退化、10 輪偶爾明顯退化
+（見下方「已測試過但沒有效果的方向」），不是精算出來的——記憶注入上線後
+每輪 payload 都會變大，退化點可能提前，屆時應針對現在的逐輪架構重新實測。
 
 **仍未解決**：對話呼叫本身豁免每遊戲日的呼叫上限（`CONVERSATION` policy，見
 `ai/api.md`／規格書《13》§5），走獨立的 `_dialogue_calls_today` 計數但沒有自己的
 封頂值——`SAFETY_MAX_TURNS` 只封頂單場對話的輪數，不封頂一天能開幾場對話。
 「有沒有玩家在觀察」的節流判斷，#178 討論過後刻意不做（範圍太大，需要新的
 「是否被觀察」偵測邏輯），留給之後想做更完整方案時另開 issue。
+
+> [!important] 但 fallback 一定要能終止
+> LLM 失敗／逾時時走 `DialogueLines`，而它**沒有 `end` 訊號**——不特別處理就會
+> 無限吐模板句。fallback 要直接說一句 `DialogueLines.closing()` 並結束對話。
 
 ## 已測試過但沒有效果的方向
 
@@ -284,11 +291,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 是直接打 `/v1/chat/completions`，不需要透過 Godot 才能測 dialogue schema
 的改動效果）。
 
-> [!important] 但 fallback 一定要能終止
-> LLM 失敗／逾時時走 `DialogueLines`，而它**沒有 `end` 訊號**——不特別處理就會
-> 無限吐模板句。fallback 要直接說一句 `DialogueLines.closing()` 並結束對話。
-
-### 台詞來源抽象
+## 台詞來源抽象
 
 > [!important] `conversation.gd` 不該問「這是玩家還是 Agent」
 > 該問的是「這個角色的下一句由誰產生」——伺服器也只認 Character，不分 player/agent，
