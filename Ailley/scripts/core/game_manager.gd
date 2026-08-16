@@ -221,6 +221,9 @@ func apply_world_save_data(data: Dictionary) -> void:
 
 		var pos_array: Array = entry.get("position", [])
 		if pos_array.size() == 2:
+			# global_position 不會清掉 Character._path——不先停下的話，讀檔後
+			# 下一個物理幀會繼續往讀檔前的舊目標走，位置瞬間跳掉又被拉回去
+			character.stop_moving()
 			character.global_position = Vector2(pos_array[0], pos_array[1])
 
 		if entry.has("current_place") and character.get("current_place") != null:
