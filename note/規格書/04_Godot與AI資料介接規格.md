@@ -1,7 +1,7 @@
 ---
 tags: [規格書, 架構]
-status: 參數待填
-updated: 2026-08-12
+status: 大致定案
+updated: 2026-08-16
 ---
 
 # 04_Godot與AI資料介接規格
@@ -9,41 +9,35 @@ updated: 2026-08-12
 # 04｜Godot 與 AI 資料介接規格
 
 **閱讀對象**：後端組・前端組・AI 組
-**文件性質**：通訊契約。Godot 端與 AI 後端之間所有資料交換的格式以本文件為準。
+**文件性質**：通訊契約。Godot 端 `AIService` 與 `LocalLLM`／`RemoteLLM`／`HumanInput` 之間所有資料交換的格式以本文件為準；沒有獨立的 AI 後端行程，見 §1。
 **前置閱讀**：《00 設計原則與架構》、《01-3 Prompt 注入與資料傳送》、《12 決策來源抽象與執行架構規格書》
 
 ---
 
 ## 1. 系統架構
 
-單機模式下，Godot（房主機兼玩家端）與 AI 後端仍是本機兩個進程，走 HTTP + JSON（localhost）。這是《12》定義的四種 `DecisionProvider` 之中 `LocalLLM` 同機時的特例；多人模式下模型呼叫改在玩家端執行，房主機只送 prompt/schema、收 JSON 並驗證，完整職責邊界見《12》§5。
+**沒有獨立的 Python AI 後端。** Godot（房主機兼玩家端）本身就是《12》定義的房主機權威——`AIService`（見《技術/LLM 串接與 AI 服務層》）在 Godot 行程內完成 prompt／schema 組裝、佇列排程、驗證與狀態套用，只有「實際生成文字」這一步會呼叫外部的 `DecisionProvider`：`LocalLLM` 是本機 `llama-server`（HTTP，同機 localhost）、`RemoteLLM` 是雲端 API（HTTP，走網際網路）、`HumanInput` 是本機決策面板（無 HTTP）。多人模式下 `RemotePlayer` 才會有 Godot↔Godot 的網路連線，完整職責邊界見《12》§5。
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                     Godot 4.x（遊戲端／操控層）                 │
+│              房主機（Godot 4.x，權威／操控層一體）               │
 │  ────────────────────────────────────────────────────────    │
 │  • 世界模擬（移動、碰撞、偵測範圍、時間推進）                    │
 │  • UI 渲染（立繪、內心狀態視窗、天神之石輸入框）                 │
-│  • 純表現：尋路、播動畫、回報執行結果（《12》§5.2）              │
-└───────────────────────────┬──────────────────────────────────┘
-                            │  HTTP + JSON（localhost）
-                            │  非同步，不阻塞主執行緒
-                            ▼
-┌──────────────────────────────────────────────────────────────┐
-│              房主機（權威）／AI 後端（Python）                  │
-│  ────────────────────────────────────────────────────────    │
 │  • Prompt 組裝（Tier 分級、事實句、兜底句）                     │
 │  • Schema 組裝（《12》§2，取代手寫 GBNF）                       │
 │  • 決策佇列與排程（事件驅動，見《10》§5.1）                      │
 │  • DecisionProvider 呼叫、schema 驗證、三條硬規定檢查            │
 │  • 成功率判定與擲骰（《01-2》）、狀態套用與存檔                  │
-│  • 記憶檢索（Vector DB）                                        │
+│  • 記憶檢索                                                     │
 └───────────────────────────┬──────────────────────────────────┘
                             │  DecisionProvider（見《12》§3）
-                            │  LocalLLM 時走 HTTP（llama.cpp server API）
+                            │  LocalLLM／RemoteLLM 走 HTTP，
+                            │  HumanInput 不經網路，RemotePlayer 見《12》§3.4
                             ▼
 ┌──────────────────────────────────────────────────────────────┐
-│              llama-server（--parallel 5, ctx 16000）           │
+│  LocalLLM: llama-server（127.0.0.1:8080，--parallel 5, ctx 16000）│
+│  RemoteLLM: 雲端 API（OpenRouter 等，見 `ai/api.md` AIConfig）   │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -65,17 +59,19 @@ updated: 2026-08-12
 
 ## 2. 通訊方式
 
+以下描述 Godot（`AIService`）呼叫 `LocalLLM`／`RemoteLLM` 這一段；`HumanInput` 不經 HTTP（本機決策面板直接讀寫），`RemotePlayer` 見《12》§3.4。
+
 | 項目 | 規格 |
 | --- | --- |
 | 協定 | HTTP/1.1 |
-| 位址 | `http://127.0.0.1:8420`（連接埠【待填】） |
+| 位址 | `LocalLLM`：`http://127.0.0.1:8080/v1`（llama-server，OpenAI 相容端點，2026-08-16 定案——與《技術/LLM 串接與 AI 服務層》現行實作一致）；`RemoteLLM`：依 provider 而定，見 `ai/api.md` `AIConfig` |
 | 資料格式 | JSON，UTF-8 |
 | Godot 端 | `HTTPRequest` node，非同步 |
 | 編碼 | `JSON.stringify()` / `JSON.parse_string()` |
 
 ### 為什麼單機是 HTTP、多人是反向連線
 
-單機模式：Godot 內建 `HTTPRequest`，零額外依賴；房主機與 AI 後端同機、單向請求為主（Godot 主動問、AI 回答），不需要伺服器主動推播。
+單機模式：Godot 內建 `HTTPRequest`，零額外依賴；`LocalLLM` 同機、單向請求為主（Godot 主動問、llama-server 回答），不需要伺服器主動推播。
 
 多人模式：依《12》§3.4 `RemotePlayer` 的結論，連線方向為反向——玩家客戶端位於 NAT 後方，房主無法主動連入，因此由玩家連進房主（WebSocket 或長輪詢皆可），房主將工作放入佇列等待對方領取。這不是「日後再評估」的空白，而是已有依據的既定方向；實作時機仍待規劃，見《99》P-20。
 
@@ -85,13 +81,15 @@ updated: 2026-08-12
 
 事件驅動架構下，決策請求以**單一角色**為單位發起，不再是每 tick 批次送出全體 NPC（見《10》§5.1、《12》§5.1）。
 
-| 端點 | 方法 | 方向 | 用途 |
-| --- | --- | --- | --- |
-| `/health` | GET | Godot → AI | 檢查模型是否就緒 |
-| `/decide` | POST | Godot → AI | 單一角色的決策請求（角色完成動作後發起） |
-| `/event` | POST | Godot → AI | 推送即時事件（天神之石） |
-| `/generate/words` | POST | Godot → AI | 建角時生成 `words_to_creator` |
-| `/memory/reflect` | POST | Godot → AI | 睡眠反思、記憶壓縮 |
+**這些是 `AIService` 對外呈現的邏輯操作，不是獨立行程的網路端點**——`decide`／`event`／`generate/words`／`memory/reflect` 各自組好 prompt/schema 後，一律送進同一個 `LocalLLM`／`RemoteLLM` 的 chat completion 呼叫，差別只在 prompt 內容與 schema，不是不同 URL。下表沿用端點命名只是方便對照「這次呼叫要做什麼」，實際 wire format 見《技術/LLM 串接與 AI 服務層》。
+
+| 操作 | 用途 |
+| --- | --- |
+| `health` | 啟動時檢查 `LocalLLM`／`RemoteLLM` 是否就緒 |
+| `decide` | 單一角色的決策請求（角色完成動作後發起） |
+| `event` | 推送即時事件（天神之石） |
+| `generate/words` | 建角時生成 `words_to_creator` |
+| `memory/reflect` | 睡眠反思、記憶壓縮 |
 
 ---
 
@@ -451,7 +449,7 @@ Godot 操控層                房主機                    llama-server
 
 | `reason` | 觸發狀況 | 玩家端訊息 |
 | --- | --- | --- |
-| `timeout` | 逾時（> 5 秒【待填】） | 模型回應逾時 |
+| `timeout` | 逾時（`LocalLLM` > 5 秒／`RemoteLLM` > 15 秒，2026-08-16 定案，見《99》P-11／P-22） | 模型回應逾時 |
 | `invalid_format` | JSON 解析失敗、重試仍失敗 | 模型輸出格式不符 |
 | `model_missing` | 指定模型不存在 | 找不到指定的模型 |
 | `quota_exceeded` | 雲端模型額度用盡 | 模型額度不足 |
@@ -532,10 +530,10 @@ Godot 操控層                房主機                    llama-server
 
 | # | 項目 | 負責 | 追蹤 |
 | --- | --- | --- | --- |
-| 1 | 連接埠與逾時秒數定案 | 後端 | 《99》P-11 |
-| 2 | 是否縮減傳送項目讓 AI 判斷更聚焦 | AI・後端 | 《99》P-03 |
-| 3 | `words_to_creator` 天神之石觸發機率 | 遊戲邏輯 | 《99》P-10 |
+| 1 | ~~連接埠與逾時秒數定案~~ | 後端 | ☑ 2026-08-16，見《99》P-11 |
+| 2 | 是否縮減傳送項目讓 AI 判斷更聚焦 | AI・後端 | 《99》P-03（MVP 定案走方案 A，見該項） |
+| 3 | ~~`words_to_creator` 天神之石觸發機率~~ | 遊戲邏輯 | ☑ 2026-08-16，見《99》P-10 |
 | 4 | `available_actions` 完整清單 | 遊戲邏輯 | 《07》 |
 | 5 | Godot 端 `HTTPRequest` 封裝與重試邏輯 | 前端 | — |
-| 6 | 單一角色決策請求的併發上限（原批次 5 的概念如何轉換為事件驅動下的排程） | 後端 | 《99》P-11 |
+| 6 | ~~單一角色決策請求的併發上限~~ | 後端 | ☑ 2026-08-16，見《99》P-11 |
 | 7 | `build_schema_for_call()` / `DecisionProvider` 重構六項任務 | AI・後端 | 《12》§7.1 |
