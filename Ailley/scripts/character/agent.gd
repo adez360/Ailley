@@ -849,6 +849,11 @@ func _select(task: Dictionary, now_minutes: int) -> void:
 	_current_task_started_at = now_minutes
 	current_place = str(task.get("params", {}).get("place", ""))
 	current_state = str(task.get("action", ""))
+	# resolve() 現在只在 _pursue_talk_task() 裡對 talk 任務呼叫——換成別的
+	# 動作（move_to/sleep 等）時沒有人會再寫入 last_action_result，舊任務
+	# 留下的失敗原因會一直卡著，讓 LLM 看到跟目前任務無關的過期訊息。這裡
+	# 統一歸零，talk 任務會在下一次 _pursue_talk_task() 立刻覆蓋成真正結果
+	last_action_result = ""
 	# 換了新任務就是換了新的追逐目標，talk 任務自己的卡住偵測要歸零重算——
 	# 不歸零的話舊目標留下的「沒進展」次數會誤算進新目標的偵測
 	_talk_pursuit_stuck_ticks = 0
@@ -931,7 +936,15 @@ func _pursue_current_task() -> void:
 # 要重新問一次「他現在在哪」，距離內就直接搭話，不是只起步一次
 func _pursue_talk_task() -> void:
 	# resolve() 判定前置檢查：只針對 llm 來源任務，在即將產生副作用（talk_to）
-	# 前執行，避免移動期間提前消耗 _roll_success() 或使用過期狀態
+	# 前執行，避免移動期間提前消耗 _roll_success() 或使用過期狀態。
+	# ⚠ _pursue_current_task() 每個遊戲分鐘都會跑到這裡，talk 現在能這樣寫
+	# 是因為它不在 SUCCESS_PARAMS 上、resolve() 對它只會走硬規則檢查（純函式、
+	# 沒有隨機性），每分鐘重算結果都一樣，等同只是重新確認前置條件沒變。
+	# 之後如果哪個會擲骰的 SUCCESS_PARAMS 動作也要做成「追逐中執行」，不能照抄
+	# 這個寫法——resolve() 裡的 _roll_success() 每呼叫一次就重骰一次，搬進這種
+	# 每分鐘都跑的函式會變成「重骰到成功為止」，跟《01-2》§2「一次決策一次骰」
+	# 的公式前提不符。那種情況要另外做「這個任務實例只骰一次」的保護（例如
+	# 記一個 _resolved_task_id，骰過就不再骰，只重驗真的需要每次重查的部分）
 	if _current_task.get("source", "") == "llm":
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
