@@ -817,8 +817,11 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 	match action:
 		"talk":
 			var target_name: String = str(params.get("target", ""))
-			if _find_character_by_name(target_name) == null:
+			var matches := _find_all_characters_by_name(target_name)
+			if matches.is_empty():
 				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
+			if matches.size() > 1:
+				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
 		# move_to/sleep/nap/rest/wash/idle/eat 目前都沒有額外的硬規則要擋
 		# （eat 落地後要在這裡加「宣稱吃了背包裡沒有的食物」的檢查，見 #114）
 		_:
@@ -829,17 +832,16 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 # 用 .get() 而不是硬取 key，跟計分那幾個函式同一種寫法——檔頭承諾「把任務丟進
 # _tasks 就會公平競爭，不用再改這個檔案」，那新來源少填一個欄位就不該讓這裡崩掉。
 #
-# resolve() 只管 llm 來源的任務——schedule 任務是引擎自己的固定行程，不是 LLM
-# 宣告的意圖，沒有「宣告不存在的東西」這個風險，套用硬規則檢查只是白白多一層
-# 可能誤判的機會
+# llm 來源任務需通過可執行動作白名單檢查（IMPLEMENTED_ACTIONS）——不在白名單上的
+# 動作直接不 commit 並移除，避免選到後靜默不執行或每分鐘重試的無限迴圈。
+# SUCCESS_PARAMS 不能當白名單：_roll_success() 對不在表上的動作直接放行（見
+# _roll_success() 自己的註解），那些動作缺少執行邏輯時會靜默不做事，不符合
+# 「不被允許」與「還沒做」要分開失敗的設計原則
 func _select(task: Dictionary, now_minutes: int) -> void:
 	if task.get("source", "") == "llm":
-		var result := resolve(str(task.get("action", "")), task.get("params", {}))
-		last_action_result = result["reason"]
-		if not result["success"]:
-			# resolve() 判定失敗的任務不 commit，也不留在池子裡繼續佔位——
-			# 不移除的話下次重算分數不變，會馬上又選到同一筆，變成每分鐘
-			# 重試一次同樣失敗的無限迴圈
+		var action: String = str(task.get("action", ""))
+		if not AISchema.is_implemented_action(action):
+			last_action_result = "這個動作還沒有實作，暫時做不了"
 			_remove_task(task.get("id", ""))
 			return
 
@@ -928,6 +930,21 @@ func _pursue_current_task() -> void:
 # 上面那套「走一次、_pursued_place／_pursuit_done 收斂」的節流——每次重算都
 # 要重新問一次「他現在在哪」，距離內就直接搭話，不是只起步一次
 func _pursue_talk_task() -> void:
+	# resolve() 判定前置檢查：只針對 llm 來源任務，在即將產生副作用（talk_to）
+	# 前執行，避免移動期間提前消耗 _roll_success() 或使用過期狀態
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		if not result["success"]:
+			# resolve() 判定失敗的任務不留在池子裡繼續佔位——不移除的話
+			# 下次重算分數不變，會馬上又選到同一筆，變成每分鐘重試一次
+			# 同樣失敗的無限迴圈。移除後記錄失敗原因，停止執行
+			_remove_task(_current_task.get("id", ""))
+			_current_task = {}
+			current_place = ""
+			current_state = "idle"
+			return
+
 	var target_name: String = str(_current_task.get("params", {}).get("target", ""))
 	var target := _find_character_by_name(target_name)
 
@@ -977,6 +994,16 @@ func _pursue_talk_task() -> void:
 
 	if _talk_pursuit_stuck_ticks == 3:
 		push_warning("Agent %s: 追不上搭話對象 %s，可能被卡住" % [character_name, target.character_name])
+
+# 按顯示名找所有符合的角色，用於偵測撞名（resolve() 的歧義檢查）
+func _find_all_characters_by_name(target_name: String) -> Array[Character]:
+	var matches: Array[Character] = []
+	if target_name.is_empty():
+		return matches
+	for node in get_tree().get_nodes_in_group("characters"):
+		if node != self and node.character_name == target_name:
+			matches.append(node as Character)
+	return matches
 
 # 按顯示名找角色，不分大小寫的規則跟 debug_console.gd::_get_character() 不同——
 # 那裡要處理玩家手打、可能撞名的情形；這裡的 target 是 LLM 從 context.visible

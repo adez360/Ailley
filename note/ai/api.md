@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-17
+updated: 2026-08-16
 ---
 
 # api
@@ -240,11 +240,15 @@ func get_current_task_elapsed_minutes() -> int             # 目前任務做了�
 resolve() -> {"success": bool, "reason": String}   # reason 成功是空字串，失敗是中文具體原因
 † 只管 llm 來源任務——schedule 是引擎自己的固定行程，不是 LLM 宣告的意圖，
   不套用硬規則檢查
-† 掛在 _select()：resolve() 判定失敗的任務不 commit、直接從 _tasks 移除，
-  不留著佔位重試
+† 延後到 _pursue_talk_task()（talk 動作）等各動作即將產生副作用的位置才呼叫，
+  避免移動期間提前消耗 _roll_success() 或使用過期狀態；失敗的任務直接從
+  _tasks 移除並記錄 last_action_result，不留著佔位重試
+† _select() 對 llm 來源任務先驗證可執行動作白名單（AISchema.IMPLEMENTED_ACTIONS）：
+  不在白名單上的動作直接不 commit 並移除，不使用 SUCCESS_PARAMS 當白名單——
+  _roll_success() 對不在表上的動作恆成功，缺執行邏輯時會靜默不做事
 † SUCCESS_PARAMS 表上的動作才會擲骰（《01-2》§2 公式），move_to/sleep/
   nap/rest/wash/idle/eat 不在表上、也沒有硬規則要擋，恆成功；talk 同樣不在
-  表上（不擲骰），但有硬規則檢查（目標存在性），不是恆成功
+  表上（不擲骰），但有硬規則檢查（目標存在性與歧義檢查），不是恆成功
 † stamina 缺欄位時（#115 未落地）當中性值 50 處理，不吃到假懲罰；
   injury/alcohol 公式本來就是從 0 起算才扣分，缺欄位回傳的 0.0 剛好是
   中性值，不用特別處理
