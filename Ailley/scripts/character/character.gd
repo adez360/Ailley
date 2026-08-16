@@ -81,6 +81,7 @@ const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader
 @onready var inventory: Inventory = get_node_or_null("Inventory")
 @onready var work_progress: WorkProgress = get_node_or_null("WorkProgress")
 @onready var money_popup: MoneyPopup = get_node_or_null("MoneyPopup")
+@onready var memory: Memory = get_node_or_null("Memory")
 
 # 最後一次的面向：front / back / right，停下時用來挑 idle 動畫
 var facing := "front"

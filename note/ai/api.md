@@ -371,6 +371,37 @@ func note_meeting(other_id) -> void          # has_met() 為真的唯一來源
 → 技術/talk 動作設計
 ```
 
+## Memory — scripts/character/memory.gd · class_name · Node
+
+```gdscript
+const L1_CAP := 8
+const DISCARD_BELOW := 30 · L3_AT := 60 · L4_AT := 90 · L4_CAP := 5
+const CONTENT_MAX_CHARS := 60 · BASE_DECAY_RATE := 3.0 · RETRIEVAL_BONUS := 10.0
+
+var l1: Array[Dictionary]                     # {content} FIFO 固定 8 條
+var entries: Array[Dictionary]                # L2/L3/L4 共用，形狀見 add_candidate()
+
+func push_l1(content: String) -> void
+func add_candidate(content, importance, valence="neutral", related_npcs=[], location_id="") -> Dictionary
+func decay_all(grudge: float = 50.0) -> void  # 每遊戲日一次，見 _on_day_changed()
+func mark_retrieved(entry: Dictionary) -> void
+func get_by_level(level: int) -> Array[Dictionary]
+```
+
+```text
+† importance 分級（《03》§3）：<30 丟棄／30-59 L2／60-89 L3／90+ L4，
+  L4 滿額（5）新記憶進來時最舊一條降級 L3，不是丟棄
+† decay_all() 公式（《03》§4-1）：正面/中性 -= 3；負面 -= 3 × (100-grudge)/50；
+  L4 不衰減；decay_value ≤ 0 刪除。grudge 由呼叫端傳入——人格資料未接（#117），
+  目前一律用預設值 50
+† mark_retrieved() 要傳 entries 裡的同一個 Dictionary 參照，不是複製值
+⚠《03》§3 分級表另有「L2：30-59...三日後若未被檢索則淘汰」一句，跟 §4-1
+  衰減公式對不起來（衰減率 3/天，100 分要約 33 天才歸零，不是 3 天）——
+  已列入《99》待釐清，目前只實作 §4-1 的衰減公式
+† 不做：向量檢索（《03》§7，完整版才需要）、記憶寫進存檔（依賴 #21/#22）
+→ 技術/記憶與睡眠反思
+```
+
 ## Inventory — scripts/character/inventory.gd · class_name · Node
 
 ```gdscript

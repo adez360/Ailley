@@ -36,6 +36,9 @@ func _ready() -> void:
 		# help 留空：先不進 locale/console.csv，避免動到翻譯資源匯入（這台機器上
 		# 曾經卡住），純 debug 用途，之後真的要收進正式指令表再補翻譯
 		"tasks": {"run": _cmd_tasks, "usage": "tasks <name>", "help": ""},
+		# 同上，help 留空：#167 驗證記憶結構用的 debug 入口，之後有正式的
+		# 角色資訊面板（《15》）接上之後再收進正式指令表
+		"memory": {"run": _cmd_memory, "usage": "memory <name>", "help": ""},
 		# 同上，help 留空：#73 驗證 GameManager.spawn_character() 管線用的
 		# debug 入口，之後有正式的建角面板/角色庫 UI（#122）接上之後再收進
 		# 正式指令表
@@ -408,6 +411,39 @@ func _cmd_tasks(args: PackedStringArray) -> void:
 		_print("[color=888888]    score=%.1f = base %.1f + time %.1f + need %.1f + age %.1f[/color]" % [
 			score["total"], score["base"], score["time"], score["need"], score["age"],
 		])
+
+# memory <name>：印出 L1 短期工作記憶 + L2/L3/L4 分級記憶。#167 驗證用，
+# 形狀比照 _cmd_tasks()——一律 .get()，記憶欄位不該因為指令本身崩掉
+func _cmd_memory(args: PackedStringArray) -> void:
+	if args.size() != 1:
+		_error("memory <name>")
+		return
+
+	var character := _get_character(args[0])
+	if character == null:
+		return
+
+	if character.memory == null:
+		_error("%s 沒有掛 Memory 元件" % character.character_name)
+		return
+
+	var m := character.memory
+	_print("[color=88ccff]%s[/color][color=888888]  L1 %d/%d 條[/color]" % [
+		character.character_name, m.l1.size(), Memory.L1_CAP
+	])
+	for entry in m.l1:
+		_print("[color=888888]  · %s[/color]" % entry.get("content", ""))
+
+	for level in [4, 3, 2]:
+		var level_entries := m.get_by_level(level)
+		if level_entries.is_empty():
+			continue
+		_print("[color=88ccff]L%d[/color][color=888888]（%d 條）[/color]" % [level, level_entries.size()])
+		for entry in level_entries:
+			_print("[color=888888]  · [%s] importance=%d decay=%.1f  %s[/color]" % [
+				entry.get("valence", "?"), entry.get("importance", 0),
+				entry.get("decay_value", 0), entry.get("content", ""),
+			])
 
 # spawn <template_id>
 #
