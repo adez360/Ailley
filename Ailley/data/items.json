@@ -1,0 +1,24 @@
+{
+	"bread": { "display_name": "麵包", "category": "food", "icon": null },
+	"cooked_meat": { "display_name": "烤肉", "category": "food", "icon": null },
+	"fish_dish": { "display_name": "魚料理", "category": "food", "icon": null },
+	"herb_soup": { "display_name": "藥草湯", "category": "food", "icon": null },
+
+	"water": { "display_name": "水", "category": "drink", "icon": null },
+	"ale": { "display_name": "麥酒", "category": "drink", "icon": null },
+	"spirit": { "display_name": "烈酒", "category": "drink", "icon": null },
+
+	"small_game": { "display_name": "小型獵物", "category": "small_game", "icon": null },
+	"large_game": { "display_name": "大型獵物", "category": "large_game", "icon": null },
+	"fish": { "display_name": "魚", "category": "seafood", "icon": null },
+
+	"herb": { "display_name": "藥草", "category": "gathered", "icon": null },
+	"wild_fruit": { "display_name": "野果", "category": "gathered", "icon": null },
+
+	"knife": { "display_name": "刀", "category": "carry", "icon": null },
+	"good_knife": { "display_name": "好刀", "category": "carry", "icon": null },
+	"instrument": { "display_name": "樂器", "category": "carry", "icon": null },
+	"clothes_basic": { "display_name": "一般衣物", "category": "carry", "icon": null },
+	"medicine": { "display_name": "藥品", "category": "carry", "icon": null },
+	"battery": { "display_name": "電池", "category": "carry", "icon": null }
+}
