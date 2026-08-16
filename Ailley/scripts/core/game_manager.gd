@@ -209,8 +209,15 @@ func get_world_save_data() -> Dictionary:
 # 只套用場景裡目前找得到的角色——重新生成存檔裡有記載但場景沒有的角色
 # 不在這則骨架範圍內（見 issue #21「不包含 player 加入世界的實際流程」）
 func apply_world_save_data(data: Dictionary) -> void:
-	GameClock.day = int(data.get("day", GameClock.day))
+	var loaded_day := int(data.get("day", GameClock.day))
+	# 直接指派不會觸發 GameClock.day_changed——AIService 訂閱這個訊號來清每日
+	# AI 呼叫配額（見 GameClock.gd 的訊號註解）。讀檔跳過發射的話，讀到「新的
+	# 一天」的存檔卻不會清掉上一次讀檔前累積的配額，角色會被卡在舊配額上
+	var day_actually_changed := loaded_day != GameClock.day
+	GameClock.day = loaded_day
 	allow_player_join = bool(data.get("allow_player_join", allow_player_join))
+	if day_actually_changed:
+		GameClock.day_changed.emit(loaded_day)
 
 	var characters: Dictionary = data.get("characters", {})
 	for node in get_tree().get_nodes_in_group("characters"):

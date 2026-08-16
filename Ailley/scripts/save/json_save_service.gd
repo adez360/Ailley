@@ -61,7 +61,12 @@ func _write(dir: String, id: String, data: Dictionary) -> bool:
 
 	var path := "%s/%s.json" % [dir, id]
 	var previous := _read(path)
-	data["version"] = int(previous.get("version", 0)) + 1
+
+	# 複製一份，不動呼叫端傳進來的 Dictionary——Dictionary 是參照型別，
+	# 直接在原地塞 version 的話，呼叫端手上那份也會被悄悄改到，之後
+	# 想拿存檔前的原始資料比對／記錄就會發現內容已經不是自己給的那份
+	var to_write := data.duplicate(true)
+	to_write["version"] = int(previous.get("version", 0)) + 1
 
 	var tmp_path := path + ".tmp"
 	var file := FileAccess.open(tmp_path, FileAccess.WRITE)
@@ -69,8 +74,15 @@ func _write(dir: String, id: String, data: Dictionary) -> bool:
 		push_error("JsonSaveService: 寫入失敗 %s（%s）" % [tmp_path, error_string(FileAccess.get_open_error())])
 		return false
 
-	file.store_string(JSON.stringify(data, "\t"))
+	file.store_string(JSON.stringify(to_write, "\t"))
 	file.close()
+
+	# 目的地已存在時，Windows 的 rename 跟 POSIX 不同——不會原地覆蓋，會直接失敗。
+	# 先刪掉舊檔再換名，讓行為在兩邊一致：這裡本來就不是真正原子的（見上面
+	# 函式註解「單一 process 情境」），刪除跟換名中間短暫沒有舊檔的窗口
+	# 由 #23 的 session 鎖負責，不是這裡要顧
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
 
 	var err := DirAccess.rename_absolute(tmp_path, path)
 	if err != OK:
