@@ -310,10 +310,12 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) ->
 	})
 
 
-# 睡眠反思回應的驗證（#168）。summary 是必填的一句話當日摘要；events 每筆
-# 對應 _daily_events 緩衝區裡的一件事，content/valence/importance 都是 LLM
-# 自己填的——這裡只驗證形狀合不合法，不重新計算或覆寫 importance 的數值，
-# 那樣做就等於引擎自己又做了一次《00》原則二禁止的主觀評分
+# 睡眠反思回應的驗證（#168）。summary 是一句話當日摘要，跟 reasoning／
+# inner_monologue 同一種寬鬆度（_validated_optional_line()）：型別錯才拒絕，
+# 缺席給空字串放行，不是硬性必填——模型少回這欄不該讓整包 events 也一起作廢。
+# events 每筆對應 _daily_events 緩衝區裡的一件事，content/valence/importance
+# 都是 LLM 自己填的——這裡只驗證形狀合不合法，不重新計算或覆寫 importance
+# 的數值，那樣做就等於引擎自己又做了一次《00》原則二禁止的主觀評分
 static func validate_reflection(data: Dictionary) -> Dictionary:
 	var summary: Variant = _validated_optional_line(data, "summary")
 	if summary == null:

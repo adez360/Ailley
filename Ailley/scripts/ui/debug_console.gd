@@ -477,7 +477,8 @@ func _cmd_reflect(args: PackedStringArray) -> void:
 
 	await character.request_sleep_reflection()
 
-	_print("[color=888888]反思完成，記憶列表：[/color]")
+	_print("[color=888888]反思完成，當日摘要：%s[/color]" % character.last_reflection_summary)
+	_print("[color=888888]記憶列表：[/color]")
 	_cmd_memory(args)
 
 # spawn <template_id>

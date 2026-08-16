@@ -151,6 +151,13 @@ var _was_sleeping := false
 ## 才判斷（#155）
 var _provider: DecisionProvider
 
+## 上一次睡眠反思的當日摘要（《03》§5「當日摘要（一句話）」）。目前只給
+## debug 用（reflect 指令印出來看），沒有其他呼叫端讀它——先留著這個欄位
+## 而不是驗證完就丟掉，之後要做《15》UI 的 today_log／摘要面板時才有東西可接，
+## 不用回頭重寫 validate_reflection() 那層（max 等級 code review 抓到：
+## 原本驗證過的 summary 完全沒被讀取，白白花了 LLM 的輸出 token）
+var last_reflection_summary := ""
+
 ## 今天發生的事，純客觀事實句，睡前反思（request_sleep_reflection()）一次
 ## 送給 LLM 評分後清空（#168，《03》§5）。跟 Memory.l1 不是同一回事——l1 是
 ## 固定 8 條的滾動視窗，這裡是「睡前都留著」的緩衝區，語意不同不共用。
@@ -471,22 +478,31 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 ## 直接遺失，留著等下次睡眠反思重試，最壞情況是被 DAILY_EVENTS_CAP 的 FIFO
 ## 擠掉，不會比現在更糟
 ##
+## 送出去反思的是呼叫當下的快照，不是 _daily_events 本身——await 期間
+## （真的打網路，從幾百毫秒到數十秒都可能）角色照樣可能觸發新事件並
+## append 進 _daily_events，那些事還沒被送去評分。成功回來後只 pop_front()
+## 掉「這次真的送出去的那幾筆」，不是整包 clear()，不然這段期間新進來的事
+## 會被平白清掉，永遠評不到分（max 等級 code review 抓到）
+##
 ## 觸發時機目前只有 debug_console.gd 的 `reflect` 指令手動呼叫——真正的睡眠
 ## 動作（#112）落地後，在角色進入睡眠那個時間點呼叫這個函式，這裡不用改
 func request_sleep_reflection() -> void:
 	if memory == null or _daily_events.is_empty():
 		return
 
-	var envelope := PromptBuilder.build_reflection_envelope(self, _daily_events)
+	var events_sent := _daily_events.duplicate()
+	var envelope := PromptBuilder.build_reflection_envelope(self, events_sent)
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, AISchema.validate_reflection)
 	if not result["ok"]:
 		return
 
 	var data: Dictionary = result["data"]
+	last_reflection_summary = data["summary"]
 	for event in data["events"]:
 		memory.add_candidate(event["content"], event["importance"], event["valence"])
 
-	_daily_events.clear()
+	for i in mini(events_sent.size(), _daily_events.size()):
+		_daily_events.pop_front()
 
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
 ## AIService、parse_completion、validate_*，任何一關失敗都靜默放棄，任務池
