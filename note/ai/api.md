@@ -690,9 +690,16 @@ decide() -> {"ok": bool, "data": Dictionary, "error": String}  # 形狀對齊 AI
 ## LocalLLMProvider — scripts/ai/local_llm_provider.gd · class_name · extends DecisionProvider
 
 ```gdscript
-const PROVIDER_NAME := "local"                # 固定打 AIConfig 裡名叫 "local" 的 provider
-func decide(envelope, requester_id, policy, is_retry=false) -> Dictionary   # 包 AIService.request(..., "local", is_retry)
-# max_validation_retries() 沿用基底的 0，不覆寫——本地無重試語意
+const PROVIDER_NAME := "local"                # 打 AIConfig 裡名叫 "local" 的 provider
+func _init() -> void                          # 解析一次：has_valid_provider("local") 不成立就 push_warning + 退回 ""
+var _provider_name: String                    # "local" 或 ""（＝交給 AIConfig.default_provider）
+func decide(envelope, requester_id, policy, is_retry=false) -> Dictionary   # 包 AIService.request(..., _provider_name, is_retry)
+func max_validation_retries() -> int          # "local" 時 0（本地 GBNF 保證格式），退回 default_provider 時 2
+```
+
+```text
+† 解析放 _init() 不放 decide()：設定一場遊戲內不會變，放 decide() 的話缺 "local" 時每次決策洗一行警告
+† 退回 default_provider 之後打到的多半不是 GBNF 端點，「本地無重試語意」的前提不成立，所以改給 2 次
 ```
 
 ## RemoteLLMProvider — scripts/ai/remote_llm_provider.gd · class_name · extends DecisionProvider
@@ -733,7 +740,8 @@ var min_interval_sec · max_calls_per_game_day · dialogue_exempt      # 全域�
 
 static func load_from_user() -> AIConfig     # 讀不到→enabled=false 的物件
 func get_provider(provider_name: String) -> Provider   # 只有空字串會退回 default_provider，打錯名字回 null
-func has_provider(provider_name: String) -> bool
+func has_provider(provider_name: String) -> bool        # 只查設定項存不存在
+func has_valid_provider(provider_name: String) -> bool  # 存在且 valid ——「這個名字真的打得出去嗎」
 ```
 
 ```text
@@ -743,6 +751,9 @@ func has_provider(provider_name: String) -> bool
 † 任何 log/錯誤/主控台輸出一律走 masked_key()，_to_string() 也只吐遮蔽版
 † 多個具名 provider 可同時併用（例如 "local" 打本機 llama-server、"openrouter" 打雲端）
   ——這個類別只回答「provider 叫這個名字時連線資訊是什麼」，不管「誰該用哪個」
+⚠ 事前檢查「能不能用這個 provider」一律用 has_valid_provider()：AIService.request() 擋的條件是
+  `provider == null or not provider.valid`，只用 has_provider() 會放行設定不全的項目，
+  然後每次請求安靜收到 ERROR_NO_PROVIDER
 † enabled 只回答「設定檔結構完整、至少一個 provider」，不管 default_provider 好不好
   ——default 壞掉只影響沒指名 provider 的呼叫，不連累明確指名且填好的 provider
 ```
@@ -992,5 +1003,5 @@ DecisionProvider 介面已存在（scripts/ai/decision_provider.gd），agent.gd
   LocalLLMProvider／RemoteLLMProvider 呼叫，不再直接呼叫 AIService；decision_source／
   model_name 是 Agent 上的佔位 @export（#122 落地前的假資料，不是真正的角色資料）
 雲端驗證失敗重試已實作（agent.gd _decide_with_retry()，RemoteLLMProvider 2 次／
-  LocalLLMProvider 0 次）；HumanInput／RemotePlayer 兩種來源尚未實作
+  LocalLLMProvider 0 次，退回 default_provider 時 2 次）；HumanInput／RemotePlayer 兩種來源尚未實作
 ```

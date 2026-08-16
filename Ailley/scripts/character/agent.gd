@@ -190,23 +190,24 @@ func _ready() -> void:
 ## 但寫一行 push_warning 帶原因——跟 _load_schedule() 找不到 assignment 時的處理是同一種
 ## 「資料異常先警告、遊戲照跑」的慣例，不讓一個資料錯字讓角色整個決策啞掉
 func _make_provider() -> DecisionProvider:
+	# 三種資料異常（來源打錯字、cloud 沒填 model_name、model_name 指到不可用的
+	# provider）處理方式完全一樣，所以只收集原因，警告與 fallback 各寫一次
+	var reason := ""
 	if decision_source == "cloud":
 		if model_name.is_empty():
-			push_warning("Agent %s: decision_source 'cloud' 但 model_name 是空的，退回 local" % character_name)
-		elif not AIService.config.has_provider(model_name):
-			# model_name 打錯字／指到一個 AIConfig 沒設定的 provider——跟空字串
-			# 是同一類資料異常，同樣要警告，不能讓角色決策整個安靜啞掉。
-			# AIConfig.get_provider() 只有空字串才會退回 default_provider，
-			# 非空但找不到的名字會回 null，不會自動救援，所以這裡要主動擋
-			push_warning("Agent %s: decision_source 'cloud' 但 model_name '%s' 不是已知的 AIConfig provider，退回 local" % [
-				character_name, model_name
-			])
+			reason = "decision_source 'cloud' 但 model_name 是空的"
+		elif not AIService.config.has_valid_provider(model_name):
+			# 用 has_valid_provider() 不是 has_provider()：AIConfig 裡有這個項目
+			# 但 base_url/model 沒填齊時，AIService.request() 一樣擋成
+			# ERROR_NO_PROVIDER，只查存在的話這種設定會安靜地讓角色決策啞掉
+			reason = "decision_source 'cloud' 但 model_name '%s' 不是可用的 AIConfig provider（不存在或設定不全）" % model_name
 		else:
 			return RemoteLLMProvider.new(model_name)
 	elif decision_source != "local":
-		push_warning("Agent %s: decision_source '%s' 不是已知值，退回 local" % [
-			character_name, decision_source
-		])
+		reason = "decision_source '%s' 不是已知值" % decision_source
+
+	if not reason.is_empty():
+		push_warning("Agent %s: %s，退回 local" % [character_name, reason])
 	return LocalLLMProvider.new()
 
 # 一趟移動有結論了：走到了，或 _check_stuck() 判定走不動而放棄。
@@ -402,6 +403,9 @@ const AI_THINKING_TEXT := "…"
 ## 《12》§3.4 要求的重試在 SCHEDULED 路徑上會實際失效（PR #176 review 抓到）
 func _decide_with_retry(envelope: Dictionary, policy: AIService.Policy, validator: Callable) -> Dictionary:
 	var attempts := _provider.max_validation_retries() + 1
+	# 記住最後一次的失敗原因，迴圈跑完直接回它——parse 與 validate 兩種失敗
+	# 的處理一模一樣（還有次數就重試，沒有就把原因原樣回報），不必各寫一遍
+	var last := AISchema._fail("no_attempt")
 	for attempt in attempts:
 		var result: Dictionary = await _provider.decide(envelope, character_id, policy, attempt > 0)
 		if not result["ok"]:
@@ -409,19 +413,15 @@ func _decide_with_retry(envelope: Dictionary, policy: AIService.Policy, validato
 
 		var parsed := AISchema.parse_completion(result["data"])
 		if not parsed["ok"]:
-			if attempt < attempts - 1:
-				continue
-			return {"ok": false, "data": {}, "error": parsed["error"]}
+			last = AISchema._fail(parsed["error"])
+			continue
 
 		var validated: Dictionary = validator.call(parsed["data"])
-		if not validated["ok"]:
-			if attempt < attempts - 1:
-				continue
-			return {"ok": false, "data": {}, "error": validated["error"]}
+		if validated["ok"]:
+			return validated
+		last = validated
 
-		return {"ok": true, "data": validated["data"], "error": ""}
-
-	return {"ok": false, "data": {}, "error": "unreachable"}
+	return last
 
 func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) -> Dictionary:
 	# 立刻蓋掉正在顯示的東西，讓玩家知道「這個角色在想」，不是卡住。

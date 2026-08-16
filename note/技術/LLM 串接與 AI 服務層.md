@@ -414,16 +414,29 @@ autoload 已註冊，主控台加了 `ai` 指令。
 ### Step 4 — DecisionProvider 介面與雲端驗證失敗重試 ✅ 完成（issue #155／#152）
 
 `agent.gd` 不再直接呼叫 `AIService`，改透過 `DecisionProvider`（`scripts/ai/
-decision_provider.gd`）：`LocalLLMProvider` 固定打 AIConfig 的 `"local"`
+decision_provider.gd`）：`LocalLLMProvider` 打 AIConfig 的 `"local"`
 provider，`RemoteLLMProvider` 建構時帶入要打哪個 provider 名字（對應《06》
 `model_name`），兩者都是 `AIService.request()` 的薄包裝，行為不變。
+
+玩家的 `ai_config.json` 不保證真的有一個可用的 `"local"`——可能只設了
+`default_provider`、取了別的名字，或有這個項目但 `base_url`／`model` 沒填齊。
+`LocalLLMProvider._init()` 因此先用 `AIConfig.has_valid_provider("local")`
+解析一次：不成立就 `push_warning` 並改傳空字串，交給 `default_provider`。
+硬傳 `"local"` 的話這些情況一律是 `ERROR_NO_PROVIDER`，角色決策整個安靜啞掉。
+解析放在 `_init()` 而不是 `decide()`：設定在一場遊戲內不會變，放 `decide()`
+的話設定真的缺 `"local"` 時每次決策都洗一行警告。
+
+檢查一律用 `has_valid_provider()` 而不是 `has_provider()`——後者只查設定項
+存不存在，但 `AIService.request()` 擋的條件是 `provider == null or not
+provider.valid`，只查存在會放行設定不全的項目、然後每次請求安靜失敗。
 
 每隻 Agent 出生時依 `decision_source`（`@export`，#122 落地前的佔位欄位，
 不是真實角色資料）建一次 provider，存成 `_provider` 成員變數，之後所有決策
 ／對話呼叫都用它——對應《06》「`decision_source`／`model_name` 投放後不可改」，
-不是每次呼叫才重新判斷。`decision_source` 打錯字／空字串，或 `"cloud"` 但
-`model_name` 是空的，兩種資料異常都安靜退回 `LocalLLMProvider`，`push_warning`
-帶原因——後者是刻意分開判斷：不擋住的話空字串會被 `AIConfig.get_provider()`
+不是每次呼叫才重新判斷。三種資料異常都安靜退回 `LocalLLMProvider`、
+`push_warning` 帶原因：`decision_source` 打錯字／空字串；`"cloud"` 但
+`model_name` 是空的；`"cloud"` 但 `model_name` 不是可用的 provider。
+空字串要跟打錯字分開判斷，是因為不擋住的話它會被 `AIConfig.get_provider()`
 解析成 `default_provider`，讓角色實際打本機模型、卻頂著 `RemoteLLMProvider`
 的身分（連帶套用錯的重試次數），而且沒有任何警告。
 
@@ -432,6 +445,8 @@ validate」，內容驗證失敗（`parse_completion()` 或 `AISchema.validate_*
 回傳 `ok=false`）時依 `DecisionProvider.max_validation_retries()` 重試：
 `RemoteLLMProvider` 2 次（《12》§3.4／P-22 #3），`LocalLLMProvider` 0 次
 （GBNF 已在文法層保證格式，出錯代表更根本的問題，重試沒有意義）。
+`LocalLLMProvider` 退回 `default_provider` 的那條路例外，一樣給 2 次——
+打到的多半不是 GBNF 端點，「文法層已保證格式」這個前提不成立。
 `AIService` 層級的失敗（見上方第 6 點）不進這個重試迴圈，直接回傳給呼叫端
 走 fallback——「這次問不到」與「問到了但答案壞掉」是兩種不同情境。
 
