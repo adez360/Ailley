@@ -125,7 +125,7 @@ func leave_conversation() -> void
 func say(line: String, interrupt := false) -> void   # interrupt=true 蓋掉現在這句
 func speech_duration(line: String) -> float
 func face_towards(other: Character) -> void
-func update_animation() -> void
+func update_animation(desired_velocity: Vector2) -> void   # facing 讀解算前的期望方向，不是解算後的 velocity（#108）
 func make_noise(radius: float = NOISE_RADIUS) -> void   # 廣播 noise_heard 給範圍內每個角色
 
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
