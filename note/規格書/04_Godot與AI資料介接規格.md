@@ -130,11 +130,11 @@ updated: 2026-08-16
     "physical": {
       "hunger":     { "value": 62, "label": "很餓" },
       "thirst":     { "value": 38, "label": "有點渴" },
-      "stamina":    { "value": 45, "label": "有些疲倦" },
-      "sleepiness": { "value": 20, "label": "還算清醒" },
-      "hygiene":    { "value": 55, "label": "普通" },
+      "stamina":    { "value": 45, "label": "有點累" },
+      "sleepiness": { "value": 20, "label": "清醒" },
+      "hygiene":    { "value": 55, "label": "還算乾淨" },
       "alcohol":    { "value": 0,  "label": "清醒" },
-      "health":     { "value": 88, "label": "健康" },
+      "health":     { "value": 88, "label": "健康強壯" },
       "injury":     { "value": 12, "label": "輕微擦傷" }
     },
     "emotion": {
@@ -189,8 +189,8 @@ updated: 2026-08-16
 | `request_id` | ✔ | 房主機產生，回應必須帶回同一個 |
 | `tick` | ✔ | 全域 tick 計數，僅供時間顯示，不是觸發依據（見《00》§3） |
 | `npc_id` | ✔ | 本次決策請求的角色，單一角色一次 |
-| `physical.*.value` | ✔ | 數值本體 |
-| `physical.*.label` | ✔ | **中文形容詞，缺一不可**（見《01-3》§6） |
+| `physical.*.value` | ✔ | 數值本體；`hunger` 這欄傳的是換算過的**飢餓度**（`100 − hunger`），不是內部原始值，其餘 7 項傳原始值（見《01》§4-1、《99》P-07） |
+| `physical.*.label` | ✔ | **中文形容詞，缺一不可**，5 級距對照表見《99》P-07 |
 | `today_plan[].done` | ✔ | 每筆標記完成／未完成，不限筆數（見《10》§5.4） |
 | `fact_lines` | ✔ | 引擎產生的事實句陣列，無則傳 `[]` |
 | `present_npcs` | ✔ | **只放在場的人**，無則傳 `[]` |
@@ -354,7 +354,10 @@ Event Parser → event_type / content / credibility
 }
 ```
 
-生成規則見《01》§1-4。違規（提及遊戲內容或數值）時 AI 端自行重試，`retries` 回報重試次數。
+生成規則見《01》§1-4。用 GBNF 約束輸出長度（≤60 字）與型別，格式面不會違規；違反內容規則（提及遊戲內容或數值）時
+Godot 端重試，**上限 3 次**（2026-08-16 定案，見《99》P-10），`retries` 回報重試次數。3 次都違規時，
+改用固定備用句庫（依人格傾向挑一句籠統但不違規的版本，例如「我沒什麼想對你說的」），`content` 絕不留空——
+它是唯讀欄位，之後沒有機會補救。50 個官方 NPC 模板在資料準備階段就先生成好、經過人工檢閱，不等投放時才生成。
 
 ---
 
