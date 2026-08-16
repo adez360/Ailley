@@ -13,28 +13,13 @@ static func create(db) -> bool:
 
 		target_id TEXT NOT NULL,
 
-		relations_affinity INTEGER NOT NULL DEFAULT 0
-			CHECK (
-				relations_affinity BETWEEN -100 AND 100
-			),
+		trust INTEGER NOT NULL DEFAULT 20
+			CHECK (trust BETWEEN 0 AND 100),
 
-		relations_trust INTEGER NOT NULL DEFAULT 0
-			CHECK (
-				relations_trust BETWEEN 0 AND 100
-			),
+		appearance_cache TEXT NOT NULL DEFAULT ''
+			CHECK (LENGTH(appearance_cache) <= 20),
 
-		relations_familiarity INTEGER NOT NULL DEFAULT 0
-			CHECK (
-				relations_familiarity BETWEEN 0 AND 100
-			),
-
-		relations_debt INTEGER NOT NULL DEFAULT 0
-			CHECK (
-				relations_debt BETWEEN -100 AND 100
-			),
-
-		updated_at TEXT NOT NULL
-			DEFAULT CURRENT_TIMESTAMP,
+		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
 		FOREIGN KEY (character_id)
 			REFERENCES npc(npc_id)
@@ -44,14 +29,9 @@ static func create(db) -> bool:
 			REFERENCES npc(npc_id)
 			ON DELETE CASCADE,
 
-		UNIQUE (
-			character_id,
-			target_id
-		),
+		UNIQUE (character_id, target_id),
 
-		CHECK (
-			character_id <> target_id
-		)
+		CHECK (character_id <> target_id)
 	);
 
 	CREATE INDEX IF NOT EXISTS
@@ -64,12 +44,7 @@ static func create(db) -> bool:
 	"""
 
 	if not db.query(sql):
-
-		push_error(
-			"[NPCRelationsSchema] "
-			+ "Failed to create npc_relations."
-		)
-
+		push_error("[NPCRelationsSchema] Failed to create npc_relations.")
 		return false
 
 	return true
