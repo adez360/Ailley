@@ -48,7 +48,13 @@ func load_npc_data():
 		npc_data[npc["id"]] = npc
 
 	schedule_assignments = data.get("assignments", {})
-	identity_assignments = data.get("identities", {})
+
+	var identities_raw = data.get("identities", {})
+	if identities_raw is Dictionary:
+		identity_assignments = identities_raw
+	else:
+		push_error("npc_schedule.json identities 不是 Dictionary")
+		identity_assignments = {}
 
 # 查詢NPC行程
 func get_npc(id:String):
@@ -62,7 +68,12 @@ func get_schedule_template(node_name:String)->String:
 # 由呼叫端（character.gd::_ready()）退回生成 UUID／節點名。Player 與動態生成的
 # 角色節點名都查不到，自然落回原本行為
 func get_npc_identity(node_name:String)->Dictionary:
-	return identity_assignments.get(node_name, {})
+	var entry = identity_assignments.get(node_name, {})
+	if entry is Dictionary:
+		return entry
+	else:
+		push_error("npc_schedule.json identities[%s] 不是 Dictionary" % node_name)
+		return {}
 
 # 讀取角色庫模板（#73）。格式與 load_npc_data() 同一套防呆：檔案不存在或
 # JSON 壞掉都只 push_error 不炸開機，模板資料目前是佔位資料，不是關鍵路徑

@@ -895,14 +895,18 @@ Esc(ui_cancel) 切換暫停。main.tscn 的 Pause，子節點 Dim(ColorRect) / T
 ```gdscript
 var npc_data = {}                            # NPC 模板 id -> 資料
 var schedule_assignments = {}                # 節點名 -> schedule_template
+var identity_assignments = {}                # 節點名 -> {character_id, character_name}
 
 func get_npc(id: String)                         # 查不到 → null
 func get_schedule_template(node_name: String) -> String   # 沒指派 → ""
+func get_npc_identity(node_name: String) -> Dictionary    # 沒指派 → {}；驗證 entry 是 Dictionary
 func load_npc_data()
 ```
 
 ```
 地點座標不歸 GameManager 管，一律走 PlaceAnchors 的 Marker2D
+† get_npc_identity 回空字典時由 character.gd::_ready() 退回生成 UUID／節點名
+† identity_assignments 與 schedule_assignments 分開：前者「我是誰」，後者「用哪份行程」
 ```
 
 ## GameClock — scripts/core/GameClock.gd · autoload
