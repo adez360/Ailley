@@ -538,6 +538,42 @@ func get_state_snapshot() -> Dictionary:
 	return snapshot
 
 
+# ---- 存檔 ----
+
+# 給 SaveService 存的角色資料：身分、數值、關係。跟 get_state_snapshot() 是
+# 兩份不同的東西，不要互相包裝——snapshot 要描述現況給 LLM 看（含 facing、
+# 動畫這類衍生狀態），這裡要能還原（座標屬於世界存檔，見 #21，不在這裡）
+func get_save_data() -> Dictionary:
+	var data := {
+		"character_id": character_id,
+		"character_name": character_name,
+	}
+
+	if stats != null:
+		data["stats"] = stats.get_save_data()
+	if relationships != null:
+		data["relationships"] = relationships.get_save_data()
+
+	return data
+
+# 已經在 characters 群組裡（_ready() 跑過）才重驗 id 唯一性——存檔的 character_id
+# 可能撞到另一隻已經在場上的角色，覆寫後兩隻共用同一個 id 就會共用關係與記憶
+# （_ensure_unique_id() 註解講的那個坑）。還沒進 tree 就不用管，接下來的 _ready()
+# 本來就會做這件事，這裡搶著做反而會在 get_tree() 是 null 時炸掉
+func load_save_data(data: Dictionary) -> void:
+	character_id = data.get("character_id", character_id)
+	if character_id.is_empty():
+		character_id = generate_id()
+	if is_inside_tree():
+		_ensure_unique_id()
+	character_name = data.get("character_name", character_name)
+
+	if stats != null and data.has("stats"):
+		stats.load_save_data(data["stats"])
+	if relationships != null and data.has("relationships"):
+		relationships.load_save_data(data["relationships"])
+
+
 # ---- 滑鼠選取 ----
 
 # 滑鼠點得到的範圍，世界座標。用目前影格的圖去量而不是碰撞形狀 ——
