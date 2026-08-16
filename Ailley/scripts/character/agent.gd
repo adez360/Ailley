@@ -193,6 +193,14 @@ func _make_provider() -> DecisionProvider:
 	if decision_source == "cloud":
 		if model_name.is_empty():
 			push_warning("Agent %s: decision_source 'cloud' 但 model_name 是空的，退回 local" % character_name)
+		elif not AIService.config.has_provider(model_name):
+			# model_name 打錯字／指到一個 AIConfig 沒設定的 provider——跟空字串
+			# 是同一類資料異常，同樣要警告，不能讓角色決策整個安靜啞掉。
+			# AIConfig.get_provider() 只有空字串才會退回 default_provider，
+			# 非空但找不到的名字會回 null，不會自動救援，所以這裡要主動擋
+			push_warning("Agent %s: decision_source 'cloud' 但 model_name '%s' 不是已知的 AIConfig provider，退回 local" % [
+				character_name, model_name
+			])
 		else:
 			return RemoteLLMProvider.new(model_name)
 	elif decision_source != "local":
