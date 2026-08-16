@@ -435,7 +435,7 @@ func _cmd_memory(args: PackedStringArray) -> void:
 		character.character_name, m.l1.size(), Memory.L1_CAP
 	])
 	for entry in m.l1:
-		_print("[color=888888]  · %s[/color]" % entry.get("content", ""))
+		_print("[color=888888]  · %s[/color]" % _escape_bbcode(str(entry.get("content", ""))))
 
 	for level in [4, 3, 2]:
 		var level_entries := m.get_by_level(level)
@@ -443,9 +443,12 @@ func _cmd_memory(args: PackedStringArray) -> void:
 			continue
 		_print("[color=88ccff]L%d[/color][color=888888]（%d 條）[/color]" % [level, level_entries.size()])
 		for entry in level_entries:
+			# content 是 LLM 輸出（memory.add_candidate() 的呼叫端來自 LLM 反思
+			# 結果），進 RichTextLabel 前一定要 _escape_bbcode()——不然 LLM 回應
+			# 塞 BBCode 標籤可以截斷或偽造主控台輸出（max 等級 code review 抓到）
 			_print("[color=888888]  · [%s] importance=%d decay=%.1f  %s[/color]" % [
 				entry.get("valence", "?"), entry.get("importance", 0),
-				entry.get("decay_value", 0), entry.get("content", ""),
+				entry.get("decay_value", 0), _escape_bbcode(str(entry.get("content", ""))),
 			])
 
 # reflect <name>：手動觸發一次睡眠反思（#168）。印出反思前的事件緩衝區
@@ -464,7 +467,15 @@ func _cmd_reflect(args: PackedStringArray) -> void:
 		_error("%s 不是 Agent，沒有反思機制" % character.character_name)
 		return
 
-	var daily_events: Array[String] = character.get_daily_events()
+	# get_daily_events()／request_sleep_reflection() 只存在於 Agent，不在
+	# Character 基底——is_in_group("agents") 不會幫 GDScript 縮窄靜態型別，
+	# 上面那行只是執行期檢查。顯式轉型才能讓底下這兩個呼叫真的是型別安全的
+	# （max 等級 code review 抓到：先前直接在 Character 型別變數上呼叫這兩個
+	# Agent-only 方法，能跑是因為 GDScript 對未宣告方法只降級成警告，不是
+	# 真的型別安全）
+	var agent := character as Agent
+
+	var daily_events: Array[String] = agent.get_daily_events()
 	if daily_events.is_empty():
 		_print("[color=888888]（今天還沒發生任何事，沒東西可以反思）[/color]")
 		return
@@ -473,11 +484,14 @@ func _cmd_reflect(args: PackedStringArray) -> void:
 		character.character_name, daily_events.size()
 	])
 	for event in daily_events:
-		_print("[color=888888]  · %s[/color]" % event)
+		_print("[color=888888]  · %s[/color]" % _escape_bbcode(event))
 
-	await character.request_sleep_reflection()
+	var result := await agent.request_sleep_reflection()
+	if not result["ok"]:
+		_error("反思失敗（可能撞到速率限制或驗證失敗），今天的事留著，下次再試")
+		return
 
-	_print("[color=888888]反思完成，當日摘要：%s[/color]" % character.last_reflection_summary)
+	_print("[color=888888]反思完成，當日摘要：%s[/color]" % _escape_bbcode(character.last_reflection_summary))
 	_print("[color=888888]記憶列表：[/color]")
 	_cmd_memory(args)
 

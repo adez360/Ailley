@@ -1,3 +1,4 @@
+class_name Agent
 extends Character
 
 ## 由任務池 + 仲裁器驅動的角色。
@@ -163,13 +164,22 @@ var last_reflection_summary := ""
 ## 固定 8 條的滾動視窗，這裡是「睡前都留著」的緩衝區，語意不同不共用。
 ## 每句只寫事實，不判斷正負面／重不重要，那是 LLM 在反思時的工作
 ## （《00》原則二：引擎只給事件，不給情緒）
+##
+## 每筆是 {id, content} 不是單純字串——反思是一趟真的打網路的非同步呼叫，
+## await 期間角色照樣可能觸發新事件、LLM 也可能漏評某幾筆。用穩定的 id
+## 讓 request_sleep_reflection() 只刪除「LLM 真的回傳評分結果」的那幾筆，
+## 不是用送出時的筆數概略估計（max 等級 code review 抓到：概略估計法在
+## LLM 漏評、或等待期間 FIFO 剛好把快照最前面幾筆擠掉時，還是可能誤刪
+## 沒被評到分的事件）
 const DAILY_EVENTS_CAP := 30
-var _daily_events: Array[String] = []
+var _daily_events: Array[Dictionary] = []
+var _next_daily_event_id := 0
 
 ## 加一筆今天發生的事。滿了就丟掉最舊的一筆，不是拒絕新的——今天最新發生的
 ## 事沒理由因為緩衝區滿了就進不去，跟 Memory.push_l1() 的 FIFO 取捨一樣
 func _push_daily_event(content: String) -> void:
-	_daily_events.append(content)
+	_daily_events.append({"id": _next_daily_event_id, "content": content})
+	_next_daily_event_id += 1
 	if _daily_events.size() > DAILY_EVENTS_CAP:
 		_daily_events.pop_front()
 
@@ -474,35 +484,45 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 ## 交給 memory 分級寫入。importance/valence 完全由 LLM 決定（見 validate_reflection()
 ## 的註解），這裡不重算或覆寫這兩個值。
 ##
-## 失敗（網路/驗證）時不清空 _daily_events——今天的事還沒被評過分，清空等於
-## 直接遺失，留著等下次睡眠反思重試，最壞情況是被 DAILY_EVENTS_CAP 的 FIFO
-## 擠掉，不會比現在更糟
+## 回傳 {"ok": bool}：ok=false 代表這次沒有真的反思到（未啟用/逾時/驗證失敗/
+## 沒有事件可反思），last_reflection_summary 維持上一次成功的舊值不變——
+## 呼叫端不該把舊摘要誤當成「這次」的結果來顯示（max 等級 code review 抓到）
 ##
-## 送出去反思的是呼叫當下的快照，不是 _daily_events 本身——await 期間
-## （真的打網路，從幾百毫秒到數十秒都可能）角色照樣可能觸發新事件並
-## append 進 _daily_events，那些事還沒被送去評分。成功回來後只 pop_front()
-## 掉「這次真的送出去的那幾筆」，不是整包 clear()，不然這段期間新進來的事
-## 會被平白清掉，永遠評不到分（max 等級 code review 抓到）
+## 失敗時不清空 _daily_events——今天的事還沒被評過分，清空等於直接遺失，
+## 留著等下次睡眠反思重試，最壞情況是被 DAILY_EVENTS_CAP 的 FIFO 擠掉，
+## 不會比現在更糟
+##
+## 送出去反思的每筆事件都帶穩定 id（見 _push_daily_event()），不是單純比
+## 送出時的筆數：LLM 可能漏評某幾筆（合法的部分回應），await 期間（真的打
+## 網路，數百毫秒到數十秒都可能）角色也可能觸發新事件並 append 進
+## _daily_events。只刪除「LLM 這次真的回傳評分結果」的那幾個 id，其餘
+## （包含等待期間新增的、跟 LLM 沒評到的）留在 _daily_events 裡，
+## 下次反思會再送一次（max 等級 code review 抓到：純用送出筆數 pop_front()
+## 的近似法，在這兩種情況下都可能誤刪還沒被評到分的事件）
 ##
 ## 觸發時機目前只有 debug_console.gd 的 `reflect` 指令手動呼叫——真正的睡眠
 ## 動作（#112）落地後，在角色進入睡眠那個時間點呼叫這個函式，這裡不用改
-func request_sleep_reflection() -> void:
+func request_sleep_reflection() -> Dictionary:
 	if memory == null or _daily_events.is_empty():
-		return
+		return {"ok": false}
 
-	var events_sent := _daily_events.duplicate()
+	var events_sent := _daily_events.duplicate(true)
 	var envelope := PromptBuilder.build_reflection_envelope(self, events_sent)
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, AISchema.validate_reflection)
 	if not result["ok"]:
-		return
+		return {"ok": false}
 
 	var data: Dictionary = result["data"]
 	last_reflection_summary = data["summary"]
+
+	var scored_ids := {}
 	for event in data["events"]:
 		memory.add_candidate(event["content"], event["importance"], event["valence"])
+		scored_ids[event["id"]] = true
 
-	for i in mini(events_sent.size(), _daily_events.size()):
-		_daily_events.pop_front()
+	_daily_events = _daily_events.filter(func(e): return not scored_ids.has(e["id"]))
+
+	return {"ok": true}
 
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
 ## AIService、parse_completion、validate_*，任何一關失敗都靜默放棄，任務池
@@ -1103,6 +1123,9 @@ func get_current_task_elapsed_minutes() -> int:
 	return _now_minutes() - _current_task_started_at
 
 ## Debug 用：今天累積了哪些事件，給 reflect 指令在呼叫 request_sleep_reflection()
-## 前先印出來看
+## 前先印出來看。只回 content——debug 顯示不需要知道內部的 id
 func get_daily_events() -> Array[String]:
-	return _daily_events
+	var contents: Array[String] = []
+	for event in _daily_events:
+		contents.append(event["content"])
+	return contents

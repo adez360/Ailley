@@ -334,6 +334,17 @@ static func validate_reflection(data: Dictionary) -> Dictionary:
 			return _fail(ERROR_BAD_SHAPE)
 
 		var event := item as Dictionary
+
+		# id 是必填，不是選填寬鬆欄位——agent.gd::request_sleep_reflection()
+		# 靠它決定哪幾筆 _daily_events 真的被評過分、可以移除，少了它就沒辦法
+		# 安全地清除，整包回應寧可判失敗重試，不要放行一個沒有 id 的事件
+		if not event.has("id"):
+			return _fail(ERROR_BAD_SHAPE)
+		var id_value: Variant = event["id"]
+		if not (id_value is int or id_value is float):
+			return _fail(ERROR_BAD_SHAPE)
+		var event_id: int = int(id_value)
+
 		if not event.has("content") or not event["content"] is String:
 			return _fail(ERROR_BAD_SHAPE)
 
@@ -359,6 +370,7 @@ static func validate_reflection(data: Dictionary) -> Dictionary:
 			valence = event["valence"]
 
 		events.append({
+			"id": event_id,
 			"content": content,
 			"valence": valence,
 			"importance": importance,
@@ -457,11 +469,12 @@ static func reflection_response_schema() -> Dictionary:
 						"items": {
 							"type": "object",
 							"properties": {
+								"id": {"type": "number"},
 								"content": {"type": "string", "maxLength": MAX_LINE_CHARS},
 								"valence": {"type": "string", "enum": VALID_VALENCES},
 								"importance": {"type": "number"},
 							},
-							"required": ["content", "importance"],
+							"required": ["id", "content", "importance"],
 						},
 					},
 				},
