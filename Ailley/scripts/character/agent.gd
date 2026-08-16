@@ -748,20 +748,28 @@ const SUCCESS_PARAMS := {
 ## 表上的動作（move_to/talk/sleep/nap/rest/wash/idle/eat 全部不在表上）不是
 ## 技能檢定，直接放行。
 ##
-## ⚠ stamina/injury/alcohol 現在不存在於 Stats.SPEC（#115 還沒落地），
-## Stats.get_value() 對不存在的 key 回傳 0.0，不是中間值——在 #115 做完前，
-## 任何真的呼叫到這裡的動作都會吃到「體力 0」的幽靈 -10% 懲罰。目前
-## SUCCESS_PARAMS 沒有一個動作真的會被 resolve() 呼叫到，先不修，但接下
-## 一個表上動作（例如 #159 attack）之前要先確認 #115 落地
+## stamina/injury/alcohol 現在不存在於 Stats.SPEC（#115 還沒落地）。injury／
+## alcohol 兩項公式本來就是「從 0 起算才扣分」，缺欄位時 Stats.get_value()
+## 回傳的 0.0 剛好是中性值，不用特別處理；stamina 公式基準點是 50，函式內部
+## 有另外判斷 Stats.SPEC.has("stamina")，缺欄位時當中性值 50 用，不會吃到假的
+## 懲罰。等 #115 把 stamina 加進 SPEC，這裡不用改，自動開始吃到真實數值
 func _roll_success(action: String, character: Character, environment_risk: float) -> Dictionary:
 	var params: Dictionary = SUCCESS_PARAMS.get(action, {})
 	if params.is_empty():
 		return {"success": true, "reason": ""}
 
 	var trait_value := 0.0  # 人格資料還沒接上（#117），先固定 0
+
+	# injury/alcohol 兩項的公式本來就是「從 0 起算才扣分」，Stats.get_value()
+	# 對不存在的 key 回傳的 0.0 剛好就是中性值，不用特別處理。stamina 不一樣——
+	# 公式基準點是 50 不是 0，缺欄位時硬套 get_value() 的 0.0 會變成一個假的
+	# -10% 懲罰（QA review 抓到）。改成：SPEC 裡真的有這個欄位才讀實際值，
+	# 沒有就當作中性的 50，貢獻 0——等 #115 把 stamina 加進 SPEC，這裡不用改，
+	# 自動開始吃到真實數值
+	var stamina: float = character.stats.get_value("stamina") if Stats.SPEC.has("stamina") else 50.0
 	var injury_term := -character.stats.get_value("injury") * 0.004
 	var alcohol_term := -maxf(0.0, character.stats.get_value("alcohol") - 30.0) * 0.005
-	var stamina_term := (character.stats.get_value("stamina") - 50.0) * 0.002
+	var stamina_term := (stamina - 50.0) * 0.002
 	var chance: float = params["base"] \
 		+ trait_value * float(params["coef"]) \
 		+ stamina_term + injury_term + alcohol_term - environment_risk

@@ -242,11 +242,12 @@ resolve() -> {"success": bool, "reason": String}   # reason 成功是空字串�
   不套用硬規則檢查
 † 掛在 _select()：resolve() 判定失敗的任務不 commit、直接從 _tasks 移除，
   不留著佔位重試
-† SUCCESS_PARAMS 表上的動作才會擲骰（《01-2》§2 公式），move_to/talk/sleep/
-  nap/rest/wash/idle/eat 不在表上，恆成功
-⚠ stamina/injury/alcohol 現在不存在於 Stats.SPEC（#115 未落地），
-  Stats.get_value() 對不存在的 key 回傳 0.0，SUCCESS_PARAMS 目前沒有動作
-  真的會被呼叫到，接下一個表上動作前要先確認 #115 落地
+† SUCCESS_PARAMS 表上的動作才會擲骰（《01-2》§2 公式），move_to/sleep/
+  nap/rest/wash/idle/eat 不在表上、也沒有硬規則要擋，恆成功；talk 同樣不在
+  表上（不擲骰），但有硬規則檢查（目標存在性），不是恆成功
+† stamina 缺欄位時（#115 未落地）當中性值 50 處理，不吃到假懲罰；
+  injury/alcohol 公式本來就是從 0 起算才扣分，缺欄位回傳的 0.0 剛好是
+  中性值，不用特別處理
 ```
 
 ```text

@@ -499,6 +499,7 @@ func get_state_snapshot() -> Dictionary:
 		"animation": sprite.animation,
 		"in_conversation": is_in_conversation(),
 		"working": is_working(),
+		"last_action_result": last_action_result,
 	}
 
 	if stats != null:
