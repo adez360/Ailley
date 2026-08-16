@@ -132,8 +132,8 @@ var _next_llm_task_id := 0
 ## 混在一起——那是引擎真的會去執行的排程單位。
 ##
 ## 欄位形狀對齊 database/schemas/NPCDailyPlanSchema.gd 的 npc_daily_plan
-## 表（npc_id 那份存的是 plan_id/text/is_done），這裡還沒接存檔（#21～#23），
-## 先用同樣的形狀存在記憶體，之後接存檔不用改欄位名
+## 表（npc_id 那份存的是 plan_id/text/is_done）。經 to_save_data()／
+## apply_save_data() 存讀，見下方「---- 存檔 ----」
 var _today_plan: Array[Dictionary] = []		# [{id, text, is_done}]
 var _next_plan_id := 0
 
@@ -141,6 +141,14 @@ var _next_plan_id := 0
 ## _request_next_decision() 開頭怎麼消費它。這是四個開放時機裡的「AI 主動
 ## 申請」：不是每次決策都能改，得先問過、下一輪才真的給
 var _plan_update_requested := false
+
+## 跟人的約定（06 §「appointment」，《10》§5.5 開放時機）：
+## {"with": character_id, "location": String, "game_time": String}，
+## 空 Dictionary 代表目前沒有約定。目前還沒有任何決策路徑會產生這個值——
+## AISchema／PromptBuilder 都還沒開放 AI 回傳 appointment（後續 issue），
+## 這裡先留欄位讓存檔 schema 現在就成形，之後接上寫入來源時只要賦值，
+## 不用回來改存檔那一段
+var _appointment: Dictionary = {}
 
 ## 這次重算「進來的時候」current_state 是不是 sleep——用來偵測「剛睡醒」
 ## 那個轉換瞬間，見 _reevaluate() 怎麼用它
@@ -618,6 +626,35 @@ func get_state_snapshot() -> Dictionary:
 		"size": _tasks.size(),
 	}
 	return snapshot
+
+
+# ---- 存檔 ----
+
+# 基底的存檔資料加上決策情境欄位。只存 today_plan／appointment 這兩個——
+# current_goal／last_action_result 是瞬時情境，重開等於睡醒重新想，
+# 依拍板不存（見 note/技術/存檔.md「決策情境欄位：只留跨天的承諾」）
+func to_save_data() -> Dictionary:
+	var data := super()
+	data["today_plan"] = _today_plan.duplicate(true)
+	data["appointment"] = _appointment.duplicate(true)
+	return data
+
+func apply_save_data(data: Dictionary) -> void:
+	super(data)
+
+	_today_plan.clear()
+	for item in (data.get("today_plan", []) as Array):
+		var entry: Dictionary = item
+		_today_plan.append({
+			"id": int(entry.get("id", 0)),
+			"text": str(entry.get("text", "")),
+			"is_done": bool(entry.get("is_done", false)),
+		})
+	_next_plan_id = 0
+	for item in _today_plan:
+		_next_plan_id = maxi(_next_plan_id, int(item["id"]))
+
+	_appointment = (data.get("appointment", {}) as Dictionary).duplicate(true)
 
 # 第一次看到某個陌生人就停下來愣一下。
 #

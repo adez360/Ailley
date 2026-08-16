@@ -76,6 +76,7 @@ const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader
 @onready var collider: CollisionShape2D = $CollisionShape2D
 @onready var stats: Stats = get_node_or_null("Stats")
 @onready var relationships: Relationships = get_node_or_null("Relationships")
+@onready var memory: Memory = get_node_or_null("Memory")
 @onready var bubble: Node2D = get_node_or_null("Bubble")
 @onready var vision: Vision = get_node_or_null("Vision")
 @onready var inventory: Inventory = get_node_or_null("Inventory")
@@ -535,6 +536,58 @@ func get_state_snapshot() -> Dictionary:
 			snapshot["affinity"] = affinity
 
 	return snapshot
+
+
+# ---- 存檔 ----
+
+# 角色存檔資料。跟 get_state_snapshot() 是兩回事：那份是給 LLM／debug 顯示看的
+# 精簡快照（不含完整 relationships records、不含記憶），這份是 SaveService 要
+# 整包寫進 JSON 的權威資料，見 note/技術/存檔.md「序列化的規則」。
+#
+# 走訪 Stats.SPEC／Relationships.records／Memory 的 l2／l4，不手寫欄位——
+# SPEC／records 加欄位，存檔自動跟著多，不用回來改這裡。
+#
+# 子類別（Agent）覆寫補上 today_plan／appointment，基底不知道那兩個欄位存在
+func to_save_data() -> Dictionary:
+	var data := {
+		"id": character_id,
+		"name": character_name,
+	}
+
+	if stats != null:
+		var values := {}
+		for key in Stats.SPEC:
+			values[key] = stats.get_value(key)
+		data["stats"] = values
+
+	if relationships != null:
+		data["relationships"] = relationships.records.duplicate(true)
+
+	if memory != null:
+		data["memory"] = {"l2": memory.l2.duplicate(true), "l4": memory.l4.duplicate(true)}
+
+	return data
+
+# data 缺欄位一律用預設值補，不當成錯誤（見note/技術/存檔.md）——
+# Stats 缺值用 SPEC[key]["start"] 補，Relationships／Memory 缺值就是空。
+# 子類別（Agent）覆寫補上 today_plan／appointment 的讀回
+func apply_save_data(data: Dictionary) -> void:
+	character_id = str(data.get("id", character_id))
+	character_name = str(data.get("name", character_name))
+
+	if stats != null:
+		var values: Dictionary = data.get("stats", {})
+		for key in Stats.SPEC:
+			stats.set_value(key, values.get(key, Stats.SPEC[key]["start"]))
+
+	if relationships != null:
+		var records: Dictionary = data.get("relationships", {})
+		relationships.records = records.duplicate(true)
+
+	if memory != null:
+		var mem: Dictionary = data.get("memory", {})
+		memory.l2.assign(mem.get("l2", []) as Array)
+		memory.l4.assign(mem.get("l4", []) as Array)
 
 
 # ---- 滑鼠選取 ----
