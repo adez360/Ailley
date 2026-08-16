@@ -135,15 +135,13 @@ func save_world(id: String, data: Dictionary) -> bool:
 ## npc 沒有 version     《14》§2 要求的並行寫入保護沒有掛靠欄位
 ## npc_relations        多了 affinity / familiarity / debt 三欄，《06》已把它們
 ##                      拿掉（見《99》2026-08-16 01§3-1）；少了 appearance_cache
-## npc_appearance       是 hair_id / face_id / clothes_id 三個定欄，
+## npc_appearance       是 hair_id / face_id / clothes_id /
+##                      decoration1_id / decoration2_id 五個定欄，
 ##                      《06》的 appearance 是 { slot, item_id, label } 陣列
 ## npc_occupation       欄位是 occupation / occupation_level / workplace_id …，
 ##                      《06》的 occupation 是 { id, name, since_day }
-## npc_state 的 range   stamina / hygiene / health 預設 1.0，是 0.0–1.0；
-##                      《99》P-32 已拍板統一為 0–100
 ## identity 三個欄位     home_location_id / decision_source / model_name 無欄位
 ## words_to_creator     只有 content 與 is_spoken，
 ##                      缺 generated_at / spoken_at / trigger
-## emotion              缺 duration_left
 ## state.appointment    整組（with / location / game_time）沒有表
 ## ===================================================================
