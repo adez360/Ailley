@@ -3,6 +3,10 @@
 		"Agent": "npc001",
 		"Agent2": "npc006"
 	},
+	"identities": {
+		"Agent": {"character_id": "aji", "character_name": "阿吉"},
+		"Agent2": {"character_id": "alan", "character_name": "阿嵐"}
+	},
 	"villagers": [
 		{
 			"id": "npc001",

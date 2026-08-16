@@ -9,6 +9,13 @@ var npc_data = {}
 # key 用節點名不用 character_id —— id 是生成的 UUID，人在 json 裡手寫不出來
 var schedule_assignments = {}
 
+# 節點名 -> {character_id, character_name}。場景裡固定的 NPC，身分（id/顯示名）
+# 是設計時決定好的資料，不是執行期才生、需要被記住的狀態——寫死在這裡才能讓
+# character_id 跨場次穩定（relationships 拿它當 key，變了等於失憶）。
+# 跟 schedule_assignments 一樣用節點名查表，跟它分兩塊是因為「用哪份行程」與
+# 「我是誰」是兩件不同的事（見 agent.gd schedule_template 的註解）
+var identity_assignments = {}
+
 # template_id -> 模板資料（character_name/system_prompt/words_to_creator）。
 # #73 的角色庫：先用記憶體清單，不等存檔系統——模板資料是寫死的 json，
 # 重開遊戲不會消失，不需要真的存檔
@@ -41,6 +48,7 @@ func load_npc_data():
 		npc_data[npc["id"]] = npc
 
 	schedule_assignments = data.get("assignments", {})
+	identity_assignments = data.get("identities", {})
 
 # 查詢NPC行程
 func get_npc(id:String):
@@ -49,6 +57,12 @@ func get_npc(id:String):
 # 這個角色該用哪份行程模板。沒有指定就回空字串，由呼叫端決定怎麼退回
 func get_schedule_template(node_name:String)->String:
 	return str(schedule_assignments.get(node_name, ""))
+
+# 這個節點名對應的固定身分（{character_id, character_name}）。沒指派就回空字典，
+# 由呼叫端（character.gd::_ready()）退回生成 UUID／節點名。Player 與動態生成的
+# 角色節點名都查不到，自然落回原本行為
+func get_npc_identity(node_name:String)->Dictionary:
+	return identity_assignments.get(node_name, {})
 
 # 讀取角色庫模板（#73）。格式與 load_npc_data() 同一套防呆：檔案不存在或
 # JSON 壞掉都只 push_error 不炸開機，模板資料目前是佔位資料，不是關鍵路徑
