@@ -13,24 +13,14 @@ static func create(db) -> bool:
 
 		target_id TEXT NOT NULL,
 
-		relations_affinity INTEGER NOT NULL DEFAULT 0
-			CHECK (
-				relations_affinity BETWEEN -100 AND 100
-			),
-
-		relations_trust INTEGER NOT NULL DEFAULT 0
+		relations_trust INTEGER NOT NULL DEFAULT 20
 			CHECK (
 				relations_trust BETWEEN 0 AND 100
 			),
 
-		relations_familiarity INTEGER NOT NULL DEFAULT 0
+		relations_appearance_cache TEXT NOT NULL DEFAULT ''
 			CHECK (
-				relations_familiarity BETWEEN 0 AND 100
-			),
-
-		relations_debt INTEGER NOT NULL DEFAULT 0
-			CHECK (
-				relations_debt BETWEEN -100 AND 100
+				length(relations_appearance_cache) <= 20
 			),
 
 		updated_at TEXT NOT NULL

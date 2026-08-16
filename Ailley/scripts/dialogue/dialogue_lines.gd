@@ -15,23 +15,20 @@ extends RefCounted
 ## 台詞本身在 res://locale/game.csv 的 DLG_* 那組 key，這裡只決定「哪一句」。
 ## 因為全是 static func 所以拿不到 tr()，一律走 L10n。
 ##
-## 刻意只收 String / Stats / float，不收 Character：
+## 刻意只收 String / Stats，不收 Character：
 ## 一來避免 character.gd -> conversation.gd -> dialogue_lines.gd -> character.gd 的循環相依，
 ## 二來逼自己把「產生台詞需要哪些資訊」講清楚，之後那就是要送給 LLM 的 context。
+##
+## 台詞不分親疏：好感度欄位已經拿掉（《01》3-1），引擎手上沒有任何
+## 「這兩個人熟不熟」的數值可以拿來挑句子。剩下的 trust 是信任不是好感，
+## 拿它當親疏門檻等於把兩件事混成一件，那正是規格書要拆開的東西。
 
-const AFFINITY_FRIEND := 30.0
-const AFFINITY_DISLIKE := -20.0
 
-
-static func opening(listener_name: String, stats: Stats, affinity: float) -> String:
-	if affinity <= AFFINITY_DISLIKE:
-		return L10n.t("DLG_OPENING_DISLIKE")
-	if affinity >= AFFINITY_FRIEND:
-		return L10n.tf("DLG_OPENING_FRIEND", {"name": listener_name})
+static func opening(listener_name: String) -> String:
 	return L10n.tf("DLG_OPENING_NEUTRAL", {"name": listener_name})
 
 # turn 從 0 開始算，目前沒用到，之後要做「話題會推進」時會需要
-static func reply(stats: Stats, affinity: float, _turn: int) -> String:
+static func reply(stats: Stats, _turn: int) -> String:
 	var lowest := stats.get_lowest_need()
 
 	if stats.get_value(lowest) < Stats.CRITICAL:
@@ -51,14 +48,7 @@ static func reply(stats: Stats, affinity: float, _turn: int) -> String:
 	if mood <= 30.0:
 		return L10n.t("DLG_MOOD_LOW")
 
-	if affinity >= AFFINITY_FRIEND:
-		return L10n.t("DLG_REPLY_FRIEND")
-
 	return L10n.t("DLG_REPLY_NEUTRAL")
 
-static func closing(listener_name: String, affinity: float) -> String:
-	if affinity <= AFFINITY_DISLIKE:
-		return L10n.t("DLG_CLOSING_DISLIKE")
-	if affinity >= AFFINITY_FRIEND:
-		return L10n.tf("DLG_CLOSING_FRIEND", {"name": listener_name})
+static func closing() -> String:
 	return L10n.t("DLG_CLOSING_NEUTRAL")

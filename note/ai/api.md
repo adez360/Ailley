@@ -142,7 +142,7 @@ get_state_snapshot() -> {
   id, name, position, moving, facing, animation, in_conversation, working,  # 一定有
   stats: {key: value, ...},                     # 有掛 Stats 才有，key 是 SPEC 的 key
   money: int,                                   # 有掛 Inventory 才有；背包內容不進快照
-  affinity: {other_id: {affinity, met_count}, ...}, # 有記錄的人才有，欄名同 relationships
+  relations: {other_id: {trust, met_count}, ...}, # 有記錄的人才有，欄名同 relationships
   schedule: {place, state, size},                # agent.gd override 補上，Player 沒有
 }
 
@@ -164,7 +164,7 @@ get_state_snapshot() -> {
   這批資料要進 LLM 的 prompt，不該隨玩家介面語系跑掉
 † schedule 由 agent.gd override get_state_snapshot()（super() 後補一段）加上，
   不是基底用 is_in_group("agents") 嗅探 —— 子類別的欄位由子類別自己放
-† affinity 的欄名跟 relationships.gd 的 record 一致，不要改名成 value
+† relations 的欄名跟 relationships.gd 的 record 一致，不要改名成 value
   同一個數值兩個名字，讀過 relationships.gd 的人會在 snapshot 上找不到它
 † make_noise() 不查視線遮蔽，聲音穿牆，跟 Vision 刻意不同
 → 技術/Character 基底與 Agent · 技術/滑鼠選取與鏡頭 · 技術/聽覺感測
@@ -359,42 +359,42 @@ mood     心情    0.5    50      50     ✗        ""
 ## Relationships — scripts/character/relationships.gd · class_name · Node
 
 ```gdscript
-const AFFINITY_MIN := -100.0 · AFFINITY_MAX := 100.0
 const TRUST_MIN := 0.0 · TRUST_MAX := 100.0
-const FAMILIARITY_MIN := 0.0 · FAMILIARITY_MAX := 100.0
-const DEBT_MIN := -100.0 · DEBT_MAX := 100.0
-const DEFAULT_RECORD := {"affinity": 0.0, "trust": 20.0, "familiarity": 0.0, "debt": 0.0, "met_count": 0}
+const APPEARANCE_MAX_CHARS := 20
+const DEFAULT_RECORD := {"trust": 20.0, "met_count": 0, "appearance_cache": ""}
 var records := {}                            # other_id -> record
 
 # 唯讀 — 不會建立紀錄
 func has_met(other_id) -> bool               # met_count > 0，只認 note_meeting()
 func has_record(other_id) -> bool            # 有沒有任何紀錄（見過但沒講完 = true/false）
 func get_record(other_id) -> Dictionary      # 副本，改它不會動到內部
-func get_affinity(other_id) -> float         # 沒紀錄回 0.0
 func get_trust(other_id) -> float            # 沒紀錄回 20.0（不是 0——初識不是完全不信任）
-func get_familiarity(other_id) -> float      # 沒紀錄回 0.0
-func get_debt(other_id) -> float             # 沒紀錄回 0.0；正=我欠他，負=他欠我
 func get_met_count(other_id) -> int
+func get_appearance_cache(other_id) -> String # 沒紀錄回 ""
 func known_ids() -> Array
 
-# 寫入 — 走私有的 _ensure_record()，四維都回夾限後的新值
-func add_affinity(other_id, delta) -> float
-func add_trust(other_id, delta) -> float
-func add_familiarity(other_id, delta) -> float
-func add_debt(other_id, delta) -> float
+# 寫入 — 走私有的 _ensure_record()
+func add_trust(other_id, delta) -> float     # 回夾限後的新值
+func set_appearance_cache(other_id, text) -> void  # 超過 20 字直接截斷
 func note_meeting(other_id) -> void          # has_met() 為真的唯一來源
+
+# 存檔
+func get_save_data() -> Dictionary           # records 的深拷
+func load_save_data(data) -> void            # 只收 DEFAULT_RECORD 認得的 key
 ```
 
 ```text
 † key 用 character_id 不用 character_name — name 可改，用它當 key = 改名即失憶
 † 每筆是 Dictionary 不是單一 float，加欄位時呼叫端不用改
-⚠ 讀寫必須分開：get_affinity() 曾經走「沒有就當場建一筆」，於是 conversation.gd
-  開場問一次好感度就讓 has_met() 永遠為真而 met_count 還是 0
+⚠ 讀寫必須分開：查詢曾經走「沒有就當場建一筆」，於是 conversation.gd
+  開場問一次關係就讓 has_met() 永遠為真而 met_count 還是 0
   → agent.gd 的「第一次看到陌生人」永遠不成立
-† trust/familiarity/debt 範圍與預設值照規格《01》3-1 表定死，不是隨意選的
-  （trust 預設 20 尤其容易看錯，別跟其餘三維一樣當成 0）
-† 這四維實際被哪些行動讀寫（persuade 用 trust、give 影響 debt……）還沒接線，
-  見 99 待規劃；目前只有欄位本身、查詢與寫入函式
+† 只有 trust 一個引擎數值。好感/熟悉/虧欠三維已整個拿掉（《01》3-1）——
+  沒有任何公式讀過它們，那三件事交給《03》記憶系統自己記自己判斷
+† trust 範圍與預設值照規格《01》3-1 表定死（預設 20 不是 0，容易看錯）
+† appearance_cache 是《99》P-08 的外觀快取（≤20 字），初次相遇注入一次後
+  隨關係帶出；目前只有欄位與存取函式，寫入端還沒接
+† trust 實際被哪些行動讀寫（persuade 讀它算成功率）還沒接線，見 99 待規劃
 → 技術/talk 動作設計
 ```
 
@@ -638,13 +638,13 @@ _unhandled_input  action "select"(左鍵) → 冒漣漪 → 有人 select / 沒�
 ```gdscript
 signal finished(reason: String)
 
-const MAX_TURNS := 6                         # 雙方各講一次算兩輪
+const SAFETY_MAX_TURNS := 10                 # 工程安全閥，不是正常的結束條件
 const TURN_GAP := 0.5
 const MAX_DISTANCE := 48.0                   # 比 TALK_RANGE 寬鬆
-const REASON_TURN_LIMIT := "TURN_LIMIT"
+const REASON_ENDED_BY_SPEAKER := "ENDED_BY_SPEAKER"
 const REASON_TOO_FAR := "TOO_FAR"
 const REASON_INTERRUPTED := "INTERRUPTED"
-const SOCIAL_GAIN := 25.0 · MOOD_GAIN := 5.0 · AFFINITY_GAIN := 3.0
+const SOCIAL_GAIN := 25.0 · MOOD_GAIN := 5.0
 
 var initiator: Character
 var target: Character
@@ -654,7 +654,7 @@ func interrupt() -> void
 ```text
 † 不要直接 new，走 Character.talk_to()
 生命週期：talk_to() 設好 initiator/target 加進場景 → 講完自己 queue_free()
-只有 REASON_TURN_LIMIT 才發獎勵（social/mood/affinity + note_meeting）
+只有 REASON_ENDED_BY_SPEAKER 才發獎勵（social/mood + note_meeting，不動 trust）
 † 做成獨立節點不塞進 Character：對話是「兩者之間」的東西，
   塞進一方會讓另一方反查，且結束時要同步清兩邊
 → 技術/talk 動作設計
@@ -663,18 +663,18 @@ func interrupt() -> void
 ## DialogueLines — scripts/dialogue/dialogue_lines.gd · class_name · RefCounted
 
 ```gdscript
-const AFFINITY_FRIEND := 30.0 · AFFINITY_DISLIKE := -20.0
-
-static func opening(listener_name: String, stats: Stats, affinity: float) -> String
-static func reply(stats: Stats, affinity: float, _turn: int) -> String
-static func closing(listener_name: String, affinity: float) -> String
+static func opening(listener_name: String) -> String
+static func reply(stats: Stats, _turn: int) -> String
+static func closing() -> String
 ```
 
 ```text
-† 只收 String/Stats/float，不收 Character
+† 只收 String/Stats，不收 Character
   避免 character→conversation→dialogue_lines→character 循環相依；
   且這份參數清單 = 之後要送給 LLM 的 context
-接 LLM 時整個換掉這個檔，狀態機與氣泡不動
+† 台詞不分親疏：好感度欄位已拿掉，引擎沒有「這兩人熟不熟」的數值可以挑句子；
+  trust 是信任不是好感，拿它當親疏門檻等於把規格書拆開的兩件事又混回去
+這個檔是 LLM 失敗時的 fallback，不是要被換掉的暫時品
 ```
 
 ---

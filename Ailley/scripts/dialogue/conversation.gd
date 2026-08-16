@@ -35,7 +35,6 @@ const REASON_INTERRUPTED := "INTERRUPTED"
 # 好好講完一場之後雙方各自的收穫
 const SOCIAL_GAIN := 25.0
 const MOOD_GAIN := 5.0
-const AFFINITY_GAIN := 3.0
 
 var initiator: Character
 var target: Character
@@ -74,9 +73,7 @@ func _process(_delta: float) -> void:
 # 才能開口——兩者都是體驗倒退，現有的「按 E 立刻打招呼」沒有理由改掉，
 # 這不在這次 issue 的範圍內
 func _run() -> void:
-	var opening := DialogueLines.opening(
-		target.character_name, initiator.stats, initiator.relationships.get_affinity(target.character_id)
-	)
+	var opening := DialogueLines.opening(target.character_name)
 	_speak(initiator, opening)
 	_turns.append(PromptBuilder.turn_entry(initiator.character_name, opening))
 
@@ -142,10 +139,7 @@ func _finish_with_fallback(speaker: Character, listener: Character) -> void:
 	# next_line() 裡的 await 讓出過控制權，speaker/listener 理論上可能在這段
 	# 期間被移出場景（跟 _process() 的 is_instance_valid 檢查是同一種顧慮）
 	if is_instance_valid(speaker) and is_instance_valid(listener):
-		var affinity := 0.0
-		if speaker.relationships != null:
-			affinity = speaker.relationships.get_affinity(listener.character_id)
-		_speak(speaker, DialogueLines.closing(listener.character_name, affinity), true)
+		_speak(speaker, DialogueLines.closing(), true)
 
 	_finish(REASON_ENDED_BY_SPEAKER)
 	queue_free()
@@ -184,6 +178,8 @@ func _apply_rewards() -> void:
 			character.stats.add("social", SOCIAL_GAIN)
 			character.stats.add("mood", MOOD_GAIN)
 
+		# 只記「互動過一次」，不動 trust：《01》3-1 的 trust 只有深度對話
+		# （5 句以上）才 +2，那條判定跟其他 trust 事件一起接線，是各自行動的
+		# issue，不在關係資料結構這則裡
 		if character.relationships != null:
-			character.relationships.add_affinity(other.character_id, AFFINITY_GAIN)
 			character.relationships.note_meeting(other.character_id)
