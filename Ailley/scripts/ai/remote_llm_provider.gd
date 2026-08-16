@@ -9,8 +9,8 @@ var _provider_name: String
 func _init(provider_name: String) -> void:
 	_provider_name = provider_name
 
-func decide(envelope: Dictionary, requester_id: String, policy: AIService.Policy) -> Dictionary:
-	return await AIService.request(envelope, requester_id, policy, _provider_name)
+func decide(envelope: Dictionary, requester_id: String, policy: AIService.Policy, is_retry: bool = false) -> Dictionary:
+	return await AIService.request(envelope, requester_id, policy, _provider_name, is_retry)
 
 
 ## 《12》§3.4：「RemoteLLM 必須實作驗證失敗重試」，上限 2 次（P-22 #3 已拍板，見 #152）

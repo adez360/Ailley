@@ -387,10 +387,15 @@ const AI_THINKING_TEXT := "…"
 ## validator 是呼叫端包好的驗證函式：next_line() 傳 AISchema.validate_dialogue，
 ## _request_next_decision() 傳一個包住 allow_update_plan 的 lambda 呼叫 validate_tasks。
 ## 這裡不用管兩邊 schema 形狀不同，只管「驗證過不過」
+##
+## attempt > 0（第二次起）傳 is_retry=true 給 AIService.request()：SCHEDULED policy
+## 沒有 CONVERSATION 那種豁免，重試間隔只有幾秒、遠低於預設 30 秒冷卻，不跳過
+## 冷卻檢查的話重試永遠會被自己剛送出的上一次呼叫擋成 ERROR_RATE_LIMITED，
+## 《12》§3.4 要求的重試在 SCHEDULED 路徑上會實際失效（PR #176 review 抓到）
 func _decide_with_retry(envelope: Dictionary, policy: AIService.Policy, validator: Callable) -> Dictionary:
 	var attempts := _provider.max_validation_retries() + 1
 	for attempt in attempts:
-		var result: Dictionary = await _provider.decide(envelope, character_id, policy)
+		var result: Dictionary = await _provider.decide(envelope, character_id, policy, attempt > 0)
 		if not result["ok"]:
 			return result
 

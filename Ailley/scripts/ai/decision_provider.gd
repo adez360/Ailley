@@ -7,8 +7,10 @@ extends RefCounted
 ## envelope 是 PromptBuilder.build_dialogue_envelope()/build_plan_envelope() 組好的信封
 ## （system/payload/選填的 response_format）。requester_id 是 character_id，policy 決定
 ## 走不走速率限制——語意跟 AIService.request() 完全一致，這裡只是換一個呼叫對象。
+## is_retry 原樣轉給 AIService.request()：同一次決策內的內容驗證失敗重試要跳過冷卻
+## 檢查，不然重試永遠會被自己剛送出的上一次呼叫的冷卻擋下（見 agent.gd._decide_with_retry()）。
 ## 回傳形狀對齊 AIService.request()：{"ok": bool, "data": Dictionary, "error": String}
-func decide(_envelope: Dictionary, _requester_id: String, _policy: AIService.Policy) -> Dictionary:
+func decide(_envelope: Dictionary, _requester_id: String, _policy: AIService.Policy, _is_retry: bool = false) -> Dictionary:
 	push_error("DecisionProvider.decide() 未實作")
 	return {"ok": false, "data": {}, "error": "not_implemented"}
 

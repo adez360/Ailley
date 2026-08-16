@@ -6,5 +6,5 @@ extends DecisionProvider
 ## max_validation_retries() 沿用基底的 0——不覆寫。
 const PROVIDER_NAME := "local"
 
-func decide(envelope: Dictionary, requester_id: String, policy: AIService.Policy) -> Dictionary:
-	return await AIService.request(envelope, requester_id, policy, PROVIDER_NAME)
+func decide(envelope: Dictionary, requester_id: String, policy: AIService.Policy, is_retry: bool = false) -> Dictionary:
+	return await AIService.request(envelope, requester_id, policy, PROVIDER_NAME, is_retry)

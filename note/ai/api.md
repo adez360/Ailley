@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-16
+updated: 2026-08-17
 ---
 
 # api
@@ -642,7 +642,8 @@ var config: AIConfig
 
 func reload_config() -> void
 func request(envelope: Dictionary, requester_id: String,
-             policy: Policy = Policy.SCHEDULED, provider_name: String = "") -> Dictionary   # 一律 await
+             policy: Policy = Policy.SCHEDULED, provider_name: String = "",
+             is_retry: bool = false) -> Dictionary   # 一律 await
 func get_usage(requester_id: String) -> Dictionary
 ```
 
@@ -662,13 +663,16 @@ get_usage -> {game_day, calls_today, max_calls, dialogue_today, total_today,
 † 用真實秒不用遊戲時間（要擋的帳單與 provider rate limit 都活在真實時間）
 † 金鑰只在組 Authorization header 時碰得到，其餘一律過 _scrub()
 † CONVERSATION 豁免冷卻/配額但照樣計數（_dialogue_calls_today）——豁免的是限制不是帳
+† is_retry=true 只跳過 min_interval_sec 冷卻，不跳過每日配額——同一次決策內容驗證
+  失敗重試（agent.gd::_decide_with_retry()）用，SCHEDULED policy 沒有 CONVERSATION
+  那種豁免，重試間隔只有幾秒，不加這個會被自己剛送出的呼叫冷卻擋死
 → 技術/LLM 串接與 AI 服務層
 ```
 
 ## DecisionProvider — scripts/ai/decision_provider.gd · class_name · RefCounted
 
 ```gdscript
-func decide(envelope: Dictionary, requester_id: String, policy: AIService.Policy) -> Dictionary
+func decide(envelope: Dictionary, requester_id: String, policy: AIService.Policy, is_retry: bool = false) -> Dictionary
 func max_validation_retries() -> int          # 基底回 0
 ```
 
@@ -687,7 +691,7 @@ decide() -> {"ok": bool, "data": Dictionary, "error": String}  # 形狀對齊 AI
 
 ```gdscript
 const PROVIDER_NAME := "local"                # 固定打 AIConfig 裡名叫 "local" 的 provider
-func decide(envelope, requester_id, policy) -> Dictionary   # 包 AIService.request(..., "local")
+func decide(envelope, requester_id, policy, is_retry=false) -> Dictionary   # 包 AIService.request(..., "local", is_retry)
 # max_validation_retries() 沿用基底的 0，不覆寫——本地無重試語意
 ```
 
@@ -695,7 +699,7 @@ func decide(envelope, requester_id, policy) -> Dictionary   # 包 AIService.requ
 
 ```gdscript
 func _init(provider_name: String) -> void     # 建構時決定打哪個 AIConfig provider，之後不變
-func decide(envelope, requester_id, policy) -> Dictionary   # 包 AIService.request(..., _provider_name)
+func decide(envelope, requester_id, policy, is_retry=false) -> Dictionary   # 包 AIService.request(..., _provider_name, is_retry)
 func max_validation_retries() -> int          # 回 2（《12》§3.4，P-22 #3）
 ```
 
