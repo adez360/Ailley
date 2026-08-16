@@ -9,12 +9,14 @@ static func create(db) -> bool:
 
 		npc_id TEXT PRIMARY KEY,
 
-		-- 生理狀態：0.0 ~ 1.0
+		-- 生理狀態：0.0 ~ 1.0（hunger 例外，見下方）
 		-- 0.0 = 0%
 		-- 1.0 = 100%
 
-		hunger REAL NOT NULL DEFAULT 0.0
-			CHECK (hunger BETWEEN 0.0 AND 1.0),
+		-- hunger 改用 0-100，跟規格書《01》§4-1／實際引擎 stats.gd 對齊：
+		-- 越高越飽，預設 100（見《99》P-32，2026-08-16）
+		hunger REAL NOT NULL DEFAULT 100.0
+			CHECK (hunger BETWEEN 0.0 AND 100.0),
 
 		thirst REAL NOT NULL DEFAULT 0.0
 			CHECK (thirst BETWEEN 0.0 AND 1.0),
