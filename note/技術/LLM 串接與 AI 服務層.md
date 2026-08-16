@@ -385,8 +385,11 @@ provider，`RemoteLLMProvider` 建構時帶入要打哪個 provider 名字（對
 每隻 Agent 出生時依 `decision_source`（`@export`，#122 落地前的佔位欄位，
 不是真實角色資料）建一次 provider，存成 `_provider` 成員變數，之後所有決策
 ／對話呼叫都用它——對應《06》「`decision_source`／`model_name` 投放後不可改」，
-不是每次呼叫才重新判斷。`decision_source` 打錯字／空字串安靜退回
-`LocalLLMProvider`，`push_warning` 帶原因。
+不是每次呼叫才重新判斷。`decision_source` 打錯字／空字串，或 `"cloud"` 但
+`model_name` 是空的，兩種資料異常都安靜退回 `LocalLLMProvider`，`push_warning`
+帶原因——後者是刻意分開判斷：不擋住的話空字串會被 `AIConfig.get_provider()`
+解析成 `default_provider`，讓角色實際打本機模型、卻頂著 `RemoteLLMProvider`
+的身分（連帶套用錯的重試次數），而且沒有任何警告。
 
 `agent.gd::_decide_with_retry()` 集中處理「decide → parse_completion →
 validate」，內容驗證失敗（`parse_completion()` 或 `AISchema.validate_*()`
