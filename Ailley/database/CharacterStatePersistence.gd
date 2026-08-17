@@ -302,10 +302,12 @@ func _save_character_state_only(
 		)
 
 
-	var existing := DatabaseManager.select(
+	var existing := DatabaseManager.select_where(
 		STATE_TABLE,
-		"npc_id = '%s'"
-		% _escape_sql(character_id),
+		"npc_id = ?",
+		[
+			character_id
+		],
 		[
 			"npc_id"
 		]
@@ -347,7 +349,7 @@ func _save_character_state_only(
 			STATE_TABLE,
 			state_data,
 			"npc_id = '%s'"
-			% _escape_sql(character_id)
+			% DatabaseManager.escape_sql_string(character_id)
 		)
 
 		if state_ok:
@@ -547,10 +549,12 @@ func _save_character(
 		)
 
 
-	var existing := DatabaseManager.select(
+	var existing := DatabaseManager.select_where(
 		STATE_TABLE,
-		"npc_id = '%s'"
-		% _escape_sql(character_id),
+		"npc_id = ?",
+		[
+			character_id
+		],
 		[
 			"npc_id"
 		]
@@ -592,7 +596,7 @@ func _save_character(
 			STATE_TABLE,
 			state_data,
 			"npc_id = '%s'"
-			% _escape_sql(character_id)
+			% DatabaseManager.escape_sql_string(character_id)
 		)
 
 		if state_ok:
@@ -731,10 +735,12 @@ func _load_inventory_once(
 	_inventory_loading[npc_id] = true
 
 
-	var rows := DatabaseManager.select(
+	var rows := DatabaseManager.select_where(
 		INVENTORY_TABLE,
-		"npc_id = '%s'"
-		% _escape_sql(npc_id),
+		"npc_id = ?",
+		[
+			npc_id
+		],
 		[
 			"slot",
 			"item_id",
@@ -1290,10 +1296,12 @@ func _save_inventory(
 	# 先查詢既有資料。
 	# -------------------------------------------------
 
-	var existing_rows := DatabaseManager.select(
+	var existing_rows := DatabaseManager.select_where(
 		INVENTORY_TABLE,
-		"npc_id = '%s'"
-		% _escape_sql(npc_id),
+		"npc_id = ?",
+		[
+			npc_id
+		],
 		[
 			"slot"
 		]
@@ -1314,7 +1322,7 @@ func _save_inventory(
 	# 開始事務
 	# -------------------------------------------------
 
-	if not DatabaseManager.db.query("BEGIN TRANSACTION;"):
+	if not DatabaseManager.begin_transaction():
 
 		push_error(
 			"[CharacterStatePersistence] "
@@ -1336,7 +1344,7 @@ func _save_inventory(
 		var deleted := DatabaseManager.delete(
 			INVENTORY_TABLE,
 			"npc_id = '%s'"
-			% _escape_sql(npc_id)
+			% DatabaseManager.escape_sql_string(npc_id)
 		)
 
 
@@ -1351,7 +1359,7 @@ func _save_inventory(
 				]
 			)
 
-			DatabaseManager.db.query("ROLLBACK;")
+			DatabaseManager.rollback_transaction()
 			return false
 
 
@@ -1433,7 +1441,7 @@ func _save_inventory(
 				]
 			)
 
-			DatabaseManager.db.query("ROLLBACK;")
+			DatabaseManager.rollback_transaction()
 			return false
 
 
@@ -1490,7 +1498,43 @@ func _save_inventory(
 				]
 			)
 
-			DatabaseManager.db.query("ROLLBACK;")
+			DatabaseManager.rollback_transaction()
+			return false
+
+
+		# -------------------------------------------------
+		# insert_row() 成功回傳後，再確認 row 真的存在——
+		# 這是 npc_inventory 自己的驗證需求，不放在通用
+		# DatabaseManager.insert() 裡（那裡不該知道特定
+		# table 的欄位形狀）。
+		# -------------------------------------------------
+
+		var verify_rows := DatabaseManager.select_where(
+			INVENTORY_TABLE,
+			"npc_id = ? AND slot = ?",
+			[
+				npc_id,
+				slot_index
+			],
+			[
+				"npc_id"
+			]
+		)
+
+
+		if verify_rows.is_empty():
+
+			push_error(
+				"[CharacterStatePersistence] "
+				+ "Inventory INSERT 回傳成功，但 SELECT 驗證不到資料："
+				+ "npc=%s slot=%d"
+				% [
+					npc_id,
+					slot_index
+				]
+			)
+
+			DatabaseManager.rollback_transaction()
 			return false
 
 
@@ -1514,7 +1558,7 @@ func _save_inventory(
 	# 提交事務
 	# -------------------------------------------------
 
-	if not DatabaseManager.db.query("COMMIT;"):
+	if not DatabaseManager.commit_transaction():
 
 		push_error(
 			"[CharacterStatePersistence] "
@@ -1563,10 +1607,12 @@ func _save_wallet(
 	)
 
 
-	var existing := DatabaseManager.select(
+	var existing := DatabaseManager.select_where(
 		WALLET_TABLE,
-		"npc_id = '%s'"
-		% _escape_sql(npc_id),
+		"npc_id = ?",
+		[
+			npc_id
+		],
 		[
 			"npc_id"
 		]
@@ -1606,7 +1652,7 @@ func _save_wallet(
 		WALLET_TABLE,
 		data,
 		"npc_id = '%s'"
-		% _escape_sql(npc_id)
+		% DatabaseManager.escape_sql_string(npc_id)
 	)
 
 
@@ -1670,10 +1716,12 @@ func _ensure_npc_record(
 	)
 
 
-	var existing := DatabaseManager.select(
+	var existing := DatabaseManager.select_where(
 		NPC_TABLE,
-		"npc_id = '%s'"
-		% _escape_sql(character_id),
+		"npc_id = ?",
+		[
+			character_id
+		],
 		[
 			"npc_id"
 		]
@@ -1772,12 +1820,12 @@ func _resolve_home_location(
 
 
 		var requested_rows := (
-			DatabaseManager.select(
+			DatabaseManager.select_where(
 				"location",
-				"location_id = '%s'"
-				% _escape_sql(
+				"location_id = ?",
+				[
 					requested
-				),
+				],
 				[
 					"location_id"
 				]
@@ -1949,15 +1997,3 @@ func get_all_states() -> Array:
 	)
 
 
-# =====================================================
-# SQL Escape
-# =====================================================
-
-func _escape_sql(
-	value: String
-) -> String:
-
-	return value.replace(
-		"'",
-		"''"
-	)

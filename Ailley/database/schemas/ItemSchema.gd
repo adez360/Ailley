@@ -29,7 +29,8 @@ static func create(db) -> bool:
 			CHECK (is_perishable IN (0, 1)),
 
 		-- 腐壞速率（/tick）
-		decay_rate REAL NOT NULL DEFAULT 0,
+		decay_rate REAL NOT NULL DEFAULT 0
+			CHECK (decay_rate >= 0),
 
 		-- 工具每次使用的耐久消耗
 		durability_cost INTEGER NOT NULL DEFAULT 0
