@@ -239,14 +239,16 @@ Agent/Agent2 是場景裡的靜態節點，`_ready()` 時自己查表更貼近�
 `SPEC` 驅動的數值本身。`conditions` 的門檻檢查（`_update_conditions()`）讀
 `stats.get_value()`，但寫入的是 `Character.conditions`。
 
-> [!important] 「tick」目前等於 GameClock 的「一遊戲分鐘」，不是獨立的 tick 引擎
-> 規格書《02》用「tick」當時間單位（12 tick = 2 遊戲小時），但專案目前沒有
-> 事件驅動的 tick 引擎（見《02》§4 的流程圖，那套還沒實作）。`emotion.duration_left`
-> 與 `conditions[].turns_left` 倒數掛在 `GameClock.time_changed`（每遊戲分鐘觸發一次），
-> 跟 `agent.gd` 訂閱同一個訊號的方式一致。這跟 `Stats._process(delta)` 的連續
-> real-time drift 是兩套不同的時間模型——`Stats` 的「每 tick」drift 值是直接當
-> 「每真實秒」在用，沒有經過 GameClock。兩者在目前 `seconds_per_game_minute = 1.0`
-> 的設定下數值上剛好對齊，但概念上不是同一個機制，日後真的做 tick 引擎時兩邊都要重接。
+> [!important] 「tick」= 10 遊戲分鐘，不是獨立的 tick 引擎、也不是 GameClock 的一遊戲分鐘
+> 規格書《02》§1-4 定義 12 tick = 2 遊戲小時（120 遊戲分鐘），也就是 1 tick = 10 遊戲分鐘
+> ——用規格書自己的算例反查就對得起來：joy intensity=60、stability=90、grudge=75 算出
+> 9 tick，規格書寫「約 1.5 小時」＝90 遊戲分鐘。專案目前沒有事件驅動的 tick 引擎
+> （見《02》§4 的流程圖，那套還沒實作），`emotion.duration_left` 與 `_update_conditions()`
+> 的門檻重新檢查都掛在 `GameClock.time_changed`（每遊戲分鐘觸發一次）上，但用
+> `Character._tick_minute_accum` 每累積 10 次才真正跑一次 tick，不是每次 `time_changed`
+> 都跑。這跟 `Stats._process(delta)` 的連續 real-time drift 是兩套不同的時間模型——
+> `Stats` 的「每 tick」drift 值是直接當「每真實秒」在用，沒有經過 GameClock，也沒有
+> 10 倍的换算。兩邊是刻意不同調的兩套機制，日後真的做 tick 引擎時要分別處理。
 
 ### emotion（`set_emotion()`）
 

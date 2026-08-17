@@ -243,7 +243,19 @@ func _find_id_holder(id: String) -> Character:
 
 # ---- 情緒與狀態 ----
 
+## 1 tick = 10 遊戲分鐘（《02》§1-4：12 tick = 2 遊戲小時）。GameClock.time_changed
+## 每遊戲分鐘觸發一次，所以要每累積 10 次才真正跑一次 tick，不是每次都跑——
+## 拿規格書自己的算例反查：joy intensity=60、stability=90、grudge=75 應該是
+## 9 tick ≈ 1.5 小時（90 遊戲分鐘），不是 9 遊戲分鐘
+const TICK_GAME_MINUTES := 10
+var _tick_minute_accum := 0
+
 func _on_game_minute(_hour: int, _minute: int) -> void:
+	_tick_minute_accum += 1
+	if _tick_minute_accum < TICK_GAME_MINUTES:
+		return
+	_tick_minute_accum = 0
+
 	_tick_emotion()
 	_update_conditions()
 
@@ -660,8 +672,10 @@ func get_state_snapshot() -> Dictionary:
 		"in_conversation": is_in_conversation(),
 		"working": is_working(),
 		"last_action_result": last_action_result,
-		"emotion": emotion,
-		"conditions": conditions,
+		# 深拷貝：Dictionary／Array 是傳參照，直接放進 snapshot 的話呼叫端改了
+		# 快照會連帶改到 Character 內部狀態，繞過 set_emotion() 的驗證
+		"emotion": emotion.duplicate(true),
+		"conditions": conditions.duplicate(true),
 	}
 
 	if stats != null:
