@@ -587,13 +587,25 @@ func give_to(other: Character, item_id: String, count: int = 1) -> String:
 		return blocked_reason
 
 	# 模擬全部通過，正式套用到對方背包——不會再失敗，因為套用的規則、對方背包
-	# 當下的狀態，跟模擬時完全一樣（中間沒有任何 await，不會有別的呼叫端插進來改動）
+	# 當下的狀態，跟模擬時完全一樣（中間沒有任何 await，不會有別的呼叫端插進來改動）。
+	# notify=false：逐筆發 changed 的話，訂閱者會在轉移途中看到對方背包只收到
+	# 一部分物品的暫態，而且訂閱者若在收到事件當下改動對方背包，會讓後面幾筆
+	# 跟模擬時的假設對不上（CodeRabbit review 抓到）——靜音到全部套用完再發一次，
+	# 迴圈中途連訊號都不發，這個假設就不會被打破
 	for chunk in chunks:
-		other.inventory.add_item(item_id, chunk["count"], chunk["decay"], chunk["durability"])
+		var add_reason: String = other.inventory.add_item(
+			item_id, chunk["count"], chunk["decay"], chunk["durability"], false
+		)
+		if add_reason != Inventory.ADD_OK:
+			# 理論上不會發生（模擬已經驗過），真的發生代表上面那個「不會被
+			# 打斷」的假設被打破了——這裡不試著回滾（已經進去的 chunk 混進
+			# 對方背包，退不乾淨），只留一個明確的錯誤讓它可被追查
+			push_error("Character.give_to(): 模擬通過但正式套用失敗（%s）——%s 的背包可能在轉移途中被改動" % [add_reason, other.character_name])
 
-	# 上面的移除故意沒發 changed，整筆轉移確定成功才在這裡對來源背包發一次——
-	# 跟失敗時完全不發是對稱的：一次真的發生的變化只對應一次事件
+	# 上面的移除跟正式套用都故意沒發 changed，整筆轉移確定成功才在這裡對兩邊
+	# 背包各發一次——跟失敗時完全不發是對稱的：一次真的發生的變化只對應一次事件
 	inventory.changed.emit()
+	other.inventory.changed.emit()
 
 	return GIVE_OK
 

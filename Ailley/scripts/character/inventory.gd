@@ -114,13 +114,17 @@ func find_first_empty() -> int:
 # count 為 0 的格子（非空所以 find_first_empty() 跳過，count_item() 又算成 0，
 # 於是 remove_item() 清不掉它），_add_unstackable() 的蒐集迴圈則永遠比不到
 # empties.size() == count，把整個背包填滿
-func add_item(item_id: String, count: int = 1, decay: int = 0, durability: int = -1) -> String:
+# notify=false 給 give_to() 這種「一次轉移要拆好幾個 chunk 加」的呼叫端用——
+# 每個 chunk 各發一次 changed 的話，訂閱者會在轉移途中看到目標背包只收到
+# 一部分物品的暫態；呼叫端自己決定「全部 chunk 都進去了」才發那一次
+# （CodeRabbit review 抓到）
+func add_item(item_id: String, count: int = 1, decay: int = 0, durability: int = -1, notify: bool = true) -> String:
 	if count <= 0:
 		return ADD_INVALID_COUNT
 	# 兩條路各有好幾個 return，所以 changed 在這裡發一次就好，不用兩邊各自散落
 	var reason := _add_unstackable(item_id, count, decay, durability) if durability >= 0 \
 			else _add_stackable(item_id, count, decay)
-	if reason == ADD_OK:
+	if reason == ADD_OK and notify:
 		changed.emit()
 	return reason
 

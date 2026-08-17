@@ -255,6 +255,11 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) ->
 				var count_value: Variant = give_params["count"]
 				if not (count_value is int or count_value is float):
 					return _fail(ERROR_BAD_SHAPE)
+				# INF 等於自己的 floor()，上面那個分數檢查放不住它，之後 int(INF)
+				# 又是不可靠的行為（實測過會生出平台相關的最小整數值）——跟 #224
+				# priority/duration 擋 INF／NaN 同一個理由，count 也不能少這關
+				if not is_finite(float(count_value)):
+					return _fail(ERROR_BAD_SHAPE)
 				# 拒絕分數：檢查浮點數是否等於其整數部分
 				if count_value is float and count_value != floor(count_value):
 					return _fail(ERROR_BAD_SHAPE)
