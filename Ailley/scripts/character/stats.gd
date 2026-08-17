@@ -15,9 +15,16 @@ extends Node
 ##            的 PlaceAnchors 解析 —— Stats 不可以依賴場景，否則就沒辦法
 ##            在沒有場景的情況下（例如日後的存檔／單元測試）使用
 ##
-## energy 的 place 是寫死的 home_001，這是從舊 villager.gd 照搬過來的。
+## stamina 的 place 是寫死的 home_001，這是從舊 villager.gd 照搬過來的。
 ## 每個角色的家其實不一樣，正確作法是讀該角色自己的家 —— 等行程表改由 AI
 ## 維護（計畫 §5.1）時一併處理，那時「家在哪」本來就要變成角色的屬性
+##
+## satiety/hydration/stamina/wakefulness/hygiene/alcohol/health/injury 8 項是
+## 規格書《01》§4-1 `state.physical` 的欄位，drift 數值取自該表「每 tick」欄。
+## alcohol/injury 是事件累積型（預設 0，靠外部事件推高），is_need 故意留 false，
+## 不參與 get_lowest_need()/needs_attention()（見《99》P-32 追加決策）；
+## hygiene/health 雖然也是「越高越好」，但目前沒有對應的 place 可去，
+## 同樣不參與這兩個函式，只靠 drift 自然變化或由外部事件寫入
 
 const MIN := 0.0
 const MAX := 100.0
@@ -25,13 +32,24 @@ const CRITICAL := 30.0		# 低於這個值算「該處理了」
 
 const SPEC := {
 	"satiety": {"label": "STAT_SATIETY", "drift": 3.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "restaurant"},
-	"energy": {"label": "STAT_ENERGY", "drift": 1.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "home_001"},
+	"hydration": {"label": "STAT_HYDRATION", "drift": 2.0, "toward": 0.0, "start": 80.0, "is_need": true, "place": "restaurant"},
+	"stamina": {"label": "STAT_STAMINA", "drift": 1.0, "toward": 0.0, "start": 80.0, "is_need": true, "place": "home_001"},
+	"wakefulness": {"label": "STAT_WAKEFULNESS", "drift": 1.2, "toward": 0.0, "start": 90.0, "is_need": true, "place": "home_001"},
+	"hygiene": {"label": "STAT_HYGIENE", "drift": 0.5, "toward": 0.0, "start": 70.0, "is_need": false, "place": ""},
+	"alcohol": {"label": "STAT_ALCOHOL", "drift": 3.0, "toward": 0.0, "start": 0.0, "is_need": false, "place": ""},
+	"health": {"label": "STAT_HEALTH", "drift": 0.0, "toward": 100.0, "start": 100.0, "is_need": false, "place": ""},
+	"injury": {"label": "STAT_INJURY", "drift": 0.5, "toward": 0.0, "start": 0.0, "is_need": false, "place": ""},
 	"social": {"label": "STAT_SOCIAL", "drift": 0.5, "toward": 0.0, "start": 100.0, "is_need": true, "place": "square"},
 	"fun": {"label": "STAT_FUN", "drift": 0.2, "toward": 0.0, "start": 100.0, "is_need": true, "place": "square"},
 	"mood": {"label": "STAT_MOOD", "drift": 0.5, "toward": 50.0, "start": 50.0, "is_need": false, "place": ""},
 }
 
 var values := {}
+
+## `bleeding` condition 期間 `injury` 原本每 tick −0.5 的自然衰減要暫停
+## （《02》§2-2 附注，唯一的例外規則）。由 Character 依 conditions 狀態設定，
+## Stats 自己不知道 conditions 是什麼
+var injury_decay_paused := false
 
 
 func _ready() -> void:
@@ -42,6 +60,8 @@ func _process(delta: float) -> void:
 	for key in SPEC:
 		var spec: Dictionary = SPEC[key]
 		if spec["drift"] == 0.0:
+			continue
+		if key == "injury" and injury_decay_paused:
 			continue
 		values[key] = move_toward(values[key], spec["toward"], spec["drift"] * delta)
 

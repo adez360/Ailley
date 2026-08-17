@@ -97,6 +97,8 @@ const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 static func generate_id() -> String           # RFC 4122 v4，不帶語意，別解析它
 var facing := "front"                        # front|back|right
 var last_action_result := ""                 # #120 resolve() 判定結果，中文，成功是空字串
+var system_prompt := ""                      # #117 送進 LLM 的人格段，_ready() 組一次後不變
+var personality := {}                        # #117 引擎用的 10 項，**不進 prompt**；沒資料是 {}
 func get_facing_direction() -> Vector2       # facing/sprite.flip_h 重建成單位向量
 
 # 元件（子節點，皆 get_node_or_null，沒掛不會壞）
@@ -366,6 +368,40 @@ _daily_events（Array[Dictionary]，每筆 {id, content}，DAILY_EVENTS_CAP=30 F
 ```
 
 
+## Personality — scripts/character/personality.gd · class_name · RefCounted
+
+HEXACO 六維 → 引擎用的 10 項數值 ＋ LLM 用的 `system_prompt` 文字（#117，《01-1》§3~§5）。
+
+```gdscript
+const TRAITS_PATH := "res://data/hexaco_traits.json"   # §4 極端值映射表，36 條文案
+const HEX_FIELDS := [hex_honesty, hex_emotionality, hex_extraversion,
+                     hex_agreeableness, hex_conscientiousness, hex_openness]
+const EXTREME_LOW := 25 · EXTREME_HIGH := 75 · NEUTRAL := 50
+
+static func from_identity(identity: Dictionary, seed_text: String) -> Dictionary
+    # -> {"personality": {10 項}, "system_prompt": String}；一次拿到兩份產出
+static func hexaco_to_personality(h: Dictionary) -> Dictionary       # §3 轉換式，round + clamp 0~100
+static func traits_from_hexaco(h: Dictionary, seed_text: String) -> Array[String]   # §4
+static func build_system_prompt(traits, description, appearance) -> String          # §5
+```
+
+```text
+† 兩份產出讀者不同，刻意不共用表達（《01》§2-1）：引擎讀數字算成功率／記憶衰減，
+  LLM 讀文字——本地模型看到 curiosity: 60 沒有基準，不知 60 是高是低
+† 只有 ≤25 或 ≥75 的維度產生文案，26~74 整條略過（不是輸出「普通」）——
+  中間值就是留給 AI 的自主空間
+† 每端 3 種語氣變體，用 hash(seed_text + 欄位名) 挑，不是真隨機：system_prompt
+  的設計前提是組好之後逐字元不變。呼叫端傳 character_id 當種子，同一隻角色
+  每次開遊戲拿到同一份文案。存檔接上（#21）後改讀存下來的那份，這裡不用改
+† 種子一定要帶欄位名，不然六個維度會一起抽到同一個索引，三種變體等於只有一種
+† 任一區塊為空就整段（含標題）不輸出——不要留「【這個人】」後面接空字串，
+  模型看到空欄位會自行編造（《01-1》§5 規則 2）
+† 完全沒有人格資料的角色（Player、動態生成）：personality = {}，
+  system_prompt 只有開場白與結尾句，不是空字串
+† appearance 目前一律傳空字串：《01》§1-2 的 slot 清單還是【待規劃】，沒有資料來源
+→ 技術/人格與 System Prompt
+```
+
 ## Stats — scripts/character/stats.gd · class_name · Node
 
 ```gdscript
@@ -384,17 +420,27 @@ func get_lowest_need_place() -> String
 ```
 
 ```text
-key      label  drift  toward  start  is_need  place
-satiety  飽足感  3.0    0       100    ✓        restaurant
-energy   精力    1.0    0       100    ✓        home_001
-social   社交    0.5    0       100    ✓        square
-fun      娛樂    0.2    0       100    ✓        square
-mood     心情    0.5    50      50     ✗        ""
+key          label   drift  toward  start  is_need  place
+satiety      飽足感   3.0    0       100    ✓        restaurant
+hydration    水分     2.0    0       80     ✓        restaurant
+stamina      體力     1.0    0       80     ✓        home_001
+wakefulness  清醒度   1.2    0       90     ✓        home_001
+hygiene      清潔     0.5    0       70     ✗        ""
+alcohol      酒精濃度 3.0    0       0      ✗        ""
+health       生命值   0.0    100     100    ✗        ""
+injury       傷勢     0.5    0       0      ✗        ""
+social       社交     0.5    0       100    ✓        square
+fun          娛樂     0.2    0       100    ✓        square
+mood         心情     0.5    50      50     ✗        ""
 
 † 加一項數值 = SPEC 加一列，其餘程式全不用改（含主控台 status 顯示）
 † drift 是每「現實秒」往 toward 靠近多少
 † place 只回名稱不回座標 — Stats 不可依賴場景（存檔/測試要能無場景使用）
-⚠ energy 的 place 寫死 home_001，每個角色的家其實不一樣
+† satiety/hydration/stamina/wakefulness/hygiene/health 是《01》§4-1「越高越好」的需求型欄位；
+  但 get_lowest_need()/needs_attention() 只掃 is_need=✓ 的 4 項（hygiene/health 沒有對應的
+  place 可去，不參與這兩個函式，見《99》P-32 追加決策）
+† alcohol/injury 是事件累積型（預設 0，靠外部事件推高），故意維持「越高越差」，不跟其他 6 項統一方向
+⚠ stamina 的 place 寫死 home_001，每個角色的家其實不一樣
 ```
 
 ## Relationships — scripts/character/relationships.gd · class_name · Node
@@ -460,8 +506,8 @@ func get_by_level(level: int) -> Array[Dictionary]
 † importance 分級（《03》§3）：<30 丟棄／30-59 L2／60-89 L3／90+ L4，
   L4 滿額（5）新記憶進來時最舊一條降級 L3，不是丟棄
 † decay_all() 公式（《03》§4-1）：正面/中性 -= 3；負面 -= 3 × (100-grudge)/50；
-  L4 不衰減；decay_value ≤ 0 刪除。grudge 由呼叫端傳入——人格資料未接（#117），
-  目前一律用預設值 50
+  L4 不衰減；decay_value ≤ 0 刪除。grudge 由呼叫端傳入——人格資料已接（#117），
+  呼叫端可傳 character.personality["grudge"]；還沒有呼叫端這樣傳，目前仍是預設值 50
 † mark_retrieved() 要傳 entries 裡的同一個 Dictionary 參照，不是複製值
 ⚠《03》§3 分級表另有「L2：30-59...三日後若未被檢索則淘汰」一句，跟 §4-1
   衰減公式對不起來（衰減率 3/天，100 分要約 33 天才歸零，不是 3 天）——
@@ -768,15 +814,29 @@ get_usage -> {game_day, calls_today, max_calls, dialogue_today, total_today,
 → 技術/LLM 串接與 AI 服務層
 ```
 
+## DecisionContext — scripts/ai/decision_context.gd · class_name · RefCounted
+
+```gdscript
+var is_retry: bool = false
+```
+
+```text
+† 決策請求的中繼資訊，跟 envelope/requester_id/policy 一起沿 DecisionProvider 鏈路傳遞（#217）
+† 取代逐層宣告 is_retry: bool 參數——新增請求層級中繼資訊只改這裡加欄位，不用逐層加參數、逐層轉發
+```
+
 ## DecisionProvider — scripts/ai/decision_provider.gd · class_name · RefCounted
 
 ```gdscript
-func decide(envelope: Dictionary, requester_id: String, policy: AIService.Policy, is_retry: bool = false) -> Dictionary
+var _provider_name: String = ""               # 子類別 _init() 負責設定；LocalLLMProvider／RemoteLLMProvider 現在共用這個欄位
+func decide(envelope: Dictionary, requester_id: String, policy: AIService.Policy, context: DecisionContext = DecisionContext.new()) -> Dictionary
 func max_validation_retries() -> int          # 基底回 0
 ```
 
 ```text
 decide() -> {"ok": bool, "data": Dictionary, "error": String}  # 形狀對齊 AIService.request()
+† 基底 decide() 本身就是真正的共用實作（#213）：return await AIService.request(envelope, requester_id, policy, _provider_name, context.is_retry)
+† LocalLLMProvider／RemoteLLMProvider 不再覆寫 decide()，直接繼承這份；未來 HumanInput／RemotePlayer 需要不同行為時才覆寫
 † agent.gd 只認得這個介面，不知道背後是本機模型還是雲端模型（《12》§3、§5.1）
 † 語意驗證/成功失敗判定不在這裡——decide() 只管格式轉換/送出/解析/逾時，驗證留給呼叫端的 AISchema
 † HumanInput／RemotePlayer 兩種來源尚未實作
@@ -790,23 +850,22 @@ decide() -> {"ok": bool, "data": Dictionary, "error": String}  # 形狀對齊 AI
 
 ```gdscript
 const PROVIDER_NAME := "local"                # 打 AIConfig 裡名叫 "local" 的 provider
-func _init() -> void                          # 解析一次：has_valid_provider("local") 不成立就 push_warning + 退回 ""
-var _provider_name: String                    # "local" 或 ""（＝交給 AIConfig.default_provider）
-func decide(envelope, requester_id, policy, is_retry=false) -> Dictionary   # 包 AIService.request(..., _provider_name, is_retry)
-func max_validation_retries() -> int          # "local" 時 0（本地 GBNF 保證格式），退回 default_provider 時 2
+func _init() -> void                          # 解析一次：has_valid_provider("local") 不成立就 push_warning + 退回 ""，設定繼承自基底的 _provider_name
+func max_validation_retries() -> int          # 讀 AIConfig.get_provider(_provider_name).format_guaranteed：true 時 0，否則 2
 ```
 
 ```text
 † 解析放 _init() 不放 decide()：設定一場遊戲內不會變，放 decide() 的話缺 "local" 時每次決策洗一行警告
-† 退回 default_provider 之後打到的多半不是 GBNF 端點，「本地無重試語意」的前提不成立，所以改給 2 次
+† #212：判斷依據從「provider 名字是不是字面值 "local"」改成讀 AIConfig.Provider.format_guaranteed 這個宣告出來的能力——
+  退回 default_provider 之後打到的多半不是 GBNF 端點，「本地無重試語意」的前提不成立；
+  format_guaranteed 預設 false，現有設定檔沒補這個欄位的話行為會從 0 次變 2 次重試（多重試幾次，非正確性問題）
 ```
 
 ## RemoteLLMProvider — scripts/ai/remote_llm_provider.gd · class_name · extends DecisionProvider
 
 ```gdscript
-func _init(provider_name: String) -> void     # 建構時決定打哪個 AIConfig provider，之後不變
-func decide(envelope, requester_id, policy, is_retry=false) -> Dictionary   # 包 AIService.request(..., _provider_name, is_retry)
-func max_validation_retries() -> int          # 回 2（《12》§3.4，P-22 #3）
+func _init(provider_name: String) -> void     # 建構時決定打哪個 AIConfig provider，之後不變，設定繼承自基底的 _provider_name
+func max_validation_retries() -> int          # 回 2（《12》§3.4，P-22 #3），不受 format_guaranteed 影響
 ```
 
 ```text
@@ -830,6 +889,7 @@ const MASK_KEEP := 4
 class Provider extends RefCounted:
     var name · base_url · model · api_key · timeout · valid · status_reason
     var supports_json_schema := true         # false 時 AIService 不送 response_format
+    var format_guaranteed := false           # #212：文法層（如 GBNF）保證輸出格式，LocalLLMProvider.max_validation_retries() 讀這個決定要不要給重試次數
     func masked_key() -> String
     func completions_url() -> String
 
@@ -869,6 +929,7 @@ static func build_plan_envelope(character: Character, visible: Array[Character],
                                  pool: Array[Dictionary]) -> Dictionary
 static func build_reflection_envelope(character: Character, daily_events: Array[Dictionary]) -> Dictionary
 static func turn_entry(speaker_name: String, text: String) -> Dictionary
+static func _system(character: Character, rules: String) -> String   # 人格段 + 規則，#117
 ```
 
 ```
@@ -877,6 +938,9 @@ plan payload        {type:"plan", self, context:{visible, pool, today_plan, memo
 reflection payload  {type:"reflection", self, context:{events: Array[{id,content}]}}   # #168
 memory 區塊          {recent: Array[String], core: Array[String]}   # L2/L4 內容，#169
 † self 區塊三者共用（_self_block()，沿用 Character.get_state_snapshot()），不重新蒐集一次
+† system 段 = character.system_prompt + "\n\n" + 該類型的規則字串（_system()，#117）。
+  人格段排最前面且逐字元不變（《01-3》§5 組裝順序），那是 llama-server 每個 slot
+  命中 KV cache 的條件。personality 十項數值**不進 prompt**（《01》§2-1）
 † PLAN_SYSTEM 的動作清單用 AISchema.ALLOWED_ACTIONS 動態組，不另外抄一份字串
   ——兩份清單各自維護會漂移，白名單改了這裡忘記跟著改，模型看到的允許清單就對不上驗證的
 † plan_response_schema()（AISchema）當 response_format 送出，跟 validate_tasks() 驗證的形狀對齊
@@ -1001,6 +1065,7 @@ locale [code]            看目前語系／切換（zh_TW / en）
 tasks <name>             印那隻 Agent 的候選任務池：分數拆項、在不在窗內、哪筆執行中
 act <name> <action> [place|target]   直接推一筆任務給那隻 Agent（#112 驗證用）；
                          只收 IMPLEMENTED_ACTIONS 上的動作，30 遊戲分鐘後自動退場
+persona <name>           印 system_prompt（送進 LLM 的那段）與 10 項 personality（不進 prompt）
 help | clear
 
 角色查找：character_name(不分大小寫) → 撞名列候選 id 前 8 碼 → character_id 前綴
@@ -1067,7 +1132,7 @@ Esc(ui_cancel) 切換暫停。main.tscn 的 Pause，子節點 Dim(ColorRect) / T
 ```gdscript
 var npc_data = {}                            # NPC 模板 id -> 資料
 var schedule_assignments = {}                # 節點名 -> schedule_template
-var identity_assignments = {}                # 節點名 -> {character_id, character_name}
+var identity_assignments = {}                # 節點名 -> {character_id, character_name, hexaco, character}
 
 func get_npc(id: String)                         # 查不到 → null
 func get_schedule_template(node_name: String) -> String   # 沒指派 → ""
@@ -1079,6 +1144,8 @@ func load_npc_data()
 地點座標不歸 GameManager 管，一律走 PlaceAnchors 的 Marker2D
 † get_npc_identity 回空字典時由 character.gd::_ready() 退回生成 UUID／節點名
 † identity_assignments 與 schedule_assignments 分開：前者「我是誰」，後者「用哪份行程」
+† identities 的 hexaco（六維滑桿）與 character（自述，≤250 字）是人格資料來源（#117），
+  怎麼變成 personality 十項與 system_prompt 見 Personality
 ```
 
 ## GameClock — scripts/core/GameClock.gd · autoload
@@ -1124,6 +1191,7 @@ AIService 已接對話（conversation.gd 非同步）與行程（agent.gd 任務
 DecisionProvider 介面已存在（scripts/ai/decision_provider.gd），agent.gd 透過
   LocalLLMProvider／RemoteLLMProvider 呼叫，不再直接呼叫 AIService；decision_source／
   model_name 是 Agent 上的佔位 @export（#122 落地前的假資料，不是真正的角色資料）
-雲端驗證失敗重試已實作（agent.gd _decide_with_retry()，RemoteLLMProvider 2 次／
-  LocalLLMProvider 0 次，退回 default_provider 時 2 次）；HumanInput／RemotePlayer 兩種來源尚未實作
+雲端驗證失敗重試已實作（agent.gd _decide_with_retry()，RemoteLLMProvider 固定 2 次／
+  LocalLLMProvider 讀 AIConfig.Provider.format_guaranteed：true 時 0 次、false 時 2 次，
+  不再用 provider 名字判斷）；HumanInput／RemotePlayer 兩種來源尚未實作
 ```
