@@ -535,9 +535,10 @@ JSON Schema → GBNF 的轉換器。
 - [ ] 尚未對真正的 OpenRouter 打過請求，TLS/DNS 與真實回應格式未驗證
 - [ ] 成本上限機制的具體設計
 - [ ] 記憶系統上線前，Agent 的對話逐字稿要不要先存記憶體就好
-- [x] `response_format` 的 json_schema 送出去之後模型端可靠度（issue #245，
-      2026-08-17）：地端 provider 對 GBNF 強制／純 prompt 約束（`supports_json_schema`
-      開關）各實測 **50 次**，GBNF 強制 50/50 全過零失敗，純 prompt 約束 47/50
+- [x] `response_format`／GBNF 強制路徑，與不送 `response_format` 的純 prompt
+      對照組，模型端可靠度差異（issue #245，2026-08-17）：地端 provider 對兩者
+      （`supports_json_schema` 開關）各實測 **50 次**，GBNF 強制 50/50 全過零失敗，
+      純 prompt 約束（`supports_json_schema=false`，不送 `response_format`）47/50
       （6% 失敗率，3 次都是模型自己生成白名單外的 action，例如 `"work"`），沒有
       出現社群回報過的 json_schema/grammar 衝突錯誤；合成的壞掉回應（缺欄位、
       白名單外、型別錯）也測過 layer 2/3 的退場路徑，`AISchema.validate_tasks()`
