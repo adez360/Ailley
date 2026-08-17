@@ -105,7 +105,7 @@ llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key
 	"enabled": true,
 	"default_provider": "local",
 	"providers": {
-		"local":      {"base_url": "http://127.0.0.1:8080/v1", "api_key": "", "model": "qwen2.5-7b-instruct", "timeout": 10.0},
+		"local":      {"base_url": "http://127.0.0.1:8080/v1", "api_key": "", "model": "qwen2.5-7b-instruct", "timeout": 10.0, "format_guaranteed": true},
 		"openrouter": {"base_url": "https://openrouter.ai/api/v1", "api_key": "sk-or-v1-…", "model": "openai/gpt-4o-mini", "timeout": 10.0}
 	},
 	"min_interval_sec": 30.0
