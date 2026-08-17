@@ -519,13 +519,23 @@ func give_to(other: Character, item_id: String, count: int = 1) -> String:
 	if get_body_position().distance_to(other.get_body_position()) > GIVE_RANGE:
 		return GIVE_TOO_FAR
 
+	# 在移除前先取得物品的 decay 與 durability 值，以便轉移時保留原始數據
+	var item_decay := 0
+	var item_durability := -1
+	for i in inventory.SIZE:
+		var slot := inventory.get_slot(i)
+		if not slot.is_empty() and slot.get("item_id", "") == item_id:
+			item_decay = int(slot.get("decay", 0))
+			item_durability = int(slot.get("durability", -1))
+			break
+
 	var remove_reason := inventory.remove_item(item_id, count)
 	if remove_reason != Inventory.REMOVE_OK:
 		return remove_reason
 
-	var add_reason := other.inventory.add_item(item_id, count)
+	var add_reason := other.inventory.add_item(item_id, count, item_decay, item_durability)
 	if add_reason != Inventory.ADD_OK:
-		inventory.add_item(item_id, count)		# 退回——送禮沒有真的發生
+		inventory.add_item(item_id, count, item_decay, item_durability)		# 退回——送禮沒有真的發生
 		return add_reason
 
 	return GIVE_OK

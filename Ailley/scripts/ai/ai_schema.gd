@@ -226,6 +226,18 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) ->
 			if not target is String or (target as String).strip_edges().is_empty():
 				return _fail(ERROR_BAD_SHAPE)
 
+		# give 動作的 count 參數驗證：拒絕分數值（如 2.5），只接受整數或代表整數的浮點數（如 3.0）
+		# JSON 解析可能把整數解成浮點數，所以兩種型別都要接受，但必須是整數值
+		if task["action"] == "give":
+			var give_params: Dictionary = task.get("params", {})
+			if give_params.has("count"):
+				var count_value: Variant = give_params["count"]
+				if not (count_value is int or count_value is float):
+					return _fail(ERROR_BAD_SHAPE)
+				# 拒絕分數：檢查浮點數是否等於其整數部分
+				if count_value is float and count_value != floor(count_value):
+					return _fail(ERROR_BAD_SHAPE)
+
 		if task.has("expires_at") and not (task["expires_at"] is int or task["expires_at"] is float):
 			return _fail(ERROR_BAD_SHAPE)
 
