@@ -502,15 +502,22 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 
 # ---- 送禮 ----
 
-# 把物品從自己的背包轉移到對方背包，形狀跟 buy_from() 一樣是「兩件事要一起
-# 成功」：remove_item_detailed() 扣掉之後，對方的 add_item() 還是可能因為背包
-# 滿了失敗——用同一套「扣除失敗就不送、加入失敗就退回」補償式寫法，不事先猜
-# 對方放不放得下（理由跟 buy_from() 一樣：還要重算堆疊規則，退貨更簡單可靠）。
+# 把物品從自己的背包轉移到對方背包。跟 buy_from() 一樣是「兩件事要一起成功」，
+# 但這裡不能照抄 buy_from() 的「先做、失敗再補償」寫法：一筆 give 可能橫跨好幾個
+# 腐壞程度不同的格子（remove_item_detailed() 照原樣拆開），若其中一筆送到一半
+# 才發現對方背包滿了，前面幾筆已經真的進了對方背包——不撤回就不是「兩件事一起
+# 成功」，撤回又得從對方背包裡精確挑出剛剛那幾筆（跟對方原有的同物品混在一起，
+# 挑錯格的風險不小）。
+#
+# 解法是先在對方背包的副本上，用真正的 add_item() 邏輯模擬全部加一遍——不是
+# 自己另外設計一套「空間夠不夠」的公式來猜（那正是 buy_from() 註解裡刻意避開的
+# 「猜錯要再重算一次堆疊規則」問題），模擬跑的就是等一下真的會執行的那個函式，
+# 兩者不可能對不上。全部模擬通過才正式套用到對方背包，任何一筆會失敗就整批
+# 作廢，沒有半成功的中間狀態（CodeRabbit review 抓到，#158）。
 #
 # 用 remove_item_detailed() 而不是 remove_item()：後者只回一個原因碼，逐筆的
 # decay／durability 資訊會直接消失，送到對方那邊等於變成一批全新狀態（腐壞
-# 程度歸零、耐久類物品甚至會被誤標成不追蹤耐久）。這裡逐筆用原本的值搬過去
-# （CodeRabbit review 抓到，#158）。
+# 程度歸零、耐久類物品甚至會被誤標成不追蹤耐久）。
 #
 # 不改動 relations 任何欄位——送禮的真實意圖交給雙方後續行為自己演，
 # 不是引擎蓋章（見《99》決策紀錄、CLAUDE.md「遊戲機制規格：AI 自主性自檢」）
@@ -528,22 +535,29 @@ func give_to(other: Character, item_id: String, count: int = 1) -> String:
 	if removal["reason"] != Inventory.REMOVE_OK:
 		return removal["reason"]
 
-	# 同一筆 give 可能橫跨好幾個腐壞程度不同的格子（remove_item_detailed()
-	# 照原樣拆開），逐筆搬過去才保得住每一筆各自的 decay／durability——只抓
-	# 「第一個符合的格子」再套用到整個 count 的做法（CodeRabbit autofix 的
-	# 版本）在橫跨多格時會把後面幾筆的 decay／durability 誤標成第一格的值
 	var chunks: Array = removal["removed"]
-	for i in chunks.size():
-		var chunk: Dictionary = chunks[i]
-		var add_reason := other.inventory.add_item(item_id, chunk["count"], chunk["decay"], chunk["durability"])
-		if add_reason != Inventory.ADD_OK:
-			# 這筆連同還沒送出去的其餘幾筆一起退回自己身上——送禮沒有真的發生。
-			# 已經送到對方那邊的前幾筆不撤回：這裡的補償式寫法跟 buy_from() 一樣，
-			# 只保證數量對得上，不保證失敗當下每一筆都精確復原到原始格位
-			for j in range(i, chunks.size()):
-				var remainder: Dictionary = chunks[j]
-				inventory.add_item(item_id, remainder["count"], remainder["decay"], remainder["durability"])
-			return add_reason
+
+	# 模擬：副本上的格子跟對方現在的背包一模一樣，跑一遍會不會塞不下
+	var sim := Inventory.new()
+	sim.slots = other.inventory.slots.duplicate(true)
+	var blocked_reason := ""
+	for chunk in chunks:
+		var sim_reason: String = sim.add_item(item_id, chunk["count"], chunk["decay"], chunk["durability"])
+		if sim_reason != Inventory.ADD_OK:
+			blocked_reason = sim_reason
+			break
+	sim.free()
+
+	if blocked_reason != "":
+		# 模擬就擋下來了，對方背包從頭到尾沒被動過——把扣掉的全部原值退回自己身上
+		for chunk in chunks:
+			inventory.add_item(item_id, chunk["count"], chunk["decay"], chunk["durability"])
+		return blocked_reason
+
+	# 模擬全部通過，正式套用到對方背包——不會再失敗，因為套用的規則、對方背包
+	# 當下的狀態，跟模擬時完全一樣（中間沒有任何 await，不會有別的呼叫端插進來改動）
+	for chunk in chunks:
+		other.inventory.add_item(item_id, chunk["count"], chunk["decay"], chunk["durability"])
 
 	return GIVE_OK
 
