@@ -1,0 +1,49 @@
+name: MVP module code review reminder
+
+# 觸發條件：PR merge 時，若它關閉的 issue 有 `mvp-module` 標籤，
+# 自動開一則 `code-review` issue 指派給 adez360。
+# 純 gh CLI + shell，不呼叫任何 LLM，零 token 成本。
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  issues: write
+  pull-requests: read
+
+jobs:
+  file-review-issue:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find mvp-module issues closed by this PR and file review issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+
+          numbers=$(printf '%s' "$PR_BODY" \
+            | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?)[[:space:]]*:?[[:space:]]*#[0-9]+' \
+            | grep -oE '[0-9]+' \
+            | sort -u || true)
+
+          if [ -z "$numbers" ]; then
+            echo "No closing issue references found in PR body."
+            exit 0
+          fi
+
+          for n in $numbers; do
+            labels=$(gh issue view "$n" -R "$REPO" --json labels -q '.labels[].name' 2>/dev/null || true)
+            if printf '%s\n' "$labels" | grep -qx "mvp-module"; then
+              title=$(gh issue view "$n" -R "$REPO" --json title -q '.title')
+              gh issue create -R "$REPO" \
+                --title "Code review: #$n $title" \
+                --body "PR #$PR_NUMBER 已 merge，關閉了標記 \`mvp-module\` 的 #$n，該模組已完成到可審查的程度，請進行 code review。" \
+                --label "code-review" \
+                --assignee "adez360"
+              echo "Filed review issue for #$n"
+            fi
+          done
