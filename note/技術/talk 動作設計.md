@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/dialogue/conversation.gd
 status: 進行中
-updated: 2026-08-16
+updated: 2026-08-17
 ---
 
 # talk 動作設計
@@ -110,16 +110,22 @@ key 用對方的 `character_id` 而不是 name —— name 會改，用它當 ke
 
 schema 欄位名稱、是否要額外佔用一次 AI 呼叫頻率配額（見《13》§5 呼叫頻率上限）、跟現有「等待對方回話逾時 8 秒」怎麼互動，待 LLM 版動工時一併設計，見《99》P-31。
 
-## 視線判定（2026-08-16 拍板，見 issue #109）
+## 視線判定（issue #109，已實作）
 
-已拍板：`talk_to()` 要跟 [[視覺感測]] 一樣被視線遮擋，不再是純距離判定。
-被牆或障礙物擋住視線時走新的失敗原因碼 `TARGET_NOT_VISIBLE`（見上表），跟 `TOO_FAR` 分開，
-理由跟其他失敗原因碼一樣——AI 要分得出「太遠」跟「擋住了」是兩種不同的重排行程策略。
+`talk_to()` 跟 [[視覺感測]] 一樣被視線遮擋，不是純距離判定：`character.gd` 的
+`_has_line_of_sight()` 用 `direct_space_state.intersect_ray()` 查 `TALK_BLOCKER_MASK`
+（1 = terrain，跟 `Vision.blocker_mask` 同一個值），不透過 `Vision` 元件本身——
+`talk_to()` 可能被明確指名對象呼叫（debug 主控台、`agent.gd` 的 LLM 決策），
+這時候要的是「現在這一刻真的擋不擋」，不是 Vision 那份每 0.2 秒才更新一次的快取。
+被牆擋住時回傳 `TARGET_NOT_VISIBLE`（見上表），跟 `TOO_FAR` 分開。
 
-連帶決定：候選角色偵測（`character.gd` 裡找最近 X 的那幾個方法）改用 `Area2D` 重構時，
-直接沿用 `Vision.get_visible_characters()`，不用另外開一個 Area2D——反正都要視線判定，沒理由重複維護兩份。
-
-決定已記錄，尚未實作。
+候選角色偵測（原本 `character.gd` 裡找最近角色的方法，未曾被 `player.gd` 實際呼叫過、
+是死代碼，已移除）改成 `player.gd` 直接濾 `Vision.get_visible_characters()`——反正都要
+視線判定，沒理由重複維護兩份。工作站／販賣機的候選則改用 `player.gd` 新增的
+`InteractArea`（`Area2D`，半徑 `maxf(WORK_RANGE, TALK_RANGE, BUY_RANGE)`，動態算不寫死），
+偵測 `project.godot` 新增的 `interactable` collision layer（`workstation.tscn`／
+`vending_machine.tscn` 的 `collision_layer` 從純 `terrain` 改成 `terrain | interactable`，
+NavGrid 的障礙判定只查 `terrain`，不受影響），取代原本每次呼叫都掃過整個 group 的寫法。
 
 ## 已定案的參數
 

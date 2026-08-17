@@ -91,6 +91,7 @@ const TALK_TARGET_IS_SELF := "TARGET_IS_SELF"
 const TALK_TOO_FAR := "TOO_FAR"
 const TALK_TARGET_BUSY := "TARGET_BUSY"
 const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
+const TALK_TARGET_NOT_VISIBLE := "TARGET_NOT_VISIBLE"  # 視線被地形擋住，見 _has_line_of_sight()
 
 @export var character_id := ""               # 唯一身分，留空→查 identities→生成 UUID v4
 @export var character_name := ""             # 顯示名，可改可撞，留空→查 identities→節點名小寫
@@ -114,12 +115,11 @@ const WORK_RANGE := 32.0                     # 同 TALK_RANGE
 const WORK_OK/WORK_TARGET_NOT_FOUND/WORK_TOO_FAR/WORK_OCCUPIED/WORK_BUSY
 const WORK_DURATION_MINUTES := 5 · WORK_PAYMENT := 50
 func work_at(workstation: Workstation) -> String   # WORK_OK 或原因碼；只代表卡位成功
-func find_nearest_workstation() -> Workstation     # WORK_RANGE 內最近；無→null
 func is_working() -> bool
 func _on_work_finished() -> void             # 子類覆寫點；Agent 用它重算行程
 
-func talk_to(other: Character) -> String     # TALK_OK 或原因碼
-func find_nearest_character() -> Character   # TALK_RANGE 內最近；無→null
+func talk_to(other: Character) -> String     # TALK_OK 或原因碼；有視線遮蔽判定，見下方
+func _has_line_of_sight(other: Character) -> bool   # direct_space_state 查 terrain，跟 vision.gd 同演算法
 func is_in_conversation() -> bool
 func is_talk_interruptible() -> bool          # 基底 `not _working`；Agent 覆寫 super() and 任務 interruptible
 func enter_conversation(conversation: Node) -> void
@@ -199,6 +199,9 @@ make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不
 † 候選先被 _is_facing()（cone 判定）篩過一輪，沒被玩家面向的直接不算候選——
   即使範圍內只有它一個、沒有別的候選能比，沒面向就是選不到。to_work/to_machine/
   to_other 是通過面向篩選後剩下候選的原始距離
+† workstation/machine 候選來自 InteractArea（Area2D，collision layer
+  "interactable"，半徑 maxf(WORK_RANGE, TALK_RANGE, BUY_RANGE)）；character
+  候選直接濾 vision.get_visible_characters()，不另開 Area2D（issue #109）
 ⚠ 純比距離會讓工作站/販賣機永遠打不到——桌子/販賣機很容易落在地點錨點的
   互動半徑內，agent 行程正好把人帶去那個錨點，NPC 幾乎必然比物件更近
 ⚠ 面向判定不是萬能解，四個真實朝向裡仍有一組會選錯（見 [[工作站]]），
@@ -577,7 +580,7 @@ func set_highlighted(on: bool) -> void       # 切換 Highlight（Line2D）節�
 
 ```text
 _ready 自動 add_to_group("workstations")
-† 自己不查距離 — 距離判定全在 Character.work_at() / find_nearest_workstation()
+† 自己不查距離 — 候選偵測在 player.gd 的 InteractArea，最終把關在 Character.work_at()
 † StaticBody2D + CollisionShape2D 是給 NavGrid 的（可走性是物理查詢量出來的），
   互動判定完全不靠它，只是「桌子擋路」的副作用
 ⚠ is_occupied() 必須用 is_instance_valid()，不能用 `occupant != null`
