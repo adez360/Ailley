@@ -75,7 +75,9 @@ const MIN_ACTION_DURATION := 10.0
 ## 的 LLM 任務筆數，那個管的是真的打出去的網路請求次數，見
 ## [[行程佇列與任務仲裁]] 的「池子的守則」。#118 實跑校準（2026-08-17）：
 ## 確認 max_calls_per_game_day 目前設定值就是 20，跟這個上限剛好對齊；
-## 單次決策會推進 2~3 筆 LLM 任務，正常一天的呼叫量遠碰不到這個上限，維持 20
+## 對同一隻角色實測 12 次連續真實決策（含觸發 dedup 的重複 action/place），
+## _llm_task_count() 峰值穩定在 6，dedup 機制有效防止無上限累積，離上限還有
+## 相當餘裕，維持 20
 const LLM_TASK_POOL_CAP := 20
 
 ## 候選任務池。這一版只在 _load_schedule() 建立一次就不再變動——
@@ -760,7 +762,9 @@ func _on_noise_heard(_source: Character) -> void:
 
 ## 回復類動作每遊戲分鐘回多少 energy（#112）。《07》§2-3 只給相對關係——sleep
 ## 回復量最大、nap「與睡覺同模組但較低」、rest「小幅回復」——沒有給數字，所以
-## 這三個值跟 MIN_COMMIT／HYSTERESIS 一樣是待實跑校準的暫定值，不是規格定案。
+## 這三個值是待實跑校準的暫定值，不是規格定案。#118 只校準了仲裁常數
+## （HYSTERESIS／MIN_COMMIT／LLM_WAIT_MIN_COMMIT／MIN_ACTION_DURATION／
+## LLM_TASK_POOL_CAP，見上方各自的說明），沒有涵蓋這裡，這三個值還沒實測過。
 ##
 ## 對照基準：energy 的自然衰減是每現實秒 1.0（Stats.SPEC 的 drift），而一個遊戲
 ## 分鐘正好是一現實秒，所以淨回復是這裡的值減 1
