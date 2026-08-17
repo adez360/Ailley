@@ -1162,8 +1162,9 @@ func get_all_states() -> Array                    # SELECT npc_id/各項數值/l
 
 ```gdscript
 const ITEM_BALANCE := {...}   # item_id -> {name, item_type, base_price, max_stack,
-                               # is_consumable, is_perishable, effect_*}，5 筆：
-                               # water/ale/cooked_meat/herb_soup/medicine
+                               # is_consumable, is_perishable, decay_rate?,
+                               # durability_cost?, effect_*}，涵蓋 data/items.json
+                               # 全部 18 個 item_id（食物/飲品/獵物水產/採集品/隨身用品）
 
 static func seed_all() -> void      # 呼叫端：DatabaseManager._ready()，schema 建立後跑一次
 static func seed_items() -> void
