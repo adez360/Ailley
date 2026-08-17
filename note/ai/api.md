@@ -224,6 +224,8 @@ const MIN_COMMIT := 2.0                      # 遊戲分鐘；做不滿就不讓
 const LLM_WAIT_MIN_COMMIT := 5.0             # 等待決策回覆期間蓋掉 MIN_COMMIT
 const MIN_ACTION_DURATION := 10.0            # llm 任務 duration 引擎端下限（遊戲分鐘）
 const LLM_TASK_POOL_CAP := 20                # 只算 source=="llm" 的筆數
+const ENERGY_RECOVERY := {sleep: 6.0, nap: 4.0, rest: 2.0}   # 每遊戲分鐘回多少 energy（#112），暫定值
+const DEBUG_TASK_PRIORITY := 999.0           # act 指令推進來的任務分數，壓過任何 schedule 任務
 const SUCCESS_PARAMS := {}                   # 《01-2》§3 成功率表，含尚未接執行邏輯的動作（#120）
 
 var _tasks: Array[Dictionary]                # 候選池，schedule 開場建立一次，llm 用 _push_llm_tasks() 加
@@ -240,7 +242,20 @@ func request_sleep_reflection() -> Dictionary               # {"ok": bool}，睡
 func get_task_debug_info() -> Array[Dictionary]            # tasks 指令用
 func get_current_task_elapsed_minutes() -> int             # 目前任務做了幾遊戲分鐘
 func get_daily_events() -> Array[String]                   # reflect 指令用，見下方
+func debug_push_task(action, params, duration) -> void     # act 指令用；走 _push_llm_tasks() 同一條路徑
 ```
+
+```text
+回復類動作（#112）
+† nap/rest/wash/idle 沒有各自的執行函式——四個都走仲裁器既有的
+  「移動到 params.place（沒給就原地）、佔用 duration」路徑
+† energy 回復在 _on_time_changed() 每遊戲分鐘結算一次（_apply_action_recovery()），
+  先結算再 _reevaluate()：反過來的話最後一分鐘會用新任務的 current_state 算
+† is_moving() 為真時不回復——還在走去床邊的路上不算在睡覺
+† wash 不在 ENERGY_RECOVERY 表上：它回復的是 hygiene，Stats.SPEC 還沒有這一項；
+  idle 也不在，發呆本來就不回復任何東西
+† 主場景沒有湖泊／深井錨點（只有 home_001/farm/restaurant/square），
+  《07》§2-3 要求的 wash 地點限制等地點補齊後才有得檢查
 
 ```text
 resolve() -> {"success": bool, "reason": String}   # reason 成功是空字串，失敗是中文具體原因
@@ -255,8 +270,8 @@ resolve() -> {"success": bool, "reason": String}   # reason 成功是空字串�
 † 先通過 AISchema.IMPLEMENTED_ACTIONS 的動作才會進入 LLM 任務流程；在已實作
   動作中，SUCCESS_PARAMS 表上的才會擲骰（《01-2》§2 公式），不在表上且無
   硬規則的動作固定成功。move_to/sleep 屬於這種。talk 不擲骰，但仍檢查目標
-  存在性與歧義；nap/rest/wash/idle/eat 目前都不在 IMPLEMENTED_ACTIONS，
-  根本進不到 resolve()，不是「恆成功」
+  存在性與歧義；eat 目前不在 IMPLEMENTED_ACTIONS，根本進不到 resolve()，
+  不是「恆成功」
 † stamina 缺欄位時（#115 未落地）當中性值 50 處理，不吃到假懲罰；
   injury/alcohol 公式本來就是從 0 起算才扣分，缺欄位回傳的 0.0 剛好是
   中性值，不用特別處理
@@ -880,7 +895,7 @@ const ALLOWED_ACTIONS := [                   # 《07》《11》拍板的 22 個�
     move_to, sleep, nap, rest, wash, idle,
     steal, attack,
 ]
-const IMPLEMENTED_ACTIONS := [move_to, talk, sleep]
+const IMPLEMENTED_ACTIONS := [move_to, talk, sleep, nap, rest, wash, idle]   # 後四個是 #112 接上的
 const MAX_TASKS_PER_RESPONSE := 5            # 單次決策回應最多幾筆任務
 const MAX_LINE_CHARS := 200                  # dialogue line／reasoning／inner_monologue 共用的截斷長度
 const ERROR_NOT_JSON := "not_json"
@@ -980,6 +995,8 @@ money <amount>           改玩家的錢；正數走 add_money()，負數走 spe
 ai [dialogue] [@provider] [文字]   對 LLM 打一次測試請求；dialogue 走對話 policy
 locale [code]            看目前語系／切換（zh_TW / en）
 tasks <name>             印那隻 Agent 的候選任務池：分數拆項、在不在窗內、哪筆執行中
+act <name> <action> [place|target]   直接推一筆任務給那隻 Agent（#112 驗證用）；
+                         只收 IMPLEMENTED_ACTIONS 上的動作，30 遊戲分鐘後自動退場
 help | clear
 
 角色查找：character_name(不分大小寫) → 撞名列候選 id 前 8 碼 → character_id 前綴
