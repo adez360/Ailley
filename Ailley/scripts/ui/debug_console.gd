@@ -36,6 +36,8 @@ func _ready() -> void:
 		# help 留空：先不進 locale/console.csv，避免動到翻譯資源匯入（這台機器上
 		# 曾經卡住），純 debug 用途，之後真的要收進正式指令表再補翻譯
 		"tasks": {"run": _cmd_tasks, "usage": "tasks <name>", "help": ""},
+		# 同上，help 留空：#112 驗證 nap/rest/wash/idle 執行邏輯用的 debug 入口
+		"act": {"run": _cmd_act, "usage": "act <name> <action> [place|target]", "help": ""},
 		# 同上，help 留空：#167 驗證記憶結構用的 debug 入口，之後有正式的
 		# 角色資訊面板（《15》）接上之後再收進正式指令表
 		"memory": {"run": _cmd_memory, "usage": "memory <name>", "help": ""},
@@ -49,6 +51,10 @@ func _ready() -> void:
 		# debug 入口，之後有正式的建角面板/角色庫 UI（#122）接上之後再收進
 		# 正式指令表
 		"spawn": {"run": _cmd_spawn, "usage": "spawn <template_id>", "help": ""},
+		# 同上，help 留空：#21 驗證 SaveService 讀寫進出點用的 debug 入口，
+		# 真正的存讀時機（睡前自動存檔等）是後續 issue 才接
+		"save": {"run": _cmd_save, "usage": "save", "help": ""},
+		"load": {"run": _cmd_load, "usage": "load", "help": ""},
 		"help": {"run": _cmd_help, "usage": "help", "help": ""},
 		"clear": {"run": _cmd_clear, "usage": "clear", "help": "HELP_CLEAR"},
 	}
@@ -446,6 +452,49 @@ func _cmd_persona(args: PackedStringArray) -> void:
 		parts.append("%s=%d" % [key, character.personality[key]])
 	_print("[color=888888]personality（引擎用，不進 prompt）：%s[/color]" % "  ".join(parts))
 
+# act <name> <action> [place|target]
+#
+# #112 驗證用：直接推一筆任務進 Agent 的池子，看它真的去做那個動作。走的是
+# agent.gd::debug_push_task()，跟 LLM 決策回應同一條路徑。
+#
+# 只收 IMPLEMENTED_ACTIONS 裡的動作——白名單上但還沒接執行層的動作推進去
+# 只會讓角色靜靜地站著，看起來像指令壞了。三十遊戲分鐘夠看出 energy 有沒有
+# 在回，又不會長到要等半個遊戲日才還角色自由
+const ACT_DURATION := 30.0
+
+func _cmd_act(args: PackedStringArray) -> void:
+	if args.size() < 2 or args.size() > 3:
+		_error("act <name> <action> [place|target]")
+		return
+
+	var character := _get_character(args[0])
+	if character == null:
+		return
+
+	if not character.is_in_group("agents"):
+		_error("%s 不是 Agent，沒有任務池" % character.character_name)
+		return
+
+	var action := args[1]
+	if not AISchema.is_implemented_action(action):
+		_error("%s 還沒有執行邏輯，目前可下：%s" % [
+			action, ", ".join(AISchema.IMPLEMENTED_ACTIONS)
+		])
+		return
+
+	# talk 的參數是人不是地點（見 agent.gd::_pursue_talk_task()），其餘動作
+	# 一律吃 place。這裡照 action 分流，不要求下指令的人自己記得填哪個 key
+	var params := {}
+	if args.size() == 3:
+		params["target" if action == "talk" else "place"] = args[2]
+
+	# is_in_group("agents") 不會幫 GDScript 縮窄靜態型別，顯式轉型才能讓
+	# debug_push_task()（Agent-only）這個呼叫真的是型別安全的
+	(character as Agent).debug_push_task(action, params, ACT_DURATION)
+	_print("[color=888888]%s 收到任務 %s params=%s，%d 遊戲分鐘後自動退場[/color]" % [
+		character.character_name, action, JSON.stringify(params), int(ACT_DURATION)
+	])
+
 # memory <name>：印出 L1 短期工作記憶 + L2/L3/L4 分級記憶。#167 驗證用，
 # 形狀比照 _cmd_tasks()——一律 .get()，記憶欄位不該因為指令本身崩掉
 func _cmd_memory(args: PackedStringArray) -> void:
@@ -549,6 +598,46 @@ func _cmd_spawn(args: PackedStringArray) -> void:
 
 	_print("[color=88ff88]生成角色 %s[/color][color=888888]  id %s[/color]" % [
 		character.character_name, character.character_id
+	])
+
+# save   存下目前世界裡每個角色 + 這個世界本身。驗證 SaveService 的讀寫
+# 進出點確實接得起來（#21）——真正該在什麼時機自動存檔（睡前等）是後續 issue
+func _cmd_save(_args: PackedStringArray) -> void:
+	var count := 0
+	for node in get_tree().get_nodes_in_group("characters"):
+		var character := node as Character
+		if SaveService.save_character(character.character_id, character.get_save_data()):
+			count += 1
+		else:
+			_error("存檔失敗：%s" % character.character_name)
+
+	if not SaveService.save_world(GameManager.DEFAULT_WORLD_ID, GameManager.get_world_save_data()):
+		_error("世界存檔失敗：%s" % GameManager.DEFAULT_WORLD_ID)
+		return
+
+	_print("[color=88ff88]已存檔[/color]  %d 個角色 + 世界 %s" % [count, GameManager.DEFAULT_WORLD_ID])
+
+# load   讀回世界本身 + 場景裡目前每個角色各自的存檔。只套用場景裡找得到的
+# 角色——存檔裡有記載但場景沒有的角色不會被生出來，那是 player 加入世界
+# 那條流程的範圍，不在這則骨架內（見 issue #21 範圍界線）
+func _cmd_load(_args: PackedStringArray) -> void:
+	var world_data := SaveService.get_world(GameManager.DEFAULT_WORLD_ID)
+	if world_data.is_empty():
+		_error("沒有世界存檔 %s" % GameManager.DEFAULT_WORLD_ID)
+		return
+	GameManager.apply_world_save_data(world_data)
+
+	var count := 0
+	for node in get_tree().get_nodes_in_group("characters"):
+		var character := node as Character
+		var data := SaveService.get_character(character.character_id)
+		if data.is_empty():
+			continue
+		character.load_save_data(data)
+		count += 1
+
+	_print("[color=88ff88]已讀檔[/color]  %d 個角色 + 世界 %s（第 %d 天）" % [
+		count, GameManager.DEFAULT_WORLD_ID, GameClock.day
 	])
 
 func _get_overlay() -> Node:
