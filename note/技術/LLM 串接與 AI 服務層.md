@@ -519,7 +519,13 @@ Godot 端也沒有任何程式呼叫它。下面是驗證期間量到、**還在
 | `fun`（100=不無聊→0=無聊） | `boredom`（方向相反） | **方向相反**：`poc_boredom = 100 - godot_fun` |
 | `social` | 無對應欄位 | poc 沒有獨立追蹤社交需求 |
 | `mood` | 無對應欄位 | poc 的「情緒」是 AI 自己宣告的 `emotion`，不是 physiology 數值 |
-| （無） | `thirst`／`health`／`money` | Godot `Stats.SPEC` 沒有這三項的資料來源 |
+| （無） | `money` | Godot `Stats.SPEC` 沒有這項的資料來源 |
+
+> [!note] `hydration`／`health` 現在 Stats.SPEC 有欄位了，但跟 poc 的方向對照還沒查證
+> 《01》§4-1 擴充（issue #115）之後 Godot 端已經有 `hydration`／`health`，
+> 對得上 poc 的 `thirst`／`health`。但 poc_village_sim 是本機獨立專案、不在這個
+> repo，這兩項實際的 range 與方向沒有查過原始碼確認，不能照抄 `hunger`／`stamina`
+> 的既有換算模式假設。之後真的要移植門檻邏輯時，要先讀 poc 原始碼補上這兩列。
 
 > [!warning] 給之後寫正式 GDScript 版本的人（確認是使用者自己，見上方 2026-08-12 更新）
 > 如果那份重寫照抄了 poc_village_sim 已驗證過的門檻邏輯（`characters.py` 的

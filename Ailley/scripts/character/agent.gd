@@ -746,18 +746,18 @@ func _on_noise_heard(_source: Character) -> void:
 
 	say(L10n.t("DLG_NOISE_ALERT"))
 
-## 回復類動作每遊戲分鐘回多少 energy（#112）。《07》§2-3 只給相對關係——sleep
+## 回復類動作每遊戲分鐘回多少 stamina（#112）。《07》§2-3 只給相對關係——sleep
 ## 回復量最大、nap「與睡覺同模組但較低」、rest「小幅回復」——沒有給數字，所以
 ## 這三個值跟 MIN_COMMIT／HYSTERESIS 一樣是待實跑校準的暫定值，不是規格定案。
 ##
-## 對照基準：energy 的自然衰減是每現實秒 1.0（Stats.SPEC 的 drift），而一個遊戲
+## 對照基準：stamina 的自然衰減是每現實秒 1.0（Stats.SPEC 的 drift），而一個遊戲
 ## 分鐘正好是一現實秒，所以淨回復是這裡的值減 1
 ##
-## wash 不列在這裡：它回復的是 `hygiene`，Stats.SPEC 還沒有這一項（生理值補到
-## 8 欄位是另一則任務），現在硬接只會寫進一個不存在的欄位。idle 也不列——
+## wash 不列在這裡：它該回復的是 `hygiene`（Stats.SPEC 已有這一項，見 #115），
+## 但要不要把 wash 接上是另一則任務，這裡先不擴大範圍硬接。idle 也不列——
 ## 發呆本來就不回復任何東西，它的用途是「合法地什麼都不做」，讓 AI 逾時或
 ## 沒事可做時有一個不必假裝在忙的選項
-const ENERGY_RECOVERY := {"sleep": 6.0, "nap": 4.0, "rest": 2.0}
+const STAMINA_RECOVERY := {"sleep": 6.0, "nap": 4.0, "rest": 2.0}
 
 # 到了定點才開始回復——還在走去床邊的路上不算在睡覺。沒有指定地點的任務
 # （LLM 完全可以只回 {"action": "rest"}）本來就原地做，is_moving() 一樣是 false，
@@ -765,9 +765,9 @@ const ENERGY_RECOVERY := {"sleep": 6.0, "nap": 4.0, "rest": 2.0}
 func _apply_action_recovery() -> void:
 	if stats == null or is_moving():
 		return
-	var recovery: float = ENERGY_RECOVERY.get(current_state, 0.0)
+	var recovery: float = STAMINA_RECOVERY.get(current_state, 0.0)
 	if recovery > 0.0:
-		stats.add("energy", recovery)
+		stats.add("stamina", recovery)
 
 func _on_time_changed(_hour: int, _minute: int) -> void:
 	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務
