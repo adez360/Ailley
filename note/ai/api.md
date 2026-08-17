@@ -768,15 +768,29 @@ get_usage -> {game_day, calls_today, max_calls, dialogue_today, total_today,
 → 技術/LLM 串接與 AI 服務層
 ```
 
+## DecisionContext — scripts/ai/decision_context.gd · class_name · RefCounted
+
+```gdscript
+var is_retry: bool = false
+```
+
+```text
+† 決策請求的中繼資訊，跟 envelope/requester_id/policy 一起沿 DecisionProvider 鏈路傳遞（#217）
+† 取代逐層宣告 is_retry: bool 參數——新增請求層級中繼資訊只改這裡加欄位，不用逐層加參數、逐層轉發
+```
+
 ## DecisionProvider — scripts/ai/decision_provider.gd · class_name · RefCounted
 
 ```gdscript
-func decide(envelope: Dictionary, requester_id: String, policy: AIService.Policy, is_retry: bool = false) -> Dictionary
+var _provider_name: String = ""               # 子類別 _init() 負責設定；LocalLLMProvider／RemoteLLMProvider 現在共用這個欄位
+func decide(envelope: Dictionary, requester_id: String, policy: AIService.Policy, context: DecisionContext = DecisionContext.new()) -> Dictionary
 func max_validation_retries() -> int          # 基底回 0
 ```
 
 ```text
 decide() -> {"ok": bool, "data": Dictionary, "error": String}  # 形狀對齊 AIService.request()
+† 基底 decide() 本身就是真正的共用實作（#213）：return await AIService.request(envelope, requester_id, policy, _provider_name, context.is_retry)
+† LocalLLMProvider／RemoteLLMProvider 不再覆寫 decide()，直接繼承這份；未來 HumanInput／RemotePlayer 需要不同行為時才覆寫
 † agent.gd 只認得這個介面，不知道背後是本機模型還是雲端模型（《12》§3、§5.1）
 † 語意驗證/成功失敗判定不在這裡——decide() 只管格式轉換/送出/解析/逾時，驗證留給呼叫端的 AISchema
 † HumanInput／RemotePlayer 兩種來源尚未實作
@@ -790,23 +804,22 @@ decide() -> {"ok": bool, "data": Dictionary, "error": String}  # 形狀對齊 AI
 
 ```gdscript
 const PROVIDER_NAME := "local"                # 打 AIConfig 裡名叫 "local" 的 provider
-func _init() -> void                          # 解析一次：has_valid_provider("local") 不成立就 push_warning + 退回 ""
-var _provider_name: String                    # "local" 或 ""（＝交給 AIConfig.default_provider）
-func decide(envelope, requester_id, policy, is_retry=false) -> Dictionary   # 包 AIService.request(..., _provider_name, is_retry)
-func max_validation_retries() -> int          # "local" 時 0（本地 GBNF 保證格式），退回 default_provider 時 2
+func _init() -> void                          # 解析一次：has_valid_provider("local") 不成立就 push_warning + 退回 ""，設定繼承自基底的 _provider_name
+func max_validation_retries() -> int          # 讀 AIConfig.get_provider(_provider_name).format_guaranteed：true 時 0，否則 2
 ```
 
 ```text
 † 解析放 _init() 不放 decide()：設定一場遊戲內不會變，放 decide() 的話缺 "local" 時每次決策洗一行警告
-† 退回 default_provider 之後打到的多半不是 GBNF 端點，「本地無重試語意」的前提不成立，所以改給 2 次
+† #212：判斷依據從「provider 名字是不是字面值 "local"」改成讀 AIConfig.Provider.format_guaranteed 這個宣告出來的能力——
+  退回 default_provider 之後打到的多半不是 GBNF 端點，「本地無重試語意」的前提不成立；
+  format_guaranteed 預設 false，現有設定檔沒補這個欄位的話行為會從 0 次變 2 次重試（多重試幾次，非正確性問題）
 ```
 
 ## RemoteLLMProvider — scripts/ai/remote_llm_provider.gd · class_name · extends DecisionProvider
 
 ```gdscript
-func _init(provider_name: String) -> void     # 建構時決定打哪個 AIConfig provider，之後不變
-func decide(envelope, requester_id, policy, is_retry=false) -> Dictionary   # 包 AIService.request(..., _provider_name, is_retry)
-func max_validation_retries() -> int          # 回 2（《12》§3.4，P-22 #3）
+func _init(provider_name: String) -> void     # 建構時決定打哪個 AIConfig provider，之後不變，設定繼承自基底的 _provider_name
+func max_validation_retries() -> int          # 回 2（《12》§3.4，P-22 #3），不受 format_guaranteed 影響
 ```
 
 ```text
@@ -830,6 +843,7 @@ const MASK_KEEP := 4
 class Provider extends RefCounted:
     var name · base_url · model · api_key · timeout · valid · status_reason
     var supports_json_schema := true         # false 時 AIService 不送 response_format
+    var format_guaranteed := false           # #212：文法層（如 GBNF）保證輸出格式，LocalLLMProvider.max_validation_retries() 讀這個決定要不要給重試次數
     func masked_key() -> String
     func completions_url() -> String
 
@@ -1123,6 +1137,7 @@ AIService 已接對話（conversation.gd 非同步）與行程（agent.gd 任務
 DecisionProvider 介面已存在（scripts/ai/decision_provider.gd），agent.gd 透過
   LocalLLMProvider／RemoteLLMProvider 呼叫，不再直接呼叫 AIService；decision_source／
   model_name 是 Agent 上的佔位 @export（#122 落地前的假資料，不是真正的角色資料）
-雲端驗證失敗重試已實作（agent.gd _decide_with_retry()，RemoteLLMProvider 2 次／
-  LocalLLMProvider 0 次，退回 default_provider 時 2 次）；HumanInput／RemotePlayer 兩種來源尚未實作
+雲端驗證失敗重試已實作（agent.gd _decide_with_retry()，RemoteLLMProvider 固定 2 次／
+  LocalLLMProvider 讀 AIConfig.Provider.format_guaranteed：true 時 0 次、false 時 2 次，
+  不再用 provider 名字判斷）；HumanInput／RemotePlayer 兩種來源尚未實作
 ```
