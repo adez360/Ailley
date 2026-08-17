@@ -35,8 +35,12 @@ static func reply(stats: Stats, _turn: int) -> String:
 		match lowest:
 			"satiety":
 				return L10n.t("DLG_NEED_HUNGER")
-			"energy":
-				return L10n.t("DLG_NEED_ENERGY")
+			"stamina":
+				return L10n.t("DLG_NEED_STAMINA")
+			"hydration":
+				return L10n.t("DLG_NEED_HYDRATION")
+			"wakefulness":
+				return L10n.t("DLG_NEED_WAKEFULNESS")
 			"social":
 				return L10n.t("DLG_NEED_SOCIAL")
 			"fun":

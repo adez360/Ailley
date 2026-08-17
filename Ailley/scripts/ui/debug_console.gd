@@ -427,7 +427,7 @@ func _cmd_tasks(args: PackedStringArray) -> void:
 # agent.gd::debug_push_task()，跟 LLM 決策回應同一條路徑。
 #
 # 只收 IMPLEMENTED_ACTIONS 裡的動作——白名單上但還沒接執行層的動作推進去
-# 只會讓角色靜靜地站著，看起來像指令壞了。三十遊戲分鐘夠看出 energy 有沒有
+# 只會讓角色靜靜地站著，看起來像指令壞了。三十遊戲分鐘夠看出 stamina 有沒有
 # 在回，又不會長到要等半個遊戲日才還角色自由
 const ACT_DURATION := 30.0
 
