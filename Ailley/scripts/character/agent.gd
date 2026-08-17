@@ -1217,7 +1217,17 @@ func _pursue_talk_task() -> void:
 # _reevaluate() 的 duration 完成分支判定完成的，那個分支不會再被觸發——
 # 不主動補的話 Agent 會乾等到某個不相干的事件才重新決策（跟 exit_conversation()
 # 對「llm 任務因為別的理由結束」的處理一致，是 max 等級 code review 抓到的坑）
+#
+# stop_moving() 與清 _pursued_place／_pursuit_done 也是必要的（CodeRabbit
+# review 抓到，#158）：give 會追著會動的目標走，走到一半才被更高分的任務
+# 打斷時，這裡若不重設，之後仲裁器選回同一個 place（跟 give 之前那筆地點式
+# 任務剛好同名）會被 _pursue_current_task() 的「地點沒換、已有結論」節流誤判
+# 成「已經到過了」而不重新 move_to()——但角色實際位置早就被 give 帶去別處，
+# 不是真的站在那個地點上
 func _finish_task_and_request_next() -> void:
+	stop_moving()
+	_pursued_place = ""
+	_pursuit_done = false
 	_remove_task(_current_task.get("id", ""))
 	_current_task = {}
 	current_place = ""
