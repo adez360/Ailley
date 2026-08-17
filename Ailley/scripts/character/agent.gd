@@ -102,6 +102,15 @@ var _pursuit_done := false
 var _talk_pursuit_stuck_ticks := 0
 var _talk_pursuit_last_distance := INF
 
+# give 任務用的卡住偵測，跟 _talk_pursuit_* 同一套理由：目標會動、每次重算
+# 都要重新 move_to()，Character._stuck_timer 因此永遠沒機會累積到 STUCK_TIME
+# ——CodeRabbit review 抓到，_on_move_finished() 的 _is_own_pursuit_target()
+# 只認地點式任務的 current_place，give 沒有這個欄位，_check_stuck() 發出的
+# move_finished(false) 對它等於被吞掉，卡住的話會原地無限重試。give 跟 talk
+# 不同的是卡住偵測到之後要真的放棄，不是只警告——give 的設計就是做一次就結束
+var _give_pursuit_stuck_ticks := 0
+var _give_pursuit_last_distance := INF
+
 # 自己成功發起、目前正在進行中的 talk 任務 id／來源。只在 talk_to() 真的成功
 # 那一刻設值，exit_conversation() 靠這個而不是「當下的 _current_task」判斷對話
 # 結束時該清掉哪一筆——理由見 exit_conversation() 自己的註解。
@@ -1052,6 +1061,8 @@ func _select(task: Dictionary, now_minutes: int) -> void:
 	# 不歸零的話舊目標留下的「沒進展」次數會誤算進新目標的偵測
 	_talk_pursuit_stuck_ticks = 0
 	_talk_pursuit_last_distance = INF
+	_give_pursuit_stuck_ticks = 0
+	_give_pursuit_last_distance = INF
 
 # 往 _current_task 的方向前進。無條件每次重算都跑一次，不管這次有沒有
 # 剛選定新任務——對話中會在這裡先返回、不移動，等下一次重算（對話結束後
@@ -1263,6 +1274,21 @@ func _pursue_give_task() -> void:
 		# 值得下個遊戲分鐘重試的情境，走不到就是走不到，直接結束這筆任務
 		if not move_to(target.get_body_position()):
 			push_warning("Agent %s: 走不到送禮對象 %s" % [character_name, target.character_name])
+			last_action_result = "靠近不了對方，禮物送不出去"
+			_finish_task_and_request_next()
+			return
+
+		# 找得到路徑但卡住（障礙物、對方站在走不進去的位置）：距離沒有明顯
+		# 縮短就算一次沒進展，連續卡住才真的放棄，跟 _give_pursuit_* 的宣告
+		# 理由一致
+		if distance >= _give_pursuit_last_distance - 1.0:
+			_give_pursuit_stuck_ticks += 1
+		else:
+			_give_pursuit_stuck_ticks = 0
+		_give_pursuit_last_distance = distance
+
+		if _give_pursuit_stuck_ticks >= 3:
+			push_warning("Agent %s: 送禮對象 %s 卡住走不到，放棄" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，禮物送不出去"
 			_finish_task_and_request_next()
 		return

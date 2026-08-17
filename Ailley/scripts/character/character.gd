@@ -531,6 +531,11 @@ func give_to(other: Character, item_id: String, count: int = 1) -> String:
 	if get_body_position().distance_to(other.get_body_position()) > GIVE_RANGE:
 		return GIVE_TOO_FAR
 
+	# 送出失敗時要原封不動退回——remove 前先留一份快照。不能靠事後逐筆
+	# add_item() 補回去：那會照它的堆疊規則重新分組，跟原本各筆分開的格子、
+	# 各自的 decay 不一定對得上（CodeRabbit review 抓到）
+	var snapshot := inventory.slots.duplicate(true)
+
 	var removal: Dictionary = inventory.remove_item_detailed(item_id, count)
 	if removal["reason"] != Inventory.REMOVE_OK:
 		return removal["reason"]
@@ -549,9 +554,10 @@ func give_to(other: Character, item_id: String, count: int = 1) -> String:
 	sim.free()
 
 	if blocked_reason != "":
-		# 模擬就擋下來了，對方背包從頭到尾沒被動過——把扣掉的全部原值退回自己身上
-		for chunk in chunks:
-			inventory.add_item(item_id, chunk["count"], chunk["decay"], chunk["durability"])
+		# 模擬就擋下來了，對方背包從頭到尾沒被動過——用快照原封不動還原自己的
+		# 背包，不能逐筆 add_item() 補回去，那會照它的堆疊規則重新分組
+		inventory.slots = snapshot
+		inventory.changed.emit()
 		return blocked_reason
 
 	# 模擬全部通過，正式套用到對方背包——不會再失敗，因為套用的規則、對方背包
