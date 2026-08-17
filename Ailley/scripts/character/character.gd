@@ -58,6 +58,17 @@ const BUY_TOO_FAR := "TOO_FAR"
 const BUY_ITEM_NOT_FOUND := "ITEM_NOT_FOUND"		# 販賣機沒有賣這個 item_id
 const BUY_NO_INVENTORY := "NO_INVENTORY"		# 沒有背包的角色沒辦法買東西
 
+const GIVE_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE 一樣的距離門檻，2 格
+
+## give_to() 的失敗原因碼，形狀比照 TALK_*／BUY_*。除了這四個，give_to()
+## 還會**原樣轉傳** Inventory 自己的原因碼（`NOT_FOUND`、`INVALID_COUNT`、
+## `NO_SPACE`），不在這裡重新取名——理由跟 buy_from() 一樣
+const GIVE_OK := ""
+const GIVE_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const GIVE_TARGET_IS_SELF := "TARGET_IS_SELF"
+const GIVE_TOO_FAR := "TOO_FAR"
+const GIVE_NO_INVENTORY := "NO_INVENTORY"
+
 ## 滑鼠指到時套在 sprite 上的描邊
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
 
@@ -487,6 +498,37 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 		money_popup.show_change(-price)
 
 	return BUY_OK
+
+
+# ---- 送禮 ----
+
+# 把物品從自己的背包轉移到對方背包，形狀跟 buy_from() 一樣是「兩件事要一起
+# 成功」：remove_item() 扣掉之後，對方的 add_item() 還是可能因為背包滿了失敗
+# ——用同一套「扣除失敗就不送、加入失敗就退回」補償式寫法，不事先猜對方
+# 放不放得下（理由跟 buy_from() 一樣：還要重算堆疊規則，退貨更簡單可靠）。
+#
+# 不改動 relations 任何欄位——送禮的真實意圖交給雙方後續行為自己演，
+# 不是引擎蓋章（見《99》決策紀錄、CLAUDE.md「遊戲機制規格：AI 自主性自檢」）
+func give_to(other: Character, item_id: String, count: int = 1) -> String:
+	if other == null:
+		return GIVE_TARGET_NOT_FOUND
+	if other == self:
+		return GIVE_TARGET_IS_SELF
+	if inventory == null or other.inventory == null:
+		return GIVE_NO_INVENTORY
+	if get_body_position().distance_to(other.get_body_position()) > GIVE_RANGE:
+		return GIVE_TOO_FAR
+
+	var remove_reason := inventory.remove_item(item_id, count)
+	if remove_reason != Inventory.REMOVE_OK:
+		return remove_reason
+
+	var add_reason := other.inventory.add_item(item_id, count)
+	if add_reason != Inventory.ADD_OK:
+		inventory.add_item(item_id, count)		# 退回——送禮沒有真的發生
+		return add_reason
+
+	return GIVE_OK
 
 
 # ---- 狀態快照 ----

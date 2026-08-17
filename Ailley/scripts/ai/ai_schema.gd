@@ -55,7 +55,12 @@ const ALLOWED_ACTIONS := [
 # nap／rest／wash／idle 是 #112 接上的：四個都只動 Stats 跟角色 state，不需要新
 # 場景物件或新資源，所以走的是仲裁器既有的「移動到 params.place（沒給就原地）、
 # 佔用 duration」路徑，沒有各自的執行函式。回復量見 agent.gd 的 ENERGY_RECOVERY
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle"]
+#
+# give／shout 是 #158 接上的：跟 talk 一樣目標會動（give）或完全不需要目標
+# （shout），走各自的 _pursue_give_task()／_pursue_shout_task()，一次執行完
+# 就退出任務池，不像 nap 那類佔滿整段 duration。persuade 不在這裡——見 #227，
+# 它需要的待回應事實句機制目前完全沒有地基
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "give", "shout"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
