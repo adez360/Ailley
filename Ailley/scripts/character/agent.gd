@@ -1256,7 +1256,7 @@ func _age_bonus(_task: Dictionary) -> float:
 # 這條路徑；LLM 推進池子的任務才會真的帶非零值
 func _is_expired(task: Dictionary, now_minutes: int) -> bool:
 	var expires_at: int = task.get("expires_at", 0)
-	return expires_at > 0 and expires_at < now_minutes
+	return expires_at > 0 and expires_at <= now_minutes
 
 func _in_window_or_unwindowed(task: Dictionary, now: String) -> bool:
 	var window = task.get("window")
