@@ -7,8 +7,7 @@ extends RefCounted
 ## 見 note/技術/LLM 串接與 AI 服務層.md 的 JSON 信封設計。plan 信封（Step 3，
 ## #88）沿用 `_self_block()`，沒有重寫。
 ##
-## 沒有人格資料（`data/personas.json` 尚未實作）——system prompt 只講規則跟輸出
-## 格式，不含角色個性。人格接上是之後的事，不是這次要做的範圍。
+## system 段的組法見 _system()：角色自己的人格段排最前面，遊戲規則接在後面。
 
 const DIALOGUE_SYSTEM := """You are an NPC in a small village life-sim game.
 Speak naturally and briefly, one short line, matching your current stats/mood.
@@ -51,6 +50,17 @@ Reply with JSON only, no prose, no code fence:
  "request_plan_update": <true if you want the chance to rewrite today_plan next time, else false>,
  "tasks": [{"action": "<one of the allowed actions>", "params": {}, "priority": 0, "duration": 0}]}
 An empty "tasks" array means don't change anything."""
+
+## 角色的人格段 ＋ 遊戲規則，順序固定不可調換（#117，《01-3》§5「組裝順序」）。
+##
+## 人格段一定排最前面：規格要求 System 段排在 prompt 最前面且逐字元一致，那是
+## llama-server 每個 slot 命中 KV cache 的條件。人格段本身由 Personality 組一次
+## 之後不再變（見 character.gd 的 system_prompt），這裡只負責接。
+##
+## 角色沒有人格資料時 system_prompt 只有開場白跟結尾句（Personality 保證不是
+## 空字串），所以這裡不需要處理「空段落」——一律接得起來
+static func _system(character: Character, rules: String) -> String:
+	return character.system_prompt + "\n\n" + rules
 
 ## 動作清單用 AISchema.ALLOWED_ACTIONS 動態組，不在這裡另外抄一份字串——
 ## 兩份清單各自維護遲早會漂移，白名單改了這裡忘記跟著改，模型看到的允許清單
@@ -100,7 +110,7 @@ score. Reply with JSON only, no prose, no code fence:
 ## build_plan_envelope() 一樣沿用 _self_block()，不重新蒐集一次同一批角色狀態
 static func build_reflection_envelope(character: Character, daily_events: Array[Dictionary]) -> Dictionary:
 	return {
-		"system": REFLECTION_SYSTEM,
+		"system": _system(character, REFLECTION_SYSTEM),
 		"payload": {
 			"type": "reflection",
 			"self": _self_block(character),
@@ -118,7 +128,7 @@ static func build_dialogue_envelope(
 	speaker: Character, listener: Character, turns: Array[Dictionary], max_turns: int
 ) -> Dictionary:
 	return {
-		"system": DIALOGUE_SYSTEM,
+		"system": _system(speaker, DIALOGUE_SYSTEM),
 		"payload": {
 			"type": "dialogue",
 			"self": _self_block(speaker),
@@ -153,7 +163,7 @@ static func build_plan_envelope(
 		visible_block.append(_listener_block(character, other))
 
 	return {
-		"system": _plan_system(allow_update_plan),
+		"system": _system(character, _plan_system(allow_update_plan)),
 		"payload": {
 			"type": "plan",
 			"self": _self_block(character),

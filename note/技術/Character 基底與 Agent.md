@@ -241,7 +241,8 @@ Agent/Agent2 是場景裡的靜態節點，`_ready()` 時自己查表更貼近�
   已定義 15 個正式地點（一地點一筆記，見《[[Ailley]]》規格書索引），跟這裡的四個測試
   錨點名字對不上（`farm`/`restaurant`/`square` 等不在那 15 個裡），換真地圖時要重新對照
 - 行程表是靜態 JSON，之後換成 AI 維護的版本，見 [[行程佇列與任務仲裁]]
-- 兩隻 Agent 的行程與身分（`character_id` / 顯示名）已經不同，但**人格還沒有**：
-  沒有 `persona_id`，兩隻的性格參數仍然一模一樣
+- 兩隻 Agent 的行程、身分（`character_id` / 顯示名）與人格（`hexaco` + `character`
+  自述，寫在 `npc_schedule.json` 的 `identities`）都已經不同，見
+  [[人格與 System Prompt]]
 - 兩隻的家都是 `home_001`。已拍板「家要各自不同」（規格書《01》§1-1 `home_location_id`、
   《07_地點/家》），但還沒實作——地圖上要放幾間房子、怎麼指派給角色仍待規劃（《99》P-17 #12）

@@ -88,7 +88,8 @@ WebSocket 在本專案有位置，但是**另一條線**：
 | `ai_schema.gd` | 回應驗證：`JSON.parse_string` → null 檢查 → 逐欄位型別檢查 → `action` 白名單 |
 | `prompt_builder.gd` | 由 Character 組出請求信封。dialogue 信封已實作，plan 還沒 |
 
-`data/personas.json` — 人格資料，Agent 以 `@export var persona_id` 指定（尚未實作）。
+人格資料在 `npc_schedule.json` 的 `identities`（節點名查表），組成 system 段的
+第一截，見 [[人格與 System Prompt]]。
 
 > [!note] `user://` 在 repo 之外
 > Linux 下 `user://` ＝ `~/.local/share/godot/app_userdata/ailley4.3/`。
@@ -492,7 +493,6 @@ JSON Schema → GBNF 的轉換器。
       要先實跑量出「一場對話平均幾輪」才有辦法訂
 - [ ] 軟壓力（system prompt 叫模型「聊久了該收尾」）到底有沒有用，未知數
 - [ ] 尚未對真正的 OpenRouter 打過請求，TLS/DNS 與真實回應格式未驗證
-- [ ] 人格資料的欄位結構——`data/personas.json` 要放哪些欄位才夠組 system prompt
 - [ ] 成本上限機制的具體設計
 - [ ] 記憶系統上線前，Agent 的對話逐字稿要不要先存記憶體就好
 - [ ] `response_format` 的 json_schema 送出去之後，模型端真的照著回、還是仍需要

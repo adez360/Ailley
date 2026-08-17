@@ -9,11 +9,15 @@ var npc_data = {}
 # key 用節點名不用 character_id —— id 是生成的 UUID，人在 json 裡手寫不出來
 var schedule_assignments = {}
 
-# 節點名 -> {character_id, character_name}。場景裡固定的 NPC，身分（id/顯示名）
-# 是設計時決定好的資料，不是執行期才生、需要被記住的狀態——寫死在這裡才能讓
-# character_id 跨場次穩定（relationships 拿它當 key，變了等於失憶）。
+# 節點名 -> {character_id, character_name, hexaco, character}。場景裡固定的 NPC，
+# 身分（id/顯示名/人格）是設計時決定好的資料，不是執行期才生、需要被記住的
+# 狀態——寫死在這裡才能讓 character_id 跨場次穩定（relationships 拿它當 key，
+# 變了等於失憶），也讓兩隻 Agent 有各自不同的人格而不是共用場景預設值。
 # 跟 schedule_assignments 一樣用節點名查表，跟它分兩塊是因為「用哪份行程」與
-# 「我是誰」是兩件不同的事（見 agent.gd schedule_template 的註解）
+# 「我是誰」是兩件不同的事（見 agent.gd schedule_template 的註解）。
+#
+# hexaco 六維與 character 自述怎麼變成 personality 十項與 system_prompt，
+# 見 scripts/character/personality.gd（#117，《01-1》§3～§5）
 var identity_assignments = {}
 
 # template_id -> 模板資料（character_name/system_prompt/words_to_creator）。

@@ -39,6 +39,9 @@ func _ready() -> void:
 		# 同上，help 留空：#167 驗證記憶結構用的 debug 入口，之後有正式的
 		# 角色資訊面板（《15》）接上之後再收進正式指令表
 		"memory": {"run": _cmd_memory, "usage": "memory <name>", "help": ""},
+		# 同上，help 留空：#117 驗證人格注入用的 debug 入口。system_prompt 是
+		# 唯一送進 LLM 的人格表達，肉眼看不到它就沒辦法判斷人格有沒有真的接上
+		"persona": {"run": _cmd_persona, "usage": "persona <name>", "help": ""},
 		# 同上，help 留空：#168 手動觸發睡眠反思的 debug 入口。真正的睡眠動作
 		# （#112）落地前，這是端到端測試整條反思管線唯一的方式
 		"reflect": {"run": _cmd_reflect, "usage": "reflect <name>", "help": ""},
@@ -414,6 +417,34 @@ func _cmd_tasks(args: PackedStringArray) -> void:
 		_print("[color=888888]    score=%.1f = base %.1f + time %.1f + need %.1f + age %.1f[/color]" % [
 			score["total"], score["base"], score["time"], score["need"], score["age"],
 		])
+
+# persona <name>：印出這隻角色的 system_prompt（送給 LLM 的那一段）與 10 項
+# personality（引擎自己算成功率用的，不進 prompt）。#117 驗證用。
+#
+# 兩個都印是刻意的：這則的重點就是「同一份 HEXACO 輸入產出兩種表達，讀者不同」，
+# 只印一個看不出它們是同一份資料的兩面
+func _cmd_persona(args: PackedStringArray) -> void:
+	if args.size() != 1:
+		_error("persona <name>")
+		return
+
+	var character := _get_character(args[0])
+	if character == null:
+		return
+
+	_print("[color=88ccff]%s[/color][color=888888]  system_prompt（送進 LLM 的 system 段）[/color]" % character.character_name)
+	# system_prompt 的來源是 npc_schedule.json 的 character 欄位，那是人在資料檔
+	# 裡編輯的自由文字——進 RichTextLabel 前一律 escape，理由同 _cmd_memory()
+	_print("[color=888888]%s[/color]" % _escape_bbcode(character.system_prompt))
+
+	if character.personality.is_empty():
+		_print("[color=888888]personality：（沒有人格資料，成功率公式的人格項當 0）[/color]")
+		return
+
+	var parts: Array[String] = []
+	for key in character.personality:
+		parts.append("%s=%d" % [key, character.personality[key]])
+	_print("[color=888888]personality（引擎用，不進 prompt）：%s[/color]" % "  ".join(parts))
 
 # memory <name>：印出 L1 短期工作記憶 + L2/L3/L4 分級記憶。#167 驗證用，
 # 形狀比照 _cmd_tasks()——一律 .get()，記憶欄位不該因為指令本身崩掉
