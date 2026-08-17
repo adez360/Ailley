@@ -666,7 +666,10 @@ func _current_frame_texture() -> Texture2D:
 # 不是解算後的 velocity——貼平物件時想往物件方向走，move_and_slide() 會把那個分量
 # 直接歸零，若 facing 也照 velocity 判斷就會卡在貼上去之前的方向，永遠轉不過來面對
 # 眼前的東西（#108）。walk / idle 動畫另外照解算後的 velocity 判斷：貼平時人確實
-# 沒有在動，播 idle 才對，只是 facing 要跟上輸入方向
+# 沒有在動，播 idle 才對，只是 facing 要跟上輸入方向。
+# 判斷用容差而非精確比較 == Vector2.ZERO——沿角度貼著障礙物滑動時，
+# move_and_slide() 可能把 velocity 解算成極小但非零的殘值，跟 _check_stuck()
+# 同一個理由、用同一個門檻（SPEED * 0.1）
 func update_animation(desired_velocity: Vector2) -> void:
 	var dir := desired_velocity.normalized()
 
@@ -678,7 +681,7 @@ func update_animation(desired_velocity: Vector2) -> void:
 			facing = "right"
 			sprite.flip_h = dir.x < 0
 
-	sprite.play(("walk_" if velocity != Vector2.ZERO else "idle_") + facing)
+	sprite.play(("walk_" if get_real_velocity().length() > SPEED * 0.1 else "idle_") + facing)
 
 # 這一幀要用的速度。基底只跟隨 A* 路徑，子類別覆寫來加上自己的驅動來源。
 # 對話中不自動移動 —— 但 Player 的輸入會蓋過這裡，走遠了由距離判定自然散場
