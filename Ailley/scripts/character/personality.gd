@@ -149,7 +149,7 @@ static func _hex(h: Dictionary, field: String) -> float:
 	if not (value is int or value is float):
 		push_warning("Personality: %s 不是數字（%s），當中間值 %d 用" % [field, value, NEUTRAL])
 		return float(NEUTRAL)
-	return float(value)
+	return clampf(float(value), 0.0, 100.0)
 
 
 static func _clamp(value: float) -> int:
