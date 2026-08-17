@@ -97,6 +97,8 @@ const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 static func generate_id() -> String           # RFC 4122 v4，不帶語意，別解析它
 var facing := "front"                        # front|back|right
 var last_action_result := ""                 # #120 resolve() 判定結果，中文，成功是空字串
+var system_prompt := ""                      # #117 送進 LLM 的人格段，_ready() 組一次後不變
+var personality := {}                        # #117 引擎用的 10 項，**不進 prompt**；沒資料是 {}
 func get_facing_direction() -> Vector2       # facing/sprite.flip_h 重建成單位向量
 
 # 元件（子節點，皆 get_node_or_null，沒掛不會壞）
@@ -366,6 +368,40 @@ _daily_events（Array[Dictionary]，每筆 {id, content}，DAILY_EVENTS_CAP=30 F
 ```
 
 
+## Personality — scripts/character/personality.gd · class_name · RefCounted
+
+HEXACO 六維 → 引擎用的 10 項數值 ＋ LLM 用的 `system_prompt` 文字（#117，《01-1》§3~§5）。
+
+```gdscript
+const TRAITS_PATH := "res://data/hexaco_traits.json"   # §4 極端值映射表，36 條文案
+const HEX_FIELDS := [hex_honesty, hex_emotionality, hex_extraversion,
+                     hex_agreeableness, hex_conscientiousness, hex_openness]
+const EXTREME_LOW := 25 · EXTREME_HIGH := 75 · NEUTRAL := 50
+
+static func from_identity(identity: Dictionary, seed_text: String) -> Dictionary
+    # -> {"personality": {10 項}, "system_prompt": String}；一次拿到兩份產出
+static func hexaco_to_personality(h: Dictionary) -> Dictionary       # §3 轉換式，round + clamp 0~100
+static func traits_from_hexaco(h: Dictionary, seed_text: String) -> Array[String]   # §4
+static func build_system_prompt(traits, description, appearance) -> String          # §5
+```
+
+```text
+† 兩份產出讀者不同，刻意不共用表達（《01》§2-1）：引擎讀數字算成功率／記憶衰減，
+  LLM 讀文字——本地模型看到 curiosity: 60 沒有基準，不知 60 是高是低
+† 只有 ≤25 或 ≥75 的維度產生文案，26~74 整條略過（不是輸出「普通」）——
+  中間值就是留給 AI 的自主空間
+† 每端 3 種語氣變體，用 hash(seed_text + 欄位名) 挑，不是真隨機：system_prompt
+  的設計前提是組好之後逐字元不變。呼叫端傳 character_id 當種子，同一隻角色
+  每次開遊戲拿到同一份文案。存檔接上（#21）後改讀存下來的那份，這裡不用改
+† 種子一定要帶欄位名，不然六個維度會一起抽到同一個索引，三種變體等於只有一種
+† 任一區塊為空就整段（含標題）不輸出——不要留「【這個人】」後面接空字串，
+  模型看到空欄位會自行編造（《01-1》§5 規則 2）
+† 完全沒有人格資料的角色（Player、動態生成）：personality = {}，
+  system_prompt 只有開場白與結尾句，不是空字串
+† appearance 目前一律傳空字串：《01》§1-2 的 slot 清單還是【待規劃】，沒有資料來源
+→ 技術/人格與 System Prompt
+```
+
 ## Stats — scripts/character/stats.gd · class_name · Node
 
 ```gdscript
@@ -470,8 +506,8 @@ func get_by_level(level: int) -> Array[Dictionary]
 † importance 分級（《03》§3）：<30 丟棄／30-59 L2／60-89 L3／90+ L4，
   L4 滿額（5）新記憶進來時最舊一條降級 L3，不是丟棄
 † decay_all() 公式（《03》§4-1）：正面/中性 -= 3；負面 -= 3 × (100-grudge)/50；
-  L4 不衰減；decay_value ≤ 0 刪除。grudge 由呼叫端傳入——人格資料未接（#117），
-  目前一律用預設值 50
+  L4 不衰減；decay_value ≤ 0 刪除。grudge 由呼叫端傳入——人格資料已接（#117），
+  呼叫端可傳 character.personality["grudge"]；還沒有呼叫端這樣傳，目前仍是預設值 50
 † mark_retrieved() 要傳 entries 裡的同一個 Dictionary 參照，不是複製值
 ⚠《03》§3 分級表另有「L2：30-59...三日後若未被檢索則淘汰」一句，跟 §4-1
   衰減公式對不起來（衰減率 3/天，100 分要約 33 天才歸零，不是 3 天）——
@@ -893,6 +929,7 @@ static func build_plan_envelope(character: Character, visible: Array[Character],
                                  pool: Array[Dictionary]) -> Dictionary
 static func build_reflection_envelope(character: Character, daily_events: Array[Dictionary]) -> Dictionary
 static func turn_entry(speaker_name: String, text: String) -> Dictionary
+static func _system(character: Character, rules: String) -> String   # 人格段 + 規則，#117
 ```
 
 ```
@@ -901,6 +938,9 @@ plan payload        {type:"plan", self, context:{visible, pool, today_plan, memo
 reflection payload  {type:"reflection", self, context:{events: Array[{id,content}]}}   # #168
 memory 區塊          {recent: Array[String], core: Array[String]}   # L2/L4 內容，#169
 † self 區塊三者共用（_self_block()，沿用 Character.get_state_snapshot()），不重新蒐集一次
+† system 段 = character.system_prompt + "\n\n" + 該類型的規則字串（_system()，#117）。
+  人格段排最前面且逐字元不變（《01-3》§5 組裝順序），那是 llama-server 每個 slot
+  命中 KV cache 的條件。personality 十項數值**不進 prompt**（《01》§2-1）
 † PLAN_SYSTEM 的動作清單用 AISchema.ALLOWED_ACTIONS 動態組，不另外抄一份字串
   ——兩份清單各自維護會漂移，白名單改了這裡忘記跟著改，模型看到的允許清單就對不上驗證的
 † plan_response_schema()（AISchema）當 response_format 送出，跟 validate_tasks() 驗證的形狀對齊
@@ -1024,6 +1064,7 @@ locale [code]            看目前語系／切換（zh_TW / en）
 tasks <name>             印那隻 Agent 的候選任務池：分數拆項、在不在窗內、哪筆執行中
 act <name> <action> [place|target]   直接推一筆任務給那隻 Agent（#112 驗證用）；
                          只收 IMPLEMENTED_ACTIONS 上的動作，30 遊戲分鐘後自動退場
+persona <name>           印 system_prompt（送進 LLM 的那段）與 10 項 personality（不進 prompt）
 help | clear
 
 角色查找：character_name(不分大小寫) → 撞名列候選 id 前 8 碼 → character_id 前綴
@@ -1090,7 +1131,7 @@ Esc(ui_cancel) 切換暫停。main.tscn 的 Pause，子節點 Dim(ColorRect) / T
 ```gdscript
 var npc_data = {}                            # NPC 模板 id -> 資料
 var schedule_assignments = {}                # 節點名 -> schedule_template
-var identity_assignments = {}                # 節點名 -> {character_id, character_name}
+var identity_assignments = {}                # 節點名 -> {character_id, character_name, hexaco, character}
 
 func get_npc(id: String)                         # 查不到 → null
 func get_schedule_template(node_name: String) -> String   # 沒指派 → ""
@@ -1102,6 +1143,8 @@ func load_npc_data()
 地點座標不歸 GameManager 管，一律走 PlaceAnchors 的 Marker2D
 † get_npc_identity 回空字典時由 character.gd::_ready() 退回生成 UUID／節點名
 † identity_assignments 與 schedule_assignments 分開：前者「我是誰」，後者「用哪份行程」
+† identities 的 hexaco（六維滑桿）與 character（自述，≤250 字）是人格資料來源（#117），
+  怎麼變成 personality 十項與 system_prompt 見 Personality
 ```
 
 ## GameClock — scripts/core/GameClock.gd · autoload

@@ -970,7 +970,11 @@ func _roll_success(action: String, character: Character, environment_risk: float
 	if params.is_empty():
 		return {"success": true, "reason": ""}
 
-	var trait_value := 0.0  # 人格資料還沒接上（#117），先固定 0
+	# 《01》§2 的 10 項 personality，由 Personality.hexaco_to_personality() 在
+	# character.gd::_ready() 產出（#117）。缺欄位（沒有 hexaco 資料的角色）當 0：
+	# 公式是 base + trait × coef，trait = 0 就是「這項人格完全不加分」，也就是
+	# 《01-2》§3 那個 base 本身的基準點，不是一個額外的懲罰
+	var trait_value: float = character.personality.get(params["trait"], 0.0)
 
 	# injury/alcohol 兩項的公式本來就是「從 0 起算才扣分」，Stats.get_value()
 	# 對不存在的 key 回傳的 0.0 剛好就是中性值，不用特別處理。stamina 不一樣——
