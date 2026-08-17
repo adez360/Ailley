@@ -212,16 +212,34 @@ func apply_world_save_data(data: Dictionary) -> void:
 	GameClock.day = int(data.get("day", GameClock.day))
 	allow_player_join = bool(data.get("allow_player_join", allow_player_join))
 
-	var characters: Dictionary = data.get("characters", {})
+	var characters = data.get("characters", {})
+	# 驗證 characters 必須是 Dictionary，不是就跳過整個角色載入流程
+	if not characters is Dictionary:
+		push_error("apply_world_save_data: characters 不是 Dictionary，跳過角色資料載入")
+		return
+
 	for node in get_tree().get_nodes_in_group("characters"):
 		var character := node as Character
-		var entry: Dictionary = characters.get(character.character_id, {})
+		var entry = characters.get(character.character_id, {})
+		# 驗證每個 entry 必須是 Dictionary
+		if not entry is Dictionary:
+			push_error("apply_world_save_data: %s 的資料不是 Dictionary，跳過" % character.character_id)
+			continue
 		if entry.is_empty():
 			continue
 
-		var pos_array: Array = entry.get("position", [])
-		if pos_array.size() == 2:
-			character.global_position = Vector2(pos_array[0], pos_array[1])
+		var pos_array = entry.get("position", [])
+		# 驗證 position 必須是 Array，包含剛好 2 個元素，且都是數字
+		if not pos_array is Array:
+			push_error("apply_world_save_data: %s 的 position 不是 Array，跳過" % character.character_id)
+			continue
+		if pos_array.size() != 2:
+			push_error("apply_world_save_data: %s 的 position 大小不是 2，跳過" % character.character_id)
+			continue
+		if not (typeof(pos_array[0]) in [TYPE_INT, TYPE_FLOAT] and typeof(pos_array[1]) in [TYPE_INT, TYPE_FLOAT]):
+			push_error("apply_world_save_data: %s 的 position 元素不是數字，跳過" % character.character_id)
+			continue
+		character.global_position = Vector2(pos_array[0], pos_array[1])
 
 		if entry.has("current_place") and character.get("current_place") != null:
 			character.set("current_place", entry.get("current_place", ""))

@@ -535,7 +535,10 @@ func _cmd_save(_args: PackedStringArray) -> void:
 		else:
 			_error("存檔失敗：%s" % character.character_name)
 
-	SaveService.save_world(GameManager.DEFAULT_WORLD_ID, GameManager.get_world_save_data())
+	if not SaveService.save_world(GameManager.DEFAULT_WORLD_ID, GameManager.get_world_save_data()):
+		_error("世界存檔失敗：%s" % GameManager.DEFAULT_WORLD_ID)
+		return
+
 	_print("[color=88ff88]已存檔[/color]  %d 個角色 + 世界 %s" % [count, GameManager.DEFAULT_WORLD_ID])
 
 # load   讀回世界本身 + 場景裡目前每個角色各自的存檔。只套用場景裡找得到的
