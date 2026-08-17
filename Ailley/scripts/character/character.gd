@@ -72,6 +72,11 @@ const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader
 ## 留空就沿用節點名 —— 不能退回 character_id，那是一串沒人讀得懂的 UUID
 @export var character_name := ""
 
+## 最近一次 LLM 決策的動作被 resolve() 判定的結果，中文自然語言，成功是空字串
+## （#120，《01-2》§1 流程圖的「④ 寫回 last_action_result」）。目前只有 Agent
+## 會寫這個欄位，Player 沒有 LLM 決策，留在 Character 是給 UI/debug 共用的掛點
+var last_action_result := ""
+
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
 @onready var stats: Stats = get_node_or_null("Stats")
@@ -491,7 +496,7 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 # （見 note/技術/LLM 串接與 AI 服務層.md）要的也是同一批資料。
 #
 # key/value 一律是識別字，不可以是翻譯過的字 —— Stats.SPEC 的 label 存的是
-# 翻譯 key，這裡照樣只放 key，翻譯留給顯示端做。stats/affinity 只有掛了對應
+# 翻譯 key，這裡照樣只放 key，翻譯留給顯示端做。stats/relations 只有掛了對應
 # 元件才會出現在回傳值裡，呼叫端用 has() 判斷。
 #
 # 子類別自己的欄位由子類別 override 這個方法補上（agent.gd 補 schedule），
@@ -506,6 +511,7 @@ func get_state_snapshot() -> Dictionary:
 		"animation": sprite.animation,
 		"in_conversation": is_in_conversation(),
 		"working": is_working(),
+		"last_action_result": last_action_result,
 	}
 
 	if stats != null:
@@ -520,20 +526,20 @@ func get_state_snapshot() -> Dictionary:
 	if inventory != null:
 		snapshot["money"] = inventory.get_money()
 
-	# 欄名跟 relationships.gd 的 record 一致（affinity / met_count），
+	# 欄名跟 relationships.gd 的 record 一致（trust / met_count），
 	# 不要在這裡改名——同一個數值有兩個名字，讀過 relationships.gd 的人
-	# 會在 snapshot 上找不到 affinity。用純量 accessor 不用 get_record()，
+	# 會在 snapshot 上找不到 trust。用純量 accessor 不用 get_record()，
 	# 後者每筆都 duplicate(true) 深拷一份只為了讀兩個數字
 	if relationships != null:
 		var known := relationships.known_ids()
 		if not known.is_empty():
-			var affinity := {}
+			var relations := {}
 			for other_id in known:
-				affinity[other_id] = {
-					"affinity": relationships.get_affinity(other_id),
+				relations[other_id] = {
+					"trust": relationships.get_trust(other_id),
 					"met_count": relationships.get_met_count(other_id),
 				}
-			snapshot["affinity"] = affinity
+			snapshot["relations"] = relations
 
 	return snapshot
 
@@ -544,8 +550,8 @@ func get_state_snapshot() -> Dictionary:
 # 精簡快照（不含完整 relationships records、不含記憶），這份是 SaveService 要
 # 整包寫進 JSON 的權威資料，見 note/技術/存檔.md「序列化的規則」。
 #
-# 走訪 Stats.SPEC／Relationships.records／Memory 的 l2／l4，不手寫欄位——
-# SPEC／records 加欄位，存檔自動跟著多，不用回來改這裡。
+# 走 Stats／Relationships／Memory 各自的 to_save_data()，不在這裡重複走訪
+# SPEC／records——元件自己知道怎麼存自己，這裡只負責組裝。
 #
 # 子類別（Agent）覆寫補上 today_plan／appointment，基底不知道那兩個欄位存在
 func to_save_data() -> Dictionary:
@@ -555,39 +561,41 @@ func to_save_data() -> Dictionary:
 	}
 
 	if stats != null:
-		var values := {}
-		for key in Stats.SPEC:
-			values[key] = stats.get_value(key)
-		data["stats"] = values
+		data["stats"] = stats.to_save_data()
 
 	if relationships != null:
-		data["relationships"] = relationships.records.duplicate(true)
+		data["relationships"] = relationships.to_save_data()
 
 	if memory != null:
-		data["memory"] = {"l2": memory.l2.duplicate(true), "l4": memory.l4.duplicate(true)}
+		data["memory"] = memory.to_save_data()
 
 	return data
 
 # data 缺欄位一律用預設值補，不當成錯誤（見note/技術/存檔.md）——
 # Stats 缺值用 SPEC[key]["start"] 補，Relationships／Memory 缺值就是空。
+#
+# 已經在 characters 群組裡（_ready() 跑過）才重驗 id 唯一性——存檔的 id
+# 可能撞到另一隻已經在場上的角色，覆寫後兩隻共用同一個 id 就會共用關係與記憶
+# （_ensure_unique_id() 註解講的那個坑）。還沒進 tree 就不用管，接下來的 _ready()
+# 本來就會做這件事，這裡搶著做反而會在 get_tree() 是 null 時炸掉
+#
 # 子類別（Agent）覆寫補上 today_plan／appointment 的讀回
 func apply_save_data(data: Dictionary) -> void:
 	character_id = str(data.get("id", character_id))
+	if character_id.is_empty():
+		character_id = generate_id()
+	if is_inside_tree():
+		_ensure_unique_id()
 	character_name = str(data.get("name", character_name))
 
 	if stats != null:
-		var values: Dictionary = data.get("stats", {})
-		for key in Stats.SPEC:
-			stats.set_value(key, values.get(key, Stats.SPEC[key]["start"]))
+		stats.apply_save_data(data.get("stats", {}))
 
 	if relationships != null:
-		var records: Dictionary = data.get("relationships", {})
-		relationships.records = records.duplicate(true)
+		relationships.apply_save_data(data.get("relationships", {}))
 
 	if memory != null:
-		var mem: Dictionary = data.get("memory", {})
-		memory.l2.assign(mem.get("l2", []) as Array)
-		memory.l4.assign(mem.get("l4", []) as Array)
+		memory.apply_save_data(data.get("memory", {}))
 
 
 # ---- 滑鼠選取 ----

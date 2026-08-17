@@ -92,3 +92,16 @@ func get_place_for_need(key: String) -> String:
 # 問不到 AI 就先去滿足最低的那項需求，而不是站在原地
 func get_lowest_need_place() -> String:
 	return get_place_for_need(get_lowest_need())
+
+
+# ---- 存檔 ----
+
+func to_save_data() -> Dictionary:
+	return values.duplicate(true)
+
+# 缺的欄位用 SPEC 的 start 補，不當成錯誤——SPEC 加一項是預期會發生的事，
+# 不該讓舊存檔讀不起來。走 set_value() 而不是直接寫 values，讓存檔裡
+# 被竄改或壞掉的數值一樣夾在 MIN..MAX 之間
+func apply_save_data(data: Dictionary) -> void:
+	for key in SPEC:
+		set_value(key, data.get(key, SPEC[key]["start"]))

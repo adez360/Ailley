@@ -10,7 +10,7 @@
 [ext_resource type="Script" uid="uid://rojhhinafyq2" path="res://scripts/character/inventory.gd" id="8_smehm"]
 [ext_resource type="Script" uid="uid://cebdk6kq4c7ip" path="res://scripts/ui/work_progress.gd" id="9_ur7pv"]
 [ext_resource type="Script" uid="uid://t6axa01hiamc" path="res://scripts/ui/money_popup.gd" id="10_y4r1p"]
-[ext_resource type="Script" uid="uid://cl8jun5fb0hlg" path="res://scripts/character/memory.gd" id="11_d2wvv"]
+[ext_resource type="Script" uid="uid://l3boughq0c6q" path="res://scripts/character/memory.gd" id="11_d2wvv"]
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_bolw2"]
 atlas = ExtResource("2_cl37t")
