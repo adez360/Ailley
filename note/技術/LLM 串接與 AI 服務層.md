@@ -106,7 +106,7 @@ llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key
 	"enabled": true,
 	"default_provider": "local",
 	"providers": {
-		"local":      {"base_url": "http://127.0.0.1:8080/v1", "api_key": "", "model": "qwen2.5-7b-instruct", "timeout": 10.0},
+		"local":      {"base_url": "http://127.0.0.1:8080/v1", "api_key": "", "model": "qwen2.5-7b-instruct", "timeout": 10.0, "format_guaranteed": true},
 		"openrouter": {"base_url": "https://openrouter.ai/api/v1", "api_key": "sk-or-v1-…", "model": "openai/gpt-4o-mini", "timeout": 10.0}
 	},
 	"min_interval_sec": 30.0
@@ -449,10 +449,19 @@ provider.valid`，只查存在會放行設定不全的項目、然後每次請�
 `agent.gd::_decide_with_retry()` 集中處理「decide → parse_completion →
 validate」，內容驗證失敗（`parse_completion()` 或 `AISchema.validate_*()`
 回傳 `ok=false`）時依 `DecisionProvider.max_validation_retries()` 重試：
-`RemoteLLMProvider` 2 次（《12》§3.4／P-22 #3），`LocalLLMProvider` 0 次
-（GBNF 已在文法層保證格式，出錯代表更根本的問題，重試沒有意義）。
-`LocalLLMProvider` 退回 `default_provider` 的那條路例外，一樣給 2 次——
-打到的多半不是 GBNF 端點，「文法層已保證格式」這個前提不成立。
+`RemoteLLMProvider` 固定 2 次（《12》§3.4／P-22 #3）；`LocalLLMProvider` 改讀
+`AIConfig.get_provider(_provider_name).format_guaranteed`（#212）——這個 provider
+的輸出格式有沒有被文法層（如 GBNF）保證，true 給 0 次（保證格式，出錯代表更根本
+的問題，重試沒有意義）、false 給 2 次，不再用「provider 名字是不是字面值 `"local"`」
+判斷。玩家的 `ai_config.json` 要幫 `"local"` 那筆 provider 補上
+`"format_guaranteed": true` 才能維持原本的 0 次重試行為，沒補的話會安全退化成
+2 次（多重試幾次，不是正確性問題）。
+
+`DecisionProvider.decide()` 現在是共用的基底實作（#213），`LocalLLMProvider`／
+`RemoteLLMProvider` 都不再各自覆寫；`is_retry` 改包在 `DecisionContext`
+（`scripts/ai/decision_context.gd`）物件裡傳遞，不再是逐層宣告的 `bool` 參數
+（#217）——未來 `HumanInput`／`RemotePlayer` 新增請求層級中繼資訊時只改
+`DecisionContext` 加欄位，不用逐層加參數、逐層轉發。
 `AIService` 層級的失敗（見上方第 6 點）不進這個重試迴圈，直接回傳給呼叫端
 走 fallback——「這次問不到」與「問到了但答案壞掉」是兩種不同情境。
 
