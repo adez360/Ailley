@@ -507,8 +507,28 @@ func request_sleep_reflection() -> Dictionary:
 		return {"ok": false}
 
 	var events_sent := _daily_events.duplicate(true)
+
+	# #210：validate_reflection() 只驗結構，不驗 id 是不是真的來自這次送出的
+	# events_sent（唯一且存在）。這裡包一層閉包，讓 id 檢查跟結構驗證共用同一條
+	# 「失敗就重試」路徑（_decide_with_retry），不用改動那個共用機制的簽名。
+	var valid_ids := {}
+	for e in events_sent:
+		valid_ids[e["id"]] = true
+
+	var validator := func(data: Dictionary) -> Dictionary:
+		var validated: Dictionary = AISchema.validate_reflection(data)
+		if not validated["ok"]:
+			return validated
+		var seen_ids := {}
+		for event in validated["data"]["events"]:
+			var event_id = event["id"]
+			if not valid_ids.has(event_id) or seen_ids.has(event_id):
+				return AISchema._fail(AISchema.ERROR_BAD_SHAPE)
+			seen_ids[event_id] = true
+		return validated
+
 	var envelope := PromptBuilder.build_reflection_envelope(self, events_sent)
-	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, AISchema.validate_reflection)
+	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	if not result["ok"]:
 		return {"ok": false}
 
