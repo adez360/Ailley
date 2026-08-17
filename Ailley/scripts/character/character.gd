@@ -503,9 +503,14 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 # ---- 送禮 ----
 
 # 把物品從自己的背包轉移到對方背包，形狀跟 buy_from() 一樣是「兩件事要一起
-# 成功」：remove_item() 扣掉之後，對方的 add_item() 還是可能因為背包滿了失敗
-# ——用同一套「扣除失敗就不送、加入失敗就退回」補償式寫法，不事先猜對方
-# 放不放得下（理由跟 buy_from() 一樣：還要重算堆疊規則，退貨更簡單可靠）。
+# 成功」：remove_item_detailed() 扣掉之後，對方的 add_item() 還是可能因為背包
+# 滿了失敗——用同一套「扣除失敗就不送、加入失敗就退回」補償式寫法，不事先猜
+# 對方放不放得下（理由跟 buy_from() 一樣：還要重算堆疊規則，退貨更簡單可靠）。
+#
+# 用 remove_item_detailed() 而不是 remove_item()：後者只回一個原因碼，逐筆的
+# decay／durability 資訊會直接消失，送到對方那邊等於變成一批全新狀態（腐壞
+# 程度歸零、耐久類物品甚至會被誤標成不追蹤耐久）。這裡逐筆用原本的值搬過去
+# （CodeRabbit review 抓到，#158）。
 #
 # 不改動 relations 任何欄位——送禮的真實意圖交給雙方後續行為自己演，
 # 不是引擎蓋章（見《99》決策紀錄、CLAUDE.md「遊戲機制規格：AI 自主性自檢」）
@@ -519,24 +524,26 @@ func give_to(other: Character, item_id: String, count: int = 1) -> String:
 	if get_body_position().distance_to(other.get_body_position()) > GIVE_RANGE:
 		return GIVE_TOO_FAR
 
-	# 在移除前先取得物品的 decay 與 durability 值，以便轉移時保留原始數據
-	var item_decay := 0
-	var item_durability := -1
-	for i in inventory.SIZE:
-		var slot := inventory.get_slot(i)
-		if not slot.is_empty() and slot.get("item_id", "") == item_id:
-			item_decay = int(slot.get("decay", 0))
-			item_durability = int(slot.get("durability", -1))
-			break
+	var removal: Dictionary = inventory.remove_item_detailed(item_id, count)
+	if removal["reason"] != Inventory.REMOVE_OK:
+		return removal["reason"]
 
-	var remove_reason := inventory.remove_item(item_id, count)
-	if remove_reason != Inventory.REMOVE_OK:
-		return remove_reason
-
-	var add_reason := other.inventory.add_item(item_id, count, item_decay, item_durability)
-	if add_reason != Inventory.ADD_OK:
-		inventory.add_item(item_id, count, item_decay, item_durability)		# 退回——送禮沒有真的發生
-		return add_reason
+	# 同一筆 give 可能橫跨好幾個腐壞程度不同的格子（remove_item_detailed()
+	# 照原樣拆開），逐筆搬過去才保得住每一筆各自的 decay／durability——只抓
+	# 「第一個符合的格子」再套用到整個 count 的做法（CodeRabbit autofix 的
+	# 版本）在橫跨多格時會把後面幾筆的 decay／durability 誤標成第一格的值
+	var chunks: Array = removal["removed"]
+	for i in chunks.size():
+		var chunk: Dictionary = chunks[i]
+		var add_reason := other.inventory.add_item(item_id, chunk["count"], chunk["decay"], chunk["durability"])
+		if add_reason != Inventory.ADD_OK:
+			# 這筆連同還沒送出去的其餘幾筆一起退回自己身上——送禮沒有真的發生。
+			# 已經送到對方那邊的前幾筆不撤回：這裡的補償式寫法跟 buy_from() 一樣，
+			# 只保證數量對得上，不保證失敗當下每一筆都精確復原到原始格位
+			for j in range(i, chunks.size()):
+				var remainder: Dictionary = chunks[j]
+				inventory.add_item(item_id, remainder["count"], remainder["decay"], remainder["durability"])
+			return add_reason
 
 	return GIVE_OK
 

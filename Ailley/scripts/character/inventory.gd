@@ -170,11 +170,23 @@ func _find_stackable_slot(item_id: String, decay: int) -> int:
 # 同樣是原子的，不會先扣掉一部分才發現不夠。
 # count 非正數是呼叫端的錯，不是「拿掉 0 個成功了」，所以回原因碼而不是 REMOVE_OK
 func remove_item(item_id: String, count: int = 1) -> String:
-	if count <= 0:
-		return REMOVE_INVALID_COUNT
-	if count_item(item_id) < count:
-		return REMOVE_NOT_FOUND
+	return _remove_item_detailed(item_id, count)["reason"]
 
+# 跟 remove_item() 同一套規則與原子性保證，但額外回傳實際扣除的每一筆
+# {count, decay, durability}——give_to() 這類「把東西原封不動搬進別的容器」
+# 的呼叫端少了這份細節，只能送出全新狀態（decay=0、durability=-1），原本的
+# 腐壞／耐久資訊會直接消失（CodeRabbit review 抓到，#158）。失敗時 "removed"
+# 是空陣列，不動任何格
+func remove_item_detailed(item_id: String, count: int = 1) -> Dictionary:
+	return _remove_item_detailed(item_id, count)
+
+func _remove_item_detailed(item_id: String, count: int) -> Dictionary:
+	if count <= 0:
+		return {"reason": REMOVE_INVALID_COUNT, "removed": []}
+	if count_item(item_id) < count:
+		return {"reason": REMOVE_NOT_FOUND, "removed": []}
+
+	var removed: Array[Dictionary] = []
 	var remaining := count
 	for i in SIZE:
 		if remaining <= 0:
@@ -185,13 +197,14 @@ func remove_item(item_id: String, count: int = 1) -> String:
 			continue
 
 		var take := mini(remaining, int(slot["count"]))
+		removed.append({"count": take, "decay": int(slot["decay"]), "durability": int(slot["durability"])})
 		slot["count"] = int(slot["count"]) - take
 		remaining -= take
 		if int(slot["count"]) <= 0:
 			slots[i] = {}
 
 	changed.emit()
-	return REMOVE_OK
+	return {"reason": REMOVE_OK, "removed": removed}
 
 # 搬到空格；目的地非空就失敗，不覆蓋。要交換兩個已佔用的格用 swap_slot()
 func move_slot(from: int, to: int) -> bool:

@@ -1006,6 +1006,11 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			if matches.size() > 1:
 				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
 
+			# count 的格式檢查（拒絕 1.5 這種帶小數的數量）交給
+			# AISchema.validate_tasks() 做——跟這裡的職責分工比照 talk：schema
+			# 驗「格式對不對」，resolve() 驗「這個世界裡真的能不能做到」。這裡
+			# 只用 int() 收，llm 來源的 count 在進入 resolve() 之前已經過 schema
+			# 那關，不會是帶小數的值
 			var item_id: String = str(params.get("item_id", ""))
 			var count: int = int(params.get("count", 1))
 			if inventory == null or not inventory.has_item(item_id, count):
