@@ -501,7 +501,7 @@ func _cmd_act(args: PackedStringArray) -> void:
 	# 一律吃 place。這裡照 action 分流，不要求下指令的人自己記得填哪個 key
 	var params := {}
 	if args.size() == 3:
-		params["target" if action == "talk" else "place"] = args[2]
+		params["target" if ["talk", "attack"].has(action) else "place"] = args[2]
 
 	# is_in_group("agents") 不會幫 GDScript 縮窄靜態型別，顯式轉型才能讓
 	# debug_push_task()（Agent-only）這個呼叫真的是型別安全的

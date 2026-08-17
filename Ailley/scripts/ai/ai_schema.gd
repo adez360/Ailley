@@ -245,7 +245,7 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) ->
 		# 還沒有）：沒有 target 的 talk 任務會被 _pursue_talk_task() 誤判成
 		# 「目標不存在」一路帶進任務池才發現，不如在這一層就擋掉，跟這個檔案
 		# 「外來內容一律不信任」的原則一致，不等到執行層才發現資料是空的
-		if task["action"] == "talk":
+		if ["talk", "attack"].has(task["action"]):
 			var talk_params: Dictionary = task.get("params", {})
 			var target: Variant = talk_params.get("target")
 			if not target is String or (target as String).strip_edges().is_empty():
