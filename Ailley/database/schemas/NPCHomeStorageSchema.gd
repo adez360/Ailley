@@ -13,18 +13,19 @@ static func create(db) -> bool:
 
 		item_id TEXT NOT NULL,
 
+		-- 數量
 		count INTEGER NOT NULL DEFAULT 0
-			CHECK (count BETWEEN 0 AND 30),
+			CHECK (count >= 0),
 
+		-- 腐壞值，100 = 完全腐壞
 		decay INTEGER NOT NULL DEFAULT 0
 			CHECK (decay BETWEEN 0 AND 100),
 
+		-- 耐久值，0 = 損毀
 		durability INTEGER NOT NULL DEFAULT 100
 			CHECK (durability BETWEEN 0 AND 100),
 
-		-- 家中倉庫：0-49，共 50 格
-		slot INTEGER NOT NULL
-			CHECK (slot BETWEEN 0 AND 49),
+		slot_index INTEGER NOT NULL,
 
 		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -36,12 +37,17 @@ static func create(db) -> bool:
 			REFERENCES item(item_id)
 			ON DELETE RESTRICT,
 
-		UNIQUE (npc_id, slot)
+		-- 一格放一疊，跟 npc_inventory 的 UNIQUE (npc_id, slot) 同一個形狀
+		UNIQUE (npc_id, slot_index)
 	);
 	"""
 
 	if not db.query(sql):
-		push_error("[NPCHomeStorageSchema] Failed to create npc_home_storage table.")
+
+		push_error(
+			"[NPCHomeStorageSchema] Failed to create npc_home_storage table."
+		)
+
 		return false
 
 	return true

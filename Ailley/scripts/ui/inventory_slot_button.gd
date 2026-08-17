@@ -41,10 +41,7 @@ func _ready() -> void:
 
 func _refresh_label() -> void:
 	var inventory := _get_inventory()
-	var slot: Dictionary = {}
-
-	if inventory != null:
-		slot = inventory.get_slot(slot_index)
+	var slot := inventory.get_slot(slot_index) if inventory != null else {}
 
 	if slot.is_empty():
 		_label.text = ""
@@ -53,12 +50,7 @@ func _refresh_label() -> void:
 	var item_id: String = slot["item_id"]
 	var count: int = slot["count"]
 	var shown := item_id.substr(0, 3).to_upper()
-
-	_label.text = (
-		"%s\n%d" % [shown, count]
-		if count > 1
-		else shown
-	)
+	_label.text = "%s\n%d" % [shown, count] if count > 1 else shown
 
 func _get_inventory() -> Inventory:
 	var player := get_tree().get_first_node_in_group("player")

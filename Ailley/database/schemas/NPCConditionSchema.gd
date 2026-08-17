@@ -1,6 +1,12 @@
 class_name NPCConditionSchema
 extends RefCounted
 
+# "conditions": [
+#    {
+#        "type": "injured",
+#        "turns_left": 8
+#    }
+#]
 
 static func create(db) -> bool:
 
@@ -11,11 +17,11 @@ static func create(db) -> bool:
 
 		npc_id TEXT NOT NULL,
 
+		-- 生理衍生（由 state.physical 自動觸發） / 社會狀態 / 行動佔用 / 終局狀態
 		type TEXT NOT NULL
 			CHECK(
 				type IN (
 					'injured',
-					'bleeding',
 					'drunk',
 					'starving',
 					'dehydrated',
@@ -32,14 +38,18 @@ static func create(db) -> bool:
 				)
 			),
 
+		-- 剩餘 tick。-1 表示持續到條件解除為止
 		turns_left INTEGER NOT NULL DEFAULT 0,
 
-		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at TEXT NOT NULL
+			DEFAULT CURRENT_TIMESTAMP,
 
 		FOREIGN KEY (npc_id)
 			REFERENCES npc(npc_id)
 			ON DELETE CASCADE,
 
+		-- 同一個 NPC 身上多種 condition 會並存（injured + working），
+		-- 但同一種不重複
 		UNIQUE (npc_id, type)
 	);
 
@@ -49,7 +59,12 @@ static func create(db) -> bool:
 	"""
 
 	if not db.query(sql):
-		push_error("[NPCConditionSchema] Failed to create npc_condition.")
+
+		push_error(
+			"[NPCConditionSchema] "
+			+ "Failed to create npc_condition."
+		)
+
 		return false
 
 	return true

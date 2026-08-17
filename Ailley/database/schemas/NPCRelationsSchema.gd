@@ -34,9 +34,14 @@ static func create(db) -> bool:
 			REFERENCES npc(npc_id)
 			ON DELETE CASCADE,
 
-		UNIQUE (character_id, target_id),
+		UNIQUE (
+			character_id,
+			target_id
+		),
 
-		CHECK (character_id <> target_id)
+		CHECK (
+			character_id <> target_id
+		)
 	);
 
 	CREATE INDEX IF NOT EXISTS
@@ -49,7 +54,12 @@ static func create(db) -> bool:
 	"""
 
 	if not db.query(sql):
-		push_error("[NPCRelationsSchema] Failed to create npc_relations.")
+
+		push_error(
+			"[NPCRelationsSchema] "
+			+ "Failed to create npc_relations."
+		)
+
 		return false
 
 	return true

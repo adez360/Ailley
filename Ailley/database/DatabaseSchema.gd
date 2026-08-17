@@ -5,13 +5,16 @@ extends RefCounted
 ## =====================================================
 ## DatabaseSchema
 ##
-## 統一建立所有 SQLite tables。
+## 職責：
+## 1. 統一管理所有資料表 Schema
+## 2. 決定資料表建立順序
+## 3. 將 SQLite db 傳給各個 Schema
+## 4. 不直接撰寫資料表 SQL
 ##
-## 注意：
-## SQLite 的 CREATE TABLE 本身不要求父表先存在；
-## 啟用 FK 後，真正要求父表存在的是 INSERT / UPDATE。
-## 因此這裡仍依賴順序建立父表，但不把它描述成 SQLite
-## 的 CREATE TABLE 強制規則。
+## 每張資料表一支 .gd，各自提供：
+##
+##     static func create(db) -> bool
+##
 ## =====================================================
 
 
@@ -20,52 +23,112 @@ static func initialize(db) -> bool:
 		push_error("[DatabaseSchema] Database object is null.")
 		return false
 
+
+	# =================================================
+	# 所有 Schema
+	#
+	# 注意：
+	# 這裡的順序非常重要。
+	#
+	# 有 Foreign Key 的資料表，
+	# 必須在被參照的資料表建立之後建立。
+	# =================================================
+
 	var schemas := [
-		# World
+
+		# -------------------------------------------------
+		# 01. World
+		# -------------------------------------------------
+
 		LocationSchema,
 
-		# NPC Core
+
+		# -------------------------------------------------
+		# 02. NPC Core
+		# -------------------------------------------------
+
 		NPCSchema,
 		NPCStateSchema,
 		NPCScheduleSchema,
 
-		# NPC Profile
+
+		# -------------------------------------------------
+		# 03. NPC Profile
+		# -------------------------------------------------
+
 		NPCPersonalitySchema,
 		NPCAppearanceSchema,
 		NPCOccupationSchema,
 		NPCTabooSchema,
 
-		# NPC AI
+
+		# -------------------------------------------------
+		# 04. NPC AI
+		# -------------------------------------------------
+
 		NPCEmotionSchema,
 		NPCConditionSchema,
 		NPCGoalSchema,
 		NPCDailyPlanSchema,
 		NPCLastActionSchema,
 
-		# NPC Memory
+
+		# -------------------------------------------------
+		# 05. NPC Memory
+		# -------------------------------------------------
+
 		MemorySchema,
 
-		# NPC Death
+
+		# -------------------------------------------------
+		# 06. NPC Death
+		# -------------------------------------------------
+
 		NPCDeathSchema,
 		GraveSchema,
 		GraveHighlightSchema,
 		GraveEpitaphSchema,
 
-		# Item
+
+		# -------------------------------------------------
+		# 07. Item
+		# -------------------------------------------------
+
 		ItemSchema,
 
-		# Inventory / Storage
+
+		# -------------------------------------------------
+		# 08. Inventory / Storage
+		# -------------------------------------------------
+
 		NPCInventorySchema,
 		NPCHomeStorageSchema,
 
-		# Relations
+
+		# -------------------------------------------------
+		# 09. Relations
+		# -------------------------------------------------
+
 		NPCRelationsSchema,
 
-		# Economy
+
+		# -------------------------------------------------
+		# 10. Economy
+		# -------------------------------------------------
+
 		NPCWalletSchema,
 		MoneyTransactionSchema,
 		ItemTransactionSchema
 	]
+
+
+	# =================================================
+	# 整批包在一個 transaction 裡。
+	#
+	# SQLite 的 DDL 可以進 transaction，所以中間任何一張表失敗
+	# 就整個回滾。否則會留下一個建到一半的資料庫，而且因為用的是
+	# CREATE TABLE IF NOT EXISTS，下次開機也不會自己修好。
+	# =================================================
 
 	if not db.query("BEGIN TRANSACTION;"):
 		push_error(
@@ -73,6 +136,7 @@ static func initialize(db) -> bool:
 			+ db.error_message
 		)
 		return false
+
 
 	for schema in schemas:
 		if schema.create(db):
@@ -86,28 +150,26 @@ static func initialize(db) -> bool:
 		db.query("ROLLBACK;")
 		return false
 
+
 	if not db.query("COMMIT;"):
 		push_error(
 			"[DatabaseSchema] COMMIT failed: "
 			+ db.error_message
 		)
+
 		db.query("ROLLBACK;")
 		return false
 
-	print(
-		"[DatabaseSchema] %d schema classes created."
-		% schemas.size()
-	)
 
-	# 25 個 Schema class 目前建立 26 張 SQLite table：
-	# MemorySchema 另外建立 memory_related_npcs。
 	print(
-		"[DatabaseSchema] Schema classes: %d | SQLite tables: 26"
+		"[DatabaseSchema] %d schemas created."
 		% schemas.size()
 	)
 
 	return true
 
 
+## schema 是 GDScript class，直接 str() 出來會是 <GDScript#...>，
+## 看不出是哪張表。
 static func _schema_name(schema) -> String:
 	return str(schema.resource_path).get_file().get_basename()

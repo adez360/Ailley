@@ -1,3 +1,5 @@
+# 規格尚未定案，欄位可能異動
+
 class_name NPCEmotionSchema
 extends RefCounted
 
@@ -8,7 +10,7 @@ static func create(db) -> bool:
 	CREATE TABLE IF NOT EXISTS npc_emotion (
 
 		npc_id TEXT PRIMARY KEY,
-
+		-- 八種情緒
 		emotion TEXT NOT NULL DEFAULT 'neutral'
 			CHECK(
 				emotion IN (
@@ -26,22 +28,33 @@ static func create(db) -> bool:
 		intensity INTEGER NOT NULL DEFAULT 0
 			CHECK (intensity BETWEEN 0 AND 100),
 
-		-- 規格目前沒有 event_memory 資料表，因此保留為純 TEXT。
+		-- 起因事件
 		cause_event_id TEXT,
 
-		duration_left INTEGER NOT NULL DEFAULT 0
+		-- 剩餘 tick，每 tick 減 1
+		duration_left  INTEGER NOT NULL DEFAULT 0
 			CHECK (duration_left >= 0),
 
-		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at TEXT NOT NULL
+			DEFAULT CURRENT_TIMESTAMP,
 
 		FOREIGN KEY (npc_id)
 			REFERENCES npc(npc_id)
-			ON DELETE CASCADE
+			ON DELETE CASCADE,
+
+		FOREIGN KEY (cause_event_id)
+			REFERENCES event_memory(event_id)
+			ON DELETE SET NULL
 	);
 	"""
 
 	if not db.query(sql):
-		push_error("[NPCEmotionSchema] Failed to create npc_emotion.")
+
+		push_error(
+			"[NPCEmotionSchema] "
+			+ "Failed to create npc_emotion."
+		)
+
 		return false
 
 	return true
