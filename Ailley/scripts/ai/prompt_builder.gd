@@ -195,12 +195,14 @@ static func _memory_block(character: Character) -> Dictionary:
 	if character.memory == null:
 		return {"recent": [], "core": []}
 
+	var buckets := character.memory.get_by_levels([2, 4])
+
 	var recent: Array[String] = []
-	for entry in character.memory.get_by_level(2):
+	for entry in buckets[2]:
 		recent.append(entry["content"])
 
 	var core: Array[String] = []
-	for entry in character.memory.get_by_level(4):
+	for entry in buckets[4]:
 		core.append(entry["content"])
 
 	return {"recent": recent, "core": core}
