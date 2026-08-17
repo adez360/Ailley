@@ -18,13 +18,24 @@ extends Node
 ##   update_rows()
 ##   delete_rows()
 ##
+## 對外 CRUD 介面：
+##
+##   query() / select() / select_where() / insert() / update() / delete()
+##   begin_transaction() / commit_transaction() / rollback_transaction()
+##
 ## 注意：
 ## conditions 是由程式內部組出的 SQL WHERE 條件。
-## 不應直接放入玩家輸入。
+## 不應直接放入玩家輸入。查詢有使用者可控或需要轉義的值時，
+## 優先用 select_where() 走 bindings，不要自己 escape_sql_string() 拼字串。
 ## =====================================================
 
 
 const DATABASE_PATH := "user://game.db"
+
+# CRUD 診斷用的逐筆 print()。單一角色同步一輪就會觸發數十次 CRUD，
+# 正常遊玩預設關閉；除錯時改成 true。錯誤路徑一律用 push_error()，
+# 不受這個開關影響。
+const VERBOSE_SQL := false
 
 
 var db: SQLite
@@ -206,13 +217,14 @@ func select(
 		)
 
 
-	print(
-		"[Database] SELECT | table=%s | conditions=%s"
-		% [
-			table,
-			conditions
-		]
-	)
+	if VERBOSE_SQL:
+		print(
+			"[Database] SELECT | table=%s | conditions=%s"
+			% [
+				table,
+				conditions
+			]
+		)
 
 
 	if not db.query_with_bindings(
@@ -235,20 +247,86 @@ func select(
 
 
 # =====================================================
+# SELECT（bindings 版）
+#
+# conditions 帶 "?" 佔位符，值透過 bindings 陣列由
+# query_with_bindings() 處理，不必自己轉義後拼字串。
+# 呼叫端要用使用者可控或需要轉義的值組 WHERE 條件時，
+# 一律走這個而不是自己 escape_sql_string() 轉義後拼進 select()。
+# =====================================================
+
+func select_where(
+	table: String,
+	where_sql: String,
+	bindings: Array = [],
+	columns: Array = ["*"]
+) -> Array:
+
+	if not _require_ready():
+		return []
+
+
+	var cols := (
+		", ".join(columns)
+		if columns.size() > 0
+		else "*"
+	)
+
+
+	var sql := (
+		"SELECT %s FROM %s"
+		% [
+			cols,
+			table
+		]
+	)
+
+
+	if not where_sql.is_empty():
+
+		sql += (
+			" WHERE %s"
+			% where_sql
+		)
+
+
+	if VERBOSE_SQL:
+		print(
+			"[Database] SELECT_WHERE | table=%s | where=%s | bindings=%s"
+			% [
+				table,
+				where_sql,
+				bindings
+			]
+		)
+
+
+	if not db.query_with_bindings(
+		sql,
+		bindings
+	):
+
+		push_error(
+			"[Database] SELECT_WHERE FROM %s failed: %s"
+			% [
+				table,
+				db.error_message
+			]
+		)
+
+		return []
+
+
+	return db.query_result
+
+
+# =====================================================
 # INSERT
 #
-# 這裡增加完整診斷。
-#
-# 特別針對目前 npc_inventory 問題：
-#
-#   INSERT START
-#   INSERT DATA
-#   INSERT RESULT
-#   INSERT VERIFY
-#
-# 如果 INSERT 失敗，可以直接看到 SQLite error。
-# 如果 addon 回傳 true 但資料不存在，
-# 也會直接被驗證抓出來。
+# 失敗時直接看得到 SQLite error。
+# 個別 table 的寫入後驗證（例如 npc_inventory）不在這裡做，
+# 屬於通用 CRUD 不該知道特定 table 的欄位形狀，
+# 由呼叫端（例如 CharacterStatePersistence）自行驗證。
 # =====================================================
 
 func insert(
@@ -279,18 +357,19 @@ func insert(
 		return false
 
 
-	print(
-		"[Database] INSERT START | table=%s"
-		% table
-	)
+	if VERBOSE_SQL:
+		print(
+			"[Database] INSERT START | table=%s"
+			% table
+		)
 
-	print(
-		"[Database] INSERT DATA | table=%s | data=%s"
-		% [
-			table,
-			data
-		]
-	)
+		print(
+			"[Database] INSERT DATA | table=%s | data=%s"
+			% [
+				table,
+				data
+			]
+		)
 
 
 	# -------------------------------------------------
@@ -303,14 +382,15 @@ func insert(
 	)
 
 
-	print(
-		"[Database] INSERT RESULT | table=%s | result=%s | error=%s"
-		% [
-			table,
-			str(result),
-			db.error_message
-		]
-	)
+	if VERBOSE_SQL:
+		print(
+			"[Database] INSERT RESULT | table=%s | result=%s | error=%s"
+			% [
+				table,
+				str(result),
+				db.error_message
+			]
+		)
 
 
 	if not result:
@@ -326,112 +406,11 @@ func insert(
 		return false
 
 
-	# -------------------------------------------------
-	# 特別針對 npc_inventory：
-	#
-	# insert_row() 成功後再確認 row 是否真的存在。
-	#
-	# 不改變一般 table 的 CRUD 行為。
-	# -------------------------------------------------
-
-	if table == "npc_inventory":
-
-		var npc_id := str(
-			data.get(
-				"npc_id",
-				""
-			)
-		)
-
-
-		var slot := int(
-			data.get(
-				"slot",
-				-1
-			)
-		)
-
-
-		if npc_id.is_empty():
-
-			push_error(
-				"[Database] npc_inventory INSERT "
-				+ "成功回傳，但 npc_id 為空。"
-			)
-
-			return false
-
-
-		if slot < 0:
-
-			push_error(
-				"[Database] npc_inventory INSERT "
-				+ "成功回傳，但 slot 無效：%d"
-				% slot
-			)
-
-			return false
-
-
-		var verify_rows := select(
-			"npc_inventory",
-			"npc_id = '%s' AND slot = %d"
-			% [
-				_escape_sql(npc_id),
-				slot
-			],
-			[
-				"npc_id",
-				"slot",
-				"item_id",
-				"count",
-				"decay",
-				"durability"
-			]
-		)
-
-
+	if VERBOSE_SQL:
 		print(
-			"[Database] npc_inventory INSERT VERIFY | "
-			+ "npc=%s | slot=%d | rows=%d"
-			% [
-				npc_id,
-				slot,
-				verify_rows.size()
-			]
+			"[Database] INSERT PASS | table=%s"
+			% table
 		)
-
-
-		if verify_rows.is_empty():
-
-			push_error(
-				"[Database] npc_inventory INSERT "
-				+ "回傳成功，但 SELECT 驗證不到資料："
-				+ "npc=%s slot=%d"
-				% [
-					npc_id,
-					slot
-				]
-			)
-
-			return false
-
-
-		print(
-			"[Database] npc_inventory INSERT VERIFIED | "
-			+ "npc=%s | slot=%d | row=%s"
-			% [
-				npc_id,
-				slot,
-				verify_rows[0]
-			]
-		)
-
-
-	print(
-		"[Database] INSERT PASS | table=%s"
-		% table
-	)
 
 
 	return true
@@ -493,14 +472,15 @@ func update(
 		)
 
 
-	print(
-		"[Database] UPDATE | table=%s | conditions=%s | data=%s"
-		% [
-			table,
-			conditions,
-			update_data
-		]
-	)
+	if VERBOSE_SQL:
+		print(
+			"[Database] UPDATE | table=%s | conditions=%s | data=%s"
+			% [
+				table,
+				conditions,
+				update_data
+			]
+		)
 
 
 	if db.update_rows(
@@ -545,13 +525,14 @@ func delete(
 		return false
 
 
-	print(
-		"[Database] DELETE | table=%s | conditions=%s"
-		% [
-			table,
-			conditions
-		]
-	)
+	if VERBOSE_SQL:
+		print(
+			"[Database] DELETE | table=%s | conditions=%s"
+			% [
+				table,
+				conditions
+			]
+		)
 
 
 	if db.delete_rows(
@@ -666,9 +647,16 @@ func _require_ready() -> bool:
 
 # =====================================================
 # SQL Escape
+#
+# 給 update()/delete() 的 conditions 字串用——godot-sqlite
+# 的 update_rows()/delete_rows() 不支援 bindings，仍得手動
+# 轉義後拼字串。全專案共用這一份，其他檔案不要各自再刻一份，
+# 呼叫 DatabaseManager.escape_sql_string()。
+#
+# SELECT 條件請改用 select_where()，走 bindings 不必轉義。
 # =====================================================
 
-func _escape_sql(
+func escape_sql_string(
 	value: String
 ) -> String:
 
