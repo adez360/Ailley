@@ -497,8 +497,9 @@ func _cmd_act(args: PackedStringArray) -> void:
 		])
 		return
 
-	# talk 的參數是人不是地點（見 agent.gd::_pursue_talk_task()），其餘動作
-	# 一律吃 place。這裡照 action 分流，不要求下指令的人自己記得填哪個 key
+	# talk／attack 的參數是人不是地點（見 agent.gd::_pursue_talk_task()／
+	# _pursue_attack_task()），其餘動作一律吃 place。這裡照 action 分流，
+	# 不要求下指令的人自己記得填哪個 key
 	var params := {}
 	if args.size() == 3:
 		params["target" if ["talk", "attack"].has(action) else "place"] = args[2]

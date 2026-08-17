@@ -786,6 +786,11 @@ func attack(other: Character) -> String:
 	if other.stats != null:
 		other.stats.add("health", ATTACK_HEALTH_DELTA)
 		other.stats.add("injury", ATTACK_INJURY_DELTA)
+		# 立即同步 bleeding／injury 衰減暫停，不等 _update_conditions() 的 10 分鐘
+		# 一次 tick——命中瞬間 injury 可能已經跨過 20 的門檻，晚同步的話這段空窗期
+		# injury 會繼續被 Stats._process() 的自然衰減蓋掉這次造成的傷害
+		other._set_condition(CONDITION_BLEEDING, other.stats.get_value("injury") >= 20.0)
+		other.stats.injury_decay_paused = other.has_condition(CONDITION_BLEEDING)
 	other.force_interrupt()
 	other._on_attacked(self)
 	return ATTACK_OK
