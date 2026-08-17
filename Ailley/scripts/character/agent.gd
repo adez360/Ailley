@@ -1199,6 +1199,11 @@ func _pursue_talk_task() -> void:
 # talk 要追著會動的目標走，也不像 nap／rest 那類要佔滿整段 duration。resolve()
 # 一過（murmur 沒有硬規則、不擲骰，恆成功）就講一句、立刻退出任務池
 func _pursue_murmur_task() -> void:
+	# CodeRabbit review：murmur 可能是從移動中的任務切換過來，不清掉舊路徑
+	# 的話角色會一邊沿用上一筆任務的移動、一邊講自語
+	if is_moving():
+		stop_moving()
+
 	var should_speak := true
 	if _current_task.get("source", "") == "llm":
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
@@ -1217,6 +1222,10 @@ func _pursue_murmur_task() -> void:
 	current_state = "idle"
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
+	# CodeRabbit review：_request_next_decision() 只有在非同步回應回來後才會
+	# 重新仲裁，不立刻補一次 _reevaluate() 的話，等回應期間排程或 fallback
+	# 任務不會被馬上接手，得空等到下一次 GameClock time_changed
+	_reevaluate()
 
 # 按顯示名找所有符合的角色，用於偵測撞名（resolve() 的歧義檢查）
 func _find_all_characters_by_name(target_name: String) -> Array[Character]:
