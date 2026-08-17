@@ -1089,6 +1089,9 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
 			if matches.size() > 1:
 				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
+		"eat":
+			if inventory == null or _find_food_slot().is_empty():
+				return {"success": false, "reason": "背包裡沒有食物可以吃"}
 		"give":
 			# 《01-2》§1 流程圖①前置檢查點名的例子就是「物品在身上？」——give
 			# 不進②③擲骰（不在 SUCCESS_PARAMS 上），只有這一關硬規則

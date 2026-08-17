@@ -683,6 +683,35 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 	return BUY_OK
 
 
+# ---- 吃 ----
+
+func eat() -> void:
+	var food_slot = _find_food_slot()
+	if food_slot.is_empty():
+		return
+
+	var item_id: String = food_slot["item_id"]
+	inventory.remove_item(item_id, 1)
+
+	var food_item = food_slot.get("item", {})
+	var satiety_recovery: int = food_item.get("satiety_recovery", 20)
+	stats.change_satiety(satiety_recovery)
+
+
+func _find_food_slot() -> Dictionary:
+	if inventory == null:
+		return {}
+
+	for slot in inventory.slots:
+		if slot.is_empty():
+			continue
+		var item = slot.get("item", {})
+		if item.get("is_food", false):
+			return slot
+
+	return {}
+
+
 # ---- 送禮 ----
 
 # 把物品從自己的背包轉移到對方背包。跟 buy_from() 一樣是「兩件事要一起成功」，
