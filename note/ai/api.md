@@ -174,7 +174,7 @@ get_state_snapshot() -> {
 † to_save_data() -> {id, name, stats?, relationships?, memory?}，走各元件自己的
   to_save_data()，不在這裡重複走訪 SPEC／records。子類別（Agent）覆寫補
   today_plan／appointment。apply_save_data() 反向還原，缺欄位用預設值補
-→ 技術/Character 基底與 Agent · 技術/滑鼠選取與鏡頭 · 技術/聽覺感測 · 技術/存檔
+→ [[Character 基底與 Agent]] · [[滑鼠選取與鏡頭]] · [[聽覺感測]] · [[存檔]]
 ```
 
 ## Player — scripts/character/player.gd · extends Character
@@ -463,7 +463,7 @@ func apply_save_data(data) -> void           # 還原 entries 後從最大 id �
   衰減公式對不起來（衰減率 3/天，100 分要約 33 天才歸零，不是 3 天）——
   已列入《99》待釐清，目前只實作 §4-1 的衰減公式
 † 不做：向量檢索（《03》§7，完整版才需要）
-→ 技術/記憶與睡眠反思 · 技術/存檔
+→ [[記憶與睡眠反思]] · [[存檔]]
 ```
 
 ## Inventory — scripts/character/inventory.gd · class_name · Node

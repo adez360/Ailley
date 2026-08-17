@@ -78,15 +78,26 @@ func _write(dir: String, id: String, data: Dictionary) -> bool:
 	file.close()
 
 	# 目的地已存在時，Windows 的 rename 跟 POSIX 不同——不會原地覆蓋，會直接失敗。
-	# 先刪掉舊檔再換名，讓行為在兩邊一致：這裡本來就不是真正原子的（見上面
-	# 函式註解「單一 process 情境」），刪除跟換名中間短暫沒有舊檔的窗口
-	# 由 #23 的 session 鎖負責，不是這裡要顧
+	# 先把舊檔移到備份路徑，換名失敗時還原；成功後刪備份。
+	# 這裡本來就不是真正原子的（見上面函式註解「單一 process 情境」），
+	# 由 #23 的 session 鎖負責
+	var backup_path := path + ".bak"
 	if FileAccess.file_exists(path):
-		DirAccess.remove_absolute(path)
+		var backup_err := DirAccess.rename_absolute(path, backup_path)
+		if backup_err != OK:
+			push_error("JsonSaveService: 備份失敗 %s → %s（%s）" % [path, backup_path, error_string(backup_err)])
+			return false
 
 	var err := DirAccess.rename_absolute(tmp_path, path)
 	if err != OK:
 		push_error("JsonSaveService: 換名失敗 %s → %s（%s）" % [tmp_path, path, error_string(err)])
+		# 還原備份
+		if FileAccess.file_exists(backup_path):
+			DirAccess.rename_absolute(backup_path, path)
 		return false
+
+	# 成功後移除備份
+	if FileAccess.file_exists(backup_path):
+		DirAccess.remove_absolute(backup_path)
 
 	return true

@@ -164,8 +164,10 @@ func to_save_data() -> Dictionary:
 	return {"entries": entries.duplicate(true)}
 
 ## _next_id 從還原的 entries 重算，不跟著存——否則舊存檔缺這個欄位時
-## 會歸零，新記憶的 id 撞上還留著的舊記憶
+## 會歸零，新記憶的 id 撞上還留著的舊記憶。
+## 清空 l1 以防載入前的暫時性資料汙染載入後的狀態
 func apply_save_data(data: Dictionary) -> void:
+	l1.clear()
 	entries.assign(data.get("entries", []) as Array)
 
 	_next_id = 0
