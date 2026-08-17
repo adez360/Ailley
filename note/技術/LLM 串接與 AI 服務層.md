@@ -86,7 +86,7 @@ WebSocket 在本專案有位置，但是**另一條線**：
 | `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers` 與全域的速率限制三個旋鈕 |
 | `ai_service.gd` | **正式線唯一碰網路的地方**。autoload。節點池、佇列、逾時、速率限制、重試 |
 | `ai_schema.gd` | 回應驗證：`JSON.parse_string` → null 檢查 → 逐欄位型別檢查 → `action` 白名單 |
-| `prompt_builder.gd` | 由 Character 組出請求信封。dialogue 信封已實作，plan 還沒 |
+| `prompt_builder.gd` | 由 Character 組出請求信封（dialogue／plan／reflection 皆已實作）。system 段前綴每個角色的人格摘要，見下方「人格資料」 |
 
 人格資料在 `npc_schedule.json` 的 `identities`（節點名查表），組成 system 段的
 第一截，見 [[人格與 System Prompt]]。
@@ -149,8 +149,9 @@ llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key
 
 ## JSON 信封
 
-對話與行程**共用同一個信封**，用 `type` 區分。dialogue 那半邊已經實作
-（`PromptBuilder.build_dialogue_envelope()`），plan 還沒。
+對話與行程**共用同一個信封**，用 `type` 區分。dialogue／plan／reflection
+三種都已經實作（`PromptBuilder.build_dialogue_envelope()`／
+`build_plan_envelope()`／`build_reflection_envelope()`）。
 
 ### 請求
 
