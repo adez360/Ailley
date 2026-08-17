@@ -460,7 +460,9 @@ func _decide_with_retry(envelope: Dictionary, policy: AIService.Policy, validato
 	# 的處理一模一樣（還有次數就重試，沒有就把原因原樣回報），不必各寫一遍
 	var last := AISchema._fail("no_attempt")
 	for attempt in attempts:
-		var result: Dictionary = await _provider.decide(envelope, character_id, policy, attempt > 0)
+		var context := DecisionContext.new()
+		context.is_retry = attempt > 0
+		var result: Dictionary = await _provider.decide(envelope, character_id, policy, context)
 		if not result["ok"]:
 			return result
 
