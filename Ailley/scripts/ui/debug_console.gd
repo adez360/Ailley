@@ -458,7 +458,7 @@ func _cmd_persona(args: PackedStringArray) -> void:
 # agent.gd::debug_push_task()，跟 LLM 決策回應同一條路徑。
 #
 # 只收 IMPLEMENTED_ACTIONS 裡的動作——白名單上但還沒接執行層的動作推進去
-# 只會讓角色靜靜地站著，看起來像指令壞了。三十遊戲分鐘夠看出 energy 有沒有
+# 只會讓角色靜靜地站著，看起來像指令壞了。三十遊戲分鐘夠看出 stamina 有沒有
 # 在回，又不會長到要等半個遊戲日才還角色自由
 const ACT_DURATION := 30.0
 
@@ -571,7 +571,7 @@ func _cmd_reflect(args: PackedStringArray) -> void:
 		_error("反思失敗（可能撞到速率限制或驗證失敗），今天的事留著，下次再試")
 		return
 
-	_print("[color=888888]反思完成，當日摘要：%s[/color]" % _escape_bbcode(character.last_reflection_summary))
+	_print("[color=888888]反思完成，當日摘要：%s[/color]" % _escape_bbcode(agent.last_reflection_summary))
 	_print("[color=888888]記憶列表：[/color]")
 	_cmd_memory(args)
 

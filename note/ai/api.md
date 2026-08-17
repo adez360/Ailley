@@ -420,17 +420,27 @@ func get_lowest_need_place() -> String
 ```
 
 ```text
-key      label  drift  toward  start  is_need  place
-satiety  飽足感  3.0    0       100    ✓        restaurant
-energy   精力    1.0    0       100    ✓        home_001
-social   社交    0.5    0       100    ✓        square
-fun      娛樂    0.2    0       100    ✓        square
-mood     心情    0.5    50      50     ✗        ""
+key          label   drift  toward  start  is_need  place
+satiety      飽足感   3.0    0       100    ✓        restaurant
+hydration    水分     2.0    0       80     ✓        restaurant
+stamina      體力     1.0    0       80     ✓        home_001
+wakefulness  清醒度   1.2    0       90     ✓        home_001
+hygiene      清潔     0.5    0       70     ✗        ""
+alcohol      酒精濃度 3.0    0       0      ✗        ""
+health       生命值   0.0    100     100    ✗        ""
+injury       傷勢     0.5    0       0      ✗        ""
+social       社交     0.5    0       100    ✓        square
+fun          娛樂     0.2    0       100    ✓        square
+mood         心情     0.5    50      50     ✗        ""
 
 † 加一項數值 = SPEC 加一列，其餘程式全不用改（含主控台 status 顯示）
 † drift 是每「現實秒」往 toward 靠近多少
 † place 只回名稱不回座標 — Stats 不可依賴場景（存檔/測試要能無場景使用）
-⚠ energy 的 place 寫死 home_001，每個角色的家其實不一樣
+† satiety/hydration/stamina/wakefulness/hygiene/health 是《01》§4-1「越高越好」的需求型欄位；
+  但 get_lowest_need()/needs_attention() 只掃 is_need=✓ 的 4 項（hygiene/health 沒有對應的
+  place 可去，不參與這兩個函式，見《99》P-32 追加決策）
+† alcohol/injury 是事件累積型（預設 0，靠外部事件推高），故意維持「越高越差」，不跟其他 6 項統一方向
+⚠ stamina 的 place 寫死 home_001，每個角色的家其實不一樣
 ```
 
 ## Relationships — scripts/character/relationships.gd · class_name · Node
