@@ -350,7 +350,7 @@ static func validate_reflection(data: Dictionary) -> Dictionary:
 		# 帶小數的 id 直接拒絕，不做截斷——#210 之後呼叫端會拿這個 id 去跟
 		# events_sent 的整數 id 做嚴格比對，截斷值（1.5 → 1）若剛好撞上一個
 		# 真實存在的 id，會被誤判成合法匹配，等於放行一個幻覺出來的 id
-		if id_value is float and not is_equal_approx(id_value, roundf(id_value)):
+		if id_value is float and id_value != roundf(id_value):
 			return _fail(ERROR_BAD_SHAPE)
 		var event_id: int = int(id_value)
 
