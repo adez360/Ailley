@@ -104,11 +104,11 @@ MCP 兩邊都**沒有**搬檔的 op，所以只能用 `git mv`。流程固定，
 
 ## Headless 驗證
 
-`/home/adez360/Applications/Godot-4.5.1.x86_64`（不在 PATH，
-`mcp__godot__launch_editor` 因此也用不了）。不需要編輯器連線就能驗兩件事：
+`mcp__godot__launch_editor` 用不了時（例如 Godot 不在 PATH），
+不需要編輯器連線也能驗兩件事：
 
 ```bash
-G=/home/adez360/Applications/Godot-4.5.1.x86_64
+G=$(command -v godot || echo /usr/share/godot/Godot_v4.5.1-stable_linux.x86_64)
 $G --headless --path . --check-only --script scripts/<領域>/x.gd   # 語法
 $G --headless --path . --quit-after 300                            # 開得起來嗎
 ```
