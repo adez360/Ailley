@@ -78,7 +78,7 @@ func get_npc(id:String):
 func get_schedule_template(node_name:String)->String:
 	return str(schedule_assignments.get(node_name, ""))
 
-# 這個節點名對應的固定身分（{character_id, character_name}）。沒指派就回空字典，
+# 這個節點名對應的固定身分（{character_id, character_name, hexaco, character}）。沒指派就回空字典，
 # 由呼叫端（character.gd::_ready()）退回生成 UUID／節點名。Player 與動態生成的
 # 角色節點名都查不到，自然落回原本行為
 func get_npc_identity(node_name:String)->Dictionary:
