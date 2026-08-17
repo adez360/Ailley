@@ -44,12 +44,24 @@ You may rewrite your entire today_plan by including "update_plan": [{"text": "<a
 const PLAN_SYSTEM_UPDATE_PLAN_LOCKED := """
 You cannot rewrite today_plan this turn. If you want the chance to on your next decision, set "request_plan_update": true."""
 
+## #224：舊版範例把 priority/duration 寫成 0，模型沒有量級可以參考，實測
+## 一律照抄範例回傳 duration=0、priority 落在自己發明的 0~1 尺度（跟
+## agent.gd 的 SCHEDULE_BASE_PRIORITY=10／TIME_BONUS=100 完全對不上）。
+## 第一版改成「go higher if urgent」這種開放式指示後，實測模型會衝到
+## Infinity／1e15／5000 這種失控值——單靠一個連續量表，模型抓不到「很少
+## 用」的分寸。現在改成分級：日常範圍 10~50、留一段空白緩衝帶、再給一個
+## 有明顯間隔、且用「真的緊急」明講成例外情境的高分帶（120~125），
+## 跟 AISchema 的 MIN/MAX_TASK_PRIORITY／MIN/MAX_TASK_DURATION、
+## json_schema 的 minimum/maximum 三層數字一致（AISchema 那層是實際擋
+## 得住的驗證，這裡只是盡量讓模型第一次就給出合理值，減少被打回重試的次數）
 const PLAN_SYSTEM_TAIL := """
+"priority" must be a number between 0 and 125, on the same scale your schedule already uses. Routine tasks are worth 10-50. A task already in its scheduled time window is worth 110, and an everyday preference cannot outrank that. Only use 120-125, and only for a genuine emergency happening right now (someone in danger, an attack) that would justify abandoning a meal or work already in progress — never for ordinary preferences.
+"duration" is your own estimate, in game minutes, of how long this action will take. It must be a positive number, up to 1440 (one full day) — never 0. Most actions take somewhere between 10 and 60 minutes; sleeping through the night can reasonably take several hundred.
 Reply with JSON only, no prose, no code fence:
 {"reasoning": "<why you decided this, brief>",
  "inner_monologue": "<what this character is thinking right now, first person>",
  "request_plan_update": <true if you want the chance to rewrite today_plan next time, else false>,
- "tasks": [{"action": "<one of the allowed actions>", "params": {}, "priority": 0, "duration": 0}]}
+ "tasks": [{"action": "<one of the allowed actions>", "params": {}, "priority": 10, "duration": 15}]}
 An empty "tasks" array means don't change anything."""
 
 ## 動作清單用 AISchema.ALLOWED_ACTIONS 動態組，不在這裡另外抄一份字串——

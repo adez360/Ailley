@@ -73,6 +73,27 @@ const MAX_PLAN_ITEMS := 10
 # 讓 prompt 越長越大。跟 MAX_LINE_CHARS 一樣的道理，數字也直接沿用
 const MAX_PLAN_TEXT_CHARS := MAX_LINE_CHARS
 
+# #224：LLM 任務 priority／duration 的合理範圍。實跑觀察到只給文字說明
+# 量級不夠——模型會回 Infinity、或 1e15／5000 這種有限但失控的數字，
+# 讓那筆任務在仲裁時永遠贏、永遠換不掉（見 agent.gd HYSTERESIS 的說明）。
+# 這裡是「真的保證」的第三層，跟送給模型的 json_schema minimum/maximum
+# （PromptBuilder.plan_response_schema，第一層）、prompt 文字量級說明
+# （PLAN_SYSTEM_TAIL，第二層）三層都設同一組數字，不是只靠其中一層。
+#
+# 上限 125：跟 agent.gd 的 TIME_BONUS(100)／SCHEDULE_BASE_PRIORITY(10) 對齊——
+# 進時間窗的 schedule 任務分數是 110，加 HYSTERESIS(5) 換任務門檻是 115；
+# 125 留一點餘裕給「這件事真的值得打斷正在做的事」的極端例外，但因為離
+# 日常範圍（10~50）有明顯間隔，prompt 措辭會把它講成罕見例外，不是常態
+const MIN_TASK_PRIORITY := 0.0
+const MAX_TASK_PRIORITY := 125.0
+
+# 上限 1440：一個完整遊戲日（分鐘）。duration 失控的後果比 priority 輕
+# （只是「這件事做久一點才問下一步」，不像 priority 失控會讓任務永久卡死），
+# 但還是要一個「怎麼樣都不該超過」的物理天花板；1440 不會誤傷合法的長時長
+# 任務（LLM 可能自己選 "sleep"，一覺睡到天亮可以到 8~14 小時＝480~840 分鐘）
+const MIN_TASK_DURATION := 0.0
+const MAX_TASK_DURATION := 1440.0
+
 const ERROR_NOT_JSON := "not_json"
 const ERROR_NOT_OBJECT := "not_object"
 const ERROR_NO_CONTENT := "no_content"
@@ -221,13 +242,38 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) ->
 			if not target is String or (target as String).strip_edges().is_empty():
 				return _fail(ERROR_BAD_SHAPE)
 
-		if task.has("expires_at") and not (task["expires_at"] is int or task["expires_at"] is float):
+		# #224：is int/float 放行 INF／NAN——實測過模型真的會回 priority: Infinity
+		# （改完量級指引那次驗到的），INF 一旦被當成合法分數，仲裁器
+		# `best_score < current_score + HYSTERESIS` 永遠算不出「贏過它」，
+		# 那個任務就再也換不掉。expires_at 沒有定義過合理範圍，只補 is_finite()；
+		# 同一種外來內容不能信任的問題，沒理由只擋 priority 一個欄位
+		if task.has("expires_at") and not ((task["expires_at"] is int or task["expires_at"] is float) and is_finite(float(task["expires_at"]))):
 			return _fail(ERROR_BAD_SHAPE)
 
-		if task.has("duration") and not (task["duration"] is int or task["duration"] is float):
+		# duration／priority 現在是必填（見上面 plan_response_schema() 的
+		# required 清單同步改過）：兩者都要落在 MIN_TASK_*／MAX_TASK_* 範圍內，
+		# 缺欄位一律當失敗處理——不能只在「欄位存在」時才檢查範圍，模型乾脆
+		# 不給這兩個欄位就會繞過檢查，退回 .get(..., 0.0) 的預設值，
+		# 正好是想擋的那個退化情況（實測踩過這個漏洞）。這是三層保證裡
+		# 「真的保證」的那一層，json_schema 的 minimum/maximum／required
+		# （層 1）與 prompt 文字說明（層 2）都可能沒生效（provider 不支援
+		# schema、或模型沒照文字指示），這裡不能只信任前兩層
+		if not task.has("duration"):
+			return _fail(ERROR_BAD_SHAPE)
+		var duration_value: Variant = task["duration"]
+		if not (duration_value is int or duration_value is float):
+			return _fail(ERROR_BAD_SHAPE)
+		var duration_float := float(duration_value)
+		if not is_finite(duration_float) or duration_float <= MIN_TASK_DURATION or duration_float > MAX_TASK_DURATION:
 			return _fail(ERROR_BAD_SHAPE)
 
-		if task.has("priority") and not (task["priority"] is int or task["priority"] is float):
+		if not task.has("priority"):
+			return _fail(ERROR_BAD_SHAPE)
+		var priority_value: Variant = task["priority"]
+		if not (priority_value is int or priority_value is float):
+			return _fail(ERROR_BAD_SHAPE)
+		var priority_float := float(priority_value)
+		if not is_finite(priority_float) or priority_float < MIN_TASK_PRIORITY or priority_float > MAX_TASK_PRIORITY:
 			return _fail(ERROR_BAD_SHAPE)
 
 		# 只複製驗證過的欄位，不是原封不動放行 task。plan_response_schema() 沒有
@@ -419,11 +465,11 @@ static func plan_response_schema(allow_update_plan: bool = false) -> Dictionary:
 				"properties": {
 					"action": {"type": "string", "enum": ALLOWED_ACTIONS},
 					"params": {"type": "object"},
-					"priority": {"type": "number"},
-					"duration": {"type": "number"},
+					"priority": {"type": "number", "minimum": MIN_TASK_PRIORITY, "maximum": MAX_TASK_PRIORITY},
+					"duration": {"type": "number", "exclusiveMinimum": MIN_TASK_DURATION, "maximum": MAX_TASK_DURATION},
 					"expires_at": {"type": "number"},
 				},
-				"required": ["action"],
+				"required": ["action", "priority", "duration"],
 			},
 		},
 	}
