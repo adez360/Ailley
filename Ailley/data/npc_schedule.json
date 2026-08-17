@@ -37,22 +37,22 @@
 			"schedule": [
 				{
 					"time": "08:00",
-					"place": "home_001",
+					"place": "home",
 					"state": "idle"
 				},
 				{
 					"time": "09:00",
-					"place": "farm",
+					"place": "herb_shop",
 					"state": "work"
 				},
 				{
 					"time": "12:00",
-					"place": "restaurant",
+					"place": "tavern",
 					"state": "eat"
 				},
 				{
 					"time": "18:00",
-					"place": "home_001",
+					"place": "home",
 					"state": "sleep"
 				}
 			]
@@ -62,27 +62,27 @@
 			"schedule": [
 				{
 					"time": "08:00",
-					"place": "home_001",
+					"place": "home",
 					"state": "idle"
 				},
 				{
 					"time": "09:00",
-					"place": "square",
+					"place": "pavilion",
 					"state": "talk"
 				},
 				{
 					"time": "12:00",
-					"place": "restaurant",
+					"place": "tavern",
 					"state": "eat"
 				},
 				{
 					"time": "15:00",
-					"place": "farm",
+					"place": "herb_shop",
 					"state": "work"
 				},
 				{
 					"time": "18:00",
-					"place": "home_001",
+					"place": "home",
 					"state": "sleep"
 				}
 			]
