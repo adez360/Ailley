@@ -106,6 +106,196 @@ const ITEM_BALANCE := {
 		"effect_hydration": 0,
 		"effect_alcohol": 0,
 		"effect_injury": -30
+	},
+
+	"bread": {
+		"name": "Bread",
+		"item_type": "food",
+		"description": "Freshly baked bread.",
+		"base_price": 12,
+		"max_stack": 30,
+		"is_consumable": 1,
+		"is_perishable": 1,
+		"effect_satiety": 25,
+		"effect_hydration": 0,
+		"effect_alcohol": 0,
+		"effect_injury": 0
+	},
+
+	"fish_dish": {
+		"name": "Fish Dish",
+		"item_type": "food",
+		"description": "A cooked fish dish.",
+		"base_price": 20,
+		"max_stack": 30,
+		"is_consumable": 1,
+		"is_perishable": 1,
+		"effect_satiety": 35,
+		"effect_hydration": 0,
+		"effect_alcohol": 0,
+		"effect_injury": 0
+	},
+
+	"spirit": {
+		"name": "Spirit",
+		"item_type": "drink",
+		"description": "A strong distilled liquor.",
+		"base_price": 22,
+		"max_stack": 30,
+		"is_consumable": 1,
+		"is_perishable": 1,
+		"effect_satiety": 0,
+		"effect_hydration": 10,
+		"effect_alcohol": 45,
+		"effect_injury": 0
+	},
+
+	"small_game": {
+		"name": "Small Game",
+		"item_type": "small_game",
+		"description": "A small hunted animal; needs cooking before it can be eaten.",
+		"base_price": 30,
+		"max_stack": 30,
+		"is_consumable": 0,
+		"is_perishable": 1,
+		"decay_rate": 0.8,
+		"effect_satiety": 0,
+		"effect_hydration": 0,
+		"effect_alcohol": 0,
+		"effect_injury": 0
+	},
+
+	"large_game": {
+		"name": "Large Game",
+		"item_type": "large_game",
+		"description": "A large hunted animal; needs cooking before it can be eaten.",
+		"base_price": 90,
+		"max_stack": 30,
+		"is_consumable": 0,
+		"is_perishable": 1,
+		"decay_rate": 0.6,
+		"effect_satiety": 0,
+		"effect_hydration": 0,
+		"effect_alcohol": 0,
+		"effect_injury": 0
+	},
+
+	"fish": {
+		"name": "Fish",
+		"item_type": "seafood",
+		"description": "A freshly caught fish; needs cooking before it can be eaten.",
+		"base_price": 25,
+		"max_stack": 30,
+		"is_consumable": 0,
+		"is_perishable": 1,
+		"decay_rate": 1.0,
+		"effect_satiety": 0,
+		"effect_hydration": 0,
+		"effect_alcohol": 0,
+		"effect_injury": 0
+	},
+
+	"herb": {
+		"name": "Herb",
+		"item_type": "gathered",
+		"description": "A medicinal herb, used for crafting medicine.",
+		"base_price": 18,
+		"max_stack": 30,
+		"is_consumable": 0,
+		"is_perishable": 1,
+		"decay_rate": 0.4,
+		"effect_satiety": 0,
+		"effect_hydration": 0,
+		"effect_alcohol": 0,
+		"effect_injury": 0
+	},
+
+	"wild_fruit": {
+		"name": "Wild Fruit",
+		"item_type": "gathered",
+		"description": "A wild fruit foraged from the field.",
+		"base_price": 8,
+		"max_stack": 30,
+		"is_consumable": 0,
+		"is_perishable": 1,
+		"decay_rate": 0.9,
+		"effect_satiety": 0,
+		"effect_hydration": 0,
+		"effect_alcohol": 0,
+		"effect_injury": 0
+	},
+
+	"knife": {
+		"name": "Knife",
+		"item_type": "carry",
+		"description": "Improves hunting success rate.",
+		"base_price": 120,
+		"max_stack": 1,
+		"is_consumable": 0,
+		"is_perishable": 0,
+		"durability_cost": 2,
+		"effect_satiety": 0,
+		"effect_hydration": 0,
+		"effect_alcohol": 0,
+		"effect_injury": 0
+	},
+
+	"good_knife": {
+		"name": "Good Knife",
+		"item_type": "carry",
+		"description": "A finely crafted knife; improves hunting success rate further.",
+		"base_price": 350,
+		"max_stack": 1,
+		"is_consumable": 0,
+		"is_perishable": 0,
+		"durability_cost": 1,
+		"effect_satiety": 0,
+		"effect_hydration": 0,
+		"effect_alcohol": 0,
+		"effect_injury": 0
+	},
+
+	"instrument": {
+		"name": "Instrument",
+		"item_type": "carry",
+		"description": "Improves performance success rate.",
+		"base_price": 200,
+		"max_stack": 1,
+		"is_consumable": 0,
+		"is_perishable": 0,
+		"durability_cost": 1,
+		"effect_satiety": 0,
+		"effect_hydration": 0,
+		"effect_alcohol": 0,
+		"effect_injury": 0
+	},
+
+	"clothes_basic": {
+		"name": "Basic Clothes",
+		"item_type": "carry",
+		"description": "Ordinary clothing.",
+		"base_price": 60,
+		"max_stack": 1,
+		"is_consumable": 0,
+		"is_perishable": 0,
+		"effect_satiety": 0,
+		"effect_hydration": 0,
+		"effect_alcohol": 0,
+		"effect_injury": 0
+	},
+
+	"battery": {
+		"name": "Battery",
+		"item_type": "carry",
+		"description": "A story item tied to the flag system; not tradeable.",
+		"base_price": 0,
+		"max_stack": 1,
+		"is_consumable": 0,
+		"is_perishable": 0,
+		"effect_satiety": 0,
+		"effect_hydration": 0,
+		"effect_alcohol": 0,
+		"effect_injury": 0
 	}
 }
 
