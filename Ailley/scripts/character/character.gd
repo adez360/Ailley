@@ -61,6 +61,27 @@ const BUY_NO_INVENTORY := "NO_INVENTORY"		# 沒有背包的角色沒辦法買東
 ## 滑鼠指到時套在 sprite 上的描邊
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
 
+## 8 種定案情緒 enum（《02》§1-1，12 種草案已作廢）。neutral 是「沒有特別感受」
+## 的必要預設值，不是湊數的第 8 種
+const EMOTION_TYPES := [
+	"joy", "anger", "sadness", "fear", "surprise", "disgust", "anticipation", "neutral",
+]
+const EMOTION_NEGATIVE := ["anger", "sadness", "fear", "disgust"]	# 見《02》§1-4 人格係數公式
+
+const EMOTION_BASE_DURATION := 12	# tick，2 遊戲小時（《02》§1-4）
+const EMOTION_DURATION_MIN := 1
+const EMOTION_DURATION_MAX := 144	# 一遊戲日上限
+
+## 8 種生理衍生 condition，全部「門檻自動」套路（《02》§2-2）
+const CONDITION_INJURED := "injured"
+const CONDITION_BLEEDING := "bleeding"
+const CONDITION_DRUNK := "drunk"
+const CONDITION_STARVING := "starving"
+const CONDITION_DEHYDRATED := "dehydrated"
+const CONDITION_EXHAUSTED := "exhausted"
+const CONDITION_SLEEPY := "sleepy"
+const CONDITION_FILTHY := "filthy"
+
 ## 角色的身分，全遊戲唯一且不隨改名而變：存檔、記憶連結、交誼區都靠它指人。
 ## 是內部識別字，不拿來顯示，也**不要去解析它** —— 格式只有 generate_id() 說了算。
 ##
@@ -89,6 +110,19 @@ var system_prompt := ""
 ## 不知道 60 是高是低，也分不出 60 跟 55（《01》§2-1）。
 ## 沒有人格資料的角色是空字典，讀的人一律用 .get(key, 0.0)
 var personality := {}
+
+## AI 唯一可自行宣告的內在狀態（《02》§1）。引擎不計算情緒，只負責倒數 duration_left，
+## 見 set_emotion() 與 _tick_emotion()
+var emotion := {
+	"type": "neutral",
+	"intensity": 0,
+	"cause_event_id": "",
+	"duration_left": 0,
+}
+
+## 特殊狀態陣列，元素形狀 {type, turns_left}（《02》§2-1）。全部由引擎寫入，
+## LLM 不可宣告；目前只實作 8 種生理衍生 condition，見 _update_conditions()
+var conditions: Array[Dictionary] = []
 
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
@@ -165,6 +199,11 @@ func _ready() -> void:
 
 	sprite.play("idle_" + facing)
 
+	# emotion.duration_left／conditions[].turns_left 都是離散單位，用 GameClock 既有的
+	# 「每遊戲分鐘」訊號驅動比自己在 _process(delta) 裡做累加器精簡（agent.gd 也是這樣接的），
+	# 且會跟著 GameClock 的時間流速走，不會像 stats.gd 的連續 drift 那樣綁死真實秒數
+	GameClock.time_changed.connect(_on_game_minute)
+
 # 隨機的 UUID v4。刻意不帶任何語意 —— 擁有者、名字、行程都不編進去，
 # 那些各自是欄位。把 owner 寫進 id 的話，帳號系統一改就得替所有存檔寫遷移
 static func generate_id() -> String:
@@ -200,6 +239,105 @@ func _find_id_holder(id: String) -> Character:
 		if other != self and other.character_id == id:
 			return other as Character
 	return null
+
+
+# ---- 情緒與狀態 ----
+
+## 1 tick = 10 遊戲分鐘（《02》§1-4：12 tick = 2 遊戲小時）。GameClock.time_changed
+## 每遊戲分鐘觸發一次，所以要每累積 10 次才真正跑一次 tick，不是每次都跑——
+## 拿規格書自己的算例反查：joy intensity=60、stability=90、grudge=75 應該是
+## 9 tick ≈ 1.5 小時（90 遊戲分鐘），不是 9 遊戲分鐘
+const TICK_GAME_MINUTES := 10
+var _tick_minute_accum := 0
+
+func _on_game_minute(_hour: int, _minute: int) -> void:
+	_tick_minute_accum += 1
+	if _tick_minute_accum < TICK_GAME_MINUTES:
+		return
+	_tick_minute_accum = 0
+
+	_tick_emotion()
+	_update_conditions()
+
+## AI 宣告新情緒。type 必須是 EMOTION_TYPES 之一，intensity 0–100。
+## stability／grudge 是《02》§1-4 持續時間公式的人格係數，人格資料還沒接上
+## Character（#117），呼叫端拿不到真實值時用 50.0（中性值）當預設——
+## 比照 memory.gd::decay_all() 對 grudge 的既有做法
+func set_emotion(type: String, intensity: int, cause_event_id: String = "",
+		stability: float = 50.0, grudge: float = 50.0) -> void:
+	if not EMOTION_TYPES.has(type):
+		push_error("Character.set_emotion: 不是定案的情緒 enum：%s" % type)
+		return
+
+	intensity = clampi(intensity, 0, 100)
+	emotion = {
+		"type": type,
+		"intensity": intensity,
+		"cause_event_id": cause_event_id,
+		"duration_left": _calc_emotion_duration(type, intensity, stability, grudge),
+	}
+
+## 《02》§1-4：duration = 基礎時長 × (intensity/50) × 人格係數，夾制 1~144 tick
+func _calc_emotion_duration(type: String, intensity: int, stability: float, grudge: float) -> int:
+	if type == "neutral":
+		return 0
+
+	var personality_factor := 1.0 + (50.0 - stability) / 100.0
+	if EMOTION_NEGATIVE.has(type):
+		personality_factor += (grudge - 50.0) / 100.0
+
+	var duration := EMOTION_BASE_DURATION * (intensity / 50.0) * personality_factor
+	return clampi(roundi(duration), EMOTION_DURATION_MIN, EMOTION_DURATION_MAX)
+
+## 每遊戲分鐘倒數一次；歸零轉回 neutral（《02》§1-3 規則 4）
+func _tick_emotion() -> void:
+	if emotion["type"] == "neutral":
+		return
+
+	emotion["duration_left"] -= 1
+	if emotion["duration_left"] <= 0:
+		emotion = {"type": "neutral", "intensity": 0, "cause_event_id": "", "duration_left": 0}
+
+func has_condition(type: String) -> bool:
+	for c in conditions:
+		if c["type"] == type:
+			return true
+	return false
+
+func _set_condition(type: String, present: bool) -> void:
+	var had := has_condition(type)
+	if present and not had:
+		conditions.append({"type": type, "turns_left": -1})
+	elif not present and had:
+		conditions = conditions.filter(func(c): return c["type"] != type)
+
+## 依生理值重新檢查 8 種生理衍生 condition，全部「門檻自動」——條件不成立
+## 下次檢查就自動移除（《02》§2-2／§2-3 規則 4）。只做偵測與新增/移除；
+## 行為成功率／說真心話機率留給 #120，exhausted「強制昏睡」是行動佔用邏輯，
+## 留給該動作自己處理，filthy 效果待《99》P-35 重新設計，這裡都不做
+func _update_conditions() -> void:
+	if stats == null:
+		return
+
+	var injury := stats.get_value("injury")
+	_set_condition(CONDITION_INJURED, injury > 0.0)
+	_set_condition(CONDITION_BLEEDING, injury >= 20.0)
+	_set_condition(CONDITION_DRUNK, stats.get_value("alcohol") > 30.0)
+	_set_condition(CONDITION_STARVING, stats.get_value("satiety") < 10.0)
+	_set_condition(CONDITION_DEHYDRATED, stats.get_value("hydration") < 10.0)
+	_set_condition(CONDITION_EXHAUSTED, stats.get_value("stamina") <= 0.0)
+	_set_condition(CONDITION_SLEEPY, stats.get_value("wakefulness") < 15.0)
+	_set_condition(CONDITION_FILTHY, stats.get_value("hygiene") < 20.0)
+
+	# bleeding／starving／dehydrated 的直接數值效果（《02》§2-2 效果欄），
+	# 跟成功率無關所以不算 #120 的範圍。injury 自然衰減暫停是唯一的例外規則
+	if has_condition(CONDITION_BLEEDING):
+		stats.add("health", -1.5)
+	if has_condition(CONDITION_STARVING):
+		stats.add("health", -0.5)
+	if has_condition(CONDITION_DEHYDRATED):
+		stats.add("health", -1.0)
+	stats.injury_decay_paused = has_condition(CONDITION_BLEEDING)
 
 
 # ---- 移動 ----
@@ -534,6 +672,10 @@ func get_state_snapshot() -> Dictionary:
 		"in_conversation": is_in_conversation(),
 		"working": is_working(),
 		"last_action_result": last_action_result,
+		# 深拷貝：Dictionary／Array 是傳參照，直接放進 snapshot 的話呼叫端改了
+		# 快照會連帶改到 Character 內部狀態，繞過 set_emotion() 的驗證
+		"emotion": emotion.duplicate(true),
+		"conditions": conditions.duplicate(true),
 	}
 
 	if stats != null:
