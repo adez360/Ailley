@@ -69,6 +69,19 @@ const GIVE_TARGET_IS_SELF := "TARGET_IS_SELF"
 const GIVE_TOO_FAR := "TOO_FAR"
 const GIVE_NO_INVENTORY := "NO_INVENTORY"
 
+const ATTACK_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE／GIVE_RANGE 一樣的距離門檻，2 格
+
+## attack() 的失敗原因碼，形狀比照 GIVE_*
+const ATTACK_OK := ""
+const ATTACK_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const ATTACK_TARGET_IS_SELF := "TARGET_IS_SELF"
+const ATTACK_TOO_FAR := "TOO_FAR"
+
+## 命中的數值效果（《99》P-28 已定案）：必中，MVP 不做閃避／格擋，
+## 不像 steal／persuade 等動作走 agent.gd 的 SUCCESS_PARAMS 擲骰
+const ATTACK_HEALTH_DELTA := -15.0
+const ATTACK_INJURY_DELTA := 20.0
+
 ## 滑鼠指到時套在 sprite 上的描邊
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
 
@@ -525,6 +538,12 @@ func make_noise(radius: float = NOISE_RADIUS) -> void:
 
 var _working := false
 
+## 被 force_interrupt() 標記中止（見《02》§3「被攻擊立即中斷，含 work 中」）。
+## _run_work() 下一次從 await 醒來時檢查這個旗標並收尾，不在 force_interrupt()
+## 當下直接改 _working——那個協程還握著 workstation 的參照，得讓它自己收尾
+## 才不會漏掉 release()／hide_progress()
+var _work_interrupted := false
+
 
 func is_working() -> bool:
 	return _working
@@ -562,6 +581,7 @@ func work_at(workstation: Workstation) -> String:
 		return WORK_OCCUPIED
 
 	_working = true
+	_work_interrupted = false
 	stop_moving()
 	if work_progress != null:
 		work_progress.show_progress(0.0)
@@ -585,9 +605,10 @@ func _run_work(workstation: Workstation) -> void:
 		#     `_working` 攔不住移動。不重驗距離的話，按下 E 之後跑到地圖另一頭，
 		#     時間到照樣入帳，而且這 5 分鐘工作站一直被卡著、現場卻沒人。
 		#
-		# 兩種都是「沒有做完」，所以收尾但不撥款：錢是站在這裡做滿的報酬，
-		# 不是按下 E 的報酬
-		if not is_instance_valid(workstation) \
+		# 三種都是「沒有做完」，所以收尾但不撥款：錢是站在這裡做滿的報酬，
+		# 不是按下 E 的報酬。_work_interrupted 是第三種——force_interrupt()
+		# 標記的，跟前兩種一樣不撥款，共用同一條收尾路徑
+		if _work_interrupted or not is_instance_valid(workstation) \
 				or get_body_position().distance_to(workstation.global_position) > WORK_RANGE:
 			_end_work(workstation)
 			return
@@ -605,6 +626,7 @@ func _end_work(workstation: Workstation) -> void:
 	if is_instance_valid(workstation):
 		workstation.release(self)
 	_working = false
+	_work_interrupted = false
 	if work_progress != null:
 		work_progress.hide_progress()
 	_on_work_finished()
@@ -746,6 +768,49 @@ func give_to(other: Character, item_id: String, count: int = 1) -> String:
 	other.inventory.changed.emit()
 
 	return GIVE_OK
+
+
+# ---- 攻擊 ----
+
+## 攻擊命中必中——跟 steal／persuade 等動作不同，不依《01-2》§2 通用成功率
+## 公式擲骰，P-28 已拍板 MVP 不做閃避／格擋。硬規則只檢查目標是否存在、
+## 距離夠不夠近；命中後直接套用數值、強制中斷對方目前行動
+func attack(other: Character) -> String:
+	if other == null:
+		return ATTACK_TARGET_NOT_FOUND
+	if other == self:
+		return ATTACK_TARGET_IS_SELF
+	if get_body_position().distance_to(other.get_body_position()) > ATTACK_RANGE:
+		return ATTACK_TOO_FAR
+
+	if other.stats != null:
+		other.stats.add("health", ATTACK_HEALTH_DELTA)
+		other.stats.add("injury", ATTACK_INJURY_DELTA)
+	other.force_interrupt()
+	other._on_attacked(self)
+	return ATTACK_OK
+
+## 被攻擊的收尾鉤子。基底只是掛點——Player 沒有記憶系統可寫，只有 Agent
+## 需要把這件事記成事實句給下次決策／反思用（見 agent.gd 覆寫）
+func _on_attacked(_attacker: Character) -> void:
+	pass
+
+## 強制中斷目前行動，不徵詢 interruptible／能不能被搭話打斷——跟仲裁器的
+## 「搶占」判斷是兩回事，這裡是外部事件硬性發生（被攻擊等，《02》§3 中斷
+## 規則），連 work 中也要中斷。工作中只標記中止旗標，真正收尾（不撥款）
+## 留給 _run_work() 下一次醒來時既有的檢查點，不在這裡重複一次它的收尾邏輯
+func force_interrupt() -> void:
+	stop_moving()
+	if is_in_conversation():
+		leave_conversation()
+	if _working:
+		_work_interrupted = true
+	_on_action_interrupted()
+
+## 中斷後的收尾鉤子，讓子類別決定要不要重新規劃行程。基底不用管——
+## Player 沒有行程可言，只有 Agent 需要清目前任務並重新問決策
+func _on_action_interrupted() -> void:
+	pass
 
 
 # ---- 狀態快照 ----

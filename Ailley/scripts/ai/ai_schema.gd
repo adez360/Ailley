@@ -60,7 +60,11 @@ const ALLOWED_ACTIONS := [
 # （shout），走各自的 _pursue_give_task()／_pursue_shout_task()，一次執行完
 # 就退出任務池，不像 nap 那類佔滿整段 duration。persuade 不在這裡——見 #227，
 # 它需要的待回應事實句機制目前完全沒有地基
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "give", "shout"]
+#
+# attack 是 #159 接上的：跟 give 同一套「目標會動、一次執行完就退出任務池」
+# 模式（_pursue_attack_task()），差別是必中（《99》P-28），resolve() 對它
+# 不擲骰，直接放行
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "give", "shout", "attack"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
