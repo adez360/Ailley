@@ -1245,6 +1245,11 @@ func _finish_task_and_request_next() -> void:
 	current_state = "idle"
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
+	# _request_next_decision() 只有在非同步回應回來後才會重新仲裁，不立刻補
+	# 一次 _reevaluate() 的話，等回應期間排程或 fallback 任務不會被馬上接手，
+	# 得空等到下一次 GameClock time_changed（跟 murmur 那條 PR 同一個
+	# CodeRabbit review 抓到的問題，這裡是共用的收尾，一次修就對三個呼叫端都生效）
+	_reevaluate()
 
 # give 任務的執行（#158）：目標跟 talk 一樣是會動的角色，不能沿用地點式的
 # 「走一次、_pursued_place／_pursuit_done 收斂」節流，每次重算都要重新問一次
