@@ -155,8 +155,8 @@ func get_by_level(level: int) -> Array[Dictionary]:
 ## 各自完整線性掃描一次（#215）。levels 沒出現在資料裡的桶，回傳空陣列而不是
 ## 缺 key，呼叫端不用防禦性判斷。get_by_level() 保留不動——L4 晉升邏輯跟
 ## debug_console.gd 的單一 level 查詢沒有重複掃描的問題，不需要跟著改
-func get_by_levels(levels: Array[int]) -> Dictionary:
-	var buckets: Dictionary = {}
+func get_by_levels(levels: Array[int]) -> Dictionary[int, Array]:
+	var buckets: Dictionary[int, Array] = {}
 	for level in levels:
 		buckets[level] = [] as Array[Dictionary]
 
