@@ -51,7 +51,11 @@ const ALLOWED_ACTIONS := [
 # buy 還多缺一個「買哪個 item_id」的來源——目前只有玩家從 vending_menu 點得出來。
 # 列進來的話就變成「白名單宣稱做得到、實際靜默不做」，正是上面那段註解要避免的
 # 混淆。等執行層接得到再加（talk 的動作執行留給 #90，其餘留給各自的 issue）
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep"]
+#
+# nap／rest／wash／idle 是 #112 接上的：四個都只動 Stats 跟角色 state，不需要新
+# 場景物件或新資源，所以走的是仲裁器既有的「移動到 params.place（沒給就原地）、
+# 佔用 duration」路徑，沒有各自的執行函式。回復量見 agent.gd 的 ENERGY_RECOVERY
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、

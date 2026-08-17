@@ -746,7 +746,33 @@ func _on_noise_heard(_source: Character) -> void:
 
 	say(L10n.t("DLG_NOISE_ALERT"))
 
+## 回復類動作每遊戲分鐘回多少 energy（#112）。《07》§2-3 只給相對關係——sleep
+## 回復量最大、nap「與睡覺同模組但較低」、rest「小幅回復」——沒有給數字，所以
+## 這三個值跟 MIN_COMMIT／HYSTERESIS 一樣是待實跑校準的暫定值，不是規格定案。
+##
+## 對照基準：energy 的自然衰減是每現實秒 1.0（Stats.SPEC 的 drift），而一個遊戲
+## 分鐘正好是一現實秒，所以淨回復是這裡的值減 1
+##
+## wash 不列在這裡：它回復的是 `hygiene`，Stats.SPEC 還沒有這一項（生理值補到
+## 8 欄位是另一則任務），現在硬接只會寫進一個不存在的欄位。idle 也不列——
+## 發呆本來就不回復任何東西，它的用途是「合法地什麼都不做」，讓 AI 逾時或
+## 沒事可做時有一個不必假裝在忙的選項
+const ENERGY_RECOVERY := {"sleep": 6.0, "nap": 4.0, "rest": 2.0}
+
+# 到了定點才開始回復——還在走去床邊的路上不算在睡覺。沒有指定地點的任務
+# （LLM 完全可以只回 {"action": "rest"}）本來就原地做，is_moving() 一樣是 false，
+# 不用另外分流
+func _apply_action_recovery() -> void:
+	if stats == null or is_moving():
+		return
+	var recovery: float = ENERGY_RECOVERY.get(current_state, 0.0)
+	if recovery > 0.0:
+		stats.add("energy", recovery)
+
 func _on_time_changed(_hour: int, _minute: int) -> void:
+	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務
+	# 會用新任務的 current_state 結算最後一分鐘
+	_apply_action_recovery()
 	_reevaluate()
 
 # 仲裁器的核心：每次重算，不維護「目前是第幾筆」。
@@ -1230,7 +1256,7 @@ func _age_bonus(_task: Dictionary) -> float:
 # 這條路徑；LLM 推進池子的任務才會真的帶非零值
 func _is_expired(task: Dictionary, now_minutes: int) -> bool:
 	var expires_at: int = task.get("expires_at", 0)
-	return expires_at > 0 and expires_at < now_minutes
+	return expires_at > 0 and expires_at <= now_minutes
 
 func _in_window_or_unwindowed(task: Dictionary, now: String) -> bool:
 	var window = task.get("window")
@@ -1278,6 +1304,27 @@ func get_current_task_elapsed_minutes() -> int:
 	if _current_task.is_empty():
 		return 0
 	return _now_minutes() - _current_task_started_at
+
+## Debug 用：直接推一筆任務進池子（debug_console.gd 的 act 指令，#112 驗證用）。
+## 走 _push_llm_tasks() 這條跟 LLM 決策回應完全一樣的路徑，不另開執行捷徑——
+## 另開一條的話，驗到的就不是真正會跑的那條。
+##
+## priority 給得比「schedule 任務 + 時間窗加成」（10 + 100）還高：指令下了就要
+## 看得到效果，不是跟到點的行程比分數。expires_at 一定要填，這筆任務才會自己
+## 退場——llm_decision_enabled 關著的角色沒有「任務做完就重新決策」那條路徑，
+## 不填的話這筆最高分任務會永遠留在池子裡，把角色卡在原地
+const DEBUG_TASK_PRIORITY := 999.0
+
+func debug_push_task(action: String, params: Dictionary, duration: float) -> void:
+	var tasks: Array[Dictionary] = [{
+		"action": action,
+		"params": params,
+		"priority": DEBUG_TASK_PRIORITY,
+		"duration": duration,
+		"expires_at": _now_minutes() + int(duration),
+	}]
+	_push_llm_tasks(tasks, {})
+	_reevaluate()
 
 ## Debug 用：今天累積了哪些事件，給 reflect 指令在呼叫 request_sleep_reflection()
 ## 前先印出來看。只回 content——debug 顯示不需要知道內部的 id
