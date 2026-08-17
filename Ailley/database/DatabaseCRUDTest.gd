@@ -440,6 +440,26 @@ func _run() -> void:
 
 	if grave_rows.is_empty():
 		_fail("grave", "無法取得測試 grave_id")
+		_cleanup_test_data()
+		print("")
+		print("=====================================================")
+		print("[DatabaseCRUDTest] RESULT")
+		print("=====================================================")
+		print("PASS: ", passed)
+		print("FAIL: ", failed)
+
+		if failed == 0:
+			print("[DatabaseCRUDTest] ALL TESTS PASSED")
+		else:
+			push_error(
+				"[DatabaseCRUDTest] %d test(s) failed."
+				% failed
+			)
+
+		print("=====================================================")
+
+		queue_free()
+		return
 	else:
 		passed += 1
 		print("[PASS] grave_id SELECT")
@@ -751,7 +771,7 @@ func _cleanup_test_data() -> void:
 	DatabaseManager.delete(
 		"npc_relations",
 		"character_id LIKE '%s%%' OR target_id LIKE '%s%%'"
-		% _escape_sql(PREFIX)
+		% [_escape_sql(PREFIX), _escape_sql(PREFIX)]
 	)
 
 	DatabaseManager.delete(

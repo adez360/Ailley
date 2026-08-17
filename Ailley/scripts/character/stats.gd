@@ -22,9 +22,7 @@ const CRITICAL := 30.0
 
 
 const LEGACY_ALIASES := {
-	"energy": "stamina",
-	"thirst": "hydration",
-	"sleepiness": "wakefulness"
+	"energy": "stamina"
 }
 
 

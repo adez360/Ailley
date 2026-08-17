@@ -271,6 +271,82 @@ func _add_stackable(
 	decay: int
 ) -> String:
 
+	# -------------------------------------------------
+	# 先計算總容量（相容的已有格 + 空格）
+	# -------------------------------------------------
+
+	var total_capacity := 0
+
+	# 計算相容已有格的可用空間
+	for i in SIZE:
+
+		var slot: Dictionary = slots[i]
+
+		if slot.is_empty():
+			continue
+
+		if str(
+			slot.get(
+				"item_id",
+				""
+			)
+		) != item_id:
+			continue
+
+		if int(
+			slot.get(
+				"durability",
+				-1
+			)
+		) >= 0:
+			continue
+
+		if (
+			absi(
+				int(
+					slot.get(
+						"decay",
+						0
+					)
+				)
+				- decay
+			)
+			> STACK_DECAY_TOLERANCE
+		):
+			continue
+
+		var current := clampi(
+			int(
+				slot.get(
+					"count",
+					0
+				)
+			),
+			0,
+			MAX_STACK
+		)
+
+		var space := (
+			MAX_STACK
+			- current
+		)
+
+		if space > 0:
+			total_capacity += space
+
+	# 計算空格數量
+	var empty_slots := 0
+	for i in SIZE:
+		if slots[i].is_empty():
+			empty_slots += 1
+
+	total_capacity += empty_slots * MAX_STACK
+
+	# 驗證總容量是否足夠
+	if total_capacity < count:
+		return ADD_NO_SPACE
+
+
 	var remaining := count
 
 

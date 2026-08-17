@@ -89,7 +89,15 @@ func _run() -> void:
 	)
 
 	# -------------------------------------------------
-	# 1. 設定實際遊戲角色的 Stats
+	# 1. 備份原始 Stats
+	# -------------------------------------------------
+
+	var original_stats := {}
+	for key in TEST_VALUES:
+		original_stats[key] = character.stats.get_value(key)
+
+	# -------------------------------------------------
+	# 2. 設定實際遊戲角色的 Stats
 	# -------------------------------------------------
 
 	for key in TEST_VALUES:
@@ -266,7 +274,19 @@ func _run() -> void:
 		)
 
 	# -------------------------------------------------
-	# 8. 結果
+	# 8. 還原 Stats 並同步
+	# -------------------------------------------------
+
+	for key in original_stats:
+		character.stats.set_value(key, original_stats[key])
+
+	if persistence != null:
+		persistence.sync_now()
+
+	print("[CharacterStateIntegrationTest] Stats 已還原並同步。")
+
+	# -------------------------------------------------
+	# 9. 結果
 	# -------------------------------------------------
 
 	_finish()

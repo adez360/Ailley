@@ -87,12 +87,14 @@ func _run() -> void:
 
 	var bread_before := character.inventory.count_item("bread")
 	var water_before := character.inventory.count_item("water")
+	var money_before := character.inventory.get_money()
 
 	print(
-		"[TEST] add_item 前：bread=%d water=%d"
+		"[TEST] add_item 前：bread=%d water=%d money=%d"
 		% [
 			bread_before,
-			water_before
+			water_before,
+			money_before
 		]
 	)
 
@@ -325,6 +327,32 @@ func _run() -> void:
 				]
 			)
 
+		# 驗證購買後的資料
+		var purchased_bread_count := _db_count_item(purchase_rows, "bread")
+		var purchased_water_count := _db_count_item(purchase_rows, "water")
+
+		if purchased_bread_count >= 1:
+			_pass("購買後 SQLite bread 數量")
+		else:
+			_fail(
+				"購買後 SQLite bread",
+				"預期至少 1，實際 %d" % purchased_bread_count
+			)
+
+		if purchased_water_count >= 1:
+			_pass("購買後 SQLite water 數量")
+		else:
+			_fail(
+				"購買後 SQLite water",
+				"預期至少 1，實際 %d" % purchased_water_count
+			)
+
+	# -------------------------------------------------
+	# 清理測試資料
+	# -------------------------------------------------
+
+	_cleanup_test_data(character, bread_before, water_before, money_before)
+
 	# -------------------------------------------------
 	# 結果
 	# -------------------------------------------------
@@ -428,6 +456,20 @@ func _db_has_item(
 	return false
 
 
+func _db_count_item(
+	rows: Array,
+	item_id: String
+) -> int:
+
+	var total := 0
+
+	for row in rows:
+		if str(row.get("item_id", "")) == item_id:
+			total += int(row.get("count", 0))
+
+	return total
+
+
 func _pass(label: String) -> void:
 	passed += 1
 	print("[PASS] %s" % label)
@@ -470,6 +512,48 @@ func _finish() -> void:
 	print("=====================================================")
 
 	queue_free()
+
+
+func _cleanup_test_data(
+	character: Character,
+	bread_before: int,
+	water_before: int,
+	money_before: int
+) -> void:
+	if character == null or character.inventory == null:
+		return
+
+	# 移除測試新增的 bread 和 water
+	var bread_current := character.inventory.count_item("bread")
+	var water_current := character.inventory.count_item("water")
+
+	if bread_current > bread_before:
+		character.inventory.remove_item("bread", bread_current - bread_before)
+
+	if water_current > water_before:
+		character.inventory.remove_item("water", water_current - water_before)
+
+	# 還原金錢
+	var money_current := character.inventory.get_money()
+	if money_current < money_before:
+		character.inventory.add_money(money_before - money_current)
+	elif money_current > money_before:
+		character.inventory.spend(money_current - money_before)
+
+	# 等待 persistence 完成
+	await get_tree().process_frame
+
+	print(
+		"[TEST] 測試資料已清理：bread=%d->%d water=%d->%d money=%d->%d"
+		% [
+			bread_current,
+			character.inventory.count_item("bread"),
+			water_current,
+			character.inventory.count_item("water"),
+			money_current,
+			character.inventory.get_money()
+		]
+	)
 
 
 func _escape_sql(

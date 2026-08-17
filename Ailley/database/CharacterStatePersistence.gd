@@ -113,7 +113,7 @@ func _on_time_changed(
 	_minute: int
 ) -> void:
 
-	_sync_all_characters()
+	_sync_all_characters_periodic()
 
 
 # =====================================================
@@ -150,6 +150,272 @@ func _sync_all_characters() -> void:
 			success_count,
 			characters.size()
 		]
+	)
+
+
+func _sync_all_characters_periodic() -> void:
+
+	if not DatabaseManager.is_ready:
+		return
+
+	var characters := get_tree().get_nodes_in_group(
+		"characters"
+	)
+
+	if characters.is_empty():
+		return
+
+	var success_count := 0
+
+	for node in characters:
+
+		var character := node as Character
+
+		if character == null:
+			continue
+
+		if _save_character_state_only(character):
+			success_count += 1
+
+	print(
+		"[CharacterStatePersistence] 定期同步完成（僅 state/wallet）：%d / %d"
+		% [
+			success_count,
+			characters.size()
+		]
+	)
+
+
+func _save_character_state_only(
+	character: Character
+) -> bool:
+
+	if character == null:
+		push_error(
+			"[CharacterStatePersistence] "
+			+ "Character 或 Stats 不存在。"
+		)
+		return false
+
+	if character.stats == null:
+		push_error(
+			"[CharacterStatePersistence] "
+			+ "%s Stats 不存在。"
+			% character.name
+		)
+		return false
+
+	if character.character_id.is_empty():
+
+		push_warning(
+			"[CharacterStatePersistence] "
+			+ "%s 沒有 character_id。"
+			% character.name
+		)
+
+		return false
+
+	var character_id := character.character_id
+
+
+	# -------------------------------------------------
+	# NPC record
+	# -------------------------------------------------
+
+	if not _ensure_npc_record(character):
+
+		push_error(
+			"[CharacterStatePersistence] "
+			+ "%s 同步失敗：npc record 無法建立。"
+			% character_id
+		)
+
+		return false
+
+
+	# -------------------------------------------------
+	# State
+	# -------------------------------------------------
+
+	var state_data := {
+		"npc_id": character_id,
+
+		"satiety": _stat(
+			character,
+			"satiety",
+			100.0
+		),
+
+		"hydration": _stat(
+			character,
+			"hydration",
+			80.0
+		),
+
+		"stamina": _stat(
+			character,
+			"stamina",
+			80.0
+		),
+
+		"wakefulness": _stat(
+			character,
+			"wakefulness",
+			90.0
+		),
+
+		"hygiene": _stat(
+			character,
+			"hygiene",
+			70.0
+		),
+
+		"alcohol": _stat(
+			character,
+			"alcohol",
+			0.0
+		),
+
+		"health": _stat(
+			character,
+			"health",
+			100.0
+		),
+
+		"injury": _stat(
+			character,
+			"injury",
+			0.0
+		)
+	}
+
+
+	for key in state_data:
+
+		if key == "npc_id":
+			continue
+
+		state_data[key] = clampf(
+			float(state_data[key]),
+			0.0,
+			100.0
+		)
+
+
+	var existing := DatabaseManager.select(
+		STATE_TABLE,
+		"npc_id = '%s'"
+		% _escape_sql(character_id),
+		[
+			"npc_id"
+		]
+	)
+
+
+	var state_ok := false
+
+
+	if existing.is_empty():
+
+		state_ok = DatabaseManager.insert(
+			STATE_TABLE,
+			state_data
+		)
+
+		if state_ok:
+
+			_log_state(
+				"INSERT",
+				character,
+				state_data
+			)
+
+		else:
+
+			push_error(
+				"[CharacterStatePersistence] "
+				+ "npc_state INSERT 失敗：%s | DB=%s"
+				% [
+					character_id,
+					DatabaseManager.db.error_message
+				]
+			)
+
+	else:
+
+		state_ok = DatabaseManager.update(
+			STATE_TABLE,
+			state_data,
+			"npc_id = '%s'"
+			% _escape_sql(character_id)
+		)
+
+		if state_ok:
+
+			_log_state(
+				"UPDATE",
+				character,
+				state_data
+			)
+
+		else:
+
+			push_error(
+				"[CharacterStatePersistence] "
+				+ "npc_state UPDATE 失敗：%s | DB=%s"
+				% [
+					character_id,
+					DatabaseManager.db.error_message
+				]
+			)
+
+
+	if not state_ok:
+
+		push_error(
+			"[CharacterStatePersistence] "
+			+ "%s STATE = FAIL"
+			% character_id
+		)
+
+		return false
+
+
+	print(
+		"[CharacterStatePersistence] "
+		+ "%s STATE = PASS"
+		% character_id
+	)
+
+
+	# -------------------------------------------------
+	# Wallet
+	# -------------------------------------------------
+
+	var wallet_ok := _save_wallet(
+		character
+	)
+
+	if wallet_ok:
+
+		print(
+			"[CharacterStatePersistence] "
+			+ "%s WALLET = PASS"
+			% character_id
+		)
+
+	else:
+
+		push_error(
+			"[CharacterStatePersistence] "
+			+ "%s WALLET = FAIL"
+			% character_id
+		)
+
+
+	return (
+		state_ok
+		and wallet_ok
 	)
 
 
@@ -1042,6 +1308,13 @@ func _save_inventory(
 
 
 	# -------------------------------------------------
+	# 開始事務
+	# -------------------------------------------------
+
+	DatabaseManager.db.query("BEGIN TRANSACTION;")
+
+
+	# -------------------------------------------------
 	# 只有真的有舊資料才 DELETE。
 	#
 	# 因此第一次保存 0 rows 不會被當成錯誤。
@@ -1067,6 +1340,7 @@ func _save_inventory(
 				]
 			)
 
+			DatabaseManager.db.query("ROLLBACK;")
 			return false
 
 
@@ -1148,6 +1422,7 @@ func _save_inventory(
 				]
 			)
 
+			DatabaseManager.db.query("ROLLBACK;")
 			return false
 
 
@@ -1204,6 +1479,7 @@ func _save_inventory(
 				]
 			)
 
+			DatabaseManager.db.query("ROLLBACK;")
 			return false
 
 
@@ -1221,6 +1497,13 @@ func _save_inventory(
 				count
 			]
 		)
+
+
+	# -------------------------------------------------
+	# 提交事務
+	# -------------------------------------------------
+
+	DatabaseManager.db.query("COMMIT;")
 
 
 	print(
@@ -1337,14 +1620,6 @@ func _stat(
 		return fallback
 
 
-	var aliases := {
-		"satiety": "hunger",
-		"hydration": "thirst",
-		"stamina": "energy",
-		"wakefulness": "sleepiness"
-	}
-
-
 	if character.stats.SPEC.has(
 		key
 	):
@@ -1353,30 +1628,6 @@ func _stat(
 			float(
 				character.stats.get_value(
 					key
-				)
-			),
-			0.0,
-			100.0
-		)
-
-
-	var legacy_key: String = aliases.get(
-		key,
-		""
-	)
-
-
-	if (
-		not legacy_key.is_empty()
-		and character.stats.SPEC.has(
-			legacy_key
-		)
-	):
-
-		return clampf(
-			float(
-				character.stats.get_value(
-					legacy_key
 				)
 			),
 			0.0,
