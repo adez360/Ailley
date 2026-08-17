@@ -114,13 +114,17 @@ func find_first_empty() -> int:
 # count 為 0 的格子（非空所以 find_first_empty() 跳過，count_item() 又算成 0，
 # 於是 remove_item() 清不掉它），_add_unstackable() 的蒐集迴圈則永遠比不到
 # empties.size() == count，把整個背包填滿
-func add_item(item_id: String, count: int = 1, decay: int = 0, durability: int = -1) -> String:
+# notify=false 給 give_to() 這種「一次轉移要拆好幾個 chunk 加」的呼叫端用——
+# 每個 chunk 各發一次 changed 的話，訂閱者會在轉移途中看到目標背包只收到
+# 一部分物品的暫態；呼叫端自己決定「全部 chunk 都進去了」才發那一次
+# （CodeRabbit review 抓到）
+func add_item(item_id: String, count: int = 1, decay: int = 0, durability: int = -1, notify: bool = true) -> String:
 	if count <= 0:
 		return ADD_INVALID_COUNT
 	# 兩條路各有好幾個 return，所以 changed 在這裡發一次就好，不用兩邊各自散落
 	var reason := _add_unstackable(item_id, count, decay, durability) if durability >= 0 \
 			else _add_stackable(item_id, count, decay)
-	if reason == ADD_OK:
+	if reason == ADD_OK and notify:
 		changed.emit()
 	return reason
 
@@ -170,11 +174,28 @@ func _find_stackable_slot(item_id: String, decay: int) -> int:
 # 同樣是原子的，不會先扣掉一部分才發現不夠。
 # count 非正數是呼叫端的錯，不是「拿掉 0 個成功了」，所以回原因碼而不是 REMOVE_OK
 func remove_item(item_id: String, count: int = 1) -> String:
-	if count <= 0:
-		return REMOVE_INVALID_COUNT
-	if count_item(item_id) < count:
-		return REMOVE_NOT_FOUND
+	return _remove_item_detailed(item_id, count)["reason"]
 
+# 跟 remove_item() 同一套規則與原子性保證，但額外回傳實際扣除的每一筆
+# {count, decay, durability}——give_to() 這類「把東西原封不動搬進別的容器」
+# 的呼叫端少了這份細節，只能送出全新狀態（decay=0、durability=-1），原本的
+# 腐壞／耐久資訊會直接消失（CodeRabbit review 抓到，#158）。失敗時 "removed"
+# 是空陣列，不動任何格
+#
+# notify=false 給 give_to() 這種「先扣、可能還要整批回滾」的呼叫端用——扣的
+# 當下發 changed 的話，訂閱者會在轉移還沒確定成功前就看到來源背包少了東西，
+# 送禮失敗回滾後淨變化是 0，卻讓訂閱者觀察到一次騙人的暫態（CodeRabbit
+# review 抓到）。呼叫端自己決定「真的確定了」才發那一次
+func remove_item_detailed(item_id: String, count: int = 1, notify: bool = true) -> Dictionary:
+	return _remove_item_detailed(item_id, count, notify)
+
+func _remove_item_detailed(item_id: String, count: int, notify: bool = true) -> Dictionary:
+	if count <= 0:
+		return {"reason": REMOVE_INVALID_COUNT, "removed": []}
+	if count_item(item_id) < count:
+		return {"reason": REMOVE_NOT_FOUND, "removed": []}
+
+	var removed: Array[Dictionary] = []
 	var remaining := count
 	for i in SIZE:
 		if remaining <= 0:
@@ -185,13 +206,15 @@ func remove_item(item_id: String, count: int = 1) -> String:
 			continue
 
 		var take := mini(remaining, int(slot["count"]))
+		removed.append({"count": take, "decay": int(slot["decay"]), "durability": int(slot["durability"])})
 		slot["count"] = int(slot["count"]) - take
 		remaining -= take
 		if int(slot["count"]) <= 0:
 			slots[i] = {}
 
-	changed.emit()
-	return REMOVE_OK
+	if notify:
+		changed.emit()
+	return {"reason": REMOVE_OK, "removed": removed}
 
 # 搬到空格；目的地非空就失敗，不覆蓋。要交換兩個已佔用的格用 swap_slot()
 func move_slot(from: int, to: int) -> bool:

@@ -55,7 +55,12 @@ const ALLOWED_ACTIONS := [
 # nap／rest／wash／idle 是 #112 接上的：四個都只動 Stats 跟角色 state，不需要新
 # 場景物件或新資源，所以走的是仲裁器既有的「移動到 params.place（沒給就原地）、
 # 佔用 duration」路徑，沒有各自的執行函式。回復量見 agent.gd 的 STAMINA_RECOVERY
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle"]
+#
+# give／shout 是 #158 接上的：跟 talk 一樣目標會動（give）或完全不需要目標
+# （shout），走各自的 _pursue_give_task()／_pursue_shout_task()，一次執行完
+# 就退出任務池，不像 nap 那類佔滿整段 duration。persuade 不在這裡——見 #227，
+# 它需要的待回應事實句機制目前完全沒有地基
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "give", "shout"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -241,6 +246,23 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) ->
 			var target: Variant = talk_params.get("target")
 			if not target is String or (target as String).strip_edges().is_empty():
 				return _fail(ERROR_BAD_SHAPE)
+
+		# give 動作的 count 參數驗證：拒絕分數值（如 2.5），只接受整數或代表整數的浮點數（如 3.0）
+		# JSON 解析可能把整數解成浮點數，所以兩種型別都要接受，但必須是整數值
+		if task["action"] == "give":
+			var give_params: Dictionary = task.get("params", {})
+			if give_params.has("count"):
+				var count_value: Variant = give_params["count"]
+				if not (count_value is int or count_value is float):
+					return _fail(ERROR_BAD_SHAPE)
+				# INF 等於自己的 floor()，上面那個分數檢查放不住它，之後 int(INF)
+				# 又是不可靠的行為（實測過會生出平台相關的最小整數值）——跟 #224
+				# priority/duration 擋 INF／NaN 同一個理由，count 也不能少這關
+				if not is_finite(float(count_value)):
+					return _fail(ERROR_BAD_SHAPE)
+				# 拒絕分數：檢查浮點數是否等於其整數部分
+				if count_value is float and count_value != floor(count_value):
+					return _fail(ERROR_BAD_SHAPE)
 
 		# #224：is int/float 放行 INF／NAN——實測過模型真的會回 priority: Infinity
 		# （改完量級指引那次驗到的），INF 一旦被當成合法分數，仲裁器

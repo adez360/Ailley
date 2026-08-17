@@ -58,6 +58,17 @@ const BUY_TOO_FAR := "TOO_FAR"
 const BUY_ITEM_NOT_FOUND := "ITEM_NOT_FOUND"		# 販賣機沒有賣這個 item_id
 const BUY_NO_INVENTORY := "NO_INVENTORY"		# 沒有背包的角色沒辦法買東西
 
+const GIVE_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE 一樣的距離門檻，2 格
+
+## give_to() 的失敗原因碼，形狀比照 TALK_*／BUY_*。除了這四個，give_to()
+## 還會**原樣轉傳** Inventory 自己的原因碼（`NOT_FOUND`、`INVALID_COUNT`、
+## `NO_SPACE`），不在這裡重新取名——理由跟 buy_from() 一樣
+const GIVE_OK := ""
+const GIVE_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const GIVE_TARGET_IS_SELF := "TARGET_IS_SELF"
+const GIVE_TOO_FAR := "TOO_FAR"
+const GIVE_NO_INVENTORY := "NO_INVENTORY"
+
 ## 滑鼠指到時套在 sprite 上的描邊
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
 
@@ -647,6 +658,94 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 		money_popup.show_change(-price)
 
 	return BUY_OK
+
+
+# ---- 送禮 ----
+
+# 把物品從自己的背包轉移到對方背包。跟 buy_from() 一樣是「兩件事要一起成功」，
+# 但這裡不能照抄 buy_from() 的「先做、失敗再補償」寫法：一筆 give 可能橫跨好幾個
+# 腐壞程度不同的格子（remove_item_detailed() 照原樣拆開），若其中一筆送到一半
+# 才發現對方背包滿了，前面幾筆已經真的進了對方背包——不撤回就不是「兩件事一起
+# 成功」，撤回又得從對方背包裡精確挑出剛剛那幾筆（跟對方原有的同物品混在一起，
+# 挑錯格的風險不小）。
+#
+# 解法是先在對方背包的副本上，用真正的 add_item() 邏輯模擬全部加一遍——不是
+# 自己另外設計一套「空間夠不夠」的公式來猜（那正是 buy_from() 註解裡刻意避開的
+# 「猜錯要再重算一次堆疊規則」問題），模擬跑的就是等一下真的會執行的那個函式，
+# 兩者不可能對不上。全部模擬通過才正式套用到對方背包，任何一筆會失敗就整批
+# 作廢，沒有半成功的中間狀態（CodeRabbit review 抓到，#158）。
+#
+# 用 remove_item_detailed() 而不是 remove_item()：後者只回一個原因碼，逐筆的
+# decay／durability 資訊會直接消失，送到對方那邊等於變成一批全新狀態（腐壞
+# 程度歸零、耐久類物品甚至會被誤標成不追蹤耐久）。
+#
+# 不改動 relations 任何欄位——送禮的真實意圖交給雙方後續行為自己演，
+# 不是引擎蓋章（見《99》決策紀錄、CLAUDE.md「遊戲機制規格：AI 自主性自檢」）
+func give_to(other: Character, item_id: String, count: int = 1) -> String:
+	if other == null:
+		return GIVE_TARGET_NOT_FOUND
+	if other == self:
+		return GIVE_TARGET_IS_SELF
+	if inventory == null or other.inventory == null:
+		return GIVE_NO_INVENTORY
+	if get_body_position().distance_to(other.get_body_position()) > GIVE_RANGE:
+		return GIVE_TOO_FAR
+
+	# 送出失敗時要原封不動退回——remove 前先留一份快照。不能靠事後逐筆
+	# add_item() 補回去：那會照它的堆疊規則重新分組，跟原本各筆分開的格子、
+	# 各自的 decay 不一定對得上（CodeRabbit review 抓到）
+	var snapshot := inventory.slots.duplicate(true)
+
+	# notify=false：這筆移除還沒確定算數，可能整批回滾——發了 changed 的話，
+	# 訂閱者會在轉移成不成功還沒有結論前，看到來源背包暫時少了東西
+	# （CodeRabbit review 抓到）。確定結果後這個函式自己決定要不要發
+	var removal: Dictionary = inventory.remove_item_detailed(item_id, count, false)
+	if removal["reason"] != Inventory.REMOVE_OK:
+		return removal["reason"]
+
+	var chunks: Array = removal["removed"]
+
+	# 模擬：副本上的格子跟對方現在的背包一模一樣，跑一遍會不會塞不下
+	var sim := Inventory.new()
+	sim.slots = other.inventory.slots.duplicate(true)
+	var blocked_reason := ""
+	for chunk in chunks:
+		var sim_reason: String = sim.add_item(item_id, chunk["count"], chunk["decay"], chunk["durability"])
+		if sim_reason != Inventory.ADD_OK:
+			blocked_reason = sim_reason
+			break
+	sim.free()
+
+	if blocked_reason != "":
+		# 模擬就擋下來了，對方背包從頭到尾沒被動過——用快照原封不動還原自己的
+		# 背包，不能逐筆 add_item() 補回去，那會照它的堆疊規則重新分組。
+		# 上面的移除故意沒發 changed，這裡還原後也不發：淨變化是 0，不該讓
+		# 外部訂閱者看到一次「來源背包變了」的暫態事件
+		inventory.slots = snapshot
+		return blocked_reason
+
+	# 模擬全部通過，正式套用到對方背包——不會再失敗，因為套用的規則、對方背包
+	# 當下的狀態，跟模擬時完全一樣（中間沒有任何 await，不會有別的呼叫端插進來改動）。
+	# notify=false：逐筆發 changed 的話，訂閱者會在轉移途中看到對方背包只收到
+	# 一部分物品的暫態，而且訂閱者若在收到事件當下改動對方背包，會讓後面幾筆
+	# 跟模擬時的假設對不上（CodeRabbit review 抓到）——靜音到全部套用完再發一次，
+	# 迴圈中途連訊號都不發，這個假設就不會被打破
+	for chunk in chunks:
+		var add_reason: String = other.inventory.add_item(
+			item_id, chunk["count"], chunk["decay"], chunk["durability"], false
+		)
+		if add_reason != Inventory.ADD_OK:
+			# 理論上不會發生（模擬已經驗過），真的發生代表上面那個「不會被
+			# 打斷」的假設被打破了——這裡不試著回滾（已經進去的 chunk 混進
+			# 對方背包，退不乾淨），只留一個明確的錯誤讓它可被追查
+			push_error("Character.give_to(): 模擬通過但正式套用失敗（%s）——%s 的背包可能在轉移途中被改動" % [add_reason, other.character_name])
+
+	# 上面的移除跟正式套用都故意沒發 changed，整筆轉移確定成功才在這裡對兩邊
+	# 背包各發一次——跟失敗時完全不發是對稱的：一次真的發生的變化只對應一次事件
+	inventory.changed.emit()
+	other.inventory.changed.emit()
+
+	return GIVE_OK
 
 
 # ---- 狀態快照 ----
