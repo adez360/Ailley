@@ -1314,7 +1314,15 @@ func _save_inventory(
 	# 開始事務
 	# -------------------------------------------------
 
-	DatabaseManager.db.query("BEGIN TRANSACTION;")
+	if not DatabaseManager.db.query("BEGIN TRANSACTION;"):
+
+		push_error(
+			"[CharacterStatePersistence] "
+			+ "Inventory BEGIN TRANSACTION 失敗：%s"
+			% npc_id
+		)
+
+		return false
 
 
 	# -------------------------------------------------
@@ -1506,7 +1514,15 @@ func _save_inventory(
 	# 提交事務
 	# -------------------------------------------------
 
-	DatabaseManager.db.query("COMMIT;")
+	if not DatabaseManager.db.query("COMMIT;"):
+
+		push_error(
+			"[CharacterStatePersistence] "
+			+ "Inventory COMMIT 失敗：%s"
+			% npc_id
+		)
+
+		return false
 
 
 	print(

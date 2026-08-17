@@ -352,7 +352,7 @@ func _run() -> void:
 	# 清理測試資料
 	# -------------------------------------------------
 
-	_cleanup_test_data(character, bread_before, water_before, money_before)
+	await _cleanup_test_data(character, bread_before, water_before, money_before)
 
 	# -------------------------------------------------
 	# 結果

@@ -30,6 +30,10 @@ const DATABASE_PATH := "user://game.db"
 var db: SQLite
 var is_ready := false
 
+# table -> Array[String]，_table_has_column() 的欄位快取，
+# schema 建立後不會再變，查一次記住即可，不必每次 UPDATE 都跑 PRAGMA
+var _table_columns_cache := {}
+
 
 # =====================================================
 # Lifecycle
@@ -607,28 +611,33 @@ func _table_has_column(
 		return false
 
 
-	if not db.query_with_bindings(
-		"PRAGMA table_info(%s);"
-		% table,
-		[]
-	):
+	if not _table_columns_cache.has(table):
 
-		return false
+		if not db.query_with_bindings(
+			"PRAGMA table_info(%s);"
+			% table,
+			[]
+		):
+
+			return false
 
 
-	for row in db.query_result:
+		var columns := []
 
-		if str(
-			row.get(
-				"name",
-				""
+		for row in db.query_result:
+			columns.append(
+				str(
+					row.get(
+						"name",
+						""
+					)
+				)
 			)
-		) == column_name:
 
-			return true
+		_table_columns_cache[table] = columns
 
 
-	return false
+	return column_name in _table_columns_cache[table]
 
 
 # =====================================================

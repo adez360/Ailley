@@ -9,11 +9,8 @@ extends Node
 ##
 ## 所有數值都是 0-100。
 ##
-## 舊系統仍可能呼叫：
-##   energy / thirst / sleepiness
-##
-## 這三個名稱透過 LEGACY_ALIASES 對應到 canonical key，
-## 不另外建立第二份狀態，避免遊戲與 SQLite 出現兩套數值。
+## 舊系統仍可能呼叫 energy，透過 LEGACY_ALIASES 對應到 canonical key
+## stamina，不另外建立第二份狀態，避免遊戲與 SQLite 出現兩套數值。
 
 
 const MIN := 0.0

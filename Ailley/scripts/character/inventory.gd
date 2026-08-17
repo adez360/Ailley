@@ -878,12 +878,13 @@ func use_item(
 	# -------------------------------------------------
 
 	print(
-		"[Inventory] 使用物品：%s | "
-		+ "satiety=%+.1f "
-		+ "hydration=%+.1f "
-		+ "alcohol=%+.1f "
-		+ "injury=%+.1f"
-		% [
+		(
+			"[Inventory] 使用物品：%s | "
+			+ "satiety=%+.1f "
+			+ "hydration=%+.1f "
+			+ "alcohol=%+.1f "
+			+ "injury=%+.1f"
+		) % [
 			item_id,
 			effect_satiety,
 			effect_hydration,
