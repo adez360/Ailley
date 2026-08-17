@@ -165,7 +165,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
   "type": "dialogue",
   "self": {
     "id": "agent", "name": "小明",
-    "stats": {"satiety": 42.0, "energy": 88.0, "social": 12.0, "fun": 60.0, "mood": 55.0},
+    "stats": {"satiety": 42.0, "hydration": 65.0, "stamina": 70.0, "wakefulness": 88.0, "hygiene": 60.0, "alcohol": 0.0, "health": 100.0, "injury": 0.0, "social": 12.0, "fun": 60.0, "mood": 55.0},
     "time": {"hour": 9, "minute": 30},
     "place": "farm",
     "current_action": "work"
@@ -515,7 +515,7 @@ Godot 端也沒有任何程式呼叫它。下面是驗證期間量到、**還在
 | Godot `Stats.SPEC` | poc_village_sim `physiology` | 換算 |
 | --- | --- | --- |
 | `satiety`（100=飽→0=餓，原欄位名 `hunger`，2026-08-16 改名，見《99》P-32） | `hunger`（0=飽→100=餓） | **方向相反**：`poc_hunger = 100 - godot_satiety` |
-| `energy`（100=飽滿→0=沒力） | `stamina`（同方向） | 直接映射，不用轉 |
+| `stamina`（100=飽滿→0=沒力） | `stamina`（同方向） | 同名同方向，直接映射，不用轉 |
 | `fun`（100=不無聊→0=無聊） | `boredom`（方向相反） | **方向相反**：`poc_boredom = 100 - godot_fun` |
 | `social` | 無對應欄位 | poc 沒有獨立追蹤社交需求 |
 | `mood` | 無對應欄位 | poc 的「情緒」是 AI 自己宣告的 `emotion`，不是 physiology 數值 |
