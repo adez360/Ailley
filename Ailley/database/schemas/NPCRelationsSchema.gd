@@ -13,13 +13,18 @@ static func create(db) -> bool:
 
 		target_id TEXT NOT NULL,
 
-		trust INTEGER NOT NULL DEFAULT 20
-			CHECK (trust BETWEEN 0 AND 100),
+		relations_trust INTEGER NOT NULL DEFAULT 20
+			CHECK (
+				relations_trust BETWEEN 0 AND 100
+			),
 
-		appearance_cache TEXT NOT NULL DEFAULT ''
-			CHECK (LENGTH(appearance_cache) <= 20),
+		relations_appearance_cache TEXT NOT NULL DEFAULT ''
+			CHECK (
+				length(relations_appearance_cache) <= 20
+			),
 
-		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at TEXT NOT NULL
+			DEFAULT CURRENT_TIMESTAMP,
 
 		FOREIGN KEY (character_id)
 			REFERENCES npc(npc_id)

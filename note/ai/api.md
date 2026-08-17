@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-14
+updated: 2026-08-17
 ---
 
 # api
@@ -92,10 +92,11 @@ const TALK_TOO_FAR := "TOO_FAR"
 const TALK_TARGET_BUSY := "TARGET_BUSY"
 const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 
-@export var character_id := ""               # 唯一身分，留空→生成 UUID v4（正常路徑）
-@export var character_name := ""             # 顯示名，可改可撞，留空→節點名小寫
+@export var character_id := ""               # 唯一身分，留空→查 identities→生成 UUID v4
+@export var character_name := ""             # 顯示名，可改可撞，留空→查 identities→節點名小寫
 static func generate_id() -> String           # RFC 4122 v4，不帶語意，別解析它
 var facing := "front"                        # front|back|right
+var last_action_result := ""                 # #120 resolve() 判定結果，中文，成功是空字串
 func get_facing_direction() -> Vector2       # facing/sprite.flip_h 重建成單位向量
 
 # 元件（子節點，皆 get_node_or_null，沒掛不會壞）
@@ -125,7 +126,7 @@ func leave_conversation() -> void
 func say(line: String, interrupt := false) -> void   # interrupt=true 蓋掉現在這句
 func speech_duration(line: String) -> float
 func face_towards(other: Character) -> void
-func update_animation() -> void
+func update_animation(desired_velocity: Vector2) -> void   # facing 讀解算前的期望方向，不是解算後的 velocity（#108）
 func make_noise(radius: float = NOISE_RADIUS) -> void   # 廣播 noise_heard 給範圍內每個角色
 
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
@@ -142,7 +143,7 @@ get_state_snapshot() -> {
   id, name, position, moving, facing, animation, in_conversation, working,  # 一定有
   stats: {key: value, ...},                     # 有掛 Stats 才有，key 是 SPEC 的 key
   money: int,                                   # 有掛 Inventory 才有；背包內容不進快照
-  affinity: {other_id: {affinity, met_count}, ...}, # 有記錄的人才有，欄名同 relationships
+  relations: {other_id: {trust, met_count}, ...}, # 有記錄的人才有，欄名同 relationships
   schedule: {place, state, size},                # agent.gd override 補上，Player 沒有
 }
 
@@ -152,7 +153,9 @@ get_state_snapshot() -> {
 † TALK_* ≠ Conversation.REASON_*
   前者=搭話失敗，後者=對話正常結束。混用會讓 AI 反覆重試成功的動作
 † character_id 撞到就換一個新的 + push_error，不是只偵測。共用 id = 共用關係與記憶
-† character_id 未持久化：每次開遊戲重新生成，關係紀錄一重開就指向不存在的人
+† character_id 三層 fallback：@export → npc_schedule.json identities[節點名] → 生成 UUID
+  走 identities 的固定 NPC（Agent/Agent2）跨場次穩定；走 UUID 的每次重開都變，
+  關係紀錄一重開就指向不存在的人
 † 動畫只有 front/back/right 三向，往左用 flip_h 翻轉 right
 † get_pick_rect 用 sprite 影格不用碰撞形狀：後者只有腳下小圓，點頭部會落空
 ⚠ set_highlighted 訂 frame_changed **與** animation_changed 兩個訊號
@@ -162,7 +165,7 @@ get_state_snapshot() -> {
   這批資料要進 LLM 的 prompt，不該隨玩家介面語系跑掉
 † schedule 由 agent.gd override get_state_snapshot()（super() 後補一段）加上，
   不是基底用 is_in_group("agents") 嗅探 —— 子類別的欄位由子類別自己放
-† affinity 的欄名跟 relationships.gd 的 record 一致，不要改名成 value
+† relations 的欄名跟 relationships.gd 的 record 一致，不要改名成 value
   同一個數值兩個名字，讀過 relationships.gd 的人會在 snapshot 上找不到它
 † make_noise() 不查視線遮蔽，聲音穿牆，跟 Vision 刻意不同
 → 技術/Character 基底與 Agent · 技術/滑鼠選取與鏡頭 · 技術/聽覺感測
@@ -210,6 +213,8 @@ make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不
 ```gdscript
 @export var schedule_template := ""          # npc_schedule.json 的鍵，如 "npc001"
 @export var llm_decision_enabled := false    # 決策迴圈開關（issue #88），逐隻手動開
+@export var decision_source := "local"       # "local"/"cloud"，佔位欄位，真正資料結構見 #122
+@export var model_name := ""                 # decision_source=="cloud" 時的 AIConfig provider 名字
 
 const NOTICE_PAUSE := 2.0
 const SCHEDULE_BASE_PRIORITY := 10.0         # schedule 任務的 base 分數
@@ -219,6 +224,12 @@ const MIN_COMMIT := 2.0                      # 遊戲分鐘；做不滿就不讓
 const LLM_WAIT_MIN_COMMIT := 5.0             # 等待決策回覆期間蓋掉 MIN_COMMIT
 const MIN_ACTION_DURATION := 10.0            # llm 任務 duration 引擎端下限（遊戲分鐘）
 const LLM_TASK_POOL_CAP := 20                # 只算 source=="llm" 的筆數
+const ENERGY_RECOVERY := {sleep: 6.0, nap: 4.0, rest: 2.0}   # 每遊戲分鐘回多少 energy（#112），暫定值
+const DEBUG_TASK_PRIORITY := 999.0           # act 指令推進來的任務分數，壓過任何 schedule 任務
+const SUCCESS_PARAMS := {                    # 《01-2》§3 成功率表照抄，含尚未接執行邏輯的動作（#120）
+    hunt_small/hunt_large/gather/fish/steal/persuade/perform/attack
+    → {base, trait, coef}                    # struggle 例外太多，不套用這張表
+}
 
 var _tasks: Array[Dictionary]                # 候選池，schedule 開場建立一次，llm 用 _push_llm_tasks() 加
 var _current_task: Dictionary
@@ -229,8 +240,44 @@ func is_talk_interruptible() -> bool          # 覆寫：super() and 目前任�
 func _is_preemptible() -> bool                # 私有，仲裁器搶占檢查；跟上面獨立算，不共用
 func exit_conversation() -> void             # 覆寫：講完重算一次
 func next_line(listener, turns, max_turns) -> Dictionary   # 對話台詞，見下方
+func resolve(action: String, params: Dictionary) -> Dictionary   # 決策執行前檢查層（#120），見下方
+func request_sleep_reflection() -> Dictionary               # {"ok": bool}，睡眠反思，見下方
 func get_task_debug_info() -> Array[Dictionary]            # tasks 指令用
 func get_current_task_elapsed_minutes() -> int             # 目前任務做了幾遊戲分鐘
+func get_daily_events() -> Array[String]                   # reflect 指令用，見下方
+func debug_push_task(action, params, duration) -> void     # act 指令用；走 _push_llm_tasks() 同一條路徑
+```
+
+```text
+回復類動作（#112）
+† nap/rest/wash/idle 沒有各自的執行函式——四個都走仲裁器既有的
+  「移動到 params.place（沒給就原地）、佔用 duration」路徑
+† energy 回復在 _on_time_changed() 每遊戲分鐘結算一次（_apply_action_recovery()），
+  先結算再 _reevaluate()：反過來的話最後一分鐘會用新任務的 current_state 算
+† is_moving() 為真時不回復——還在走去床邊的路上不算在睡覺
+† wash 不在 ENERGY_RECOVERY 表上：它回復的是 hygiene，Stats.SPEC 還沒有這一項；
+  idle 也不在，發呆本來就不回復任何東西
+† 主場景沒有湖泊／深井錨點（只有 home_001/farm/restaurant/square），
+  《07》§2-3 要求的 wash 地點限制等地點補齊後才有得檢查
+
+```text
+resolve() -> {"success": bool, "reason": String}   # reason 成功是空字串，失敗是中文具體原因
+† 只管 llm 來源任務——schedule 是引擎自己的固定行程，不是 LLM 宣告的意圖，
+  不套用硬規則檢查
+† 延後到 _pursue_talk_task()（talk 動作）等各動作即將產生副作用的位置才呼叫，
+  避免移動期間提前消耗 _roll_success() 或使用過期狀態；失敗的任務直接從
+  _tasks 移除並記錄 last_action_result，不留著佔位重試
+† _select() 對 llm 來源任務先驗證可執行動作白名單（AISchema.IMPLEMENTED_ACTIONS）：
+  不在白名單上的動作直接不 commit 並移除，不使用 SUCCESS_PARAMS 當白名單——
+  _roll_success() 對不在表上的動作恆成功，缺執行邏輯時會靜默不做事
+† 先通過 AISchema.IMPLEMENTED_ACTIONS 的動作才會進入 LLM 任務流程；在已實作
+  動作中，SUCCESS_PARAMS 表上的才會擲骰（《01-2》§2 公式），不在表上且無
+  硬規則的動作固定成功。move_to/sleep 屬於這種。talk 不擲骰，但仍檢查目標
+  存在性與歧義；eat 目前不在 IMPLEMENTED_ACTIONS，根本進不到 resolve()，
+  不是「恆成功」
+† stamina 缺欄位時（#115 未落地）當中性值 50 處理，不吃到假懲罰；
+  injury/alcohol 公式本來就是從 0 起算才扣分，缺欄位回傳的 0.0 剛好是
+  中性值，不用特別處理
 ```
 
 ```text
@@ -272,7 +319,7 @@ noise_heard 且 !is_in_conversation() → say("!?")，無去重，每次都會�
   只比距離的話 2..11px 是死角：距離說沒到，find_path() 卻因同格只回一個點
   → move_to() false → 假的「走不到」。每次重算行程都會噴
 † schedule_template ≠ character_id：前者是「用哪份資料」，後者是「我是誰」
-† assignments 的 key 是節點名不是 character_id（id 是 UUID，json 裡手寫不出來）
+† assignments 與 identities 的 key 都是節點名，兩塊分開：前者「用哪份行程」，後者「我是誰」
   查不到 → 退回 @export 並 push_warning（預設值 instance 共用，靜默退回會兩隻同行程）
   節點名只在同一層唯一，不同父節點下撞名 → push_error（兩隻會查到同一筆）
 † move_finished 要比對 last_move_target：debug 主控台的 goto 也會發同一個訊號，
@@ -293,6 +340,29 @@ character_id, Policy.CONVERSATION) → AISchema.parse_completion → validate_di
 † requester_id 用 character_id 不是節點名：額度算在這隻角色頭上
 † ok=false 不分原因（未啟用/逾時/驗證失敗都一樣），呼叫端一律走 fallback
 → 技術/LLM 串接與 AI 服務層
+```
+
+```gdscript
+func request_sleep_reflection() -> Dictionary   # {"ok": bool}，#168，《03》§5
+```
+
+```text
+_daily_events（Array[Dictionary]，每筆 {id, content}，DAILY_EVENTS_CAP=30 FIFO）→
+  PromptBuilder.build_reflection_envelope() → AIService.request(Policy.SCHEDULED)
+  → validate_reflection() → 逐筆 memory.add_candidate(content, importance, valence)
+  → 只刪除 LLM 真的回傳 id 的那幾筆
+† 目前 3 個事件觸發點：對話結束（exit_conversation()）、完成一段工作站工作
+  （_on_work_finished()）、第一次注意到陌生人（_on_spotted()）——都只寫客觀事實句，
+  不判斷正負面／重不重要，那是 LLM 在反思時的工作（《00》原則二）
+† id 是必填、穩定的識別碼（_push_daily_event() 配發，單調遞增），不是用送出
+  筆數概略估計要刪哪幾筆——LLM 可能漏評某幾筆，await 期間（真的打網路）角色
+  也可能觸發新事件，只刪 id 有出現在回應裡的那幾筆，其餘留著等下次反思
+† 失敗（rate_limited/驗證失敗/沒有事件）回傳 {"ok": false}，不清空 _daily_events，
+  留著等下次反思重試，不會因為一次失敗就遺失今天的事；last_reflection_summary
+  維持上一次成功的舊值，呼叫端不該把舊摘要當成這次的結果
+† 目前只能靠 debug_console.gd 的 `reflect <name>` 指令手動觸發——真正的睡眠
+  動作（#112）落地後，在角色進入睡眠那個時間點呼叫這個函式即可，不用改這裡
+→ 技術/記憶與睡眠反思
 ```
 
 
@@ -330,43 +400,74 @@ mood     心情    0.5    50      50     ✗        ""
 ## Relationships — scripts/character/relationships.gd · class_name · Node
 
 ```gdscript
-const AFFINITY_MIN := -100.0 · AFFINITY_MAX := 100.0
 const TRUST_MIN := 0.0 · TRUST_MAX := 100.0
-const FAMILIARITY_MIN := 0.0 · FAMILIARITY_MAX := 100.0
-const DEBT_MIN := -100.0 · DEBT_MAX := 100.0
-const DEFAULT_RECORD := {"affinity": 0.0, "trust": 20.0, "familiarity": 0.0, "debt": 0.0, "met_count": 0}
+const APPEARANCE_MAX_CHARS := 20
+const DEFAULT_RECORD := {"trust": 20.0, "met_count": 0, "appearance_cache": ""}
 var records := {}                            # other_id -> record
 
 # 唯讀 — 不會建立紀錄
 func has_met(other_id) -> bool               # met_count > 0，只認 note_meeting()
 func has_record(other_id) -> bool            # 有沒有任何紀錄（見過但沒講完 = true/false）
 func get_record(other_id) -> Dictionary      # 副本，改它不會動到內部
-func get_affinity(other_id) -> float         # 沒紀錄回 0.0
 func get_trust(other_id) -> float            # 沒紀錄回 20.0（不是 0——初識不是完全不信任）
-func get_familiarity(other_id) -> float      # 沒紀錄回 0.0
-func get_debt(other_id) -> float             # 沒紀錄回 0.0；正=我欠他，負=他欠我
 func get_met_count(other_id) -> int
+func get_appearance_cache(other_id) -> String # 沒紀錄回 ""
 func known_ids() -> Array
 
-# 寫入 — 走私有的 _ensure_record()，四維都回夾限後的新值
-func add_affinity(other_id, delta) -> float
-func add_trust(other_id, delta) -> float
-func add_familiarity(other_id, delta) -> float
-func add_debt(other_id, delta) -> float
+# 寫入 — 走私有的 _ensure_record()
+func add_trust(other_id, delta) -> float     # 回夾限後的新值
+func set_appearance_cache(other_id, text) -> void  # 超過 20 字直接截斷
 func note_meeting(other_id) -> void          # has_met() 為真的唯一來源
+
+# 存檔
+func get_save_data() -> Dictionary           # records 的深拷
+func load_save_data(data) -> void            # 只收 DEFAULT_RECORD 認得的 key
 ```
 
 ```text
 † key 用 character_id 不用 character_name — name 可改，用它當 key = 改名即失憶
 † 每筆是 Dictionary 不是單一 float，加欄位時呼叫端不用改
-⚠ 讀寫必須分開：get_affinity() 曾經走「沒有就當場建一筆」，於是 conversation.gd
-  開場問一次好感度就讓 has_met() 永遠為真而 met_count 還是 0
+⚠ 讀寫必須分開：查詢曾經走「沒有就當場建一筆」，於是 conversation.gd
+  開場問一次關係就讓 has_met() 永遠為真而 met_count 還是 0
   → agent.gd 的「第一次看到陌生人」永遠不成立
-† trust/familiarity/debt 範圍與預設值照規格《01》3-1 表定死，不是隨意選的
-  （trust 預設 20 尤其容易看錯，別跟其餘三維一樣當成 0）
-† 這四維實際被哪些行動讀寫（persuade 用 trust、give 影響 debt……）還沒接線，
-  見 99 待規劃；目前只有欄位本身、查詢與寫入函式
+† 只有 trust 一個引擎數值。好感/熟悉/虧欠三維已整個拿掉（《01》3-1）——
+  沒有任何公式讀過它們，那三件事交給《03》記憶系統自己記自己判斷
+† trust 範圍與預設值照規格《01》3-1 表定死（預設 20 不是 0，容易看錯）
+† appearance_cache 是《99》P-08 的外觀快取（≤20 字），初次相遇注入一次後
+  隨關係帶出；目前只有欄位與存取函式，寫入端還沒接
+† trust 實際被哪些行動讀寫（persuade 讀它算成功率）還沒接線，見 99 待規劃
 → 技術/talk 動作設計
+```
+
+## Memory — scripts/character/memory.gd · class_name · Node
+
+```gdscript
+const L1_CAP := 8
+const DISCARD_BELOW := 30 · L3_AT := 60 · L4_AT := 90 · L4_CAP := 5
+const CONTENT_MAX_CHARS := 60 · BASE_DECAY_RATE := 3.0 · RETRIEVAL_BONUS := 10.0
+
+var l1: Array[Dictionary]                     # {content} FIFO 固定 8 條
+var entries: Array[Dictionary]                # L2/L3/L4 共用，形狀見 add_candidate()
+
+func push_l1(content: String) -> void
+func add_candidate(content, importance, valence="neutral", related_npcs=[], location_id="") -> Dictionary
+func decay_all(grudge: float = 50.0) -> void  # 每遊戲日一次，見 _on_day_changed()
+func mark_retrieved(entry: Dictionary) -> void
+func get_by_level(level: int) -> Array[Dictionary]
+```
+
+```text
+† importance 分級（《03》§3）：<30 丟棄／30-59 L2／60-89 L3／90+ L4，
+  L4 滿額（5）新記憶進來時最舊一條降級 L3，不是丟棄
+† decay_all() 公式（《03》§4-1）：正面/中性 -= 3；負面 -= 3 × (100-grudge)/50；
+  L4 不衰減；decay_value ≤ 0 刪除。grudge 由呼叫端傳入——人格資料未接（#117），
+  目前一律用預設值 50
+† mark_retrieved() 要傳 entries 裡的同一個 Dictionary 參照，不是複製值
+⚠《03》§3 分級表另有「L2：30-59...三日後若未被檢索則淘汰」一句，跟 §4-1
+  衰減公式對不起來（衰減率 3/天，100 分要約 33 天才歸零，不是 3 天）——
+  已列入《99》待釐清，目前只實作 §4-1 的衰減公式
+† 不做：向量檢索（《03》§7，完整版才需要）、記憶寫進存檔（依賴 #21/#22）
+→ 技術/記憶與睡眠反思
 ```
 
 ## Inventory — scripts/character/inventory.gd · class_name · Node
@@ -578,13 +679,13 @@ _unhandled_input  action "select"(左鍵) → 冒漣漪 → 有人 select / 沒�
 ```gdscript
 signal finished(reason: String)
 
-const MAX_TURNS := 6                         # 雙方各講一次算兩輪
+const SAFETY_MAX_TURNS := 10                 # 工程安全閥，不是正常的結束條件
 const TURN_GAP := 0.5
 const MAX_DISTANCE := 48.0                   # 比 TALK_RANGE 寬鬆
-const REASON_TURN_LIMIT := "TURN_LIMIT"
+const REASON_ENDED_BY_SPEAKER := "ENDED_BY_SPEAKER"
 const REASON_TOO_FAR := "TOO_FAR"
 const REASON_INTERRUPTED := "INTERRUPTED"
-const SOCIAL_GAIN := 25.0 · MOOD_GAIN := 5.0 · AFFINITY_GAIN := 3.0
+const SOCIAL_GAIN := 25.0 · MOOD_GAIN := 5.0
 
 var initiator: Character
 var target: Character
@@ -594,7 +695,7 @@ func interrupt() -> void
 ```text
 † 不要直接 new，走 Character.talk_to()
 生命週期：talk_to() 設好 initiator/target 加進場景 → 講完自己 queue_free()
-只有 REASON_TURN_LIMIT 才發獎勵（social/mood/affinity + note_meeting）
+只有 REASON_ENDED_BY_SPEAKER 才發獎勵（social/mood + note_meeting，不動 trust）
 † 做成獨立節點不塞進 Character：對話是「兩者之間」的東西，
   塞進一方會讓另一方反查，且結束時要同步清兩邊
 → 技術/talk 動作設計
@@ -603,18 +704,18 @@ func interrupt() -> void
 ## DialogueLines — scripts/dialogue/dialogue_lines.gd · class_name · RefCounted
 
 ```gdscript
-const AFFINITY_FRIEND := 30.0 · AFFINITY_DISLIKE := -20.0
-
-static func opening(listener_name: String, stats: Stats, affinity: float) -> String
-static func reply(stats: Stats, affinity: float, _turn: int) -> String
-static func closing(listener_name: String, affinity: float) -> String
+static func opening(listener_name: String) -> String
+static func reply(stats: Stats, _turn: int) -> String
+static func closing() -> String
 ```
 
 ```text
-† 只收 String/Stats/float，不收 Character
+† 只收 String/Stats，不收 Character
   避免 character→conversation→dialogue_lines→character 循環相依；
   且這份參數清單 = 之後要送給 LLM 的 context
-接 LLM 時整個換掉這個檔，狀態機與氣泡不動
+† 台詞不分親疏：好感度欄位已拿掉，引擎沒有「這兩人熟不熟」的數值可以挑句子；
+  trust 是信任不是好感，拿它當親疏門檻等於把規格書拆開的兩件事又混回去
+這個檔是 LLM 失敗時的 fallback，不是要被換掉的暫時品
 ```
 
 ---
@@ -640,7 +741,8 @@ var config: AIConfig
 
 func reload_config() -> void
 func request(envelope: Dictionary, requester_id: String,
-             policy: Policy = Policy.SCHEDULED, provider_name: String = "") -> Dictionary   # 一律 await
+             policy: Policy = Policy.SCHEDULED, provider_name: String = "",
+             is_retry: bool = false) -> Dictionary   # 一律 await
 func get_usage(requester_id: String) -> Dictionary
 ```
 
@@ -660,7 +762,56 @@ get_usage -> {game_day, calls_today, max_calls, dialogue_today, total_today,
 † 用真實秒不用遊戲時間（要擋的帳單與 provider rate limit 都活在真實時間）
 † 金鑰只在組 Authorization header 時碰得到，其餘一律過 _scrub()
 † CONVERSATION 豁免冷卻/配額但照樣計數（_dialogue_calls_today）——豁免的是限制不是帳
+† is_retry=true 只跳過 min_interval_sec 冷卻，不跳過每日配額——同一次決策內容驗證
+  失敗重試（agent.gd::_decide_with_retry()）用，SCHEDULED policy 沒有 CONVERSATION
+  那種豁免，重試間隔只有幾秒，不加這個會被自己剛送出的呼叫冷卻擋死
 → 技術/LLM 串接與 AI 服務層
+```
+
+## DecisionProvider — scripts/ai/decision_provider.gd · class_name · RefCounted
+
+```gdscript
+func decide(envelope: Dictionary, requester_id: String, policy: AIService.Policy, is_retry: bool = false) -> Dictionary
+func max_validation_retries() -> int          # 基底回 0
+```
+
+```text
+decide() -> {"ok": bool, "data": Dictionary, "error": String}  # 形狀對齊 AIService.request()
+† agent.gd 只認得這個介面，不知道背後是本機模型還是雲端模型（《12》§3、§5.1）
+† 語意驗證/成功失敗判定不在這裡——decide() 只管格式轉換/送出/解析/逾時，驗證留給呼叫端的 AISchema
+† HumanInput／RemotePlayer 兩種來源尚未實作
+⚠ Agent._make_provider() 目前把 decision_source == "human" 當成打錯字處理
+  （印「不是已知值」警告、退回 LocalLLMProvider）——《06》human 是合法的第三個值，
+  等 HumanInput provider 做出來時要把這個分支改掉，不要沿用「異常值才退回」的邏輯
+→ 技術/LLM 串接與 AI 服務層
+```
+
+## LocalLLMProvider — scripts/ai/local_llm_provider.gd · class_name · extends DecisionProvider
+
+```gdscript
+const PROVIDER_NAME := "local"                # 打 AIConfig 裡名叫 "local" 的 provider
+func _init() -> void                          # 解析一次：has_valid_provider("local") 不成立就 push_warning + 退回 ""
+var _provider_name: String                    # "local" 或 ""（＝交給 AIConfig.default_provider）
+func decide(envelope, requester_id, policy, is_retry=false) -> Dictionary   # 包 AIService.request(..., _provider_name, is_retry)
+func max_validation_retries() -> int          # "local" 時 0（本地 GBNF 保證格式），退回 default_provider 時 2
+```
+
+```text
+† 解析放 _init() 不放 decide()：設定一場遊戲內不會變，放 decide() 的話缺 "local" 時每次決策洗一行警告
+† 退回 default_provider 之後打到的多半不是 GBNF 端點，「本地無重試語意」的前提不成立，所以改給 2 次
+```
+
+## RemoteLLMProvider — scripts/ai/remote_llm_provider.gd · class_name · extends DecisionProvider
+
+```gdscript
+func _init(provider_name: String) -> void     # 建構時決定打哪個 AIConfig provider，之後不變
+func decide(envelope, requester_id, policy, is_retry=false) -> Dictionary   # 包 AIService.request(..., _provider_name, is_retry)
+func max_validation_retries() -> int          # 回 2（《12》§3.4，P-22 #3）
+```
+
+```text
+† _provider_name 對應《06》model_name 欄位——建角面板下拉選的是 AIConfig 裡已設定好的 provider 名字
+† 投放後不可改，跟 decision_source 同一條規則，所以做成建構子帶入、不是每次呼叫才傳
 ```
 
 ## AIConfig — scripts/ai/ai_config.gd · class_name · RefCounted
@@ -688,7 +839,8 @@ var min_interval_sec · max_calls_per_game_day · dialogue_exempt      # 全域�
 
 static func load_from_user() -> AIConfig     # 讀不到→enabled=false 的物件
 func get_provider(provider_name: String) -> Provider   # 只有空字串會退回 default_provider，打錯名字回 null
-func has_provider(provider_name: String) -> bool
+func has_provider(provider_name: String) -> bool        # 只查設定項存不存在
+func has_valid_provider(provider_name: String) -> bool  # 存在且 valid ——「這個名字真的打得出去嗎」
 ```
 
 ```text
@@ -698,6 +850,9 @@ func has_provider(provider_name: String) -> bool
 † 任何 log/錯誤/主控台輸出一律走 masked_key()，_to_string() 也只吐遮蔽版
 † 多個具名 provider 可同時併用（例如 "local" 打本機 llama-server、"openrouter" 打雲端）
   ——這個類別只回答「provider 叫這個名字時連線資訊是什麼」，不管「誰該用哪個」
+⚠ 事前檢查「能不能用這個 provider」一律用 has_valid_provider()：AIService.request() 擋的條件是
+  `provider == null or not provider.valid`，只用 has_provider() 會放行設定不全的項目，
+  然後每次請求安靜收到 ERROR_NO_PROVIDER
 † enabled 只回答「設定檔結構完整、至少一個 provider」，不管 default_provider 好不好
   ——default 壞掉只影響沒指名 provider 的呼叫，不連累明確指名且填好的 provider
 ```
@@ -712,17 +867,26 @@ static func build_dialogue_envelope(speaker: Character, listener: Character,
                                      turns: Array[Dictionary], max_turns: int) -> Dictionary
 static func build_plan_envelope(character: Character, visible: Array[Character],
                                  pool: Array[Dictionary]) -> Dictionary
+static func build_reflection_envelope(character: Character, daily_events: Array[Dictionary]) -> Dictionary
 static func turn_entry(speaker_name: String, text: String) -> Dictionary
 ```
 
 ```
-dialogue payload  {type:"dialogue", self, context:{listener, turns, max_turns}}
-plan payload      {type:"plan", self, context:{visible, pool}}
-† self 區塊兩者共用（_self_block()，沿用 Character.get_state_snapshot()），不重新蒐集一次
+dialogue payload    {type:"dialogue", self, context:{listener, turns, max_turns, memory}}
+plan payload        {type:"plan", self, context:{visible, pool, today_plan, memory}}
+reflection payload  {type:"reflection", self, context:{events: Array[{id,content}]}}   # #168
+memory 區塊          {recent: Array[String], core: Array[String]}   # L2/L4 內容，#169
+† self 區塊三者共用（_self_block()，沿用 Character.get_state_snapshot()），不重新蒐集一次
 † PLAN_SYSTEM 的動作清單用 AISchema.ALLOWED_ACTIONS 動態組，不另外抄一份字串
   ——兩份清單各自維護會漂移，白名單改了這裡忘記跟著改，模型看到的允許清單就對不上驗證的
 † plan_response_schema()（AISchema）當 response_format 送出，跟 validate_tasks() 驗證的形狀對齊
-→ 技術/LLM 串接與 AI 服務層
+† reflection 的 events 是純客觀事實句（agent.gd 的 _daily_events），importance/valence
+  完全交給 LLM 判斷（reflection_response_schema()），不在這裡或引擎端預先計算
+† memory 固定全量帶入 L2+L4（《99》P-03 方案 A，不做情境篩選），放在 context 不放
+  system——system 段要逐字元不變才能吃到 provider 的 prompt cache，已用 game_eval
+  驗證：記憶內容變了，system 字串仍逐字元相同。只帶 content 字串，不帶
+  valence/importance/decay_value 這些引擎內部欄位
+→ 技術/記憶與睡眠反思
 ```
 
 ## AISchema — scripts/ai/ai_schema.gd · class_name · RefCounted
@@ -734,7 +898,7 @@ const ALLOWED_ACTIONS := [                   # 《07》《11》拍板的 22 個�
     move_to, sleep, nap, rest, wash, idle,
     steal, attack,
 ]
-const IMPLEMENTED_ACTIONS := [move_to, talk, sleep]
+const IMPLEMENTED_ACTIONS := [move_to, talk, sleep, nap, rest, wash, idle]   # 後四個是 #112 接上的
 const MAX_TASKS_PER_RESPONSE := 5            # 單次決策回應最多幾筆任務
 const MAX_LINE_CHARS := 200                  # dialogue line／reasoning／inner_monologue 共用的截斷長度
 const ERROR_NOT_JSON := "not_json"
@@ -749,6 +913,8 @@ static func parse_completion(response: Dictionary) -> Dictionary
 static func validate_dialogue(data: Dictionary) -> Dictionary
 static func validate_tasks(data: Dictionary) -> Dictionary   # -> {tasks, reasoning, inner_monologue}
 static func plan_response_schema() -> Dictionary             # response_format 用，跟 validate_tasks() 對齊
+static func validate_reflection(data: Dictionary) -> Dictionary   # -> {summary, events:[{id,content,valence,importance}]}
+static func reflection_response_schema() -> Dictionary       # response_format 用，跟 validate_reflection() 對齊
 static func is_allowed_action(action: String) -> bool
 static func is_implemented_action(action: String) -> bool
 ```
@@ -769,6 +935,11 @@ static func is_implemented_action(action: String) -> bool
   schedule 來源的 work 任務不經過這裡驗證，不受影響——只影響 LLM 不能自己決定叫角色去打工
 † reasoning／inner_monologue 選填、缺席給空字串、型別錯整包拒絕、超長截斷不拒絕
   ——跟 dialogue 的 line 用同一種寬鬆度，但語意不同（可以不存在、可以是空字串）
+† validate_reflection() 的 importance/valence 只做形狀檢查（範圍夾限、enum 檢查），
+  不重新計算或覆寫數值——LLM 給的分數就是最終分數，引擎不二次評分（《00》原則二）
+† validate_reflection() 的 id 是必填（跟 summary/reasoning 不同，不是寬鬆選填）：
+  agent.gd 靠它決定哪幾筆 _daily_events 真的被評過分，少了 id 就沒辦法安全
+  刪除，整包回應寧可判失敗重試
 ```
 
 ---
@@ -827,6 +998,8 @@ money <amount>           改玩家的錢；正數走 add_money()，負數走 spe
 ai [dialogue] [@provider] [文字]   對 LLM 打一次測試請求；dialogue 走對話 policy
 locale [code]            看目前語系／切換（zh_TW / en）
 tasks <name>             印那隻 Agent 的候選任務池：分數拆項、在不在窗內、哪筆執行中
+act <name> <action> [place|target]   直接推一筆任務給那隻 Agent（#112 驗證用）；
+                         只收 IMPLEMENTED_ACTIONS 上的動作，30 遊戲分鐘後自動退場
 help | clear
 
 角色查找：character_name(不分大小寫) → 撞名列候選 id 前 8 碼 → character_id 前綴
@@ -893,14 +1066,18 @@ Esc(ui_cancel) 切換暫停。main.tscn 的 Pause，子節點 Dim(ColorRect) / T
 ```gdscript
 var npc_data = {}                            # NPC 模板 id -> 資料
 var schedule_assignments = {}                # 節點名 -> schedule_template
+var identity_assignments = {}                # 節點名 -> {character_id, character_name}
 
 func get_npc(id: String)                         # 查不到 → null
 func get_schedule_template(node_name: String) -> String   # 沒指派 → ""
+func get_npc_identity(node_name: String) -> Dictionary    # 沒指派 → {}；驗證 entry 是 Dictionary
 func load_npc_data()
 ```
 
 ```
 地點座標不歸 GameManager 管，一律走 PlaceAnchors 的 Marker2D
+† get_npc_identity 回空字典時由 character.gd::_ready() 退回生成 UUID／節點名
+† identity_assignments 與 schedule_assignments 分開：前者「我是誰」，後者「用哪份行程」
 ```
 
 ## GameClock — scripts/core/GameClock.gd · autoload
@@ -943,4 +1120,9 @@ noise_heard 對話中會被吞掉；睡覺中的 Agent 沒有排除，一樣會�
 character_id 與 GameClock.day 都未持久化，重開就重來
 AIService 已接對話（conversation.gd 非同步）與行程（agent.gd 任務池＋決策迴圈，
   llm_decision_enabled 開關）；決策內容有效性未實跑真實 provider 驗證過（見驗收清單）
+DecisionProvider 介面已存在（scripts/ai/decision_provider.gd），agent.gd 透過
+  LocalLLMProvider／RemoteLLMProvider 呼叫，不再直接呼叫 AIService；decision_source／
+  model_name 是 Agent 上的佔位 @export（#122 落地前的假資料，不是真正的角色資料）
+雲端驗證失敗重試已實作（agent.gd _decide_with_retry()，RemoteLLMProvider 2 次／
+  LocalLLMProvider 0 次，退回 default_provider 時 2 次）；HumanInput／RemotePlayer 兩種來源尚未實作
 ```

@@ -72,6 +72,11 @@ const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader
 ## 留空就沿用節點名 —— 不能退回 character_id，那是一串沒人讀得懂的 UUID
 @export var character_name := ""
 
+## 最近一次 LLM 決策的動作被 resolve() 判定的結果，中文自然語言，成功是空字串
+## （#120，《01-2》§1 流程圖的「④ 寫回 last_action_result」）。目前只有 Agent
+## 會寫這個欄位，Player 沒有 LLM 決策，留在 Character 是給 UI/debug 共用的掛點
+var last_action_result := ""
+
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
 @onready var stats: Stats = get_node_or_null("Stats")
@@ -81,6 +86,7 @@ const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader
 @onready var inventory: Inventory = get_node_or_null("Inventory")
 @onready var work_progress: WorkProgress = get_node_or_null("WorkProgress")
 @onready var money_popup: MoneyPopup = get_node_or_null("MoneyPopup")
+@onready var memory: Memory = get_node_or_null("Memory")
 
 # 最後一次的面向：front / back / right，停下時用來挑 idle 動畫
 var facing := "front"
@@ -115,9 +121,20 @@ var _outline: ShaderMaterial = null
 
 
 func _ready() -> void:
+	# 場景裡固定的 NPC，身分是設計時決定好的資料——先用節點名查 npc_schedule.json 的
+	# identities（跟 agent.gd::_load_schedule() 查 assignments 同一個模式）。查到就用，
+	# 讓 character_id 跨場次穩定（relationships 拿它當 key，每次重開都變等於認識的人全歸零）。
+	# @export 手擺的值優先（測試角色）；兩者都空才落回生成 UUID／節點名，這條保留給
+	# Player 與動態生成的角色
+	var identity := GameManager.get_npc_identity(name)
+
+	if character_id.is_empty():
+		character_id = str(identity.get("character_id", ""))
 	if character_id.is_empty():
 		character_id = generate_id()
 
+	if character_name.is_empty():
+		character_name = str(identity.get("character_name", ""))
 	if character_name.is_empty():
 		character_name = name.to_lower()
 
@@ -479,7 +496,7 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 # （見 note/技術/LLM 串接與 AI 服務層.md）要的也是同一批資料。
 #
 # key/value 一律是識別字，不可以是翻譯過的字 —— Stats.SPEC 的 label 存的是
-# 翻譯 key，這裡照樣只放 key，翻譯留給顯示端做。stats/affinity 只有掛了對應
+# 翻譯 key，這裡照樣只放 key，翻譯留給顯示端做。stats/relations 只有掛了對應
 # 元件才會出現在回傳值裡，呼叫端用 has() 判斷。
 #
 # 子類別自己的欄位由子類別 override 這個方法補上（agent.gd 補 schedule），
@@ -494,6 +511,7 @@ func get_state_snapshot() -> Dictionary:
 		"animation": sprite.animation,
 		"in_conversation": is_in_conversation(),
 		"working": is_working(),
+		"last_action_result": last_action_result,
 	}
 
 	if stats != null:
@@ -508,22 +526,58 @@ func get_state_snapshot() -> Dictionary:
 	if inventory != null:
 		snapshot["money"] = inventory.get_money()
 
-	# 欄名跟 relationships.gd 的 record 一致（affinity / met_count），
+	# 欄名跟 relationships.gd 的 record 一致（trust / met_count），
 	# 不要在這裡改名——同一個數值有兩個名字，讀過 relationships.gd 的人
-	# 會在 snapshot 上找不到 affinity。用純量 accessor 不用 get_record()，
+	# 會在 snapshot 上找不到 trust。用純量 accessor 不用 get_record()，
 	# 後者每筆都 duplicate(true) 深拷一份只為了讀兩個數字
 	if relationships != null:
 		var known := relationships.known_ids()
 		if not known.is_empty():
-			var affinity := {}
+			var relations := {}
 			for other_id in known:
-				affinity[other_id] = {
-					"affinity": relationships.get_affinity(other_id),
+				relations[other_id] = {
+					"trust": relationships.get_trust(other_id),
 					"met_count": relationships.get_met_count(other_id),
 				}
-			snapshot["affinity"] = affinity
+			snapshot["relations"] = relations
 
 	return snapshot
+
+
+# ---- 存檔 ----
+
+# 給 SaveService 存的角色資料：身分、數值、關係。跟 get_state_snapshot() 是
+# 兩份不同的東西，不要互相包裝——snapshot 要描述現況給 LLM 看（含 facing、
+# 動畫這類衍生狀態），這裡要能還原（座標屬於世界存檔，見 #21，不在這裡）
+func get_save_data() -> Dictionary:
+	var data := {
+		"character_id": character_id,
+		"character_name": character_name,
+	}
+
+	if stats != null:
+		data["stats"] = stats.get_save_data()
+	if relationships != null:
+		data["relationships"] = relationships.get_save_data()
+
+	return data
+
+# 已經在 characters 群組裡（_ready() 跑過）才重驗 id 唯一性——存檔的 character_id
+# 可能撞到另一隻已經在場上的角色，覆寫後兩隻共用同一個 id 就會共用關係與記憶
+# （_ensure_unique_id() 註解講的那個坑）。還沒進 tree 就不用管，接下來的 _ready()
+# 本來就會做這件事，這裡搶著做反而會在 get_tree() 是 null 時炸掉
+func load_save_data(data: Dictionary) -> void:
+	character_id = data.get("character_id", character_id)
+	if character_id.is_empty():
+		character_id = generate_id()
+	if is_inside_tree():
+		_ensure_unique_id()
+	character_name = data.get("character_name", character_name)
+
+	if stats != null and data.has("stats"):
+		stats.load_save_data(data["stats"])
+	if relationships != null and data.has("relationships"):
+		relationships.load_save_data(data["relationships"])
 
 
 # ---- 滑鼠選取 ----
@@ -606,22 +660,25 @@ func _current_frame_texture() -> Texture2D:
 
 # ---- 每幀 ----
 
-# 依移動方向切換 walk / idle；沒有 left 素材，往左用 flip_h 翻轉 right
-func update_animation() -> void:
-	var dir := velocity.normalized()
+# 依移動方向切換 walk / idle；沒有 left 素材，往左用 flip_h 翻轉 right。
+#
+# facing 讀 desired_velocity（move_and_slide() 解算前、_decide_velocity() 的原始輸出），
+# 不是解算後的 velocity——貼平物件時想往物件方向走，move_and_slide() 會把那個分量
+# 直接歸零，若 facing 也照 velocity 判斷就會卡在貼上去之前的方向，永遠轉不過來面對
+# 眼前的東西（#108）。walk / idle 動畫另外照解算後的 velocity 判斷：貼平時人確實
+# 沒有在動，播 idle 才對，只是 facing 要跟上輸入方向
+func update_animation(desired_velocity: Vector2) -> void:
+	var dir := desired_velocity.normalized()
 
-	if dir == Vector2.ZERO:
-		sprite.play("idle_" + facing)
-		return
+	if dir != Vector2.ZERO:
+		# 垂直位移比水平大就用背面／正面，否則用側面
+		if abs(dir.y) > abs(dir.x):
+			facing = "back" if dir.y < 0 else "front"
+		else:
+			facing = "right"
+			sprite.flip_h = dir.x < 0
 
-	# 垂直位移比水平大就用背面／正面，否則用側面
-	if abs(dir.y) > abs(dir.x):
-		facing = "back" if dir.y < 0 else "front"
-	else:
-		facing = "right"
-		sprite.flip_h = dir.x < 0
-
-	sprite.play("walk_" + facing)
+	sprite.play(("walk_" if velocity != Vector2.ZERO else "idle_") + facing)
 
 # 這一幀要用的速度。基底只跟隨 A* 路徑，子類別覆寫來加上自己的驅動來源。
 # 對話中不自動移動 —— 但 Player 的輸入會蓋過這裡，走遠了由距離判定自然散場
@@ -661,9 +718,10 @@ func _check_stuck(delta: float) -> void:
 		move_finished.emit(false)
 
 func _physics_process(delta: float) -> void:
-	velocity = _decide_velocity()
+	var desired_velocity := _decide_velocity()
+	velocity = desired_velocity
 	move_and_slide()
-	update_animation()
+	update_animation(desired_velocity)
 
 	if is_moving():
 		_check_stuck(delta)

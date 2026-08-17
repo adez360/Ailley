@@ -42,11 +42,19 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 | `character_name` | 玩家取的名字，顯示用，指令也用它指名 | 是 | 是 |
 | `schedule_template`（僅 Agent） | 用哪份行程資料，對應 `npc_schedule.json` 的鍵 | — | 是 |
 
-留空時：`character_id` 生成一個 UUID，`character_name` 退回節點名小寫。
+兩個欄位都空時，`character.gd::_ready()` 依序試三層：
+
+| 順位 | 來源 | 給誰用 |
+| --- | --- | --- |
+| 1 | `@export` 手擺的值 | 場景裡的測試角色 |
+| 2 | `npc_schedule.json` 的 `identities`，用**節點名**查表 | 場景裡固定的 NPC（Agent／Agent2） |
+| 3 | `character_id` 生成 UUID、`character_name` 退回節點名小寫 | Player 與動態生成的角色 |
 
 「玩家可改」不等於「這一場不會變」：`character_id` 玩家碰不到，但撞號時
-`_ensure_unique_id()` 會就地換掉一個，而且目前每次開遊戲都重新生成。
-別把它快取在 `_ready()` 之外，也別假設它跨場次還是同一個。
+`_ensure_unique_id()` 會就地換掉一個，別把它快取在 `_ready()` 之外。
+
+**跨場次是否穩定要看走到第幾層**：走第 2 層的固定 NPC 每次開遊戲都拿到同一個 id
+（`identities` 是靜態資料），走第 3 層的角色每次重開都是新 UUID。
 
 ## `character_id` 是生成的 UUID，不帶任何語意
 
@@ -145,7 +153,7 @@ id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存
 
 ## 狀態快照是純資料，供顯示端與 AI payload 共用
 
-`get_state_snapshot()` 回傳角色狀態（位置、數值、好感、行程……），
+`get_state_snapshot()` 回傳角色狀態（位置、數值、關係、行程……），
 主控台的 `status` 指令只負責把它排版成 BBCode，不自己蒐集一次
 ——蒐集邏輯原本糊在 `debug_console.gd` 裡，任何人想重用都得先拆掉格式。
 
@@ -161,9 +169,9 @@ override `get_state_snapshot()`、`super()` 之後補上去，**不是**基底�
 `get("current_place")` 動態讀，group 成員資格跟「有沒有這個欄位」是兩件事，
 不吻合時會拿到 `null`（或在 `as Array` 那步直接崩）。
 
-`affinity` 每筆是 `{affinity, met_count}`，欄名跟 `relationships.gd` 的 record
+`relations` 每筆是 `{trust, met_count}`，欄名跟 `relationships.gd` 的 record
 一致，不要在快照裡改名 —— 同一個數值兩個名字，讀過 `relationships.gd` 的人
-會在快照上找不到它。取值走 `get_affinity()` / `get_met_count()` 這兩個純量
+會在快照上找不到它。取值走 `get_trust()` / `get_met_count()` 這兩個純量
 accessor，不用 `get_record()`：後者每筆都 `duplicate(true)` 深拷一份，
 只為了讀兩個數字。
 
@@ -192,26 +200,37 @@ accessor，不用 `get_record()`：後者每筆都 `duplicate(true)` 深拷一�
 > 而角色已經在 layer 2，本來就掃不到。留著沒壞處（還擋著 RigidBody2D），
 > 只是不再必要。
 
-## 固定 NPC 的身份指派（2026-08-16 拍板，見 issue #69）
+## 固定 NPC 的身份指派
 
-Agent/Agent2 目前每次開遊戲都重新生成 `character_id`，`character_name` 退回節點名小寫——
-這是 #69 要解決的問題。之前 PR #70 想改 `npc_schedule.json` 的 `assignments` 塞進
-`{character_id, character_name}` 物件，卡在 `village_sim_locale.gd` 拿 `character_name`
-當 join key、改成中文顯示名會讓 R&D 的 `village_ai` 視線清單悄悄清空——那支腳本已在
-issue #96 整支移除，這個地雷不在了。
+`npc_schedule.json` 的 `identities` 區塊，用節點名對到 `{character_id, character_name}`：
 
-**決定**：不新增資料檔、不動場景，重用 `schedule_template` 已經在用的 lookup 模式——
-`npc_schedule.json` 的 `villagers[].id`（如 `npc001`）本來就是穩定的手寫識別碼，
-直接拿來當 `character_id` 的來源（格式對齊《01》§1-1 的 `npc_XXX`）；`character_name`
-需要在 `villagers` 資料上補一個顯示名欄位。`character.gd::_ready()` 在走隨機 UUID
-那條 fallback 之前，要先問 `GameManager` 這個節點名有沒有對應的固定身份——跟
-`agent.gd::_load_schedule()` 問 `get_schedule_template()` 是同一種資料流向，只是
-問的時間點要提前到基底的 `_ready()`，不能等 `agent.gd` 才問（Player 沒有 schedule
-概念，但也需要走同一套身份 fallback）。
+```json
+"identities": {
+    "Agent":  {"character_id": "aji",  "character_name": "阿吉"},
+    "Agent2": {"character_id": "alan", "character_name": "阿嵐"}
+}
+```
+
+`GameManager.get_npc_identity(node_name)` 查它，`character.gd::_ready()` 在生成 UUID／
+退回節點名之前先問一次。查不到回空字典，自然落回第 3 層 —— Player 與動態生成的角色
+不必列進表裡。
+
+> [!important] `identities` 跟 `assignments` 分兩塊，不合併
+> 「用哪份行程」（`assignments` → `schedule_template`）與「我是誰」（`identities`）
+> 是兩件事。同一隻角色換行程不該換身分，換身分也不該換行程。
+> 合併成一個物件會讓這兩件事被迫同進同出。
+
+問的時間點在基底 `Character._ready()`，不是 `agent.gd::_load_schedule()`：
+Player 沒有 schedule 概念，但一樣要走這套 fallback 鏈。
 
 不走 #73 的 `spawn_character()`：那是給動態生成角色用的（identity 當參數傳），
 Agent/Agent2 是場景裡的靜態節點，`_ready()` 時自己查表更貼近現有架構，
 不用為了兩隻寫死的示範 NPC 去改場景結構。
+
+> [!warning] 目前的 id 值不符合《01》§1-1 的格式規定
+> 規格書寫 `id` 格式是 `npc_001`，這裡用的是 `aji`／`alan`。
+> 存檔還沒接上、沒有任何持久化資料綁在這兩個值上，改動成本目前是零；
+> 要對齊規格就趁現在。追蹤見 issue #69 的 PR 討論。
 
 ## 未做
 
@@ -222,7 +241,7 @@ Agent/Agent2 是場景裡的靜態節點，`_ready()` 時自己查表更貼近�
   已定義 15 個正式地點（一地點一筆記，見《[[Ailley]]》規格書索引），跟這裡的四個測試
   錨點名字對不上（`farm`/`restaurant`/`square` 等不在那 15 個裡），換真地圖時要重新對照
 - 行程表是靜態 JSON，之後換成 AI 維護的版本，見 [[行程佇列與任務仲裁]]
-- 兩隻 Agent 的行程已經不同，但**人格還沒有**：沒有 `persona_id`，
-  也沒有覆寫 `character_name`（顯示名就是 `agent` / `agent2`）
+- 兩隻 Agent 的行程與身分（`character_id` / 顯示名）已經不同，但**人格還沒有**：
+  沒有 `persona_id`，兩隻的性格參數仍然一模一樣
 - 兩隻的家都是 `home_001`。已拍板「家要各自不同」（規格書《01》§1-1 `home_location_id`、
   《07_地點/家》），但還沒實作——地圖上要放幾間房子、怎麼指派給角色仍待規劃（《99》P-17 #12）

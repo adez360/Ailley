@@ -1,3 +1,4 @@
+class_name Agent
 extends Character
 
 ## 由任務池 + 仲裁器驅動的角色。
@@ -25,6 +26,11 @@ const NOTICE_PAUSE := 2.0
 ## [[LLM 串接與 AI 服務層]] 明講過「先從一隻角色開始，不要一次對所有
 ## Agent 開放」，這是那條原則的落實
 @export var llm_decision_enabled := false
+
+## 佔位欄位：決策來源（《06》decision_source，正式資料結構見 #122）。
+## 先用常數驗證 DecisionProvider 選取邏輯是對的，欄位落地後這裡改吃真正的角色資料。
+@export var decision_source := "local"		# "local" / "cloud"
+@export var model_name := ""				# decision_source == "cloud" 時，AIConfig 的 provider 名字
 
 ## schedule 任務給中間值，靠 time_bonus 拉開跟其他來源的差距，
 ## 不是靠 base priority 本身——見 [[行程佇列與任務仲裁]] 的「待決」那節
@@ -141,10 +147,47 @@ var _plan_update_requested := false
 ## 那個轉換瞬間，見 _reevaluate() 怎麼用它
 var _was_sleeping := false
 
+## 這隻角色的決策來源，出生時決定一次，之後所有決策/對話呼叫都透過它——
+## 跟《06》「decision_source／model_name 投放後不可改」的規則一致，不做成每次呼叫
+## 才判斷（#155）
+var _provider: DecisionProvider
+
+## 上一次睡眠反思的當日摘要（《03》§5「當日摘要（一句話）」）。目前只給
+## debug 用（reflect 指令印出來看），沒有其他呼叫端讀它——先留著這個欄位
+## 而不是驗證完就丟掉，之後要做《15》UI 的 today_log／摘要面板時才有東西可接，
+## 不用回頭重寫 validate_reflection() 那層（max 等級 code review 抓到：
+## 原本驗證過的 summary 完全沒被讀取，白白花了 LLM 的輸出 token）
+var last_reflection_summary := ""
+
+## 今天發生的事，純客觀事實句，睡前反思（request_sleep_reflection()）一次
+## 送給 LLM 評分後清空（#168，《03》§5）。跟 Memory.l1 不是同一回事——l1 是
+## 固定 8 條的滾動視窗，這裡是「睡前都留著」的緩衝區，語意不同不共用。
+## 每句只寫事實，不判斷正負面／重不重要，那是 LLM 在反思時的工作
+## （《00》原則二：引擎只給事件，不給情緒）
+##
+## 每筆是 {id, content} 不是單純字串——反思是一趟真的打網路的非同步呼叫，
+## await 期間角色照樣可能觸發新事件、LLM 也可能漏評某幾筆。用穩定的 id
+## 讓 request_sleep_reflection() 只刪除「LLM 真的回傳評分結果」的那幾筆，
+## 不是用送出時的筆數概略估計（max 等級 code review 抓到：概略估計法在
+## LLM 漏評、或等待期間 FIFO 剛好把快照最前面幾筆擠掉時，還是可能誤刪
+## 沒被評到分的事件）
+const DAILY_EVENTS_CAP := 30
+var _daily_events: Array[Dictionary] = []
+var _next_daily_event_id := 0
+
+## 加一筆今天發生的事。滿了就丟掉最舊的一筆，不是拒絕新的——今天最新發生的
+## 事沒理由因為緩衝區滿了就進不去，跟 Memory.push_l1() 的 FIFO 取捨一樣
+func _push_daily_event(content: String) -> void:
+	_daily_events.append({"id": _next_daily_event_id, "content": content})
+	_next_daily_event_id += 1
+	if _daily_events.size() > DAILY_EVENTS_CAP:
+		_daily_events.pop_front()
+
 
 func _ready() -> void:
 	super()
 	add_to_group("agents")
+	_provider = _make_provider()
 	_load_schedule()
 
 	if vision != null:
@@ -174,6 +217,30 @@ func _ready() -> void:
 	# 那個時機（#89 觸發 2）是同一種狀況——沒有計畫，需要一份新的
 	if llm_decision_enabled and not _has_llm_task():
 		_request_next_decision(true)
+
+## 依 decision_source 建一次決策提供者（#155）。打錯字／空字串一律安靜退回 LocalLLMProvider，
+## 但寫一行 push_warning 帶原因——跟 _load_schedule() 找不到 assignment 時的處理是同一種
+## 「資料異常先警告、遊戲照跑」的慣例，不讓一個資料錯字讓角色整個決策啞掉
+func _make_provider() -> DecisionProvider:
+	# 三種資料異常（來源打錯字、cloud 沒填 model_name、model_name 指到不可用的
+	# provider）處理方式完全一樣，所以只收集原因，警告與 fallback 各寫一次
+	var reason := ""
+	if decision_source == "cloud":
+		if model_name.is_empty():
+			reason = "decision_source 'cloud' 但 model_name 是空的"
+		elif not AIService.config.has_valid_provider(model_name):
+			# 用 has_valid_provider() 不是 has_provider()：AIConfig 裡有這個項目
+			# 但 base_url/model 沒填齊時，AIService.request() 一樣擋成
+			# ERROR_NO_PROVIDER，只查存在的話這種設定會安靜地讓角色決策啞掉
+			reason = "decision_source 'cloud' 但 model_name '%s' 不是可用的 AIConfig provider（不存在或設定不全）" % model_name
+		else:
+			return RemoteLLMProvider.new(model_name)
+	elif decision_source != "local":
+		reason = "decision_source '%s' 不是已知值" % decision_source
+
+	if not reason.is_empty():
+		push_warning("Agent %s: %s，退回 local" % [character_name, reason])
+	return LocalLLMProvider.new()
 
 # 一趟移動有結論了：走到了，或 _check_stuck() 判定走不動而放棄。
 # 兩種都代表「這個地點不必再起步一次」，_pursue_current_task() 靠它收斂。
@@ -317,6 +384,13 @@ func _is_preemptible() -> bool:
 # 不是 _current_task、清不到；或是被別人搭話時，自己另一筆不相干的待辦
 # talk 任務剛好是 _current_task，被誤刪
 func exit_conversation() -> void:
+	# 事件事實句要在 super() 把 _conversation 清成 null 之前先讀——這裡只記
+	# 客觀事實（跟誰講完話），不記對話內容好壞，那是睡前反思時 LLM 自己判斷的事
+	if _conversation != null:
+		var other: Character = _conversation.target if _conversation.initiator == self else _conversation.initiator
+		if other != null:
+			_push_daily_event("你跟 %s 講完話了" % other.character_name)
+
 	super()
 
 	if not _active_talk_task_id.is_empty():
@@ -353,6 +427,41 @@ func exit_conversation() -> void:
 ## 三種都是「這次要不到台詞」，處理方式完全一樣
 const AI_THINKING_TEXT := "…"
 
+## 呼叫 provider 決策並驗證內容，失敗時依 provider.max_validation_retries() 重試（#152）。
+## 只有「拿到回應但內容不合格式」才重試（parse_completion／validate 失敗）；AIService
+## 層級的失敗（逾時、連線失敗、停用、額度）不重試，原樣回傳給呼叫端走 fallback——
+## 那類是「這次問不到」，不是「問到了但答案壞掉」，是《12》§6.1 講的不同兩種情境。
+##
+## validator 是呼叫端包好的驗證函式：next_line() 傳 AISchema.validate_dialogue，
+## _request_next_decision() 傳一個包住 allow_update_plan 的 lambda 呼叫 validate_tasks。
+## 這裡不用管兩邊 schema 形狀不同，只管「驗證過不過」
+##
+## attempt > 0（第二次起）傳 is_retry=true 給 AIService.request()：SCHEDULED policy
+## 沒有 CONVERSATION 那種豁免，重試間隔只有幾秒、遠低於預設 30 秒冷卻，不跳過
+## 冷卻檢查的話重試永遠會被自己剛送出的上一次呼叫擋成 ERROR_RATE_LIMITED，
+## 《12》§3.4 要求的重試在 SCHEDULED 路徑上會實際失效（PR #176 review 抓到）
+func _decide_with_retry(envelope: Dictionary, policy: AIService.Policy, validator: Callable) -> Dictionary:
+	var attempts := _provider.max_validation_retries() + 1
+	# 記住最後一次的失敗原因，迴圈跑完直接回它——parse 與 validate 兩種失敗
+	# 的處理一模一樣（還有次數就重試，沒有就把原因原樣回報），不必各寫一遍
+	var last := AISchema._fail("no_attempt")
+	for attempt in attempts:
+		var result: Dictionary = await _provider.decide(envelope, character_id, policy, attempt > 0)
+		if not result["ok"]:
+			return result
+
+		var parsed := AISchema.parse_completion(result["data"])
+		if not parsed["ok"]:
+			last = AISchema._fail(parsed["error"])
+			continue
+
+		var validated: Dictionary = validator.call(parsed["data"])
+		if validated["ok"]:
+			return validated
+		last = validated
+
+	return last
+
 func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) -> Dictionary:
 	# 立刻蓋掉正在顯示的東西，讓玩家知道「這個角色在想」，不是卡住。
 	# AIService.request() 還沒送出就已經先顯示——冷卻/配額檢查也算在等待時間裡，
@@ -361,23 +470,59 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 	say(AI_THINKING_TEXT, true)
 
 	var envelope := PromptBuilder.build_dialogue_envelope(self, listener, turns, max_turns)
-	var result: Dictionary = await AIService.request(envelope, character_id, AIService.Policy.CONVERSATION)
+	var result := await _decide_with_retry(envelope, AIService.Policy.CONVERSATION, AISchema.validate_dialogue)
 	if not result["ok"]:
-		return {"ok": false}
-
-	var parsed := AISchema.parse_completion(result["data"])
-	if not parsed["ok"]:
-		return {"ok": false}
-
-	var validated := AISchema.validate_dialogue(parsed["data"])
-	if not validated["ok"]:
 		return {"ok": false}
 
 	return {
 		"ok": true,
-		"line": validated["data"]["line"],
-		"end": validated["data"]["end"],
+		"line": result["data"]["line"],
+		"end": result["data"]["end"],
 	}
+
+## 睡眠反思（#168，《03》§5）：把今天的事實句丟給 LLM，換回摘要跟逐筆評分，
+## 交給 memory 分級寫入。importance/valence 完全由 LLM 決定（見 validate_reflection()
+## 的註解），這裡不重算或覆寫這兩個值。
+##
+## 回傳 {"ok": bool}：ok=false 代表這次沒有真的反思到（未啟用/逾時/驗證失敗/
+## 沒有事件可反思），last_reflection_summary 維持上一次成功的舊值不變——
+## 呼叫端不該把舊摘要誤當成「這次」的結果來顯示（max 等級 code review 抓到）
+##
+## 失敗時不清空 _daily_events——今天的事還沒被評過分，清空等於直接遺失，
+## 留著等下次睡眠反思重試，最壞情況是被 DAILY_EVENTS_CAP 的 FIFO 擠掉，
+## 不會比現在更糟
+##
+## 送出去反思的每筆事件都帶穩定 id（見 _push_daily_event()），不是單純比
+## 送出時的筆數：LLM 可能漏評某幾筆（合法的部分回應），await 期間（真的打
+## 網路，數百毫秒到數十秒都可能）角色也可能觸發新事件並 append 進
+## _daily_events。只刪除「LLM 這次真的回傳評分結果」的那幾個 id，其餘
+## （包含等待期間新增的、跟 LLM 沒評到的）留在 _daily_events 裡，
+## 下次反思會再送一次（max 等級 code review 抓到：純用送出筆數 pop_front()
+## 的近似法，在這兩種情況下都可能誤刪還沒被評到分的事件）
+##
+## 觸發時機目前只有 debug_console.gd 的 `reflect` 指令手動呼叫——真正的睡眠
+## 動作（#112）落地後，在角色進入睡眠那個時間點呼叫這個函式，這裡不用改
+func request_sleep_reflection() -> Dictionary:
+	if memory == null or _daily_events.is_empty():
+		return {"ok": false}
+
+	var events_sent := _daily_events.duplicate(true)
+	var envelope := PromptBuilder.build_reflection_envelope(self, events_sent)
+	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, AISchema.validate_reflection)
+	if not result["ok"]:
+		return {"ok": false}
+
+	var data: Dictionary = result["data"]
+	last_reflection_summary = data["summary"]
+
+	var scored_ids := {}
+	for event in data["events"]:
+		memory.add_candidate(event["content"], event["importance"], event["valence"])
+		scored_ids[event["id"]] = true
+
+	_daily_events = _daily_events.filter(func(e): return not scored_ids.has(e["id"]))
+
+	return {"ok": true}
 
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
 ## AIService、parse_completion、validate_*，任何一關失敗都靜默放棄，任務池
@@ -402,37 +547,34 @@ func _request_next_decision(allow_update_plan: bool = false) -> void:
 	var envelope := PromptBuilder.build_plan_envelope(
 		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan
 	)
-	var result: Dictionary = await AIService.request(envelope, character_id, AIService.Policy.SCHEDULED)
+	var validator := func(data: Dictionary) -> Dictionary:
+		return AISchema.validate_tasks(data, effective_allow_update_plan)
+
+	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	_awaiting_decision = false
 
 	if not result["ok"]:
 		return
 
-	var parsed := AISchema.parse_completion(result["data"])
-	if not parsed["ok"]:
-		return
-
-	var validated := AISchema.validate_tasks(parsed["data"], effective_allow_update_plan)
-	if not validated["ok"]:
-		return
+	var data: Dictionary = result["data"]
 
 	# reasoning／inner_monologue 印出來給人排查，跟 _trigger_village_ai() 的
 	# print() 除錯模式一致；不進遊戲內 UI。決策準不準沒有系統性驗證，
 	# 目前只能肉眼看這兩個欄位判斷合不合理
-	print("[llm_decision] %s reasoning: %s" % [character_name, validated["data"].get("reasoning", "")])
-	print("[llm_decision] %s inner_monologue: %s" % [character_name, validated["data"].get("inner_monologue", "")])
+	print("[llm_decision] %s reasoning: %s" % [character_name, data.get("reasoning", "")])
+	print("[llm_decision] %s inner_monologue: %s" % [character_name, data.get("inner_monologue", "")])
 
-	_push_llm_tasks(validated["data"]["tasks"], validated["data"])
+	_push_llm_tasks(data["tasks"], data)
 
 	# 不管這輪有沒有拿到 update_plan 許可，模型都可能問「下次讓我改」——記
 	# 下來，下一次不管是哪個理由觸發 _request_next_decision() 都會兌現
-	if validated["data"].get("request_plan_update", false):
+	if data.get("request_plan_update", false):
 		_plan_update_requested = true
 
 	# null 代表這次沒有 update_plan（不管是沒許可、還是有許可但模型選擇不用）；
 	# 空陣列 [] 是模型明確給的合法值（today_plan 清空），兩者不可混淆，見
 	# AISchema.validate_tasks() 用 null 分辨「沒提供」與「提供了空陣列」
-	var update_plan: Variant = validated["data"].get("update_plan")
+	var update_plan: Variant = data.get("update_plan")
 	if update_plan != null:
 		_apply_today_plan(update_plan)
 
@@ -547,6 +689,10 @@ func _task_pool_summary() -> Array[Dictionary]:
 # 工作結束後同理：那 5 個遊戲分鐘可能已經跨過行程的整點，而 work_at() 開頭的
 # stop_moving() 把原本的路徑清掉了，不重算的話會一路站到下一個整點字串吻合為止
 func _on_work_finished() -> void:
+	# 不寫「賺了多少錢」——_on_work_finished() 提早離開工作站（半途走開）也會
+	# 觸發，那種情況沒有真的撥款（見 character.gd 的 _run_work()／_end_work()），
+	# 寫死賺錢金額會變成一句不一定為真的事實句
+	_push_daily_event("你剛結束了一段工作站的工作")
 	_reevaluate()
 
 # 基底的快照加上行程表這一段。schedule/current_place/current_state 宣告在這裡，
@@ -574,6 +720,8 @@ func _on_spotted(other: Character) -> void:
 	if relationships != null and relationships.has_met(other.character_id):
 		return
 
+	_push_daily_event("你第一次注意到 %s" % other.character_name)
+
 	say(L10n.t("DLG_SURPRISE"))
 	stop_moving()
 
@@ -598,7 +746,33 @@ func _on_noise_heard(_source: Character) -> void:
 
 	say(L10n.t("DLG_NOISE_ALERT"))
 
+## 回復類動作每遊戲分鐘回多少 energy（#112）。《07》§2-3 只給相對關係——sleep
+## 回復量最大、nap「與睡覺同模組但較低」、rest「小幅回復」——沒有給數字，所以
+## 這三個值跟 MIN_COMMIT／HYSTERESIS 一樣是待實跑校準的暫定值，不是規格定案。
+##
+## 對照基準：energy 的自然衰減是每現實秒 1.0（Stats.SPEC 的 drift），而一個遊戲
+## 分鐘正好是一現實秒，所以淨回復是這裡的值減 1
+##
+## wash 不列在這裡：它回復的是 `hygiene`，Stats.SPEC 還沒有這一項（生理值補到
+## 8 欄位是另一則任務），現在硬接只會寫進一個不存在的欄位。idle 也不列——
+## 發呆本來就不回復任何東西，它的用途是「合法地什麼都不做」，讓 AI 逾時或
+## 沒事可做時有一個不必假裝在忙的選項
+const ENERGY_RECOVERY := {"sleep": 6.0, "nap": 4.0, "rest": 2.0}
+
+# 到了定點才開始回復——還在走去床邊的路上不算在睡覺。沒有指定地點的任務
+# （LLM 完全可以只回 {"action": "rest"}）本來就原地做，is_moving() 一樣是 false，
+# 不用另外分流
+func _apply_action_recovery() -> void:
+	if stats == null or is_moving():
+		return
+	var recovery: float = ENERGY_RECOVERY.get(current_state, 0.0)
+	if recovery > 0.0:
+		stats.add("energy", recovery)
+
 func _on_time_changed(_hour: int, _minute: int) -> void:
+	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務
+	# 會用新任務的 current_state 結算最後一分鐘
+	_apply_action_recovery()
 	_reevaluate()
 
 # 仲裁器的核心：每次重算，不維護「目前是第幾筆」。
@@ -730,13 +904,130 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 
 	_select(best, now_minutes)
 
+## 《01-2》§3 完整表格，數字照抄，含目前還沒接上執行邏輯的動作（#159 等落地時
+## 直接呼叫 _roll_success()，不用重寫一次成功率公式）。struggle 例外太多
+## （不擲骰、搭 haul 檢查點），不套用這裡，見《01-2》§3 附註
+const SUCCESS_PARAMS := {
+	"hunt_small": {"base": 0.60, "trait": "courage", "coef": 0.002},
+	"hunt_large": {"base": 0.30, "trait": "courage", "coef": 0.003},
+	"gather": {"base": 0.80, "trait": "diligence", "coef": 0.001},
+	"fish": {"base": 0.55, "trait": "diligence", "coef": 0.0015},
+	"steal": {"base": 0.35, "trait": "courage", "coef": 0.0025},
+	"persuade": {"base": 0.40, "trait": "sociability", "coef": 0.003},
+	"perform": {"base": 0.70, "trait": "romanticism", "coef": 0.003},
+	"attack": {"base": 0.50, "trait": "courage", "coef": 0.0025},
+}
+
+## 《01-2》§2 通用成功率公式，純數學，跟哪個動作無關——不在 SUCCESS_PARAMS
+## 表上的動作（move_to/talk/sleep/nap/rest/wash/idle/eat 全部不在表上）不是
+## 技能檢定，直接放行。
+##
+## stamina/injury/alcohol 現在不存在於 Stats.SPEC（#115 還沒落地）。injury／
+## alcohol 兩項公式本來就是「從 0 起算才扣分」，缺欄位時 Stats.get_value()
+## 回傳的 0.0 剛好是中性值，不用特別處理；stamina 公式基準點是 50，函式內部
+## 有另外判斷 Stats.SPEC.has("stamina")，缺欄位時當中性值 50 用，不會吃到假的
+## 懲罰。等 #115 把 stamina 加進 SPEC，這裡不用改，自動開始吃到真實數值
+func _roll_success(action: String, character: Character, environment_risk: float) -> Dictionary:
+	var params: Dictionary = SUCCESS_PARAMS.get(action, {})
+	if params.is_empty():
+		return {"success": true, "reason": ""}
+
+	var trait_value := 0.0  # 人格資料還沒接上（#117），先固定 0
+
+	# injury/alcohol 兩項的公式本來就是「從 0 起算才扣分」，Stats.get_value()
+	# 對不存在的 key 回傳的 0.0 剛好就是中性值，不用特別處理。stamina 不一樣——
+	# 公式基準點是 50 不是 0，缺欄位時硬套 get_value() 的 0.0 會變成一個假的
+	# -10% 懲罰（QA review 抓到）。改成：SPEC 裡真的有這個欄位才讀實際值，
+	# 沒有就當作中性的 50，貢獻 0——等 #115 把 stamina 加進 SPEC，這裡不用改，
+	# 自動開始吃到真實數值
+	var stamina: float = character.stats.get_value("stamina") if Stats.SPEC.has("stamina") else 50.0
+	var injury_term := -character.stats.get_value("injury") * 0.004
+	var alcohol_term := -maxf(0.0, character.stats.get_value("alcohol") - 30.0) * 0.005
+	var stamina_term := (stamina - 50.0) * 0.002
+	var chance: float = params["base"] \
+		+ trait_value * float(params["coef"]) \
+		+ stamina_term + injury_term + alcohol_term - environment_risk
+	chance = clampf(chance, 0.05, 0.95)
+
+	var success := randf() < chance
+	if success:
+		return {"success": true, "reason": ""}
+	return {"success": false, "reason": _failure_reason(injury_term, alcohol_term, stamina_term, environment_risk)}
+
+## 《01-2》§5：失敗原因要具體到 AI 能調整策略，不能給一句放諸四海皆準的
+## 「運氣不好」——找出扣最多分的修正項，講出具體理由。四個修正項全部
+## 是負值或 0（environment_risk 本身以正值代表風險，取負號比較），取最負
+## 的那個當主因；都沒扣分時才是真的手氣不好
+func _failure_reason(injury_term: float, alcohol_term: float, stamina_term: float, environment_risk: float) -> String:
+	var worst := "luck"
+	var worst_value := 0.0
+	for pair in [["injury", injury_term], ["alcohol", alcohol_term], ["stamina", stamina_term], ["environment", -environment_risk]]:
+		if float(pair[1]) < worst_value:
+			worst_value = pair[1]
+			worst = pair[0]
+
+	match worst:
+		"injury":
+			return "傷勢太重，這個動作做不利索"
+		"alcohol":
+			return "喝多了，手腳不聽使喚"
+		"stamina":
+			return "體力撐不住，中途沒了力氣"
+		"environment":
+			return "現場條件不利，沒能成功"
+		_:
+			return "手氣不好，這次沒抓到訣竅"
+
+## 環境風險由呼叫端依動作/情境算好傳入（正值代表風險，數字越大成功率扣越多）。
+## SUCCESS_PARAMS 目前沒有動作會走到這裡，之後接動作時（例如 steal 的目擊者
+## 風險）再補實際算法
+func _environment_risk(_action: String, _params: Dictionary) -> float:
+	return 0.0
+
+## 決策執行前的檢查層（#120，《00》原則一：LLM 決定想做什麼，引擎決定做不做得到）。
+## 只管兩件事：目標/前提是不是真的存在（硬規則），以及擲不擲得過成功率——語意
+## 驗證/白名單那些是 AISchema 的事，這裡假設 action/params 已經過白名單
+func resolve(action: String, params: Dictionary) -> Dictionary:
+	match action:
+		"talk":
+			var target_name: String = str(params.get("target", ""))
+			var matches := _find_all_characters_by_name(target_name)
+			if matches.is_empty():
+				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
+			if matches.size() > 1:
+				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
+		# move_to/sleep/nap/rest/wash/idle/eat 目前都沒有額外的硬規則要擋
+		# （eat 落地後要在這裡加「宣稱吃了背包裡沒有的食物」的檢查，見 #114）
+		_:
+			pass
+
+	return _roll_success(action, self, _environment_risk(action, params))
+
 # 用 .get() 而不是硬取 key，跟計分那幾個函式同一種寫法——檔頭承諾「把任務丟進
-# _tasks 就會公平競爭，不用再改這個檔案」，那新來源少填一個欄位就不該讓這裡崩掉
+# _tasks 就會公平競爭，不用再改這個檔案」，那新來源少填一個欄位就不該讓這裡崩掉。
+#
+# llm 來源任務需通過可執行動作白名單檢查（IMPLEMENTED_ACTIONS）——不在白名單上的
+# 動作直接不 commit 並移除，避免選到後靜默不執行或每分鐘重試的無限迴圈。
+# SUCCESS_PARAMS 不能當白名單：_roll_success() 對不在表上的動作直接放行（見
+# _roll_success() 自己的註解），那些動作缺少執行邏輯時會靜默不做事，不符合
+# 「不被允許」與「還沒做」要分開失敗的設計原則
 func _select(task: Dictionary, now_minutes: int) -> void:
+	if task.get("source", "") == "llm":
+		var action: String = str(task.get("action", ""))
+		if not AISchema.is_implemented_action(action):
+			last_action_result = "這個動作還沒有實作，暫時做不了"
+			_remove_task(task.get("id", ""))
+			return
+
 	_current_task = task
 	_current_task_started_at = now_minutes
 	current_place = str(task.get("params", {}).get("place", ""))
 	current_state = str(task.get("action", ""))
+	# resolve() 現在只在 _pursue_talk_task() 裡對 talk 任務呼叫——換成別的
+	# 動作（move_to/sleep 等）時沒有人會再寫入 last_action_result，舊任務
+	# 留下的失敗原因會一直卡著，讓 LLM 看到跟目前任務無關的過期訊息。這裡
+	# 統一歸零，talk 任務會在下一次 _pursue_talk_task() 立刻覆蓋成真正結果
+	last_action_result = ""
 	# 換了新任務就是換了新的追逐目標，talk 任務自己的卡住偵測要歸零重算——
 	# 不歸零的話舊目標留下的「沒進展」次數會誤算進新目標的偵測
 	_talk_pursuit_stuck_ticks = 0
@@ -818,6 +1109,36 @@ func _pursue_current_task() -> void:
 # 上面那套「走一次、_pursued_place／_pursuit_done 收斂」的節流——每次重算都
 # 要重新問一次「他現在在哪」，距離內就直接搭話，不是只起步一次
 func _pursue_talk_task() -> void:
+	# resolve() 判定前置檢查：只針對 llm 來源任務，在即將產生副作用（talk_to）
+	# 前執行，避免移動期間提前消耗 _roll_success() 或使用過期狀態。
+	# ⚠ _pursue_current_task() 每個遊戲分鐘都會跑到這裡，talk 現在能這樣寫
+	# 是因為它不在 SUCCESS_PARAMS 上、resolve() 對它只會走硬規則檢查（純函式、
+	# 沒有隨機性），每分鐘重算結果都一樣，等同只是重新確認前置條件沒變。
+	# 之後如果哪個會擲骰的 SUCCESS_PARAMS 動作也要做成「追逐中執行」，不能照抄
+	# 這個寫法——resolve() 裡的 _roll_success() 每呼叫一次就重骰一次，搬進這種
+	# 每分鐘都跑的函式會變成「重骰到成功為止」，跟《01-2》§2「一次決策一次骰」
+	# 的公式前提不符。那種情況要另外做「這個任務實例只骰一次」的保護（例如
+	# 記一個 _resolved_task_id，骰過就不再骰，只重驗真的需要每次重查的部分）
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		if not result["success"]:
+			# resolve() 判定失敗的任務不留在池子裡繼續佔位——不移除的話
+			# 下次重算分數不變，會馬上又選到同一筆，變成每分鐘重試一次
+			# 同樣失敗的無限迴圈。移除後記錄失敗原因，停止執行
+			_remove_task(_current_task.get("id", ""))
+			_current_task = {}
+			current_place = ""
+			current_state = "idle"
+			# 這筆若是最後一筆 llm 任務，_reevaluate() 的 duration 完成分支
+			# 不會再被觸發（那筆任務在這裡就已經被移除，不是被 duration 判定
+			# 完成的），Agent 會乾等到某個不相干的事件才重新決策。跟
+			# exit_conversation() 對「llm 任務因為別的理由結束」的處理一致，
+			# 這裡也要主動補一次請求（max 等級 code review 抓到）
+			if llm_decision_enabled and not _awaiting_decision:
+				_request_next_decision(_today_plan_needs_new_goal())
+			return
+
 	var target_name: String = str(_current_task.get("params", {}).get("target", ""))
 	var target := _find_character_by_name(target_name)
 
@@ -867,6 +1188,16 @@ func _pursue_talk_task() -> void:
 
 	if _talk_pursuit_stuck_ticks == 3:
 		push_warning("Agent %s: 追不上搭話對象 %s，可能被卡住" % [character_name, target.character_name])
+
+# 按顯示名找所有符合的角色，用於偵測撞名（resolve() 的歧義檢查）
+func _find_all_characters_by_name(target_name: String) -> Array[Character]:
+	var matches: Array[Character] = []
+	if target_name.is_empty():
+		return matches
+	for node in get_tree().get_nodes_in_group("characters"):
+		if node != self and node.character_name == target_name:
+			matches.append(node as Character)
+	return matches
 
 # 按顯示名找角色，不分大小寫的規則跟 debug_console.gd::_get_character() 不同——
 # 那裡要處理玩家手打、可能撞名的情形；這裡的 target 是 LLM 從 context.visible
@@ -925,7 +1256,7 @@ func _age_bonus(_task: Dictionary) -> float:
 # 這條路徑；LLM 推進池子的任務才會真的帶非零值
 func _is_expired(task: Dictionary, now_minutes: int) -> bool:
 	var expires_at: int = task.get("expires_at", 0)
-	return expires_at > 0 and expires_at < now_minutes
+	return expires_at > 0 and expires_at <= now_minutes
 
 func _in_window_or_unwindowed(task: Dictionary, now: String) -> bool:
 	var window = task.get("window")
@@ -973,3 +1304,32 @@ func get_current_task_elapsed_minutes() -> int:
 	if _current_task.is_empty():
 		return 0
 	return _now_minutes() - _current_task_started_at
+
+## Debug 用：直接推一筆任務進池子（debug_console.gd 的 act 指令，#112 驗證用）。
+## 走 _push_llm_tasks() 這條跟 LLM 決策回應完全一樣的路徑，不另開執行捷徑——
+## 另開一條的話，驗到的就不是真正會跑的那條。
+##
+## priority 給得比「schedule 任務 + 時間窗加成」（10 + 100）還高：指令下了就要
+## 看得到效果，不是跟到點的行程比分數。expires_at 一定要填，這筆任務才會自己
+## 退場——llm_decision_enabled 關著的角色沒有「任務做完就重新決策」那條路徑，
+## 不填的話這筆最高分任務會永遠留在池子裡，把角色卡在原地
+const DEBUG_TASK_PRIORITY := 999.0
+
+func debug_push_task(action: String, params: Dictionary, duration: float) -> void:
+	var tasks: Array[Dictionary] = [{
+		"action": action,
+		"params": params,
+		"priority": DEBUG_TASK_PRIORITY,
+		"duration": duration,
+		"expires_at": _now_minutes() + int(duration),
+	}]
+	_push_llm_tasks(tasks, {})
+	_reevaluate()
+
+## Debug 用：今天累積了哪些事件，給 reflect 指令在呼叫 request_sleep_reflection()
+## 前先印出來看。只回 content——debug 顯示不需要知道內部的 id
+func get_daily_events() -> Array[String]:
+	var contents: Array[String] = []
+	for event in _daily_events:
+		contents.append(event["content"])
+	return contents

@@ -1,7 +1,12 @@
 extends Node
-class_name SaveService
 
 ## 存讀角色／世界資料的唯一入口，定義於 note/規格書/14_存檔資料存取層規格書.md §2。
+##
+## 刻意不宣告 class_name：全域 autoload 也叫 SaveService（掛在
+## JsonSaveService 上，見 project.godot），Godot 不允許 class_name 跟
+## autoload 撞同一個識別字（"Class X hides an autoload singleton" 開機期
+## 直接 Parser Error）。子類別改用路徑繼承：
+## extends "res://scripts/save/save_service.gd"
 ##
 ## 呼叫端（角色生成、睡眠反思寫回、debug console 等）一律只呼叫這四個函式，
 ## 不直接使用 FileAccess 或任何資料庫 API —— 存取邏輯只能在這個介面的實作裡。

@@ -227,3 +227,15 @@ func get_place_for_need(key: String) -> String:
 
 func get_lowest_need_place() -> String:
 	return get_place_for_need(get_lowest_need())
+
+
+# ---- 存檔 ----
+
+func get_save_data() -> Dictionary:
+	return values.duplicate(true)
+
+# 缺的欄位用 SPEC 的 start 補，不當成錯誤——SPEC 加一項是預期會發生的事，
+# 不該讓舊存檔讀不起來
+func load_save_data(data: Dictionary) -> void:
+	for key in SPEC:
+		values[key] = data.get(key, SPEC[key]["start"])

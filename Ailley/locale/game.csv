@@ -1,6 +1,4 @@
 keys,zh_TW,en
-DLG_OPENING_DISLIKE,"又是你。","You again."
-DLG_OPENING_FRIEND,"{name}，又見面了！","Good to see you again, {name}!"
 DLG_OPENING_NEUTRAL,"嗨，{name}。","Hi, {name}."
 DLG_NEED_HUNGER,"我肚子好餓……","I'm starving..."
 DLG_NEED_ENERGY,"好累，想睡了。","So tired. I want to sleep."
@@ -8,10 +6,7 @@ DLG_NEED_SOCIAL,"好久沒跟人說話了。","I haven't talked to anyone in age
 DLG_NEED_FUN,"最近有點無聊。","Things have been a bit dull lately."
 DLG_MOOD_HIGH,"今天心情不錯。","I'm in a good mood today."
 DLG_MOOD_LOW,"唉，提不起勁。","Ugh, I just can't get going."
-DLG_REPLY_FRIEND,"跟你聊天總是很輕鬆。","Talking with you is always easy."
 DLG_REPLY_NEUTRAL,"今天天氣還行。","Weather's not bad today."
-DLG_CLOSING_DISLIKE,"我先走了。","I'm off."
-DLG_CLOSING_FRIEND,"{name}，下次再聊！","Talk to you later, {name}!"
 DLG_CLOSING_NEUTRAL,"那先這樣，掰。","That's it for now. Bye."
 DLG_SURPRISE,"！","!"
 DLG_NOISE_ALERT,"!?","!?"

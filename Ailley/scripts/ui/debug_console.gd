@@ -36,10 +36,22 @@ func _ready() -> void:
 		# help 留空：先不進 locale/console.csv，避免動到翻譯資源匯入（這台機器上
 		# 曾經卡住），純 debug 用途，之後真的要收進正式指令表再補翻譯
 		"tasks": {"run": _cmd_tasks, "usage": "tasks <name>", "help": ""},
+		# 同上，help 留空：#112 驗證 nap/rest/wash/idle 執行邏輯用的 debug 入口
+		"act": {"run": _cmd_act, "usage": "act <name> <action> [place|target]", "help": ""},
+		# 同上，help 留空：#167 驗證記憶結構用的 debug 入口，之後有正式的
+		# 角色資訊面板（《15》）接上之後再收進正式指令表
+		"memory": {"run": _cmd_memory, "usage": "memory <name>", "help": ""},
+		# 同上，help 留空：#168 手動觸發睡眠反思的 debug 入口。真正的睡眠動作
+		# （#112）落地前，這是端到端測試整條反思管線唯一的方式
+		"reflect": {"run": _cmd_reflect, "usage": "reflect <name>", "help": ""},
 		# 同上，help 留空：#73 驗證 GameManager.spawn_character() 管線用的
 		# debug 入口，之後有正式的建角面板/角色庫 UI（#122）接上之後再收進
 		# 正式指令表
 		"spawn": {"run": _cmd_spawn, "usage": "spawn <template_id>", "help": ""},
+		# 同上，help 留空：#21 驗證 SaveService 讀寫進出點用的 debug 入口，
+		# 真正的存讀時機（睡前自動存檔等）是後續 issue 才接
+		"save": {"run": _cmd_save, "usage": "save", "help": ""},
+		"load": {"run": _cmd_load, "usage": "load", "help": ""},
 		"help": {"run": _cmd_help, "usage": "help", "help": ""},
 		"clear": {"run": _cmd_clear, "usage": "clear", "help": "HELP_CLEAR"},
 	}
@@ -334,16 +346,16 @@ func _cmd_status(args: PackedStringArray) -> void:
 	if snapshot.has("money"):
 		_field("CON_FIELD_MONEY", "%d" % int(snapshot["money"]))
 
-	if snapshot.has("affinity"):
+	if snapshot.has("relations"):
 		var lines: Array[String] = []
-		for other_id in snapshot["affinity"]:
-			var record: Dictionary = snapshot["affinity"][other_id]
-			lines.append(L10n.tf("CON_AFFINITY_ENTRY", {
+		for other_id in snapshot["relations"]:
+			var record: Dictionary = snapshot["relations"][other_id]
+			lines.append(L10n.tf("CON_RELATION_ENTRY", {
 				"id": other_id,
-				"affinity": "%.1f" % record["affinity"],
+				"trust": "%.1f" % record["trust"],
 				"count": record["met_count"],
 			}))
-		_field("CON_FIELD_AFFINITY", SEP.join(lines))
+		_field("CON_FIELD_RELATIONS", SEP.join(lines))
 
 	if snapshot.has("schedule"):
 		_field("CON_FIELD_SCHEDULE", L10n.tf("CON_SCHEDULE_BODY", {
@@ -409,6 +421,129 @@ func _cmd_tasks(args: PackedStringArray) -> void:
 			score["total"], score["base"], score["time"], score["need"], score["age"],
 		])
 
+# act <name> <action> [place|target]
+#
+# #112 驗證用：直接推一筆任務進 Agent 的池子，看它真的去做那個動作。走的是
+# agent.gd::debug_push_task()，跟 LLM 決策回應同一條路徑。
+#
+# 只收 IMPLEMENTED_ACTIONS 裡的動作——白名單上但還沒接執行層的動作推進去
+# 只會讓角色靜靜地站著，看起來像指令壞了。三十遊戲分鐘夠看出 energy 有沒有
+# 在回，又不會長到要等半個遊戲日才還角色自由
+const ACT_DURATION := 30.0
+
+func _cmd_act(args: PackedStringArray) -> void:
+	if args.size() < 2 or args.size() > 3:
+		_error("act <name> <action> [place|target]")
+		return
+
+	var character := _get_character(args[0])
+	if character == null:
+		return
+
+	if not character.is_in_group("agents"):
+		_error("%s 不是 Agent，沒有任務池" % character.character_name)
+		return
+
+	var action := args[1]
+	if not AISchema.is_implemented_action(action):
+		_error("%s 還沒有執行邏輯，目前可下：%s" % [
+			action, ", ".join(AISchema.IMPLEMENTED_ACTIONS)
+		])
+		return
+
+	# talk 的參數是人不是地點（見 agent.gd::_pursue_talk_task()），其餘動作
+	# 一律吃 place。這裡照 action 分流，不要求下指令的人自己記得填哪個 key
+	var params := {}
+	if args.size() == 3:
+		params["target" if action == "talk" else "place"] = args[2]
+
+	# is_in_group("agents") 不會幫 GDScript 縮窄靜態型別，顯式轉型才能讓
+	# debug_push_task()（Agent-only）這個呼叫真的是型別安全的
+	(character as Agent).debug_push_task(action, params, ACT_DURATION)
+	_print("[color=888888]%s 收到任務 %s params=%s，%d 遊戲分鐘後自動退場[/color]" % [
+		character.character_name, action, JSON.stringify(params), int(ACT_DURATION)
+	])
+
+# memory <name>：印出 L1 短期工作記憶 + L2/L3/L4 分級記憶。#167 驗證用，
+# 形狀比照 _cmd_tasks()——一律 .get()，記憶欄位不該因為指令本身崩掉
+func _cmd_memory(args: PackedStringArray) -> void:
+	if args.size() != 1:
+		_error("memory <name>")
+		return
+
+	var character := _get_character(args[0])
+	if character == null:
+		return
+
+	if character.memory == null:
+		_error("%s 沒有掛 Memory 元件" % character.character_name)
+		return
+
+	var m := character.memory
+	_print("[color=88ccff]%s[/color][color=888888]  L1 %d/%d 條[/color]" % [
+		character.character_name, m.l1.size(), Memory.L1_CAP
+	])
+	for entry in m.l1:
+		_print("[color=888888]  · %s[/color]" % _escape_bbcode(str(entry.get("content", ""))))
+
+	for level in [4, 3, 2]:
+		var level_entries := m.get_by_level(level)
+		if level_entries.is_empty():
+			continue
+		_print("[color=88ccff]L%d[/color][color=888888]（%d 條）[/color]" % [level, level_entries.size()])
+		for entry in level_entries:
+			# content 是 LLM 輸出（memory.add_candidate() 的呼叫端來自 LLM 反思
+			# 結果），進 RichTextLabel 前一定要 _escape_bbcode()——不然 LLM 回應
+			# 塞 BBCode 標籤可以截斷或偽造主控台輸出（max 等級 code review 抓到）
+			_print("[color=888888]  · [%s] importance=%d decay=%.1f  %s[/color]" % [
+				entry.get("valence", "?"), entry.get("importance", 0),
+				entry.get("decay_value", 0), _escape_bbcode(str(entry.get("content", ""))),
+			])
+
+# reflect <name>：手動觸發一次睡眠反思（#168）。印出反思前的事件緩衝區
+# 內容、await 完成、再印出反思後的記憶列表，方便一次看到「送了什麼、
+# 分到哪一層」的完整前後對照
+func _cmd_reflect(args: PackedStringArray) -> void:
+	if args.size() != 1:
+		_error("reflect <name>")
+		return
+
+	var character := _get_character(args[0])
+	if character == null:
+		return
+
+	if not character.is_in_group("agents"):
+		_error("%s 不是 Agent，沒有反思機制" % character.character_name)
+		return
+
+	# get_daily_events()／request_sleep_reflection() 只存在於 Agent，不在
+	# Character 基底——is_in_group("agents") 不會幫 GDScript 縮窄靜態型別，
+	# 上面那行只是執行期檢查。顯式轉型才能讓底下這兩個呼叫真的是型別安全的
+	# （max 等級 code review 抓到：先前直接在 Character 型別變數上呼叫這兩個
+	# Agent-only 方法，能跑是因為 GDScript 對未宣告方法只降級成警告，不是
+	# 真的型別安全）
+	var agent := character as Agent
+
+	var daily_events: Array[String] = agent.get_daily_events()
+	if daily_events.is_empty():
+		_print("[color=888888]（今天還沒發生任何事，沒東西可以反思）[/color]")
+		return
+
+	_print("[color=88ccff]%s[/color][color=888888]  反思前，今天發生了 %d 件事[/color]" % [
+		character.character_name, daily_events.size()
+	])
+	for event in daily_events:
+		_print("[color=888888]  · %s[/color]" % _escape_bbcode(event))
+
+	var result := await agent.request_sleep_reflection()
+	if not result["ok"]:
+		_error("反思失敗（可能撞到速率限制或驗證失敗），今天的事留著，下次再試")
+		return
+
+	_print("[color=888888]反思完成，當日摘要：%s[/color]" % _escape_bbcode(character.last_reflection_summary))
+	_print("[color=888888]記憶列表：[/color]")
+	_cmd_memory(args)
+
 # spawn <template_id>
 #
 # #73 驗證用：從 GameManager 的角色庫模板動態生成一隻角色、投放進場景樹。
@@ -432,6 +567,46 @@ func _cmd_spawn(args: PackedStringArray) -> void:
 
 	_print("[color=88ff88]生成角色 %s[/color][color=888888]  id %s[/color]" % [
 		character.character_name, character.character_id
+	])
+
+# save   存下目前世界裡每個角色 + 這個世界本身。驗證 SaveService 的讀寫
+# 進出點確實接得起來（#21）——真正該在什麼時機自動存檔（睡前等）是後續 issue
+func _cmd_save(_args: PackedStringArray) -> void:
+	var count := 0
+	for node in get_tree().get_nodes_in_group("characters"):
+		var character := node as Character
+		if SaveService.save_character(character.character_id, character.get_save_data()):
+			count += 1
+		else:
+			_error("存檔失敗：%s" % character.character_name)
+
+	if not SaveService.save_world(GameManager.DEFAULT_WORLD_ID, GameManager.get_world_save_data()):
+		_error("世界存檔失敗：%s" % GameManager.DEFAULT_WORLD_ID)
+		return
+
+	_print("[color=88ff88]已存檔[/color]  %d 個角色 + 世界 %s" % [count, GameManager.DEFAULT_WORLD_ID])
+
+# load   讀回世界本身 + 場景裡目前每個角色各自的存檔。只套用場景裡找得到的
+# 角色——存檔裡有記載但場景沒有的角色不會被生出來，那是 player 加入世界
+# 那條流程的範圍，不在這則骨架內（見 issue #21 範圍界線）
+func _cmd_load(_args: PackedStringArray) -> void:
+	var world_data := SaveService.get_world(GameManager.DEFAULT_WORLD_ID)
+	if world_data.is_empty():
+		_error("沒有世界存檔 %s" % GameManager.DEFAULT_WORLD_ID)
+		return
+	GameManager.apply_world_save_data(world_data)
+
+	var count := 0
+	for node in get_tree().get_nodes_in_group("characters"):
+		var character := node as Character
+		var data := SaveService.get_character(character.character_id)
+		if data.is_empty():
+			continue
+		character.load_save_data(data)
+		count += 1
+
+	_print("[color=88ff88]已讀檔[/color]  %d 個角色 + 世界 %s（第 %d 天）" % [
+		count, GameManager.DEFAULT_WORLD_ID, GameClock.day
 	])
 
 func _get_overlay() -> Node:
