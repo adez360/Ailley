@@ -41,29 +41,43 @@ const SCHEDULE_BASE_PRIORITY := 10.0
 const TIME_BONUS := 100.0
 
 ## 兩個任務分數接近時的防抖動閾值：新任務分數要贏過目前任務「這麼多」才切換。
-## 跟 MIN_COMMIT 一樣是待實跑調的暫定值，不是理論算出來的
+## #118 實跑校準（2026-08-17）：真實跑兩次決策，觀察到的分數只有兩種差距——
+## schedule 任務間完全打平（同檔內都是 10 或都是 110）、LLM 任務間差距 <0.2
+## （observed priority 集中在 0.4~0.6）。5.0 對這兩種情況都綽綽有餘，沒有
+## 重現任何抖動，維持這個值。之後 LLM 任務的 priority 量級校準（見 #224）
+## 落地後，分數分佈會改變，屆時要重新驗證這個值還夠不夠
 const HYSTERESIS := 5.0
 
 ## 最短承諾時間（遊戲分鐘）：任務至少要做滿這麼久才允許被非 reflex 任務搶走，
-## 防止兩個分數接近的任務讓角色來回抖動
+## 防止兩個分數接近的任務讓角色來回抖動。#118：跟 HYSTERESIS 同一輪驗證，
+## 目前場上沒有任何候選會逼近這個門檻（見 HYSTERESIS 註解），維持 2.0
 const MIN_COMMIT := 2.0
 
-## 等待決策回覆期間，蓋掉上面的 MIN_COMMIT 用這個值。本地 LLM 已知延遲
-## 2.5-4 秒（見 note/技術/LLM 串接與 AI 服務層.md 的延遲章節），比一般
-## MIN_COMMIT（2.0 秒）長——等待決策期間退回任務池的 fallback 任務如果只受
-## 一般 MIN_COMMIT 保護，幾乎每個決策週期都會在 fallback 才做不到一半、
-## LLM 決策準時抵達的那一刻被切掉，變成規律性抖動而不是偶發的。
-## 起始值抓 5.0，跟 MIN_COMMIT／HYSTERESIS 一樣是待實跑校準的暫定值
+## 等待決策回覆期間，蓋掉上面的 MIN_COMMIT 用這個值。#118 實跑校準
+## （2026-08-17）：對現行 llama-server 拓樸（本機 SSH port-forward 到
+## desktop-h9aniv5）實測 6 次 plan 決策延遲，596~1866ms（均值約 1024ms）；
+## 舊註解引用的「同機測試 2.5-4 秒」不是這次量到的環境，但兩者都遠低於
+## 5.0（換算現實秒＝遊戲分鐘）；對照最大值 1866ms，約有 2.7 倍緩衝
+## （5.0 / 1.866 ≈ 2.68），不調整
 const LLM_WAIT_MIN_COMMIT := 5.0
 
 ## LLM 任務的 duration 引擎端下限（遊戲分鐘）：不管模型回傳什麼，實際套用值
-## 一律不低於這個下限，避免呼叫頻率沒有上界保護。起始值抓 10，在地端已知延遲
-## 2.5-4 秒的前提下留有緩衝，實跑同機測試後再校準，不是理論算出來的定案值
+## 一律不低於這個下限。#118 實跑校準（2026-08-17）：兩次真實決策裡，LLM
+## 回傳的 duration **一律是 0**——模型完全沒有被告知這個欄位的單位或合理
+## 範圍（見 #224），目前這個下限不只是防禦性下限，是任務唯一的非零執行時間
+## 來源。維持 10，等 #224 補上 prompt 說明、模型真的開始給出有意義的估計值
+## 之後再重新校準
 const MIN_ACTION_DURATION := 10.0
 
 ## _tasks 池子的 LLM 來源總量上限（不含 schedule 來源，那批是開場建立一次
-## 就不變的固定集合）。跟每遊戲日最多 20 次 AI 請求同量級——見
-## [[行程佇列與任務仲裁]] 的「池子的守則」
+## 就不變的固定集合）。跟 max_calls_per_game_day（每遊戲日最多幾次 AI 請求）
+## 是兩個獨立的限制，只是數字剛好一樣——這個管的是池子裡累積、還沒被執行掉
+## 的 LLM 任務筆數，那個管的是真的打出去的網路請求次數，見
+## [[行程佇列與任務仲裁]] 的「池子的守則」。#118 實跑校準（2026-08-17）：
+## 確認 max_calls_per_game_day 目前設定值就是 20，跟這個上限剛好對齊；
+## 對同一隻角色實測 12 次連續真實決策（含觸發 dedup 的重複 action/place），
+## _llm_task_count() 峰值穩定在 6，dedup 機制有效防止無上限累積，離上限還有
+## 相當餘裕，維持 20
 const LLM_TASK_POOL_CAP := 20
 
 ## 候選任務池。這一版只在 _load_schedule() 建立一次就不再變動——
@@ -455,7 +469,9 @@ func _decide_with_retry(envelope: Dictionary, policy: AIService.Policy, validato
 	# 的處理一模一樣（還有次數就重試，沒有就把原因原樣回報），不必各寫一遍
 	var last := AISchema._fail("no_attempt")
 	for attempt in attempts:
-		var result: Dictionary = await _provider.decide(envelope, character_id, policy, attempt > 0)
+		var context := DecisionContext.new()
+		context.is_retry = attempt > 0
+		var result: Dictionary = await _provider.decide(envelope, character_id, policy, context)
 		if not result["ok"]:
 			return result
 
@@ -516,8 +532,28 @@ func request_sleep_reflection() -> Dictionary:
 		return {"ok": false}
 
 	var events_sent := _daily_events.duplicate(true)
+
+	# #210：validate_reflection() 只驗結構，不驗 id 是不是真的來自這次送出的
+	# events_sent（唯一且存在）。這裡包一層閉包，讓 id 檢查跟結構驗證共用同一條
+	# 「失敗就重試」路徑（_decide_with_retry），不用改動那個共用機制的簽名。
+	var valid_ids := {}
+	for e in events_sent:
+		valid_ids[e["id"]] = true
+
+	var validator := func(data: Dictionary) -> Dictionary:
+		var validated: Dictionary = AISchema.validate_reflection(data)
+		if not validated["ok"]:
+			return validated
+		var seen_ids := {}
+		for event in validated["data"]["events"]:
+			var event_id = event["id"]
+			if not valid_ids.has(event_id) or seen_ids.has(event_id):
+				return AISchema._fail(AISchema.ERROR_BAD_SHAPE)
+			seen_ids[event_id] = true
+		return validated
+
 	var envelope := PromptBuilder.build_reflection_envelope(self, events_sent)
-	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, AISchema.validate_reflection)
+	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	if not result["ok"]:
 		return {"ok": false}
 
@@ -755,18 +791,20 @@ func _on_noise_heard(_source: Character) -> void:
 
 	say(L10n.t("DLG_NOISE_ALERT"))
 
-## 回復類動作每遊戲分鐘回多少 energy（#112）。《07》§2-3 只給相對關係——sleep
+## 回復類動作每遊戲分鐘回多少 stamina（#112）。《07》§2-3 只給相對關係——sleep
 ## 回復量最大、nap「與睡覺同模組但較低」、rest「小幅回復」——沒有給數字，所以
-## 這三個值跟 MIN_COMMIT／HYSTERESIS 一樣是待實跑校準的暫定值，不是規格定案。
+## 這三個值是待實跑校準的暫定值，不是規格定案。#118 只校準了仲裁常數
+## （HYSTERESIS／MIN_COMMIT／LLM_WAIT_MIN_COMMIT／MIN_ACTION_DURATION／
+## LLM_TASK_POOL_CAP，見上方各自的說明），沒有涵蓋這裡，這三個值還沒實測過。
 ##
-## 對照基準：energy 的自然衰減是每現實秒 1.0（Stats.SPEC 的 drift），而一個遊戲
+## 對照基準：stamina 的自然衰減是每現實秒 1.0（Stats.SPEC 的 drift），而一個遊戲
 ## 分鐘正好是一現實秒，所以淨回復是這裡的值減 1
 ##
-## wash 不列在這裡：它回復的是 `hygiene`，Stats.SPEC 還沒有這一項（生理值補到
-## 8 欄位是另一則任務），現在硬接只會寫進一個不存在的欄位。idle 也不列——
+## wash 不列在這裡：它該回復的是 `hygiene`（Stats.SPEC 已有這一項，見 #115），
+## 但要不要把 wash 接上是另一則任務，這裡先不擴大範圍硬接。idle 也不列——
 ## 發呆本來就不回復任何東西，它的用途是「合法地什麼都不做」，讓 AI 逾時或
 ## 沒事可做時有一個不必假裝在忙的選項
-const ENERGY_RECOVERY := {"sleep": 6.0, "nap": 4.0, "rest": 2.0}
+const STAMINA_RECOVERY := {"sleep": 6.0, "nap": 4.0, "rest": 2.0}
 
 # 到了定點才開始回復——還在走去床邊的路上不算在睡覺。沒有指定地點的任務
 # （LLM 完全可以只回 {"action": "rest"}）本來就原地做，is_moving() 一樣是 false，
@@ -774,9 +812,9 @@ const ENERGY_RECOVERY := {"sleep": 6.0, "nap": 4.0, "rest": 2.0}
 func _apply_action_recovery() -> void:
 	if stats == null or is_moving():
 		return
-	var recovery: float = ENERGY_RECOVERY.get(current_state, 0.0)
+	var recovery: float = STAMINA_RECOVERY.get(current_state, 0.0)
 	if recovery > 0.0:
-		stats.add("energy", recovery)
+		stats.add("stamina", recovery)
 
 func _on_time_changed(_hour: int, _minute: int) -> void:
 	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務
@@ -941,7 +979,11 @@ func _roll_success(action: String, character: Character, environment_risk: float
 	if params.is_empty():
 		return {"success": true, "reason": ""}
 
-	var trait_value := 0.0  # 人格資料還沒接上（#117），先固定 0
+	# 《01》§2 的 10 項 personality，由 Personality.hexaco_to_personality() 在
+	# character.gd::_ready() 產出（#117）。缺欄位（沒有 hexaco 資料的角色）當 0：
+	# 公式是 base + trait × coef，trait = 0 就是「這項人格完全不加分」，也就是
+	# 《01-2》§3 那個 base 本身的基準點，不是一個額外的懲罰
+	var trait_value: float = character.personality.get(params["trait"], 0.0)
 
 	# injury/alcohol 兩項的公式本來就是「從 0 起算才扣分」，Stats.get_value()
 	# 對不存在的 key 回傳的 0.0 剛好就是中性值，不用特別處理。stamina 不一樣——

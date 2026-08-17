@@ -88,6 +88,19 @@ const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader
 ## 會寫這個欄位，Player 沒有 LLM 決策，留在 Character 是給 UI/debug 共用的掛點
 var last_action_result := ""
 
+## 給 LLM 讀的常駐人格段（#117，《01-1》§5、《01-3》§1 的 System 級）：
+## 行為準則 ＋ `character` 自述 ＋ 外觀文字，組一次之後逐字元不變——那是
+## llama-server 每個 slot 命中 KV cache 的前提。沒有人格資料的角色拿到的是
+## 只有開場白與結尾句的最小版本，不是空字串（模型看到空欄位會自行編造）
+var system_prompt := ""
+
+## 引擎用的 10 項人格數值（《01》§2，由 Personality.hexaco_to_personality() 產出）。
+## **不注入 prompt**——那是給成功率公式（agent.gd 的 _roll_success()）與記憶
+## 衰減率讀的，模型讀的是上面那段文字。本地模型看到 `curiosity: 60` 沒有基準，
+## 不知道 60 是高是低，也分不出 60 跟 55（《01》§2-1）。
+## 沒有人格資料的角色是空字典，讀的人一律用 .get(key, 0.0)
+var personality := {}
+
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
 @onready var stats: Stats = get_node_or_null("Stats")
@@ -151,6 +164,15 @@ func _ready() -> void:
 
 	_ensure_unique_id()
 	add_to_group("characters")
+
+	# 人格要在 _ensure_unique_id() 之後才組：種子用的是最終的 character_id。
+	# 種子而不是真的隨機——《01-1》§4 每個極端維度有 3 種語氣變體，真隨機的話
+	# 同一隻角色每次開遊戲的人格文案都不一樣，而 system_prompt 的設計前提是
+	# 「組好之後逐字元不變」。存檔接上之後（#21）改讀存下來的那份，
+	# Personality 那邊不用改
+	var persona := Personality.from_identity(identity, character_id)
+	personality = persona["personality"]
+	system_prompt = persona["system_prompt"]
 
 	sprite.play("idle_" + facing)
 
@@ -753,7 +775,10 @@ func _current_frame_texture() -> Texture2D:
 # 不是解算後的 velocity——貼平物件時想往物件方向走，move_and_slide() 會把那個分量
 # 直接歸零，若 facing 也照 velocity 判斷就會卡在貼上去之前的方向，永遠轉不過來面對
 # 眼前的東西（#108）。walk / idle 動畫另外照解算後的 velocity 判斷：貼平時人確實
-# 沒有在動，播 idle 才對，只是 facing 要跟上輸入方向
+# 沒有在動，播 idle 才對，只是 facing 要跟上輸入方向。
+# 判斷用容差而非精確比較 == Vector2.ZERO——沿角度貼著障礙物滑動時，
+# move_and_slide() 可能把 velocity 解算成極小但非零的殘值，跟 _check_stuck()
+# 同一個理由、用同一個門檻（SPEED * 0.1）
 func update_animation(desired_velocity: Vector2) -> void:
 	var dir := desired_velocity.normalized()
 
@@ -765,7 +790,7 @@ func update_animation(desired_velocity: Vector2) -> void:
 			facing = "right"
 			sprite.flip_h = dir.x < 0
 
-	sprite.play(("walk_" if velocity != Vector2.ZERO else "idle_") + facing)
+	sprite.play(("walk_" if get_real_velocity().length() > SPEED * 0.1 else "idle_") + facing)
 
 # 這一幀要用的速度。基底只跟隨 A* 路徑，子類別覆寫來加上自己的驅動來源。
 # 對話中不自動移動 —— 但 Player 的輸入會蓋過這裡，走遠了由距離判定自然散場

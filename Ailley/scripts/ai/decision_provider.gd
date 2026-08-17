@@ -4,15 +4,21 @@ extends RefCounted
 ## 決策來源。agent.gd 只認得這個介面，不知道也不在乎背後是本機模型還是雲端模型
 ## （《12》§3、§5.1）。HumanInput／RemotePlayer 留給之後的 issue。
 
+## 實際要傳給 AIService.request() 的 provider 名字。LocalLLMProvider／
+## RemoteLLMProvider 都只是「決定這個字串是什麼」，其餘邏輯共用（#213），
+## 所以搬進基底類別統一持有，子類別的 _init() 負責設定它
+var _provider_name: String = ""
+
 ## envelope 是 PromptBuilder.build_dialogue_envelope()/build_plan_envelope() 組好的信封
 ## （system/payload/選填的 response_format）。requester_id 是 character_id，policy 決定
 ## 走不走速率限制——語意跟 AIService.request() 完全一致，這裡只是換一個呼叫對象。
-## is_retry 原樣轉給 AIService.request()：同一次決策內的內容驗證失敗重試要跳過冷卻
-## 檢查，不然重試永遠會被自己剛送出的上一次呼叫的冷卻擋下（見 agent.gd._decide_with_retry()）。
+## context 帶的 is_retry 原樣轉給 AIService.request()（見 DecisionContext 的說明）。
 ## 回傳形狀對齊 AIService.request()：{"ok": bool, "data": Dictionary, "error": String}
-func decide(_envelope: Dictionary, _requester_id: String, _policy: AIService.Policy, _is_retry: bool = false) -> Dictionary:
-	push_error("DecisionProvider.decide() 未實作")
-	return {"ok": false, "data": {}, "error": "not_implemented"}
+##
+## LocalLLMProvider／RemoteLLMProvider 目前不覆寫這個方法，直接吃這份共用實作；
+## 之後 HumanInput／RemotePlayer 如果需要不一樣的行為，照舊可以覆寫
+func decide(envelope: Dictionary, requester_id: String, policy: AIService.Policy, context: DecisionContext = DecisionContext.new()) -> Dictionary:
+	return await AIService.request(envelope, requester_id, policy, _provider_name, context.is_retry)
 
 
 ## 內容驗證失敗時，同一次決策請求內最多重試幾次（不含首次嘗試）。《12》§3.4：雲端 2 次，
