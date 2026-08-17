@@ -226,7 +226,10 @@ const MIN_ACTION_DURATION := 10.0            # llm 任務 duration 引擎端下�
 const LLM_TASK_POOL_CAP := 20                # 只算 source=="llm" 的筆數
 const ENERGY_RECOVERY := {sleep: 6.0, nap: 4.0, rest: 2.0}   # 每遊戲分鐘回多少 energy（#112），暫定值
 const DEBUG_TASK_PRIORITY := 999.0           # act 指令推進來的任務分數，壓過任何 schedule 任務
-const SUCCESS_PARAMS := {}                   # 《01-2》§3 成功率表，含尚未接執行邏輯的動作（#120）
+const SUCCESS_PARAMS := {                    # 《01-2》§3 成功率表照抄，含尚未接執行邏輯的動作（#120）
+    hunt_small/hunt_large/gather/fish/steal/persuade/perform/attack
+    → {base, trait, coef}                    # struggle 例外太多，不套用這張表
+}
 
 var _tasks: Array[Dictionary]                # 候選池，schedule 開場建立一次，llm 用 _push_llm_tasks() 加
 var _current_task: Dictionary
