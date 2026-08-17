@@ -613,12 +613,17 @@ func _table_has_column(
 
 	if not _table_columns_cache.has(table):
 
+		# PRAGMA 查詢會覆寫 db.query_result，先保存呼叫端原本的結果，
+		# 查完欄位資訊後還原，避免 get_last_result() 拿到 PRAGMA 的資料
+		var saved_query_result: Array = db.query_result
+
 		if not db.query_with_bindings(
 			"PRAGMA table_info(%s);"
 			% table,
 			[]
 		):
 
+			db.query_result = saved_query_result
 			return false
 
 
@@ -633,6 +638,8 @@ func _table_has_column(
 					)
 				)
 			)
+
+		db.query_result = saved_query_result
 
 		_table_columns_cache[table] = columns
 
