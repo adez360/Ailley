@@ -454,6 +454,10 @@ func add_candidate(content, importance, valence="neutral", related_npcs=[], loca
 func decay_all(grudge: float = 50.0) -> void  # 每遊戲日一次，見 _on_day_changed()
 func mark_retrieved(entry: Dictionary) -> void
 func get_by_level(level: int) -> Array[Dictionary]
+
+# 存檔（#170）：只收 L2/L4，L1/L3 不進存檔
+func get_save_data() -> Dictionary            # {entries: [level 2/4 的部分]}
+func load_save_data(data) -> void             # 重算 _next_id 避免撞號；l1 不碰
 ```
 
 ```text
@@ -466,7 +470,7 @@ func get_by_level(level: int) -> Array[Dictionary]
 ⚠《03》§3 分級表另有「L2：30-59...三日後若未被檢索則淘汰」一句，跟 §4-1
   衰減公式對不起來（衰減率 3/天，100 分要約 33 天才歸零，不是 3 天）——
   已列入《99》待釐清，目前只實作 §4-1 的衰減公式
-† 不做：向量檢索（《03》§7，完整版才需要）、記憶寫進存檔（依賴 #21/#22）
+† 不做：向量檢索（《03》§7，完整版才需要）
 → 技術/記憶與睡眠反思
 ```
 

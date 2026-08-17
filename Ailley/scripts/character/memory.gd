@@ -14,8 +14,12 @@ extends Node
 ## 不拆三個陣列，是因為《03》§4-2「被檢索延長壽命」跟 L4 滿額降級都需要在
 ## 同一個集合裡搬動記憶，拆開反而要多寫搬移邏輯。
 ##
-## 不做：向量檢索（§7，完整版才需要，MVP 用標籤/關鍵字/連結展開）、記憶寫進
-## 存檔（依賴 #21/#22 先有存檔骨架）。
+## 不做：向量檢索（§7，完整版才需要，MVP 用標籤/關鍵字/連結展開）。
+##
+## 存檔只收 L2/L4（見 note/技術/存檔.md「記憶怎麼存」）：L1 每 tick 滾動、
+## 開場即可重建，L3 是 MVP 不採用的向量檢索前置資料，兩者都不寫進存檔。
+## get_save_data()／load_save_data() 因此只走 entries 裡 level 2/4 的部分，
+## 不動 l1。
 
 ## 分級門檻與規則，見《03》§2-4／《99》P-15（已定案）
 const DISCARD_BELOW := 30
@@ -153,3 +157,24 @@ func get_by_level(level: int) -> Array[Dictionary]:
 
 func _on_day_changed(_day: int) -> void:
 	decay_all()
+
+
+# ---- 存檔 ----
+
+## 只存 L2/L4（見檔案開頭說明）。L3 不進存檔，L1 完全不碰
+func get_save_data() -> Dictionary:
+	var persisted: Array[Dictionary] = []
+	for entry in entries:
+		if entry["level"] == 2 or entry["level"] == 4:
+			persisted.append(entry)
+	return {"entries": persisted.duplicate(true)}
+
+## 讀回的只有 L2/L4，L3 本來就沒存過。_next_id 要重算成已載入 id 的最大值，
+## 否則重開後從 0 起算會撞號——add_candidate() 之後配出來的新 id 會跟某筆
+## 讀回來的舊記憶撞在一起，同一個 id 對到兩筆內容不同的記憶
+func load_save_data(data: Dictionary) -> void:
+	entries.assign(data.get("entries", []) as Array)
+
+	_next_id = 0
+	for entry in entries:
+		_next_id = maxi(_next_id, int(entry.get("id", 0)))
