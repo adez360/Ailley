@@ -537,10 +537,12 @@ JSON Schema → GBNF 的轉換器。
 - [ ] 記憶系統上線前，Agent 的對話逐字稿要不要先存記憶體就好
 - [x] `response_format` 的 json_schema 送出去之後模型端可靠度（issue #245，
       2026-08-17）：地端 provider 對 GBNF 強制／純 prompt 約束（`supports_json_schema`
-      開關）各實測 15 次，JSON 解析與 schema 驗證都 15/15 全過，沒有出現社群回報過
-      的 json_schema/grammar 衝突錯誤；合成的壞掉回應（缺欄位、白名單外、型別錯）
-      也測過 layer 2/3 的退場路徑，`AISchema.validate_tasks()` 全部正確擋下，
-      `_decide_with_retry()` 的重試機制實測會真的觸發，不只是理論上存在
+      開關）各實測 **50 次**，GBNF 強制 50/50 全過零失敗，純 prompt 約束 47/50
+      （6% 失敗率，3 次都是模型自己生成白名單外的 action，例如 `"work"`），沒有
+      出現社群回報過的 json_schema/grammar 衝突錯誤；合成的壞掉回應（缺欄位、
+      白名單外、型別錯）也測過 layer 2/3 的退場路徑，`AISchema.validate_tasks()`
+      全部正確擋下，`_decide_with_retry()` 的重試機制實測會真的觸發，不只是理論
+      上存在。GBNF 文法層強制比純 prompt 約束實測更可靠，剛好是現行預設值
 
 ---
 
