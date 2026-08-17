@@ -27,10 +27,9 @@ extends Node
 ##   npc_state UPDATE 是否能覆蓋既有資料
 ##
 ## 注意：
-##   Inventory 目前沒有 persistence layer。
-##   因此本測試不假裝驗證 Inventory -> SQLite。
-##   等 CharacterStatePersistence 補上 inventory/home storage
-##   後，再做第二階段整合測試。
+##   CharacterStatePersistence 已透過 _load_inventory_once() 持久化 Inventory，
+##   但本測試目前只驗證 npc_state 這條路徑，尚未涵蓋 Inventory -> SQLite 的
+##   比對，故仍只回報 [INFO] 而不判定 PASS/FAIL。
 ## =====================================================
 
 
@@ -124,7 +123,9 @@ func _run() -> void:
 		_finish()
 		return
 
-	persistence.sync_now()
+	if not _sync_now(persistence):
+		_finish()
+		return
 
 	# -------------------------------------------------
 	# 3. 驗證 npc record
@@ -219,43 +220,42 @@ func _run() -> void:
 	character.stats.set_value("alcohol", 44.0)
 	character.stats.set_value("injury", 21.0)
 
-	persistence.sync_now()
-
-	var updated_rows := DatabaseManager.select(
-		"npc_state",
-		"npc_id = '%s'" % _escape_sql(character.character_id),
-		[
-			"hydration",
-			"alcohol",
-			"injury"
-		]
-	)
-
-	if updated_rows.is_empty():
-		_fail(
-			"npc_state.UPDATE",
-			"第二次同步後找不到資料"
-		)
-	else:
-		var updated: Dictionary = updated_rows[0]
-
-		_check_value(
-			"UPDATE hydration",
-			33.0,
-			float(updated.get("hydration", -999.0))
+	if _sync_now(persistence):
+		var updated_rows := DatabaseManager.select(
+			"npc_state",
+			"npc_id = '%s'" % _escape_sql(character.character_id),
+			[
+				"hydration",
+				"alcohol",
+				"injury"
+			]
 		)
 
-		_check_value(
-			"UPDATE alcohol",
-			44.0,
-			float(updated.get("alcohol", -999.0))
-		)
+		if updated_rows.is_empty():
+			_fail(
+				"npc_state.UPDATE",
+				"第二次同步後找不到資料"
+			)
+		else:
+			var updated: Dictionary = updated_rows[0]
 
-		_check_value(
-			"UPDATE injury",
-			21.0,
-			float(updated.get("injury", -999.0))
-		)
+			_check_value(
+				"UPDATE hydration",
+				33.0,
+				float(updated.get("hydration", -999.0))
+			)
+
+			_check_value(
+				"UPDATE alcohol",
+				44.0,
+				float(updated.get("alcohol", -999.0))
+			)
+
+			_check_value(
+				"UPDATE injury",
+				21.0,
+				float(updated.get("injury", -999.0))
+			)
 
 	# -------------------------------------------------
 	# 7. 報告 Inventory 狀態
@@ -269,8 +269,8 @@ func _run() -> void:
 	else:
 		print(
 			"[INFO] Inventory runtime 存在。"
-			+ "目前 CharacterStatePersistence 尚未寫入 npc_inventory，"
-			+ "故本測試不將它判定為 PASS。"
+			+ "CharacterStatePersistence 會寫入 npc_inventory，"
+			+ "但本測試尚未涵蓋這條比對，故不將它判定為 PASS。"
 		)
 
 	# -------------------------------------------------
@@ -281,7 +281,7 @@ func _run() -> void:
 		character.stats.set_value(key, original_stats[key])
 
 	if persistence != null:
-		persistence.sync_now()
+		_sync_now(persistence)
 
 	print("[CharacterStateIntegrationTest] Stats 已還原並同步。")
 
@@ -290,6 +290,18 @@ func _run() -> void:
 	# -------------------------------------------------
 
 	_finish()
+
+
+func _sync_now(persistence: Node) -> bool:
+	if not persistence.has_method("sync_now"):
+		_fail(
+			"sync_now",
+			"CharacterStatePersistence 沒有 sync_now() 方法"
+		)
+		return false
+
+	persistence.sync_now()
+	return true
 
 
 func _find_test_character() -> Character:

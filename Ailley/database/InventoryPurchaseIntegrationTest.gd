@@ -40,6 +40,7 @@ extends Node
 
 var passed := 0
 var failed := 0
+var skipped := 0
 
 
 func _ready() -> void:
@@ -231,9 +232,9 @@ func _run() -> void:
 	)
 
 	if machine == null:
-		print(
-			"[INFO] 找不到範圍內販賣機，"
-			+ "跳過 buy_from() 測試。"
+		_skip(
+			"Character.buy_from",
+			"找不到範圍內販賣機，跳過 buy_from() 測試。"
 		)
 	else:
 		print(
@@ -241,7 +242,7 @@ func _run() -> void:
 			% machine.name
 		)
 
-		var money_before := (
+		var machine_money_before := (
 			character.inventory.get_money()
 		)
 
@@ -290,7 +291,7 @@ func _run() -> void:
 		print(
 			"[TEST] money：%d -> %d"
 			% [
-				money_before,
+				machine_money_before,
 				character.inventory.get_money()
 			]
 		)
@@ -378,7 +379,7 @@ func _find_nearest_vending_machine(
 ) -> VendingMachine:
 
 	var nearest: VendingMachine = null
-	var shortest := 80.0
+	var shortest := Character.BUY_RANGE
 
 	for node in get_tree().get_nodes_in_group(
 		"vending_machines"
@@ -489,6 +490,14 @@ func _fail(
 	)
 
 
+func _skip(
+	label: String,
+	message: String
+) -> void:
+	skipped += 1
+	print("[SKIP] %s: %s" % [label, message])
+
+
 func _finish() -> void:
 	print("")
 	print("=====================================================")
@@ -496,11 +505,18 @@ func _finish() -> void:
 	print("=====================================================")
 	print("PASS: ", passed)
 	print("FAIL: ", failed)
+	print("SKIP: ", skipped)
 
-	if failed == 0:
+	if failed == 0 and skipped == 0:
 		print(
 			"[InventoryPurchaseIntegrationTest] "
 			+ "INVENTORY PURCHASE PIPELINE PASSED"
+		)
+	elif failed == 0:
+		print(
+			"[InventoryPurchaseIntegrationTest] "
+			+ "%d test(s) skipped — coverage incomplete."
+			% skipped
 		)
 	else:
 		push_error(

@@ -42,8 +42,8 @@ const SPEC := {
 
 	"hydration": {
 		"label": "STAT_HYDRATION",
-		"drift": 0.0,
-		"toward": 80.0,
+		"drift": 2.0,
+		"toward": 0.0,
 		"start": 80.0,
 		"is_need": true,
 		"place": "home_001"
@@ -69,8 +69,8 @@ const SPEC := {
 
 	"hygiene": {
 		"label": "STAT_HYGIENE",
-		"drift": 0.0,
-		"toward": 70.0,
+		"drift": 0.3,
+		"toward": 0.0,
 		"start": 70.0,
 		"is_need": true,
 		"place": "home_001"

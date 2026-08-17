@@ -889,6 +889,9 @@ func _load_inventory_once(
 	)
 
 
+	character.inventory.notify_changed()
+
+
 	_connect_inventory_changed(
 		character
 	)
@@ -1675,10 +1678,11 @@ func _ensure_npc_record(
 	if home_location_id.is_empty():
 
 		push_error(
-			"[CharacterStatePersistence] "
-			+ "%s 無法建立 npc："
-			+ "沒有可用的 home_location_id。"
-			% character_id
+			(
+				"[CharacterStatePersistence] "
+				+ "%s 無法建立 npc："
+				+ "沒有可用的 home_location_id。"
+			) % character_id
 		)
 
 		return false
@@ -1690,9 +1694,7 @@ func _ensure_npc_record(
 		"age": 30,
 		"gender": "other",
 		"village_id": "default_village",
-		"character": _get_character_type(
-			character
-		),
+		"character": "",
 		"reputation": 0,
 		"system_prompt": "",
 		"words_to_creator": "",
@@ -1816,23 +1818,6 @@ func _resolve_home_location(
 
 
 	return ""
-
-
-# =====================================================
-# Character Type
-# =====================================================
-
-func _get_character_type(
-	character: Character
-) -> String:
-
-	if character.is_in_group(
-		"player"
-	):
-		return "player"
-
-
-	return "npc"
 
 
 # =====================================================

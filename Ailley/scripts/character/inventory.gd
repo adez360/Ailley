@@ -50,6 +50,13 @@ extends Node
 signal changed
 
 
+## 外部直接覆蓋 slots（例如存檔載入）後用來補發變更通知，
+## 讓 InventorySlotButton / Hotbar / InventoryPanel 同步刷新。
+## 外部不要直接 emit_signal("changed")。
+func notify_changed() -> void:
+	changed.emit()
+
+
 const HOTBAR_SIZE := 9
 const MAIN_SIZE := 27
 const SIZE := HOTBAR_SIZE + MAIN_SIZE
