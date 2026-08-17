@@ -1,8 +1,8 @@
 class_name Workstation
 extends StaticBody2D
 
-## 可以工作賺錢的地點。距離判定交給 Character.find_nearest_workstation()／
-## work_at() 做（跟 TALK_RANGE 同一種簡單距離檢查，見 character.gd 的
+## 可以工作賺錢的地點。候選偵測交給 player.gd（Area2D 範圍 + 面向判定），
+## 距離的最終把關在 work_at()（跟 TALK_RANGE 同一種簡單距離檢查，見 character.gd 的
 ## "---- 工作 ----" 那節），這裡自己不查距離，只管「誰現在佔用著」。
 ##
 ## StaticBody2D + CollisionShape2D 純粹是給 NavGrid 用的——NavGrid 的

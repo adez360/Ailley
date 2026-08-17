@@ -47,7 +47,7 @@ const ALLOWED_ACTIONS := [
 # 而不是在驗證層擋掉 —— 兩者是不同的失敗，混在一起 debug 時會分不清
 # work 與 buy 不在這裡：Character.work_at()／buy_from() 做出來了，但沒有任何
 # 執行層把一筆 {"action": "work"} 對應到一個 Workstation 實例，而它們需要
-# 節點參照、find_nearest_workstation()／find_nearest_vending_machine() 只看得到 32px。
+# 節點參照，player.gd 的候選偵測也只看 32px 範圍內、面向著的物件。
 # buy 還多缺一個「買哪個 item_id」的來源——目前只有玩家從 vending_menu 點得出來。
 # 列進來的話就變成「白名單宣稱做得到、實際靜默不做」，正是上面那段註解要避免的
 # 混淆。等執行層接得到再加（talk 的動作執行留給 #90，其餘留給各自的 issue）
