@@ -49,14 +49,18 @@ You cannot rewrite today_plan this turn. If you want the chance to on your next 
 ## agent.gd 的 SCHEDULE_BASE_PRIORITY=10／TIME_BONUS=100 完全對不上）。
 ## 第一版改成「go higher if urgent」這種開放式指示後，實測模型會衝到
 ## Infinity／1e15／5000 這種失控值——單靠一個連續量表，模型抓不到「很少
-## 用」的分寸。現在改成分級：日常範圍 10~50、留一段空白緩衝帶、再給一個
-## 有明顯間隔、且用「真的緊急」明講成例外情境的高分帶（120~125），
-## 跟 AISchema 的 MIN/MAX_TASK_PRIORITY／MIN/MAX_TASK_DURATION、
-## json_schema 的 minimum/maximum 三層數字一致（AISchema 那層是實際擋
-## 得住的驗證，這裡只是盡量讓模型第一次就給出合理值，減少被打回重試的次數）
-const PLAN_SYSTEM_TAIL := """
-"priority" must be a number between 0 and 125, on the same scale your schedule already uses. Routine tasks are worth 10-50. A task already in its scheduled time window is worth 110, and an everyday preference cannot outrank that. Only use 120-125, and only for a genuine emergency happening right now (someone in danger, an attack) that would justify abandoning a meal or work already in progress — never for ordinary preferences.
-"duration" is your own estimate, in game minutes, of how long this action will take. It must be a positive number, up to 1440 (one full day) — never 0. Most actions take somewhere between 10 and 60 minutes; sleeping through the night can reasonably take several hundred.
+## 用」的分寸。原本想在 [0,125] 中間挖一段驗證層擋住的「禁區」逼模型只能
+## 落在兩個分開的子區間，但這違背當初選連續數值（而非分類）的理由——
+## _score() 是純加總公式，數值本來就該是連續的，挖洞等於做出一個「看起來
+## 連續、其實不連續」的四不像。改成兩段**相鄰、不重疊**的子區間（10~110／
+## 111~125），[0,125] 整段都有明確意義，不需要額外的驗證分支；「很少用
+## 高分」單靠 prompt 措辭（明講 111~125 只給真的緊急）達成，不用驗證層
+## 物理擋一段數字。上下限數字用格式化帶入 AISchema 的
+## MIN/MAX_TASK_PRIORITY、MAX_TASK_DURATION，不寫死——CodeRabbit review
+## 抓到：常數改了這裡沒跟著改，prompt 講的量級會跟驗證層兜不起來
+const PLAN_SYSTEM_TAIL_TEMPLATE := """
+"priority" must be a number between %d and %d, on the same scale your schedule already uses. 10-110 is for ordinary preferences — a task already in its scheduled time window is worth 110, so an everyday preference at that level still won't outrank it. Only use 111-%d, and only for a genuine emergency happening right now (someone in danger, an attack) that would justify abandoning a meal or work already in progress — never for ordinary preferences.
+"duration" is your own estimate, in game minutes, of how long this action will take. It must be a positive number, up to %d (one full day) — never 0. Most actions take somewhere between 10 and 60 minutes; sleeping through the night can reasonably take several hundred.
 Reply with JSON only, no prose, no code fence:
 {"reasoning": "<why you decided this, brief>",
  "inner_monologue": "<what this character is thinking right now, first person>",
@@ -64,13 +68,20 @@ Reply with JSON only, no prose, no code fence:
  "tasks": [{"action": "<one of the allowed actions>", "params": {}, "priority": 10, "duration": 15}]}
 An empty "tasks" array means don't change anything."""
 
+static func _plan_system_tail() -> String:
+	return PLAN_SYSTEM_TAIL_TEMPLATE % [
+		int(AISchema.MIN_TASK_PRIORITY), int(AISchema.MAX_TASK_PRIORITY),
+		int(AISchema.MAX_TASK_PRIORITY),
+		int(AISchema.MAX_TASK_DURATION),
+	]
+
 ## 動作清單用 AISchema.ALLOWED_ACTIONS 動態組，不在這裡另外抄一份字串——
 ## 兩份清單各自維護遲早會漂移，白名單改了這裡忘記跟著改，模型看到的允許清單
 ## 就會跟 AISchema 實際驗證的不一樣
 static func _plan_system(allow_update_plan: bool) -> String:
 	var body := PLAN_SYSTEM_BASE % ", ".join(AISchema.ALLOWED_ACTIONS)
 	body += PLAN_SYSTEM_UPDATE_PLAN_ALLOWED if allow_update_plan else PLAN_SYSTEM_UPDATE_PLAN_LOCKED
-	return body + PLAN_SYSTEM_TAIL
+	return body + _plan_system_tail()
 
 ## today_plan 陣列壓成一句自然語言，不是丟原始欄位列表給模型——見 #89 的
 ## 「輸入端一律注入，但壓成自然語言句子」。空的話也要講清楚「還沒有」，
