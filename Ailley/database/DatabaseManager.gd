@@ -1,18 +1,27 @@
 extends Node
 
+
+## =====================================================
 ## Ailley SQLite Database Manager
 ##
-## 只負責三件事：
+## 負責：
+##
 ## 1. 開啟 user://game.db
-## 2. 建立所有資料表（實際內容在 DatabaseSchema）
-## 3. 把 godot-sqlite 的 CRUD 轉出去
+## 2. 建立 DatabaseSchema
+## 3. 統一管理 SQLite CRUD
+## 4. 啟動 CharacterStatePersistence
 ##
-## CRUD 一律走 addon 的 insert_row / select_rows / update_rows / delete_rows，
-## 值會由 addon 綁定成參數。不要自己把值拼進 SQL 字串 ——
-## 這個專案的記憶內容是 LLM 產的，拼字串等於把它交給模型改寫。
+## CRUD 使用 godot-sqlite：
 ##
-## conditions 參數是 WHERE 子句（不含 WHERE 關鍵字），它是原始 SQL，
-## 只能由程式碼自己組，不可以放模型或玩家輸入的字串。
+##   insert_row()
+##   select_rows / query_with_bindings
+##   update_rows()
+##   delete_rows()
+##
+## 注意：
+## conditions 是由程式內部組出的 SQL WHERE 條件。
+## 不應直接放入玩家輸入。
+## =====================================================
 
 
 const DATABASE_PATH := "user://game.db"
@@ -21,150 +30,705 @@ const DATABASE_PATH := "user://game.db"
 var db: SQLite
 var is_ready := false
 
+# table -> Array[String]，_table_has_column() 的欄位快取，
+# schema 建立後不會再變，查一次記住即可，不必每次 UPDATE 都跑 PRAGMA
+var _table_columns_cache := {}
+
+
+# =====================================================
+# Lifecycle
+# =====================================================
 
 func _ready() -> void:
+
 	db = SQLite.new()
+
 	db.path = DATABASE_PATH
 
-	# 必須在 open_db() 之前設定：addon 是在開檔時才送出 PRAGMA foreign_keys
+	# 必須在 open_db() 前設定。
+	# addon 會在開啟資料庫時設定 foreign_keys。
 	db.foreign_keys = true
 
+
 	if not db.open_db():
+
 		push_error(
 			"[Database] Failed to open %s: %s"
-			% [DATABASE_PATH, db.error_message]
+			% [
+				DATABASE_PATH,
+				db.error_message
+			]
 		)
+
 		return
 
+
+	print(
+		"[Database] Opened database successfully: %s"
+		% DATABASE_PATH
+	)
+
+
+	# -------------------------------------------------
+	# Schema
+	# -------------------------------------------------
+
 	if not DatabaseSchema.initialize(db):
+
+		push_error(
+			"[Database] DatabaseSchema.initialize() failed."
+		)
+
 		db.close_db()
+
 		return
+
 
 	is_ready = true
 
-	print("[Database] Ready: ", DATABASE_PATH)
 
+	print(
+		"[Database] Ready: %s"
+		% DATABASE_PATH
+	)
+
+
+	# -------------------------------------------------
+	# Seed
+	# -------------------------------------------------
+
+	DatabaseSeeder.seed_all()
+
+
+	# -------------------------------------------------
+	# CharacterStatePersistence
+	# -------------------------------------------------
+
+	call_deferred(
+		"_start_character_state_persistence"
+	)
+
+
+# =====================================================
+# Exit
+# =====================================================
 
 func _exit_tree() -> void:
+
 	if db != null:
+
 		db.close_db()
 
+		db = null
 
-## 執行任意 SQL。值放進 bindings，不要拼進 sql。
-func query(sql: String, bindings: Array = []) -> bool:
+		is_ready = false
+
+
+# =====================================================
+# Generic Query
+# =====================================================
+
+func query(
+	sql: String,
+	bindings: Array = []
+) -> bool:
+
 	if not _require_ready():
 		return false
 
-	if db.query_with_bindings(sql, bindings):
+
+	if db.query_with_bindings(
+		sql,
+		bindings
+	):
+
 		return true
+
 
 	push_error(
 		"[Database] Query failed: %s\n%s"
-		% [db.error_message, sql]
+		% [
+			db.error_message,
+			sql
+		]
 	)
+
 	return false
 
 
-## 上一次 query() / select() 的原始結果。
-func get_last_result() -> Array:
-	return db.query_result if db != null else []
+# =====================================================
+# Last Query Result
+# =====================================================
 
+func get_last_result() -> Array:
+
+	if db == null:
+		return []
+
+	return db.query_result
+
+
+# =====================================================
+# SELECT
+# =====================================================
 
 func select(
 	table: String,
 	conditions: String = "",
 	columns: Array = ["*"]
 ) -> Array:
+
 	if not _require_ready():
 		return []
 
-	var cols := ", ".join(columns) if columns.size() > 0 else "*"
-	var sql := "SELECT %s FROM %s" % [cols, table]
+
+	var cols := (
+		", ".join(columns)
+		if columns.size() > 0
+		else "*"
+	)
+
+
+	var sql := (
+		"SELECT %s FROM %s"
+		% [
+			cols,
+			table
+		]
+	)
+
 
 	if not conditions.is_empty():
-		sql += " WHERE %s" % conditions
 
-	if not db.query_with_bindings(sql, []):
+		sql += (
+			" WHERE %s"
+			% conditions
+		)
+
+
+	print(
+		"[Database] SELECT | table=%s | conditions=%s"
+		% [
+			table,
+			conditions
+		]
+	)
+
+
+	if not db.query_with_bindings(
+		sql,
+		[]
+	):
+
 		push_error(
 			"[Database] SELECT FROM %s failed: %s"
-			% [table, db.error_message]
+			% [
+				table,
+				db.error_message
+			]
 		)
+
 		return []
+
 
 	return db.query_result
 
 
-func insert(table: String, data: Dictionary) -> bool:
+# =====================================================
+# INSERT
+#
+# 這裡增加完整診斷。
+#
+# 特別針對目前 npc_inventory 問題：
+#
+#   INSERT START
+#   INSERT DATA
+#   INSERT RESULT
+#   INSERT VERIFY
+#
+# 如果 INSERT 失敗，可以直接看到 SQLite error。
+# 如果 addon 回傳 true 但資料不存在，
+# 也會直接被驗證抓出來。
+# =====================================================
+
+func insert(
+	table: String,
+	data: Dictionary
+) -> bool:
+
 	if not _require_ready():
 		return false
 
-	if db.insert_row(table, data):
-		return true
 
-	push_error(
-		"[Database] INSERT INTO %s failed: %s"
-		% [table, db.error_message]
+	if table.strip_edges().is_empty():
+
+		push_error(
+			"[Database] INSERT table name is empty."
+		)
+
+		return false
+
+
+	if data.is_empty():
+
+		push_error(
+			"[Database] INSERT data is empty | table=%s"
+			% table
+		)
+
+		return false
+
+
+	print(
+		"[Database] INSERT START | table=%s"
+		% table
 	)
-	return false
 
+	print(
+		"[Database] INSERT DATA | table=%s | data=%s"
+		% [
+			table,
+			data
+		]
+	)
+
+
+	# -------------------------------------------------
+	# 實際 INSERT
+	# -------------------------------------------------
+
+	var result := db.insert_row(
+		table,
+		data
+	)
+
+
+	print(
+		"[Database] INSERT RESULT | table=%s | result=%s | error=%s"
+		% [
+			table,
+			str(result),
+			db.error_message
+		]
+	)
+
+
+	if not result:
+
+		push_error(
+			"[Database] INSERT INTO %s failed: %s"
+			% [
+				table,
+				db.error_message
+			]
+		)
+
+		return false
+
+
+	# -------------------------------------------------
+	# 特別針對 npc_inventory：
+	#
+	# insert_row() 成功後再確認 row 是否真的存在。
+	#
+	# 不改變一般 table 的 CRUD 行為。
+	# -------------------------------------------------
+
+	if table == "npc_inventory":
+
+		var npc_id := str(
+			data.get(
+				"npc_id",
+				""
+			)
+		)
+
+
+		var slot := int(
+			data.get(
+				"slot",
+				-1
+			)
+		)
+
+
+		if npc_id.is_empty():
+
+			push_error(
+				"[Database] npc_inventory INSERT "
+				+ "成功回傳，但 npc_id 為空。"
+			)
+
+			return false
+
+
+		if slot < 0:
+
+			push_error(
+				"[Database] npc_inventory INSERT "
+				+ "成功回傳，但 slot 無效：%d"
+				% slot
+			)
+
+			return false
+
+
+		var verify_rows := select(
+			"npc_inventory",
+			"npc_id = '%s' AND slot = %d"
+			% [
+				_escape_sql(npc_id),
+				slot
+			],
+			[
+				"npc_id",
+				"slot",
+				"item_id",
+				"count",
+				"decay",
+				"durability"
+			]
+		)
+
+
+		print(
+			"[Database] npc_inventory INSERT VERIFY | "
+			+ "npc=%s | slot=%d | rows=%d"
+			% [
+				npc_id,
+				slot,
+				verify_rows.size()
+			]
+		)
+
+
+		if verify_rows.is_empty():
+
+			push_error(
+				"[Database] npc_inventory INSERT "
+				+ "回傳成功，但 SELECT 驗證不到資料："
+				+ "npc=%s slot=%d"
+				% [
+					npc_id,
+					slot
+				]
+			)
+
+			return false
+
+
+		print(
+			"[Database] npc_inventory INSERT VERIFIED | "
+			+ "npc=%s | slot=%d | row=%s"
+			% [
+				npc_id,
+				slot,
+				verify_rows[0]
+			]
+		)
+
+
+	print(
+		"[Database] INSERT PASS | table=%s"
+		% table
+	)
+
+
+	return true
+
+
+# =====================================================
+# UPDATE
+# =====================================================
 
 func update(
 	table: String,
 	data: Dictionary,
 	conditions: String
 ) -> bool:
+
 	if not _require_ready():
 		return false
 
-	# 空 conditions 會變成「更新整張表」，不是呼叫端想要的
+
 	if conditions.strip_edges().is_empty():
-		push_error("[Database] UPDATE requires conditions.")
+
+		push_error(
+			"[Database] UPDATE requires conditions."
+		)
+
 		return false
 
-	if db.update_rows(table, conditions, data):
+
+	if data.is_empty():
+
+		push_error(
+			"[Database] UPDATE data is empty | table=%s"
+			% table
+		)
+
+		return false
+
+
+	# -------------------------------------------------
+	# Schema 中有 updated_at 的 table
+	# 由 DatabaseManager 統一維護。
+	# -------------------------------------------------
+
+	var update_data := data.duplicate(
+		true
+	)
+
+
+	if _table_has_column(
+		table,
+		"updated_at"
+	):
+
+		update_data["updated_at"] = (
+			Time.get_datetime_string_from_system(
+				true,
+				false
+			)
+		)
+
+
+	print(
+		"[Database] UPDATE | table=%s | conditions=%s | data=%s"
+		% [
+			table,
+			conditions,
+			update_data
+		]
+	)
+
+
+	if db.update_rows(
+		table,
+		conditions,
+		update_data
+	):
+
 		return true
+
 
 	push_error(
 		"[Database] UPDATE %s failed: %s"
-		% [table, db.error_message]
+		% [
+			table,
+			db.error_message
+		]
 	)
+
 	return false
 
 
-func delete(table: String, conditions: String) -> bool:
+# =====================================================
+# DELETE
+# =====================================================
+
+func delete(
+	table: String,
+	conditions: String
+) -> bool:
+
 	if not _require_ready():
 		return false
 
-	# 空 conditions 會清空整張表
+
 	if conditions.strip_edges().is_empty():
-		push_error("[Database] DELETE requires conditions.")
+
+		push_error(
+			"[Database] DELETE requires conditions."
+		)
+
 		return false
 
-	if db.delete_rows(table, conditions):
+
+	print(
+		"[Database] DELETE | table=%s | conditions=%s"
+		% [
+			table,
+			conditions
+		]
+	)
+
+
+	if db.delete_rows(
+		table,
+		conditions
+	):
+
 		return true
+
 
 	push_error(
 		"[Database] DELETE FROM %s failed: %s"
-		% [table, db.error_message]
+		% [
+			table,
+			db.error_message
+		]
 	)
+
 	return false
 
 
+# =====================================================
+# Transactions
+# =====================================================
+
 func begin_transaction() -> bool:
-	return query("BEGIN TRANSACTION;")
+
+	return query(
+		"BEGIN TRANSACTION;"
+	)
 
 
 func commit_transaction() -> bool:
-	return query("COMMIT;")
+
+	return query(
+		"COMMIT;"
+	)
 
 
 func rollback_transaction() -> bool:
-	return query("ROLLBACK;")
 
+	return query(
+		"ROLLBACK;"
+	)
+
+
+# =====================================================
+# Table Column Check
+# =====================================================
+
+func _table_has_column(
+	table: String,
+	column_name: String
+) -> bool:
+
+	if table.strip_edges().is_empty():
+		return false
+
+
+	if not _table_columns_cache.has(table):
+
+		# PRAGMA 查詢會覆寫 db.query_result，先保存呼叫端原本的結果，
+		# 查完欄位資訊後還原，避免 get_last_result() 拿到 PRAGMA 的資料
+		var saved_query_result: Array = db.query_result
+
+		if not db.query_with_bindings(
+			"PRAGMA table_info(%s);"
+			% table,
+			[]
+		):
+
+			db.query_result = saved_query_result
+			return false
+
+
+		var columns := []
+
+		for row in db.query_result:
+			columns.append(
+				str(
+					row.get(
+						"name",
+						""
+					)
+				)
+			)
+
+		db.query_result = saved_query_result
+
+		_table_columns_cache[table] = columns
+
+
+	return column_name in _table_columns_cache[table]
+
+
+# =====================================================
+# Ready Check
+# =====================================================
 
 func _require_ready() -> bool:
+
 	if is_ready:
 		return true
 
-	push_error("[Database] Database is not ready.")
+
+	push_error(
+		"[Database] Database is not ready."
+	)
+
 	return false
+
+
+# =====================================================
+# SQL Escape
+# =====================================================
+
+func _escape_sql(
+	value: String
+) -> String:
+
+	return value.replace(
+		"'",
+		"''"
+	)
+
+
+# =====================================================
+# CharacterStatePersistence
+# =====================================================
+
+func _start_character_state_persistence() -> void:
+
+	if not is_inside_tree():
+		return
+
+
+	var script: Script = load(
+		"res://database/CharacterStatePersistence.gd"
+	)
+
+
+	if script == null:
+
+		push_error(
+			"[Database] 找不到 CharacterStatePersistence.gd。"
+		)
+
+		return
+
+
+	var existing := get_node_or_null(
+		"CharacterStatePersistence"
+	)
+
+
+	if existing != null:
+
+		print(
+			"[Database] CharacterStatePersistence 已存在，"
+			+ "不重複建立。"
+		)
+
+		return
+
+
+	var persistence: Node = script.new()
+
+	persistence.name = (
+		"CharacterStatePersistence"
+	)
+
+
+	add_child(
+		persistence
+	)
+
+
+	print(
+		"[Database] CharacterStatePersistence started."
+	)

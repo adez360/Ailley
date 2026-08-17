@@ -11,59 +11,31 @@ static func create(db) -> bool:
 
 		npc_id TEXT NOT NULL,
 
+		-- 遊戲日；不能用現實 created_at 推算
+		game_day INTEGER NOT NULL,
+
+		-- LLM 產生的當日計畫
 		text TEXT DEFAULT '',
 
-		-- 行程起始時間，用tick計算
---		start_time INTEGER NOT NULL DEFAULT 0
---			CHECK (
---				start_time BETWEEN 0 AND 1439
---			),
-
---		action TEXT NOT NULL DEFAULT '',
-
---		location_id TEXT,
-
---		優先權
---		priority INTEGER NOT NULL DEFAULT 50
---			CHECK (
---				priority BETWEEN 0 AND 100
---			),
-
-		-- 是否完成
 		is_done INTEGER NOT NULL DEFAULT 0
-			CHECK (
-				is_done IN (0, 1)
-			),
+			CHECK (is_done IN (0, 1)),
 
+		created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-
-		created_at TEXT NOT NULL
-			DEFAULT CURRENT_TIMESTAMP,
-
-		updated_at TEXT NOT NULL
-			DEFAULT CURRENT_TIMESTAMP,
+		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
 		FOREIGN KEY (npc_id)
 			REFERENCES npc(npc_id)
 			ON DELETE CASCADE
-
---		FOREIGN KEY (location_id)
---			REFERENCES location(location_id)
---			ON DELETE SET NULL
 	);
 
 	CREATE INDEX IF NOT EXISTS
-	idx_npc_daily_plan_npc_id
-	ON npc_daily_plan(npc_id);
+	idx_npc_daily_plan_npc_day
+	ON npc_daily_plan(npc_id, game_day);
 	"""
 
 	if not db.query(sql):
-
-		push_error(
-			"[NPCDailyPlanSchema] "
-			+ "Failed to create npc_daily_plan."
-		)
-
+		push_error("[NPCDailyPlanSchema] Failed to create npc_daily_plan.")
 		return false
 
 	return true
