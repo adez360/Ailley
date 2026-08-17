@@ -1,5 +1,15 @@
 extends Node
 
+## 目前只有一個世界，MVP 沒有建立/選擇世界的流程，先固定一個 id 頂著——
+## 真的要支援多世界時，這裡才需要變成可選清單
+const DEFAULT_WORLD_ID := "world_001"
+
+## 這個世界允不允許 player 加入，建立世界時就該決定的旗標（見
+## note/技術/存檔.md「允不允許 player 加入，也屬於世界」）。MVP 沒有建立
+## 世界的流程，先固定 true；問的是「允不允許」不是「現在有沒有人」，
+## 後者是角色層的事，不在這裡算
+var allow_player_join := true
+
 var npc_data = {}
 
 # 節點名 -> schedule_template。行程模板是「用哪份資料」，而它跟角色的對應
@@ -161,3 +171,76 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 		character.character_name = character.name.to_lower()
 
 	return character
+
+
+# ---- 存檔 ----
+
+# 世界存檔資料：日曆、每個角色在這個世界裡的位置與行程狀態、允不允許
+# player 加入。角色「是誰」（身分／數值／關係）屬於角色層，見
+# character.gd::get_save_data()——這裡只收位置這類「只對這個世界有意義」的
+# 東西（見 note/技術/存檔.md「位置屬於世界，不屬於角色」）
+func get_world_save_data() -> Dictionary:
+	var characters := {}
+	for node in get_tree().get_nodes_in_group("characters"):
+		var character := node as Character
+		# 存 character.global_position（節點自己的座標），不是
+		# get_body_position()（碰撞體的世界座標，兩者差一個 collider 偏移）——
+		# 寫入跟讀回都用同一個點，才不用另外還原 collider 偏移的反運算。
+		# JSON 沒有 Vector2 型別，存成 [x, y] 而不是直接塞 Vector2：
+		# JSON.stringify() 對它只會呼叫 str()，讀回來的是格式化字串不是座標
+		var entry := {
+			"position": [character.global_position.x, character.global_position.y],
+		}
+		# current_place／current_state 只有 Agent（行程仲裁器）才有意義，
+		# Player 沒有這兩個欄位——用 get() 而不是型別轉型，跟
+		# spawn_character() 判斷 schedule_template 同一種寫法
+		if character.get("current_place") != null:
+			entry["current_place"] = character.get("current_place")
+			entry["current_state"] = character.get("current_state")
+		characters[character.character_id] = entry
+
+	return {
+		"day": GameClock.day,
+		"allow_player_join": allow_player_join,
+		"characters": characters,
+	}
+
+# data 缺欄位一律用預設值補，不當成錯誤（跟 character.gd 同一條規則）。
+# 只套用場景裡目前找得到的角色——重新生成存檔裡有記載但場景沒有的角色
+# 不在這則骨架範圍內（見 issue #21「不包含 player 加入世界的實際流程」）
+func apply_world_save_data(data: Dictionary) -> void:
+	GameClock.day = int(data.get("day", GameClock.day))
+	allow_player_join = bool(data.get("allow_player_join", allow_player_join))
+
+	var characters = data.get("characters", {})
+	# 驗證 characters 必須是 Dictionary，不是就跳過整個角色載入流程
+	if not characters is Dictionary:
+		push_error("apply_world_save_data: characters 不是 Dictionary，跳過角色資料載入")
+		return
+
+	for node in get_tree().get_nodes_in_group("characters"):
+		var character := node as Character
+		var entry = characters.get(character.character_id, {})
+		# 驗證每個 entry 必須是 Dictionary
+		if not entry is Dictionary:
+			push_error("apply_world_save_data: %s 的資料不是 Dictionary，跳過" % character.character_id)
+			continue
+		if entry.is_empty():
+			continue
+
+		var pos_array = entry.get("position", [])
+		# 驗證 position 必須是 Array，包含剛好 2 個元素，且都是數字
+		if not pos_array is Array:
+			push_error("apply_world_save_data: %s 的 position 不是 Array，跳過" % character.character_id)
+			continue
+		if pos_array.size() != 2:
+			push_error("apply_world_save_data: %s 的 position 大小不是 2，跳過" % character.character_id)
+			continue
+		if not (typeof(pos_array[0]) in [TYPE_INT, TYPE_FLOAT] and typeof(pos_array[1]) in [TYPE_INT, TYPE_FLOAT]):
+			push_error("apply_world_save_data: %s 的 position 元素不是數字，跳過" % character.character_id)
+			continue
+		character.global_position = Vector2(pos_array[0], pos_array[1])
+
+		if entry.has("current_place") and character.get("current_place") != null:
+			character.set("current_place", entry.get("current_place", ""))
+			character.set("current_state", entry.get("current_state", "idle"))

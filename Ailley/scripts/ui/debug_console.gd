@@ -48,6 +48,10 @@ func _ready() -> void:
 		# debug 入口，之後有正式的建角面板/角色庫 UI（#122）接上之後再收進
 		# 正式指令表
 		"spawn": {"run": _cmd_spawn, "usage": "spawn <template_id>", "help": ""},
+		# 同上，help 留空：#21 驗證 SaveService 讀寫進出點用的 debug 入口，
+		# 真正的存讀時機（睡前自動存檔等）是後續 issue 才接
+		"save": {"run": _cmd_save, "usage": "save", "help": ""},
+		"load": {"run": _cmd_load, "usage": "load", "help": ""},
 		"help": {"run": _cmd_help, "usage": "help", "help": ""},
 		"clear": {"run": _cmd_clear, "usage": "clear", "help": "HELP_CLEAR"},
 	}
@@ -563,6 +567,46 @@ func _cmd_spawn(args: PackedStringArray) -> void:
 
 	_print("[color=88ff88]生成角色 %s[/color][color=888888]  id %s[/color]" % [
 		character.character_name, character.character_id
+	])
+
+# save   存下目前世界裡每個角色 + 這個世界本身。驗證 SaveService 的讀寫
+# 進出點確實接得起來（#21）——真正該在什麼時機自動存檔（睡前等）是後續 issue
+func _cmd_save(_args: PackedStringArray) -> void:
+	var count := 0
+	for node in get_tree().get_nodes_in_group("characters"):
+		var character := node as Character
+		if SaveService.save_character(character.character_id, character.get_save_data()):
+			count += 1
+		else:
+			_error("存檔失敗：%s" % character.character_name)
+
+	if not SaveService.save_world(GameManager.DEFAULT_WORLD_ID, GameManager.get_world_save_data()):
+		_error("世界存檔失敗：%s" % GameManager.DEFAULT_WORLD_ID)
+		return
+
+	_print("[color=88ff88]已存檔[/color]  %d 個角色 + 世界 %s" % [count, GameManager.DEFAULT_WORLD_ID])
+
+# load   讀回世界本身 + 場景裡目前每個角色各自的存檔。只套用場景裡找得到的
+# 角色——存檔裡有記載但場景沒有的角色不會被生出來，那是 player 加入世界
+# 那條流程的範圍，不在這則骨架內（見 issue #21 範圍界線）
+func _cmd_load(_args: PackedStringArray) -> void:
+	var world_data := SaveService.get_world(GameManager.DEFAULT_WORLD_ID)
+	if world_data.is_empty():
+		_error("沒有世界存檔 %s" % GameManager.DEFAULT_WORLD_ID)
+		return
+	GameManager.apply_world_save_data(world_data)
+
+	var count := 0
+	for node in get_tree().get_nodes_in_group("characters"):
+		var character := node as Character
+		var data := SaveService.get_character(character.character_id)
+		if data.is_empty():
+			continue
+		character.load_save_data(data)
+		count += 1
+
+	_print("[color=88ff88]已讀檔[/color]  %d 個角色 + 世界 %s（第 %d 天）" % [
+		count, GameManager.DEFAULT_WORLD_ID, GameClock.day
 	])
 
 func _get_overlay() -> Node:
