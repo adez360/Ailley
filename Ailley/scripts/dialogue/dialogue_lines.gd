@@ -52,3 +52,28 @@ static func reply(stats: Stats, _turn: int) -> String:
 
 static func closing() -> String:
 	return L10n.t("DLG_CLOSING_NEUTRAL")
+
+## murmur（自語，#162）的內容層。跟 reply() 同一套「依角色數值挑句子」邏輯，
+## 但語氣是講給自己聽，不是講給對話對象聽——murmur 沒有 Conversation、沒有
+## 聽者，用 reply() 那組面向對象的句子（「今天天氣還行」）會很奇怪
+static func murmur(stats: Stats) -> String:
+	var lowest := stats.get_lowest_need()
+
+	if stats.get_value(lowest) < Stats.CRITICAL:
+		match lowest:
+			"satiety":
+				return L10n.t("DLG_MURMUR_HUNGER")
+			"energy":
+				return L10n.t("DLG_MURMUR_ENERGY")
+			"social":
+				return L10n.t("DLG_MURMUR_SOCIAL")
+			"fun":
+				return L10n.t("DLG_MURMUR_FUN")
+
+	var mood := stats.get_value("mood")
+	if mood >= 70.0:
+		return L10n.t("DLG_MURMUR_MOOD_HIGH")
+	if mood <= 30.0:
+		return L10n.t("DLG_MURMUR_MOOD_LOW")
+
+	return L10n.t("DLG_MURMUR_NEUTRAL")

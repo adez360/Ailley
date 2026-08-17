@@ -21,10 +21,10 @@ extends RefCounted
 ## reasoning/inner_monologue、單次回應筆數上限、跟送出去用的 JSON Schema。
 
 # §5.3 的動作白名單，換成《07 地點與行動》《11 人際互動與社交行為》拍板後的
-# 22 個動作（issue #88）。不在這張表上的 action 一律拒絕 —— 用白名單而不是
+# 動作（issue #88）。不在這張表上的 action 一律拒絕 —— 用白名單而不是
 # 黑名單，是因為黑名單漏掉的那一項就是被打穿的那一項。
 #
-# 刻意不含 spec 沒有的 "work"：《07》《11》的 22 個動作裡沒有它，嚴格照 spec。
+# 刻意不含 spec 沒有的 "work"：《07》《11》的動作裡沒有它，嚴格照 spec。
 # 這只影響 LLM 回應的驗證——schedule 來源的任務（npc_schedule.json 轉換）是
 # agent.gd 直接建構、不經過這裡，既有的 work 排程不受影響；影響的是 LLM 之後
 # 不能自己決定叫角色去打工，只有寫死在 npc_schedule.json 的排程能觸發 work。
@@ -32,9 +32,12 @@ extends RefCounted
 # "move_to" 沿用既有命名，不改成 spec 用的 "move"——兩者語意完全一樣，只是
 # 命名不同，改名要動 agent.gd／debug_console.gd／api.md 好幾處引用，不值得
 # 為了對齊規格書用詞冒這個風險
+#
+# "murmur"（自語，#162）原本 #88 population 時漏掉——《11》§1 拍板的 MVP 動作
+# 清單本來就有 murmur，只是那次沒被列進來，不是這次新拍板決定要加
 const ALLOWED_ACTIONS := [
 	# A 溝通類
-	"talk", "persuade", "give", "report", "shout", "perform",
+	"talk", "persuade", "give", "report", "shout", "perform", "murmur",
 	# B 工作與消費類
 	"hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink",
 	# C 動作與移動類
@@ -55,7 +58,10 @@ const ALLOWED_ACTIONS := [
 # nap／rest／wash／idle 是 #112 接上的：四個都只動 Stats 跟角色 state，不需要新
 # 場景物件或新資源，所以走的是仲裁器既有的「移動到 params.place（沒給就原地）、
 # 佔用 duration」路徑，沒有各自的執行函式。回復量見 agent.gd 的 ENERGY_RECOVERY
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle"]
+#
+# murmur 是 #162 接上的：跟 idle 平行、純機率觸發（見《99》P-23），沒有目標、
+# 不用移動，走自己的 _pursue_murmur_task()，一次執行完就退出任務池
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "murmur"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、

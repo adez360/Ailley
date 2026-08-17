@@ -1059,6 +1059,12 @@ func _pursue_current_task() -> void:
 	if _reacting:
 		return
 
+	# murmur 沒有目標、也不用移動——講給自己聽當下就結束，不屬於「走到某個
+	# 地點」這件事，要另外分流，不能落進下面的地點判斷
+	if current_state == "murmur":
+		_pursue_murmur_task()
+		return
+
 	# talk 任務的目標是另一個角色，不是固定地點——current_place 對它一律是空的
 	# （params 裝的是 target 不是 place），要另外分流，不能落進下面的地點判斷
 	if current_state == "talk":
@@ -1188,6 +1194,29 @@ func _pursue_talk_task() -> void:
 
 	if _talk_pursuit_stuck_ticks == 3:
 		push_warning("Agent %s: 追不上搭話對象 %s，可能被卡住" % [character_name, target.character_name])
+
+# murmur 任務的執行（#162）：沒有目標、不用移動，講給自己聽當下就結束——不像
+# talk 要追著會動的目標走，也不像 nap／rest 那類要佔滿整段 duration。resolve()
+# 一過（murmur 沒有硬規則、不擲骰，恆成功）就講一句、立刻退出任務池
+func _pursue_murmur_task() -> void:
+	var should_speak := true
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		should_speak = result["success"]
+
+	# 內容層跟 talk 同一套「模板先頂著，LLM 版之後再換」的分工（見
+	# note/技術/talk 動作設計.md）：murmur 沒有聽者，講的是給自己聽的話，
+	# 不能沿用 DialogueLines.reply() 那組面向對話對象的句子
+	if should_speak and stats != null:
+		say(DialogueLines.murmur(stats))
+
+	_remove_task(_current_task.get("id", ""))
+	_current_task = {}
+	current_place = ""
+	current_state = "idle"
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
 
 # 按顯示名找所有符合的角色，用於偵測撞名（resolve() 的歧義檢查）
 func _find_all_characters_by_name(target_name: String) -> Array[Character]:
