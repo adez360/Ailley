@@ -535,10 +535,12 @@ JSON Schema → GBNF 的轉換器。
 - [ ] 尚未對真正的 OpenRouter 打過請求，TLS/DNS 與真實回應格式未驗證
 - [ ] 成本上限機制的具體設計
 - [ ] 記憶系統上線前，Agent 的對話逐字稿要不要先存記憶體就好
-- [ ] `response_format` 的 json_schema 送出去之後，模型端真的照著回、還是仍需要
-      layer 2/3 兜底救回來——只驗證過本機 llama-server 自己轉 grammar 這條路徑
-      「有在動」（決策迴圈實測延遲 2.5-4 秒能量出來就是證據），沒有拿真實壞掉的
-      回應測過三層保證的退場路徑
+- [x] `response_format` 的 json_schema 送出去之後模型端可靠度（issue #245，
+      2026-08-17）：地端 provider 對 GBNF 強制／純 prompt 約束（`supports_json_schema`
+      開關）各實測 15 次，JSON 解析與 schema 驗證都 15/15 全過，沒有出現社群回報過
+      的 json_schema/grammar 衝突錯誤；合成的壞掉回應（缺欄位、白名單外、型別錯）
+      也測過 layer 2/3 的退場路徑，`AISchema.validate_tasks()` 全部正確擋下，
+      `_decide_with_retry()` 的重試機制實測會真的觸發，不只是理論上存在
 
 ---
 
