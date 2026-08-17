@@ -1143,6 +1143,9 @@ func get_all_states() -> Array                    # SELECT npc_id/各項數值/l
 不是 autoload，由 DatabaseManager._ready()（call_deferred）動態 load()+add_child() 掛進樹，
   節點名固定 "CharacterStatePersistence"；要拿 instance 走
   DatabaseManager.get_node("CharacterStatePersistence")
+⚠ DatabaseManager.is_ready 在 _ready() 裡同步設為 true，之後才 call_deferred() 建立這個節點——
+  is_ready==true 那一刻不保證這個子節點已存在，DatabaseManager.get_node() 在極早期可能撲空；
+  等下一個 idle frame（或直接訂閱 DatabaseManager 的樹狀態變化）再拿節點比較保險
 † 同步對象是 npc / npc_state / npc_inventory / npc_wallet 四張表，relations／memory／
   personality 等其他欄位不在這裡
 † GameClock.time_changed 每遊戲分鐘觸發一次「僅 state/wallet」定期同步（不含 inventory）；
@@ -1194,7 +1197,7 @@ Vision 圓形無朝向；lost 無呼叫端
 Agent 不對 Stats 反應（get_lowest_need_place() 可用但無呼叫端）
 noise_heard 對話中會被吞掉；睡覺中的 Agent 沒有排除，一樣會冒 !?
 SaveService 兩條實作並存：JsonSaveService（MVP 採用中）與 SqliteSaveService/DatabaseManager
-  （非阻塞平行開發，見規格書 P-26）；CharacterStatePersistence 已把 npc/npc_state/
+  （非阻塞平行開發，見《99》P-26）；CharacterStatePersistence 已把 npc/npc_state/
   npc_inventory/npc_wallet 同步進 user://game.db，但 character_id／GameClock.day 本身
   仍未持久化，見下行
 character_id 與 GameClock.day 都未持久化，重開就重來
