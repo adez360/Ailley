@@ -177,10 +177,15 @@ func remove_item(item_id: String, count: int = 1) -> String:
 # 的呼叫端少了這份細節，只能送出全新狀態（decay=0、durability=-1），原本的
 # 腐壞／耐久資訊會直接消失（CodeRabbit review 抓到，#158）。失敗時 "removed"
 # 是空陣列，不動任何格
-func remove_item_detailed(item_id: String, count: int = 1) -> Dictionary:
-	return _remove_item_detailed(item_id, count)
+#
+# notify=false 給 give_to() 這種「先扣、可能還要整批回滾」的呼叫端用——扣的
+# 當下發 changed 的話，訂閱者會在轉移還沒確定成功前就看到來源背包少了東西，
+# 送禮失敗回滾後淨變化是 0，卻讓訂閱者觀察到一次騙人的暫態（CodeRabbit
+# review 抓到）。呼叫端自己決定「真的確定了」才發那一次
+func remove_item_detailed(item_id: String, count: int = 1, notify: bool = true) -> Dictionary:
+	return _remove_item_detailed(item_id, count, notify)
 
-func _remove_item_detailed(item_id: String, count: int) -> Dictionary:
+func _remove_item_detailed(item_id: String, count: int, notify: bool = true) -> Dictionary:
 	if count <= 0:
 		return {"reason": REMOVE_INVALID_COUNT, "removed": []}
 	if count_item(item_id) < count:
@@ -203,7 +208,8 @@ func _remove_item_detailed(item_id: String, count: int) -> Dictionary:
 		if int(slot["count"]) <= 0:
 			slots[i] = {}
 
-	changed.emit()
+	if notify:
+		changed.emit()
 	return {"reason": REMOVE_OK, "removed": removed}
 
 # 搬到空格；目的地非空就失敗，不覆蓋。要交換兩個已佔用的格用 swap_slot()

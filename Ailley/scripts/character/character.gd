@@ -536,7 +536,10 @@ func give_to(other: Character, item_id: String, count: int = 1) -> String:
 	# 各自的 decay 不一定對得上（CodeRabbit review 抓到）
 	var snapshot := inventory.slots.duplicate(true)
 
-	var removal: Dictionary = inventory.remove_item_detailed(item_id, count)
+	# notify=false：這筆移除還沒確定算數，可能整批回滾——發了 changed 的話，
+	# 訂閱者會在轉移成不成功還沒有結論前，看到來源背包暫時少了東西
+	# （CodeRabbit review 抓到）。確定結果後這個函式自己決定要不要發
+	var removal: Dictionary = inventory.remove_item_detailed(item_id, count, false)
 	if removal["reason"] != Inventory.REMOVE_OK:
 		return removal["reason"]
 
@@ -555,15 +558,20 @@ func give_to(other: Character, item_id: String, count: int = 1) -> String:
 
 	if blocked_reason != "":
 		# 模擬就擋下來了，對方背包從頭到尾沒被動過——用快照原封不動還原自己的
-		# 背包，不能逐筆 add_item() 補回去，那會照它的堆疊規則重新分組
+		# 背包，不能逐筆 add_item() 補回去，那會照它的堆疊規則重新分組。
+		# 上面的移除故意沒發 changed，這裡還原後也不發：淨變化是 0，不該讓
+		# 外部訂閱者看到一次「來源背包變了」的暫態事件
 		inventory.slots = snapshot
-		inventory.changed.emit()
 		return blocked_reason
 
 	# 模擬全部通過，正式套用到對方背包——不會再失敗，因為套用的規則、對方背包
 	# 當下的狀態，跟模擬時完全一樣（中間沒有任何 await，不會有別的呼叫端插進來改動）
 	for chunk in chunks:
 		other.inventory.add_item(item_id, chunk["count"], chunk["decay"], chunk["durability"])
+
+	# 上面的移除故意沒發 changed，整筆轉移確定成功才在這裡對來源背包發一次——
+	# 跟失敗時完全不發是對稱的：一次真的發生的變化只對應一次事件
+	inventory.changed.emit()
 
 	return GIVE_OK
 
