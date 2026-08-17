@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-16
+updated: 2026-08-17
 ---
 
 # Character 基底與 Agent
@@ -231,6 +231,55 @@ Agent/Agent2 是場景裡的靜態節點，`_ready()` 時自己查表更貼近�
 > 規格書寫 `id` 格式是 `npc_001`，這裡用的是 `aji`／`alan`。
 > 存檔還沒接上、沒有任何持久化資料綁在這兩個值上，改動成本目前是零；
 > 要對齊規格就趁現在。追蹤見 issue #69 的 PR 討論。
+
+## 情緒 emotion 與特殊狀態 conditions
+
+`emotion`（單一物件）與 `conditions`（陣列）都直接是 `Character` 的欄位，不掛在
+`Stats` 底下——規格書《02》把兩者定義成獨立於生理數值的狀態層，`Stats` 只管
+`SPEC` 驅動的數值本身。`conditions` 的門檻檢查（`_update_conditions()`）讀
+`stats.get_value()`，但寫入的是 `Character.conditions`。
+
+> [!important] 「tick」目前等於 GameClock 的「一遊戲分鐘」，不是獨立的 tick 引擎
+> 規格書《02》用「tick」當時間單位（12 tick = 2 遊戲小時），但專案目前沒有
+> 事件驅動的 tick 引擎（見《02》§4 的流程圖，那套還沒實作）。`emotion.duration_left`
+> 與 `conditions[].turns_left` 倒數掛在 `GameClock.time_changed`（每遊戲分鐘觸發一次），
+> 跟 `agent.gd` 訂閱同一個訊號的方式一致。這跟 `Stats._process(delta)` 的連續
+> real-time drift 是兩套不同的時間模型——`Stats` 的「每 tick」drift 值是直接當
+> 「每真實秒」在用，沒有經過 GameClock。兩者在目前 `seconds_per_game_minute = 1.0`
+> 的設定下數值上剛好對齊，但概念上不是同一個機制，日後真的做 tick 引擎時兩邊都要重接。
+
+### emotion（`set_emotion()`）
+
+- `type` 限定在 8 種定案 enum（`Character.EMOTION_TYPES`），`duration_left` 由
+  `_calc_emotion_duration()` 依《02》§1-4 公式算，夾制 1~144 tick
+- 公式吃 `stability`／`grudge` 兩個人格係數，人格資料還沒接上 `Character`（#117），
+  呼叫端拿不到真實值時用 50.0（中性值）當預設——比照 `memory.gd::decay_all()`
+  對 `grudge` 的既有做法，等 #117 落地後呼叫端改傳真實值即可，`set_emotion()`
+  本身不用改
+- `AISchema`／`prompt_builder.gd` 的 LLM 輸出端與 prompt 注入**沒有一併做**
+  （#116 本文列為選做項），目前只有 debug 主控台 `emotion <name> <type> [intensity]`
+  能手動觸發
+
+### conditions（`_update_conditions()`）
+
+8 種生理衍生 condition 全部「門檻自動」，每遊戲分鐘重新檢查一次：
+
+| 只做偵測 | 偵測＋直接數值效果 |
+| --- | --- |
+| `injured`／`drunk`／`sleepy`／`filthy` | `bleeding`（health −1.5/tick）／`starving`（health −0.5/tick）／`dehydrated`（health −1.0/tick） |
+
+`exhausted`（`stamina = 0`）目前也只做偵測——規格書寫的「強制昏睡」效果
+是行動佔用邏輯的一部分，留給接手 #160（昏迷狀態）的那則實作。
+
+行為成功率／說真心話機率（`injured`／`drunk` 的效果）刻意不做，留給 #120
+（成功率／硬規則檢查層）；`filthy` 的效果留給《99》P-35 重新設計。
+
+> [!important] `bleeding` 期間 `injury` 的自然衰減暫停，是 `Stats.injury_decay_paused` 一個 bool
+> 沒有做成通用的「暫停任意 key 的 drift」機制——目前全規格書只有這一個例外
+> （《02》§2-2 附注），加一個只為單一呼叫端存在的通用機制是提前的抽象化。
+> `Character._update_conditions()` 每次檢查完就把這個 bool 設成
+> `has_condition("bleeding")` 的目前值，`Stats._process()` 只在這個 key 上多一行
+> `continue`。真的出現第二個需要暫停 drift 的欄位時再抽成通用機制。
 
 ## 未做
 

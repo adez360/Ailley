@@ -46,6 +46,11 @@ const SPEC := {
 
 var values := {}
 
+## `bleeding` condition 期間 `injury` 原本每 tick −0.5 的自然衰減要暫停
+## （《02》§2-2 附注，唯一的例外規則）。由 Character 依 conditions 狀態設定，
+## Stats 自己不知道 conditions 是什麼
+var injury_decay_paused := false
+
 
 func _ready() -> void:
 	for key in SPEC:
@@ -55,6 +60,8 @@ func _process(delta: float) -> void:
 	for key in SPEC:
 		var spec: Dictionary = SPEC[key]
 		if spec["drift"] == 0.0:
+			continue
+		if key == "injury" and injury_decay_paused:
 			continue
 		values[key] = move_toward(values[key], spec["toward"], spec["drift"] * delta)
 

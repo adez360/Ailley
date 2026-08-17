@@ -31,6 +31,9 @@ func _ready() -> void:
 		"nav": {"run": _cmd_nav, "usage": "nav rebuild", "help": "HELP_NAV"},
 		"inv": {"run": _cmd_inv, "usage": "inv [name] / inv give <item_id> [count]", "help": "HELP_INV"},
 		"money": {"run": _cmd_money, "usage": "money <amount>", "help": "HELP_MONEY"},
+		# 同上，help 留空：#116 手動設定 emotion 用的 debug 入口，正式的角色資訊
+		# 面板（《15》）不做 emotion 手動編輯，這是唯一的手動設定方式
+		"emotion": {"run": _cmd_emotion, "usage": "emotion <name> <type> [intensity]", "help": ""},
 		"ai": {"run": _cmd_ai, "usage": "ai [dialogue] [@provider] [text]", "help": "HELP_AI"},
 		"locale": {"run": _cmd_locale, "usage": "locale [code]", "help": "HELP_LOCALE"},
 		# help 留空：先不進 locale/console.csv，避免動到翻譯資源匯入（這台機器上
@@ -328,6 +331,18 @@ func _cmd_status(args: PackedStringArray) -> void:
 
 	if snapshot["working"]:
 		_field("CON_FIELD_WORK", L10n.t("CON_STATE_ACTIVE"))
+
+	var emotion: Dictionary = snapshot["emotion"]
+	_field("CON_FIELD_EMOTION", "%s (intensity %d, %d tick)" % [
+		emotion["type"], emotion["intensity"], emotion["duration_left"]
+	])
+
+	var conditions: Array = snapshot["conditions"]
+	if not conditions.is_empty():
+		var parts: Array[String] = []
+		for c in conditions:
+			parts.append(str(c["type"]))
+		_field("CON_FIELD_CONDITIONS", SEP.join(parts))
 
 	# 直接掃 Stats.SPEC，所以之後加數值不用回來改這裡。
 	# SPEC 的 label 存的是翻譯 key，翻譯在這個顯示端做
@@ -829,6 +844,42 @@ const AI_PROBE_TEXT := "hello from ailley"
 # 連打兩次 ai dialogue 應該兩次都過
 #
 # 每次都先 reload_config()，玩家剛寫完 user://ai_config.json 不用重開遊戲
+# emotion <name> <type> [intensity]
+#
+# #116 AC 要求要有 debug 方式「手動設定/觀察」emotion；status 已經做了觀察，
+# 這裡補上設定的一半。intensity 省略時用 60（中等強度，好觀察 duration_left
+# 倒數而不用每次都手動打數字）
+func _cmd_emotion(args: PackedStringArray) -> void:
+	if args.size() < 2 or args.size() > 3:
+		_error(L10n.t("CON_USAGE_EMOTION"))
+		return
+
+	var character := _get_character(args[0])
+	if character == null:
+		return
+
+	var type := args[1]
+	if not Character.EMOTION_TYPES.has(type):
+		_error(L10n.tf("CON_EMOTION_INVALID_TYPE", {
+			"type": type, "valid": ", ".join(Character.EMOTION_TYPES)
+		}))
+		return
+
+	var intensity := 60
+	if args.size() == 3:
+		if not args[2].is_valid_int():
+			_error(L10n.t("CON_USAGE_EMOTION"))
+			return
+		intensity = args[2].to_int()
+
+	character.set_emotion(type, intensity)
+	_print(L10n.tf("CON_EMOTION_OK", {
+		"name": character.character_name,
+		"type": character.emotion["type"],
+		"intensity": character.emotion["intensity"],
+		"duration": character.emotion["duration_left"],
+	}))
+
 func _cmd_ai(args: PackedStringArray) -> void:
 	AIService.reload_config()
 	var config: AIConfig = AIService.config
