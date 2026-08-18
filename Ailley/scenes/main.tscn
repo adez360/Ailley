@@ -1,4 +1,4 @@
-[gd_scene load_steps=29 format=4 uid="uid://bianwxowjctjk"]
+[gd_scene load_steps=31 format=4 uid="uid://bianwxowjctjk"]
 
 [ext_resource type="Script" uid="uid://djdfer2luq3s5" path="res://scripts/ui/pause.gd" id="1_a8y0u"]
 [ext_resource type="PackedScene" uid="uid://v21qv1icuh5m" path="res://scenes/player.tscn" id="1_ljsu2"]
@@ -22,6 +22,8 @@
 [ext_resource type="Script" uid="uid://bghlt4yqp6xrt" path="res://scripts/ui/inventory_panel.gd" id="17_dp3eg"]
 [ext_resource type="Script" uid="uid://hism2nudt3ss" path="res://scripts/ui/hotbar.gd" id="17_muem4"]
 [ext_resource type="Script" uid="uid://dm5y3oyvsultm" path="res://scripts/ui/vending_menu.gd" id="21_jscy8"]
+[ext_resource type="PackedScene" uid="uid://cefpexpl7arvm" path="res://scenes/character_create.tscn" id="23_y6deb"]
+[ext_resource type="PackedScene" uid="uid://xqribn8mdubp" path="res://scenes/character_library.tscn" id="24_og1vs"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_pl1ev"]
 texture = ExtResource("3_y8peb")
@@ -467,3 +469,7 @@ theme_override_constants/separation = 3
 layout_mode = 2
 theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
 horizontal_alignment = 1
+
+[node name="CharacterCreate" parent="." instance=ExtResource("23_y6deb")]
+
+[node name="CharacterLibrary" parent="." instance=ExtResource("24_og1vs")]

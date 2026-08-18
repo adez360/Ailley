@@ -251,13 +251,18 @@ func _make_provider() -> DecisionProvider:
 	if decision_source == "cloud":
 		if model_name.is_empty():
 			reason = "decision_source 'cloud' 但 model_name 是空的"
-		elif not AIService.config.has_valid_provider(model_name):
-			# 用 has_valid_provider() 不是 has_provider()：AIConfig 裡有這個項目
-			# 但 base_url/model 沒填齊時，AIService.request() 一樣擋成
-			# ERROR_NO_PROVIDER，只查存在的話這種設定會安靜地讓角色決策啞掉
-			reason = "decision_source 'cloud' 但 model_name '%s' 不是可用的 AIConfig provider（不存在或設定不全）" % model_name
 		else:
-			return RemoteLLMProvider.new(model_name)
+			# model_name（《06》）存的是給玩家看的型號字串（如
+			# "qwen2.5-7b-instruct"），不是 AIConfig.providers 字典的 key
+			# （如 "openrouter"）——那個 key 只是玩家自己取的代號，規格書
+			# 刻意不讓它進 model_name。查表方向要反過來：拿型號去掃
+			# providers 找 .model 相符的那個，再用那個 provider 真正的
+			# 名字去打 AIService.request()（見 AIConfig.get_provider_by_model()）
+			var provider := AIService.config.get_provider_by_model(model_name)
+			if provider == null or not provider.valid:
+				reason = "decision_source 'cloud' 但 model_name '%s' 沒有對應的可用 AIConfig provider（不存在或設定不全）" % model_name
+			else:
+				return RemoteLLMProvider.new(provider.name)
 	elif decision_source != "local":
 		reason = "decision_source '%s' 不是已知值" % decision_source
 
