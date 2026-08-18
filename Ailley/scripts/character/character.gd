@@ -685,17 +685,36 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 
 # ---- 吃 ----
 
-func eat() -> void:
+const EAT_OK := ""
+const EAT_NO_INVENTORY := "NO_INVENTORY"
+const EAT_NO_FOOD := "NO_FOOD"
+const EAT_NO_STATS := "NO_STATS"
+
+# 吃東西要「食物真的被扣掉」與「satiety 真的回補」一起成立（CodeRabbit
+# PR #261 抓到）：remove_item() 回非 REMOVE_OK 就代表沒扣成，直接回原因碼，
+# 不動 stats；stats 為 null 時也不能先扣食物。回傳空字串 = 成功，其餘是
+# 原因碼（跟 Inventory 的 REMOVE_* 同一個慣例），未來 _pursue_eat_task()
+# 接入時可以直接把原因寫進 last_action_result
+func eat() -> String:
+	if inventory == null:
+		return EAT_NO_INVENTORY
+
 	var food_slot = _find_food_slot()
 	if food_slot.is_empty():
-		return
+		return EAT_NO_FOOD
+
+	if stats == null:
+		return EAT_NO_STATS
 
 	var item_id: String = food_slot["item_id"]
-	inventory.remove_item(item_id, 1)
+	var removal_reason := inventory.remove_item(item_id, 1)
+	if removal_reason != Inventory.REMOVE_OK:
+		return removal_reason
 
 	var food_item = food_slot.get("item", {})
 	var satiety_recovery: int = food_item.get("satiety_recovery", 20)
 	stats.change_satiety(satiety_recovery)
+	return EAT_OK
 
 
 func _find_food_slot() -> Dictionary:
