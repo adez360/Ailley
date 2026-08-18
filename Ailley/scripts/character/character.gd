@@ -69,6 +69,15 @@ const GIVE_TARGET_IS_SELF := "TARGET_IS_SELF"
 const GIVE_TOO_FAR := "TOO_FAR"
 const GIVE_NO_INVENTORY := "NO_INVENTORY"
 
+const HAUL_RANGE := 32.0		# 跟 TALK_RANGE／GIVE_RANGE 一樣的距離門檻，2 格
+const HAUL_SPEED_MULTIPLIER := 0.5		# 搬運時速度倍率（《99》P-27 #3-1）
+const HAUL_STAMINA_DRAIN := 3.0			# 搬運者每現實秒額外扣的體力（《99》P-27 #3-2）
+
+const HAUL_OK := ""
+const HAUL_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const HAUL_TARGET_IS_SELF := "TARGET_IS_SELF"
+const HAUL_TOO_FAR := "TOO_FAR"
+
 ## 滑鼠指到時套在 sprite 上的描邊
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
 
@@ -93,7 +102,7 @@ const CONDITION_EXHAUSTED := "exhausted"
 const CONDITION_SLEEPY := "sleepy"
 const CONDITION_FILTHY := "filthy"
 
-## MVP 新機制：昏迷狀態（《99》P-27）
+## MVP 新機制：昏迷狀態（#160，《99》P-27）
 const CONDITION_INCAPACITATED := "incapacitated"
 
 ## 角色的身分，全遊戲唯一且不隨改名而變：存檔、記憶連結、交誼區都靠它指人。
@@ -137,6 +146,11 @@ var emotion := {
 ## 特殊狀態陣列，元素形狀 {type, turns_left}（《02》§2-1）。全部由引擎寫入，
 ## LLM 不可宣告；目前只實作 8 種生理衍生 condition，見 _update_conditions()
 var conditions: Array[Dictionary] = []
+
+## 搬運相關狀態（#161，《99》P-27）
+var _hauling_target: Character = null		# 目前正在搬運誰
+var _hauled_by: Array[Character] = []		# 目前正被誰搬運
+var _speed_multiplier := 1.0				# 速度倍率（搬運時為 50%）
 
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
@@ -1099,6 +1113,11 @@ func update_animation(desired_velocity: Vector2) -> void:
 # 這一幀要用的速度。基底只跟隨 A* 路徑，子類別覆寫來加上自己的驅動來源。
 # 對話中不自動移動 —— 但 Player 的輸入會蓋過這裡，走遠了由距離判定自然散場
 func _decide_velocity() -> Vector2:
+	# 被搬運時身體要跟著搬運者走，即使正昏迷或治療中（石化原地指的是不能「自己」
+	# 移動，不是身體釘死不能被搬走）——這個判斷要排在昏迷/治療鎖定之前
+	if is_being_hauled():
+		return _follow_hauler()
+
 	# 昏迷或治療中無法產生移動速度
 	if _is_movement_locked():
 		return Vector2.ZERO
@@ -1123,7 +1142,22 @@ func _follow_path() -> Vector2:
 		move_finished.emit(true)
 		return Vector2.ZERO
 
-	return body_position.direction_to(_path[_path_index]) * SPEED
+	return body_position.direction_to(_path[_path_index]) * effective_speed()
+
+# 被搬運中跟著搬運者移動
+func _follow_hauler() -> Vector2:
+	if _hauled_by.is_empty():
+		return Vector2.ZERO
+
+	var hauler: Character = _hauled_by[0]
+	if not is_instance_valid(hauler):
+		return Vector2.ZERO
+
+	var body_position := get_body_position()
+	if body_position.distance_to(hauler.get_body_position()) < ARRIVE_DISTANCE:
+		return Vector2.ZERO
+
+	return body_position.direction_to(hauler.get_body_position()) * hauler.effective_speed()
 
 # 該走卻幾乎沒位移（被地形頂住）就放棄，避免無限原地打轉
 func _check_stuck(delta: float) -> void:
@@ -1145,3 +1179,57 @@ func _physics_process(delta: float) -> void:
 
 	if is_moving():
 		_check_stuck(delta)
+
+	# 搬運體力消耗（#161，《99》P-27 #3-2）
+	if _hauling_target != null and stats != null:
+		stats.add("stamina", -HAUL_STAMINA_DRAIN * delta)
+
+
+# ---- 搬運邏輯（#161） ----
+
+func is_being_hauled() -> bool:
+	return not _hauled_by.is_empty()
+
+func hauler_count() -> int:
+	return _hauled_by.size()
+
+func is_hauling() -> bool:
+	return _hauling_target != null
+
+func effective_speed() -> float:
+	return SPEED * _speed_multiplier
+
+func start_haul(target: Character) -> String:
+	if target == null:
+		return HAUL_TARGET_NOT_FOUND
+	if target == self:
+		return HAUL_TARGET_IS_SELF
+	if get_body_position().distance_to(target.get_body_position()) > HAUL_RANGE:
+		return HAUL_TOO_FAR
+
+	# 換搬別的目標前，先放掉原本那個，避免舊目標的 _hauled_by 留著搬不掉的殘留參照
+	if _hauling_target != null and _hauling_target != target:
+		stop_haul()
+
+	target._attach_haul(self)
+	_hauling_target = target
+	_speed_multiplier = HAUL_SPEED_MULTIPLIER
+	target.set_being_carried(true)		# #271: 通知昏迷機制
+	return HAUL_OK
+
+func stop_haul() -> void:
+	if _hauling_target != null:
+		var target := _hauling_target
+		target._detach_haul(self)
+		# 雙人搬運時（《99》P-27 #8），其中一人放手不該讓另一人還在搬的目標被標記成沒人搬
+		if not target.is_being_hauled():
+			target.set_being_carried(false)		# #271: 通知昏迷機制
+		_hauling_target = null
+	_speed_multiplier = 1.0
+
+func _attach_haul(hauler: Character) -> void:
+	if not _hauled_by.has(hauler):
+		_hauled_by.append(hauler)
+
+func _detach_haul(hauler: Character) -> void:
+	_hauled_by.erase(hauler)
