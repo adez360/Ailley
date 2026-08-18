@@ -928,11 +928,21 @@ func _reevaluate_once() -> void:
 	# 過期時那條「清掉，不要留著」的路徑（見下面 elif 分支）也只清空了
 	# _current_task 這個變數本身，沒有把同一個 Dictionary 從 _tasks 裡拿掉。
 	# 在候選評分之前先單獨掃一次、真的 remove_at()，不論該任務是不是目前
-	# 正被 _current_task 指向；_current_task 過不過期、要不要換下一筆，仍由
-	# 後面既有的邏輯處理，這裡只負責把「已經確定沒機會了」的 Task 物件丟出池子
+	# 正被 _current_task 指向。
+	#
+	# 被移除的剛好是 _current_task 本人時，這裡直接同步清空 _current_task／
+	# current_place／current_state——不依賴下面 elif 分支（那個分支只在
+	# best 沒找到候選、或 _consider_switch() 選中別的候選時才會處理到過期
+	# 的 _current_task）補做，讓「這個 Dictionary 一旦被拿出池子，_current_task
+	# 就同一時間點跟著清空」直接在移除的當下發生，不留給後續分支的邊界情況去對
 	for i in range(_tasks.size() - 1, -1, -1):
 		if _is_expired(_tasks[i], now_minutes):
+			var expired_task := _tasks[i]
 			_tasks.remove_at(i)
+			if expired_task.get("id", "") == _current_task.get("id", ""):
+				_current_task = {}
+				current_place = ""
+				current_state = "idle"
 
 	var best: Dictionary = {}
 	var best_score := -INF
