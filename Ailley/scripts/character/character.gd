@@ -689,11 +689,19 @@ func make_noise(radius: float = NOISE_RADIUS) -> void:
 
 var _working := false
 
-## 被 force_interrupt() 標記中止（見《02》§3「被攻擊立即中斷，含 work 中」）。
-## _run_work() 下一次從 await 醒來時檢查這個旗標並收尾，不在 force_interrupt()
-## 當下直接改 _working——那個協程還握著 workstation 的參照，得讓它自己收尾
-## 才不會漏掉 release()／hide_progress()
-var _work_interrupted := false
+## _end_work() 需要的 workstation 參照，讓 force_interrupt() 可以在不依賴
+## _run_work() 協程本地變數的情況下，自己也呼叫得到 _end_work()
+var _current_workstation: Workstation = null
+
+## 每次 _end_work() 遞增，_run_work() 協程在建立時記住當下的號碼。
+## force_interrupt()（見《02》§3「被攻擊立即中斷，含 work 中」）當下就直接
+## 呼叫 _end_work() 立即釋放工作站、收掉進度條——不能拖到 _run_work() 下一次
+## GameClock.time_changed 才收尾（CodeRabbit review 抓到）：那段空窗期
+## 工作站仍算「有人在用」，其他角色會被 WORK_OCCUPIED 擋下來，明明沒有人真的
+## 在那裡工作。協程醒來後比對號碼：跟目前的號碼對不上，代表這個 session
+## 已經被 force_interrupt() 提早收尾過，單純 return，不能重複呼叫
+## _end_work()——這時 workstation 可能已經被下一個佔用者用掉
+var _work_session_id := 0
 
 
 func is_working() -> bool:
@@ -713,11 +721,11 @@ func work_at(workstation: Workstation) -> String:
 		return WORK_OCCUPIED
 
 	_working = true
-	_work_interrupted = false
+	_current_workstation = workstation
 	stop_moving()
 	if work_progress != null:
 		work_progress.show_progress(0.0)
-	_run_work(workstation)
+	_run_work(workstation, _work_session_id)
 	return WORK_OK
 
 # 數 GameClock.time_changed 發了幾次來算「過了幾個遊戲分鐘」，不是掛
@@ -725,22 +733,26 @@ func work_at(workstation: Workstation) -> String:
 # 遊戲時間變速的話兩邊就會對不上。進度條每過一個遊戲分鐘更新一次，
 # 不是照 _process() 的 delta 平滑跑——工作本身就是離散地一分鐘一分鐘算，
 # 進度條應該老實反映這件事，不用假裝連續
-func _run_work(workstation: Workstation) -> void:
+func _run_work(workstation: Workstation, session_id: int) -> void:
 	for i in WORK_DURATION_MINUTES:
 		await GameClock.time_changed
 
-		# 這個協程橫跨 5 個遊戲分鐘，中間什麼都可能發生。兩件事要在每次醒來時重驗：
+		# 這個協程橫跨 5 個遊戲分鐘，中間什麼都可能發生。三件事要在每次醒來時重驗：
 		#
-		# 一、工作站可能已經被移除。await 之後直接 workstation.release() 會炸
+		# 一、這個 session 可能已經被 force_interrupt() 收尾過（見它的註解，
+		#     還可能已經被下一次 work_at() 蓋掉）——不是自己的號碼了就直接
+		#     return，不能對這時可能已經被別人用掉的 workstation 再收尾一次。
+		# 二、工作站可能已經被移除。await 之後直接 workstation.release() 會炸
 		#     「call function on a previously freed instance」。
-		# 二、角色可能自己走開了——Player 一按方向鍵就蓋掉 work_at() 的 stop_moving()，
+		# 三、角色可能自己走開了——Player 一按方向鍵就蓋掉 work_at() 的 stop_moving()，
 		#     `_working` 攔不住移動。不重驗距離的話，按下 E 之後跑到地圖另一頭，
 		#     時間到照樣入帳，而且這 5 分鐘工作站一直被卡著、現場卻沒人。
 		#
-		# 三種都是「沒有做完」，所以收尾但不撥款：錢是站在這裡做滿的報酬，
-		# 不是按下 E 的報酬。_work_interrupted 是第三種——force_interrupt()
-		# 標記的，跟前兩種一樣不撥款，共用同一條收尾路徑
-		if _work_interrupted or not is_instance_valid(workstation) \
+		# 後兩種都是「沒有做完」，所以收尾但不撥款：錢是站在這裡做滿的報酬，
+		# 不是按下 E 的報酬
+		if session_id != _work_session_id:
+			return
+		if not is_instance_valid(workstation) \
 				or get_body_position().distance_to(workstation.global_position) > WORK_RANGE:
 			_end_work(workstation)
 			return
@@ -758,7 +770,11 @@ func _end_work(workstation: Workstation) -> void:
 	if is_instance_valid(workstation):
 		workstation.release(self)
 	_working = false
-	_work_interrupted = false
+	_current_workstation = null
+	# 遞增號碼：如果這次收尾是 force_interrupt() 提早觸發的，_run_work() 的
+	# 協程還在等下一次 GameClock.time_changed，讓它醒來後比對號碼發現對不上，
+	# 知道 session 已經收尾過，不用再收一次
+	_work_session_id += 1
 	if work_progress != null:
 		work_progress.hide_progress()
 	_on_work_finished()
@@ -930,15 +946,17 @@ func _on_attacked(_attacker: Character) -> void:
 	pass
 
 ## 強制中斷目前行動，不徵詢 interruptible／能不能被搭話打斷——跟仲裁器的
-## 「搶占」判斷是兩回事，這裡是外部事件硬性發生（被攻擊等，《02》§3 中斷
-## 規則），連 work 中也要中斷。工作中只標記中止旗標，真正收尾（不撥款）
-## 留給 _run_work() 下一次醒來時既有的檢查點，不在這裡重複一次它的收尾邏輯
+## 「搶占」判斷是兩回事，這裡是外部事件硬性發生（被攻擊等，《02》§3「立即
+## 中斷，含 work 中」）。工作中要立即呼叫 _end_work()：工作站的釋放與進度條
+## 收尾不能拖到 _run_work() 下一次 GameClock.time_changed 才做（CodeRabbit
+## review 抓到）——拖著的話那段空窗期工作站仍算「有人在用」，擋掉其他角色，
+## 而工作進度 UI 也還開著，跟角色已經不在工作的實際狀態對不上
 func force_interrupt() -> void:
 	stop_moving()
 	if is_in_conversation():
 		leave_conversation()
 	if _working:
-		_work_interrupted = true
+		_end_work(_current_workstation)
 	_on_action_interrupted()
 
 ## 中斷後的收尾鉤子，讓子類別決定要不要重新規劃行程。基底不用管——
