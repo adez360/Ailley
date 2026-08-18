@@ -93,6 +93,9 @@ const CONDITION_EXHAUSTED := "exhausted"
 const CONDITION_SLEEPY := "sleepy"
 const CONDITION_FILTHY := "filthy"
 
+## MVP 新機制：昏迷狀態（《99》P-27）
+const CONDITION_INCAPACITATED := "incapacitated"
+
 ## 角色的身分，全遊戲唯一且不隨改名而變：存檔、記憶連結、交誼區都靠它指人。
 ## 是內部識別字，不拿來顯示，也**不要去解析它** —— 格式只有 generate_id() 說了算。
 ##
@@ -166,6 +169,12 @@ var _path := PackedVector2Array()
 var _path_index := 0
 var _stuck_timer := 0.0
 var _conversation: Node = null
+
+## 昏迷相關狀態（《99》P-27）
+var _incapacitation_start_minute := -1		# 昏迷開始的遊戲分鐘，-1 表示未昏迷
+var _is_being_carried := false				# 標記正在被搬運（#161 會設置此項）
+var _treatment_start_minute := -1			# 藥草鋪治療開始的遊戲分鐘，-1 表示未治療
+var _treatment_location := ""				# 治療地點（暫定「藥草鋪」）
 
 # 滑鼠 hover（selection.gd）跟 E 鍵目前的互動目標（player.gd）是兩個獨立的
 # 高亮來源，任一個成立就該顯示描邊。分開存，不是合用一個布林值——CodeRabbit
@@ -269,6 +278,8 @@ func _on_game_minute(_hour: int, _minute: int) -> void:
 
 	_tick_emotion()
 	_update_conditions()
+	_update_incapacitation()
+	_update_treatment()
 
 ## AI 宣告新情緒。type 必須是 EMOTION_TYPES 之一，intensity 0–100。
 ## stability／grudge 是《02》§1-4 持續時間公式的人格係數，人格資料還沒接上
@@ -326,11 +337,16 @@ func _set_condition(type: String, present: bool) -> void:
 ## 下次檢查就自動移除（《02》§2-2／§2-3 規則 4）。只做偵測與新增/移除；
 ## 行為成功率／說真心話機率留給 #120，exhausted「強制昏睡」是行動佔用邏輯，
 ## 留給該動作自己處理，filthy 效果待《99》P-35 重新設計，這裡都不做
+##
+## 昏迷狀態檢查（《99》P-27）：health ≤ 0 即進入昏迷。注意昏迷不是「門檻自動」，
+## 只要曾經觸發就必須明確結束（被搬走或完成治療），不會因為 health 變正就自動消失
 func _update_conditions() -> void:
 	if stats == null:
 		return
 
 	var injury := stats.get_value("injury")
+	var health := stats.get_value("health")
+
 	_set_condition(CONDITION_INJURED, injury > 0.0)
 	_set_condition(CONDITION_BLEEDING, injury >= 20.0)
 	_set_condition(CONDITION_DRUNK, stats.get_value("alcohol") > 30.0)
@@ -339,6 +355,10 @@ func _update_conditions() -> void:
 	_set_condition(CONDITION_EXHAUSTED, stats.get_value("stamina") <= 0.0)
 	_set_condition(CONDITION_SLEEPY, stats.get_value("wakefulness") < 15.0)
 	_set_condition(CONDITION_FILTHY, stats.get_value("hygiene") < 20.0)
+
+	## 昏迷狀態觸發（health ≤ 0）——不是門檻自動，一旦進入必須明確結束
+	if health <= 0.0 and not has_condition(CONDITION_INCAPACITATED):
+		_start_incapacitation()
 
 	# bleeding／starving／dehydrated 的直接數值效果（《02》§2-2 效果欄），
 	# 跟成功率無關所以不算 #120 的範圍。injury 自然衰減暫停是唯一的例外規則
@@ -349,6 +369,87 @@ func _update_conditions() -> void:
 	if has_condition(CONDITION_DEHYDRATED):
 		stats.add("health", -1.0)
 	stats.injury_decay_paused = has_condition(CONDITION_BLEEDING)
+
+## 開始昏迷（health ≤ 0 觸發）。記錄開始時間，30 分鐘內若無人搬走則自動傳送藥草鋪
+## （《99》P-27，搬走邏輯依賴 #161 haul/struggle）
+func _start_incapacitation() -> void:
+	_set_condition(CONDITION_INCAPACITATED, true)
+	_incapacitation_start_minute = GameClock.hour * 60 + GameClock.minute
+	_is_being_carried = false
+	print_debug("Character %s 進入昏迷，計時器已啟動" % character_name)
+
+## 每遊戲分鐘檢查昏迷狀態：
+## 1. 若被搬走（#161 設置 _is_being_carried），立即結束昏迷
+## 2. 若昏迷 30 分鐘無人搬走，自動傳送藥草鋪並開始治療（待藥草鋪傳送機制完成）
+func _update_incapacitation() -> void:
+	if not has_condition(CONDITION_INCAPACITATED):
+		return
+
+	# 檢查是否被搬走（#161 會設置此標誌）
+	if _is_being_carried:
+		_end_incapacitation()
+		return
+
+	# 計算昏迷時長（單位：遊戲分鐘）
+	var current_minute := GameClock.hour * 60 + GameClock.minute
+	var elapsed_minutes := (current_minute - _incapacitation_start_minute) % (24 * 60)
+
+	# 30 分鐘無人搬走時自動傳送藥草鋪開始治療
+	if elapsed_minutes >= 30:
+		_send_to_herb_shop_for_treatment()
+
+## 結束昏迷（被搬走時觸發，#161 負責調用）
+func _end_incapacitation() -> void:
+	_set_condition(CONDITION_INCAPACITATED, false)
+	_incapacitation_start_minute = -1
+	_is_being_carried = false
+	print_debug("Character %s 昏迷已結束（被搬走）" % character_name)
+
+## 由搬運動作（#161 haul）調用，標記此角色正在被搬運。
+## 若該角色昏迷，搬運會立即結束昏迷計時器（《99》P-27）
+func set_being_carried(is_carried: bool) -> void:
+	if is_carried and has_condition(CONDITION_INCAPACITATED):
+		_is_being_carried = true
+	elif not is_carried:
+		_is_being_carried = false
+
+## 自動傳送到藥草鋪並開始治療
+func _send_to_herb_shop_for_treatment() -> void:
+	print_debug("Character %s 昏迷 30 分鐘無人搬走，自動傳送藥草鋪治療" % character_name)
+
+	# TODO：實現自動傳送邏輯（awaiting #162 或專門的傳送 issue）
+	# 暫時記錄治療開始時間，_update_treatment() 會處理倒計時
+	_treatment_start_minute = GameClock.hour * 60 + GameClock.minute
+	_treatment_location = "herb_shop"
+
+## 每遊戲分鐘檢查治療進度。60 分鐘治療完成後解除所有異常狀態
+func _update_treatment() -> void:
+	if _treatment_start_minute == -1:
+		return
+
+	var current_minute := GameClock.hour * 60 + GameClock.minute
+	var elapsed_minutes := (current_minute - _treatment_start_minute) % (24 * 60)
+
+	# 治療完成：60 分鐘後解除所有異常狀態並結束昏迷
+	if elapsed_minutes >= 60:
+		_complete_treatment()
+
+## 治療完成：解除所有異常狀態、恢復 health 和 injury、結束昏迷
+func _complete_treatment() -> void:
+	print_debug("Character %s 藥草鋪治療完成" % character_name)
+
+	# 恢復 health 和 injury（《99》P-27、P-28）
+	if stats != null:
+		stats.set_value("health", 50.0)		# 設定一個中等恢復量
+		stats.set_value("injury", 0.0)
+
+	# 清除所有異常狀態
+	conditions.clear()
+	_incapacitation_start_minute = -1
+	_treatment_start_minute = -1
+	_treatment_location = ""
+
+	print_debug("Character %s 已恢復可行動" % character_name)
 
 
 # ---- 移動 ----
