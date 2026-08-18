@@ -1262,6 +1262,34 @@ func _pursue_talk_task() -> void:
 			return
 
 	var target_name: String = str(_current_task.get("params", {}).get("target", ""))
+
+	# schedule talk（target_name 為空）需要先到達指定地點再找人聊。
+	# LLM talk（target_name 非空）維持現有行為：直接追蹤目標角色。
+	if target_name.is_empty() and not current_place.is_empty():
+		var anchors := get_tree().get_first_node_in_group("place_anchors")
+		if anchors == null or not anchors.has(current_place):
+			if current_place != _pursued_place:
+				push_error("Agent %s: 沒有這個地點 %s" % [character_name, current_place])
+				_pursued_place = current_place
+			return
+
+		var place_pos: Vector2 = anchors.resolve(current_place)
+		if not _has_arrived_at(place_pos):
+			# 還沒到——跟 _pursue_current_task() 的節流邏輯一樣：
+			# 同一個地點只起步一次，還在走就繼續走
+			if current_place == _pursued_place and (is_moving() or _pursuit_done):
+				return
+			_pursued_place = current_place
+			_pursuit_done = false
+			if not move_to(place_pos):
+				push_warning("Agent %s: 走不到搭話地點 %s" % [character_name, current_place])
+				_pursuit_done = true
+			return
+		# 到了——停下、標記，繼續往下找人
+		stop_moving()
+		_pursued_place = current_place
+		_pursuit_done = true
+
 	var target := _find_character_by_name(target_name)
 
 	if target == null:
