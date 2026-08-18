@@ -28,7 +28,7 @@ static func create(db) -> bool:
 		intensity INTEGER NOT NULL DEFAULT 0
 			CHECK (intensity BETWEEN 0 AND 100),
 
-		-- 起因事件
+		-- 起因事件；專案目前沒有 event 這層資料模型，不做參照完整性
 		cause_event_id TEXT,
 
 		-- 剩餘 tick，每 tick 減 1
@@ -40,11 +40,7 @@ static func create(db) -> bool:
 
 		FOREIGN KEY (npc_id)
 			REFERENCES npc(npc_id)
-			ON DELETE CASCADE,
-
-		FOREIGN KEY (cause_event_id)
-			REFERENCES event_memory(event_id)
-			ON DELETE SET NULL
+			ON DELETE CASCADE
 	);
 	"""
 
