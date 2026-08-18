@@ -254,6 +254,14 @@ func get_input_direction() -> Vector2:
 	).normalized()
 
 func _decide_velocity() -> Vector2:
+	# 被搬運時交給基底的 _follow_hauler()，玩家輸入不該蓋過（見 Character._decide_velocity()）
+	if is_being_hauled():
+		return super()
+
+	# 昏迷或治療中無法移動（即使有輸入也不回應）
+	if _is_movement_locked():
+		return Vector2.ZERO
+
 	var input_dir := get_input_direction()
 
 	# 手動操作優先，直接中斷自動移動
