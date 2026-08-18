@@ -1060,6 +1060,10 @@ func start_haul(target: Character) -> String:
 	if get_body_position().distance_to(target.get_body_position()) > HAUL_RANGE:
 		return HAUL_TOO_FAR
 
+	# 換搬別的目標前，先放掉原本那個，避免舊目標的 _hauled_by 留著搬不掉的殘留參照
+	if _hauling_target != null and _hauling_target != target:
+		stop_haul()
+
 	target._attach_haul(self)
 	_hauling_target = target
 	_speed_multiplier = HAUL_SPEED_MULTIPLIER
@@ -1068,8 +1072,11 @@ func start_haul(target: Character) -> String:
 
 func stop_haul() -> void:
 	if _hauling_target != null:
-		_hauling_target._detach_haul(self)
-		_hauling_target.set_being_carried(false)		# #271: 通知昏迷機制
+		var target := _hauling_target
+		target._detach_haul(self)
+		# 雙人搬運時（《99》P-27 #8），其中一人放手不該讓另一人還在搬的目標被標記成沒人搬
+		if not target.is_being_hauled():
+			target.set_being_carried(false)		# #271: 通知昏迷機制
 		_hauling_target = null
 	_speed_multiplier = 1.0
 
