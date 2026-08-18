@@ -301,10 +301,12 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minute
 		if task.has("params") and not task["params"] is Dictionary:
 			return _fail(ERROR_BAD_SHAPE)
 
-		# talk 是目前唯一逐欄位驗證 params 的動作（#90 接了執行層，其餘動作
-		# 還沒有）：沒有 target 的 talk 任務會被 _pursue_talk_task() 誤判成
-		# 「目標不存在」一路帶進任務池才發現，不如在這一層就擋掉，跟這個檔案
-		# 「外來內容一律不信任」的原則一致，不等到執行層才發現資料是空的
+		# talk／attack／give 是目前有逐欄位驗證 params 的動作（talk 見 #90，
+		# attack 見 #159，give 見 #264；其餘動作還沒有）：沒有 target 的任務會被
+		# 各自的 _pursue_*_task() 誤判成「目標不存在」一路帶進任務池才發現，
+		# 不如在這一層就擋掉，跟這個檔案「外來內容一律不信任」的原則一致，
+		# 不等到執行層才發現資料是空的。give 的 target 檢查獨立成下面一段，
+		# 因為它還要多驗 count 的範圍，跟 talk／attack 共用的這段不同形狀
 		if ["talk", "attack"].has(task["action"]):
 			var talk_params: Dictionary = task.get("params", {})
 			var target: Variant = talk_params.get("target")
