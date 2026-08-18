@@ -19,11 +19,36 @@ signal line_submitted(text: String)
 ## Conversation 節點的地方（見該檔 `_finish()` 的說明），節點因此永遠留在場景樹上
 signal turn_resolved(text: String, ok: bool)
 
+@onready var interact_area: Area2D = $InteractArea
+
+## InteractArea 目前偵測到的候選（工作站／販賣機，靠 collision layer "interactable"
+## 篩選，見 project.godot 的 layer_3）。角色候選不走這裡——直接沿用
+## vision.get_visible_characters()，見 _get_interact_candidates() 的說明
+var _nearby_interactables: Array[Node2D] = []
+
 
 func _ready() -> void:
 	super()
 	add_to_group("player")
 	line_submitted.connect(_on_line_submitted)
+
+	# 半徑動態算 maxf(...)，不能寫死：WORK_RANGE／TALK_RANGE／BUY_RANGE 是三個
+	# 故意保持獨立可調的常數（見 note/技術/販賣機.md），這裡只是先撈進一個
+	# 夠大的候選集合，真正的門檻在 _nearest_facing() 用各自的 range 再篩一次
+	var shape := interact_area.get_node("CollisionShape2D").shape as CircleShape2D
+	shape.radius = maxf(WORK_RANGE, maxf(TALK_RANGE, BUY_RANGE))
+	interact_area.body_entered.connect(_on_interact_area_body_entered)
+	interact_area.body_exited.connect(_on_interact_area_body_exited)
+
+# InteractArea 的 collision_mask 只認 "interactable" 層，工作站／販賣機以外的
+# 東西（地形、其他角色）本來就進不來，不用像 vision.gd 那樣濾除自己——
+# Player 自己的 collision_layer 是 "character"，不在這層上，偵測不到自己
+func _on_interact_area_body_entered(body: Node2D) -> void:
+	if not _nearby_interactables.has(body):
+		_nearby_interactables.append(body)
+
+func _on_interact_area_body_exited(body: Node2D) -> void:
+	_nearby_interactables.erase(body)
 
 # 打字是「這一輪有結果了」的其中一種來源，另一種是對話結束（見 exit_conversation()）。
 # 兩者收斂成同一個訊號，next_line() 才只要等一個東西
@@ -119,10 +144,16 @@ func _is_facing(target: Vector2) -> bool:
 ## 的決定，不是這次漏做——見 note/技術/販賣機.md：「不做一套通用的互動物件
 ## 框架，兩個物件不值得先蓋一層抽象」，Workstation／VendingMachine 本來就是
 ## 兩個獨立腳本、沒有共用基底
+##
+## 工作站／販賣機候選來自 InteractArea（Area2D，見 _ready()），取代原本每次
+## 呼叫都掃過整個 group 的寫法。角色候選改用 vision.get_visible_characters()，
+## 不另開一個 Area2D（issue #109 拍板，見 note/技術/talk 動作設計.md）——
+## 反正 talk_to() 已經要做視線判定，搭話候選跟著視線走沒理由重複維護兩份
 func _get_interact_candidates() -> Dictionary:
-	var workstation := _nearest_facing("workstations", WORK_RANGE, func(n): return n.global_position) as Workstation
-	var machine := _nearest_facing("vending_machines", BUY_RANGE, func(n): return n.global_position) as VendingMachine
-	var other := _nearest_facing("characters", TALK_RANGE, func(n): return (n as Character).get_body_position()) as Character
+	var workstation := _nearest_facing(_nearby_group("workstations"), WORK_RANGE, func(n): return n.global_position) as Workstation
+	var machine := _nearest_facing(_nearby_group("vending_machines"), BUY_RANGE, func(n): return n.global_position) as VendingMachine
+	var visible_characters: Array = vision.get_visible_characters() if vision != null else []
+	var other := _nearest_facing(visible_characters, TALK_RANGE, func(n): return (n as Character).get_body_position()) as Character
 
 	# 不在範圍內／沒被面向的候選距離是 INF，直接輸掉比較，不用另外再寫一層
 	# null 判斷
@@ -139,17 +170,17 @@ func _get_interact_candidates() -> Dictionary:
 ## 的候選直接跳過，不進距離比較——即使範圍內只有這一個候選，沒面向就是
 ## 沒面向，不會因為沒有對手就選到它。
 ##
-## **不是**用 `Character.find_nearest_workstation()` 那系列——那些是純比物理
-## 距離選一個，會讓較近但沒被面向的候選在選取那一步就把較遠但被面向的候選
-## 擋掉，永遠沒機會進入距離比較（CodeRabbit review 抓到：兩隻 Agent 站在
-## 玩家前後時，背後 8px 沒被面向的那隻會讓正前方 20px 被面向的那隻完全不
-## 參與比較）
-func _nearest_facing(group: String, max_distance: float, position_of: Callable) -> Node2D:
+## **不是**用整個 group 下去掃——那是純比物理距離選一個，會讓較近但沒被
+## 面向的候選在選取那一步就把較遠但被面向的候選擋掉，永遠沒機會進入距離比較
+## （CodeRabbit review 抓到：兩隻 Agent 站在玩家前後時，背後 8px 沒被面向的
+## 那隻會讓正前方 20px 被面向的那隻完全不參與比較）。candidates 現在是先經過
+## InteractArea／Vision 篩過一輪的小集合，不是整個 group
+func _nearest_facing(candidates: Array, max_distance: float, position_of: Callable) -> Node2D:
 	var best: Node2D = null
 	var best_distance := INF
 
-	for node in get_tree().get_nodes_in_group(group):
-		if node == self:
+	for node in candidates:
+		if not is_instance_valid(node) or node == self:
 			continue
 
 		var target: Vector2 = position_of.call(node)
@@ -165,6 +196,12 @@ func _nearest_facing(group: String, max_distance: float, position_of: Callable) 
 			best = node
 
 	return best
+
+# InteractArea 偵測到的候選裡，篩出屬於某個 group 的那些（工作站／販賣機
+# 各自呼叫一次）——InteractArea 的半徑是三個 RANGE 常數的最大值，同一個
+# collision layer 上兩種物件都會進來，這裡才依 group 分開
+func _nearby_group(group: String) -> Array:
+	return _nearby_interactables.filter(func(n): return is_instance_valid(n) and n.is_in_group(group))
 
 # 每幀重算一次「E 現在會打到誰」並更新高亮，跟 selection.gd::_update_hover()
 # 同一種寫法——目標沒變就不重複呼叫 set_highlighted()。對話中不顯示任何
@@ -254,6 +291,14 @@ func get_input_direction() -> Vector2:
 	).normalized()
 
 func _decide_velocity() -> Vector2:
+	# 被搬運時交給基底的 _follow_hauler()，玩家輸入不該蓋過（見 Character._decide_velocity()）
+	if is_being_hauled():
+		return super()
+
+	# 昏迷或治療中無法移動（即使有輸入也不回應）
+	if _is_movement_locked():
+		return Vector2.ZERO
+
 	var input_dir := get_input_direction()
 
 	# 手動操作優先，直接中斷自動移動

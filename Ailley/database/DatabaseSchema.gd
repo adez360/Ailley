@@ -45,7 +45,12 @@ static func initialize(db) -> bool:
 		return false
 
 	var schemas := [
-		# World
+
+		# -------------------------------------------------
+		# 01. World
+		# -------------------------------------------------
+
+		WorldSchema,
 		LocationSchema,
 
 		# NPC Core
@@ -88,7 +93,14 @@ static func initialize(db) -> bool:
 		# Economy
 		NPCWalletSchema,
 		MoneyTransactionSchema,
-		ItemTransactionSchema
+		ItemTransactionSchema,
+
+
+		# -------------------------------------------------
+		# 11. World Character State
+		# -------------------------------------------------
+
+		WorldCharacterStateSchema
 	]
 
 	if not db.query("BEGIN TRANSACTION;"):

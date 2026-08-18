@@ -54,6 +54,11 @@ func _ready() -> void:
 		# debug 入口，之後有正式的建角面板/角色庫 UI（#122）接上之後再收進
 		# 正式指令表
 		"spawn": {"run": _cmd_spawn, "usage": "spawn <template_id>", "help": ""},
+		# 同上，help 留空：#122 玩家自建角色的入口。建角面板／角色庫首頁本身
+		# 沒有任何 HUD 按鈕可以點開（規格書 05 沒有定義掛點），比照 spawn 的
+		# 先例走 debug 指令打通管線，不等一個像素風的開場選單
+		"charnew": {"run": _cmd_charnew, "usage": "charnew", "help": ""},
+		"charlib": {"run": _cmd_charlib, "usage": "charlib", "help": ""},
 		# 同上，help 留空：#21 驗證 SaveService 讀寫進出點用的 debug 入口，
 		# 真正的存讀時機（睡前自動存檔等）是後續 issue 才接
 		"save": {"run": _cmd_save, "usage": "save", "help": ""},
@@ -497,11 +502,12 @@ func _cmd_act(args: PackedStringArray) -> void:
 		])
 		return
 
-	# talk 的參數是人不是地點（見 agent.gd::_pursue_talk_task()），其餘動作
-	# 一律吃 place。這裡照 action 分流，不要求下指令的人自己記得填哪個 key
+	# talk／attack 的參數是人不是地點（見 agent.gd::_pursue_talk_task()／
+	# _pursue_attack_task()），其餘動作一律吃 place。這裡照 action 分流，
+	# 不要求下指令的人自己記得填哪個 key
 	var params := {}
 	if args.size() == 3:
-		params["target" if action == "talk" else "place"] = args[2]
+		params["target" if ["talk", "attack"].has(action) else "place"] = args[2]
 
 	# is_in_group("agents") 不會幫 GDScript 縮窄靜態型別，顯式轉型才能讓
 	# debug_push_task()（Agent-only）這個呼叫真的是型別安全的
@@ -614,6 +620,22 @@ func _cmd_spawn(args: PackedStringArray) -> void:
 	_print("[color=88ff88]生成角色 %s[/color][color=888888]  id %s[/color]" % [
 		character.character_name, character.character_id
 	])
+
+# charnew / charlib   開啟建角面板／角色庫首頁（#122）。兩個面板都用
+# group 找節點，本檔不持有直接參照——跟找角色用 get_tree() 找節點同一個理由
+func _cmd_charnew(_args: PackedStringArray) -> void:
+	var panel := get_tree().get_first_node_in_group("character_create_panel")
+	if panel == null:
+		_error("找不到建角面板")
+		return
+	panel.open()
+
+func _cmd_charlib(_args: PackedStringArray) -> void:
+	var panel := get_tree().get_first_node_in_group("character_library_panel")
+	if panel == null:
+		_error("找不到角色庫面板")
+		return
+	panel.open()
 
 # save   存下目前世界裡每個角色 + 這個世界本身。驗證 SaveService 的讀寫
 # 進出點確實接得起來（#21）——真正該在什麼時機自動存檔（睡前等）是後續 issue

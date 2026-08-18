@@ -27,6 +27,11 @@ const TALK_TARGET_IS_SELF := "TARGET_IS_SELF"
 const TALK_TOO_FAR := "TOO_FAR"
 const TALK_TARGET_BUSY := "TARGET_BUSY"
 const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
+const TALK_TARGET_NOT_VISIBLE := "TARGET_NOT_VISIBLE"
+
+## 搭話的視線遮蔽判定用哪個 physics layer 擋。跟 vision.gd 的 blocker_mask
+## 同一個值（1 = terrain）——搭話比照視覺判定，人不是牆，不會互相擋視線
+const TALK_BLOCKER_MASK := 1
 
 const WORK_RANGE := 32.0		# 跟 TALK_RANGE 一樣的距離門檻，2 格
 
@@ -58,6 +63,24 @@ const BUY_TOO_FAR := "TOO_FAR"
 const BUY_ITEM_NOT_FOUND := "ITEM_NOT_FOUND"		# 販賣機沒有賣這個 item_id
 const BUY_NO_INVENTORY := "NO_INVENTORY"		# 沒有背包的角色沒辦法買東西
 
+## eat() 的失敗原因碼，形狀比照 TALK_*／WORK_*／BUY_*
+const EAT_OK := ""
+const EAT_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法吃東西
+const EAT_NO_FOOD := "NO_FOOD"			# 背包裡沒有 ItemDatabase 分類為 food 的物品
+const EAT_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 satiety，不能先扣食物
+
+## 各食物 item_id 吃下去回復多少 satiety。抄《規格書 08》§3-1「飢餓回復」欄位
+## 取絕對值——那欄位是改名前（hunger，越低越好）留下的數字，P-32 把欄位改成
+## satiety（越高越好）之後，同一個量就是「回復多少 satiety」，方向反過來但
+## 數字不變。查不到的 item_id（理論上不會發生，_find_food_slot() 已經用
+## ItemDatabase 篩過 category）保守回 0，不讓 eat() 憑空生出滿足感
+const EAT_SATIETY_RECOVERY := {
+	"bread": 25.0,
+	"cooked_meat": 40.0,
+	"fish_dish": 35.0,
+	"herb_soup": 20.0,
+}
+
 const GIVE_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE 一樣的距離門檻，2 格
 
 ## give_to() 的失敗原因碼，形狀比照 TALK_*／BUY_*。除了這四個，give_to()
@@ -68,6 +91,28 @@ const GIVE_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
 const GIVE_TARGET_IS_SELF := "TARGET_IS_SELF"
 const GIVE_TOO_FAR := "TOO_FAR"
 const GIVE_NO_INVENTORY := "NO_INVENTORY"
+
+const HAUL_RANGE := 32.0		# 跟 TALK_RANGE／GIVE_RANGE 一樣的距離門檻，2 格
+const HAUL_SPEED_MULTIPLIER := 0.5		# 搬運時速度倍率（《99》P-27 #3-1）
+const HAUL_STAMINA_DRAIN := 3.0			# 搬運者每現實秒額外扣的體力（《99》P-27 #3-2）
+
+const HAUL_OK := ""
+const HAUL_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const HAUL_TARGET_IS_SELF := "TARGET_IS_SELF"
+const HAUL_TOO_FAR := "TOO_FAR"
+
+const ATTACK_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE／GIVE_RANGE 一樣的距離門檻，2 格
+
+## attack() 的失敗原因碼，形狀比照 GIVE_*
+const ATTACK_OK := ""
+const ATTACK_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const ATTACK_TARGET_IS_SELF := "TARGET_IS_SELF"
+const ATTACK_TOO_FAR := "TOO_FAR"
+
+## 命中的數值效果（《99》P-28 已定案）：必中，MVP 不做閃避／格擋，
+## 不像 steal／persuade 等動作走 agent.gd 的 SUCCESS_PARAMS 擲骰
+const ATTACK_HEALTH_DELTA := -15.0
+const ATTACK_INJURY_DELTA := 20.0
 
 ## 滑鼠指到時套在 sprite 上的描邊
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
@@ -92,6 +137,9 @@ const CONDITION_DEHYDRATED := "dehydrated"
 const CONDITION_EXHAUSTED := "exhausted"
 const CONDITION_SLEEPY := "sleepy"
 const CONDITION_FILTHY := "filthy"
+
+## MVP 新機制：昏迷狀態（#160，《99》P-27）
+const CONDITION_INCAPACITATED := "incapacitated"
 
 ## 角色的身分，全遊戲唯一且不隨改名而變：存檔、記憶連結、交誼區都靠它指人。
 ## 是內部識別字，不拿來顯示，也**不要去解析它** —— 格式只有 generate_id() 說了算。
@@ -135,6 +183,11 @@ var emotion := {
 ## LLM 不可宣告；目前只實作 8 種生理衍生 condition，見 _update_conditions()
 var conditions: Array[Dictionary] = []
 
+## 搬運相關狀態（#161，《99》P-27）
+var _hauling_target: Character = null		# 目前正在搬運誰
+var _hauled_by: Array[Character] = []		# 目前正被誰搬運
+var _speed_multiplier := 1.0				# 速度倍率（搬運時為 50%）
+
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
 @onready var stats: Stats = get_node_or_null("Stats")
@@ -166,6 +219,12 @@ var _path := PackedVector2Array()
 var _path_index := 0
 var _stuck_timer := 0.0
 var _conversation: Node = null
+
+## 昏迷相關狀態（《99》P-27）
+var _incapacitation_start_minute := -1		# 昏迷開始的遊戲分鐘，-1 表示未昏迷
+var _is_being_carried := false				# 標記正在被搬運（#161 會設置此項）
+var _treatment_start_minute := -1			# 藥草鋪治療開始的遊戲分鐘，-1 表示未治療
+var _treatment_location := ""				# 治療地點（暫定「藥草鋪」）
 
 # 滑鼠 hover（selection.gd）跟 E 鍵目前的互動目標（player.gd）是兩個獨立的
 # 高亮來源，任一個成立就該顯示描邊。分開存，不是合用一個布林值——CodeRabbit
@@ -262,6 +321,11 @@ const TICK_GAME_MINUTES := 10
 var _tick_minute_accum := 0
 
 func _on_game_minute(_hour: int, _minute: int) -> void:
+	# 昏迷與治療檢查每遊戲分鐘執行（與 GameClock.time_changed 同步）
+	_update_incapacitation()
+	_update_treatment()
+
+	# 情緒與其他 condition 每 10 遊戲分鐘執行一次（tick 機制）
 	_tick_minute_accum += 1
 	if _tick_minute_accum < TICK_GAME_MINUTES:
 		return
@@ -326,11 +390,16 @@ func _set_condition(type: String, present: bool) -> void:
 ## 下次檢查就自動移除（《02》§2-2／§2-3 規則 4）。只做偵測與新增/移除；
 ## 行為成功率／說真心話機率留給 #120，exhausted「強制昏睡」是行動佔用邏輯，
 ## 留給該動作自己處理，filthy 效果待《99》P-35 重新設計，這裡都不做
+##
+## 昏迷狀態檢查（《99》P-27）：health ≤ 0 即進入昏迷。注意昏迷不是「門檻自動」，
+## 只要曾經觸發就必須明確結束（被搬走或完成治療），不會因為 health 變正就自動消失
 func _update_conditions() -> void:
 	if stats == null:
 		return
 
 	var injury := stats.get_value("injury")
+	var health := stats.get_value("health")
+
 	_set_condition(CONDITION_INJURED, injury > 0.0)
 	_set_condition(CONDITION_BLEEDING, injury >= 20.0)
 	_set_condition(CONDITION_DRUNK, stats.get_value("alcohol") > 30.0)
@@ -339,6 +408,10 @@ func _update_conditions() -> void:
 	_set_condition(CONDITION_EXHAUSTED, stats.get_value("stamina") <= 0.0)
 	_set_condition(CONDITION_SLEEPY, stats.get_value("wakefulness") < 15.0)
 	_set_condition(CONDITION_FILTHY, stats.get_value("hygiene") < 20.0)
+
+	## 昏迷狀態觸發（health ≤ 0）——不是門檻自動，一旦進入必須明確結束
+	if health <= 0.0 and not has_condition(CONDITION_INCAPACITATED):
+		_start_incapacitation()
 
 	# bleeding／starving／dehydrated 的直接數值效果（《02》§2-2 效果欄），
 	# 跟成功率無關所以不算 #120 的範圍。injury 自然衰減暫停是唯一的例外規則
@@ -349,6 +422,114 @@ func _update_conditions() -> void:
 	if has_condition(CONDITION_DEHYDRATED):
 		stats.add("health", -1.0)
 	stats.injury_decay_paused = has_condition(CONDITION_BLEEDING)
+
+## 開始昏迷（health ≤ 0 觸發）。記錄開始時間，30 分鐘內若無人搬走則自動傳送藥草鋪
+## （《99》P-27，搬走邏輯依賴 #161 haul/struggle）
+func _start_incapacitation() -> void:
+	_set_condition(CONDITION_INCAPACITATED, true)
+	_incapacitation_start_minute = GameClock.hour * 60 + GameClock.minute
+	_is_being_carried = false
+	stop_moving()  # 立即停止移動
+	print_debug("Character %s 進入昏迷，計時器已啟動" % character_name)
+
+## 昏迷或治療中都不能動：昏迷是「石化原地」，治療是「住院中」，兩者共用同一個
+## 移動鎖（《99》P-27／藥草鋪筆記），供 move_to() 與 _decide_velocity()（含 Player 覆寫）共用
+func _is_movement_locked() -> bool:
+	return has_condition(CONDITION_INCAPACITATED) or _treatment_start_minute != -1
+
+## 每遊戲分鐘檢查昏迷狀態：
+## 1. 若被搬走（#161 設置 _is_being_carried），立即結束昏迷
+## 2. 若昏迷 30 分鐘無人搬走，自動傳送藥草鋪並開始治療（待藥草鋪傳送機制完成）
+func _update_incapacitation() -> void:
+	if not has_condition(CONDITION_INCAPACITATED):
+		return
+
+	# 檢查是否被搬走（#161 會設置此標誌）
+	if _is_being_carried:
+		_end_incapacitation()
+		return
+
+	# 計算昏迷時長（單位：遊戲分鐘）
+	var current_minute := GameClock.hour * 60 + GameClock.minute
+	var elapsed_minutes := (current_minute - _incapacitation_start_minute) % (24 * 60)
+
+	# 30 分鐘無人搬走時自動傳送藥草鋪開始治療
+	if elapsed_minutes >= 30:
+		_send_to_herb_shop_for_treatment()
+
+## 結束昏迷（被搬走時觸發，#161 負責調用）
+func _end_incapacitation() -> void:
+	_set_condition(CONDITION_INCAPACITATED, false)
+	_incapacitation_start_minute = -1
+	_is_being_carried = false
+
+	# 恢復少量 health 避免立即重新進入昏迷（被搬走表示獲得基礎救助）
+	if stats != null:
+		stats.set_value("health", 10.0)
+
+	print_debug("Character %s 昏迷已結束（被搬走）" % character_name)
+
+## 由搬運動作（#161 haul）調用，標記此角色正在被搬運。
+## 若該角色昏迷，搬運會立即結束昏迷計時器（《99》P-27）
+func set_being_carried(is_carried: bool) -> void:
+	if is_carried and has_condition(CONDITION_INCAPACITATED):
+		_is_being_carried = true
+	elif not is_carried:
+		_is_being_carried = false
+
+## 自動傳送到藥草鋪並開始治療
+func _send_to_herb_shop_for_treatment() -> void:
+	# 治療已開始時不重複設置（避免重置計時器）
+	if _treatment_start_minute != -1:
+		return
+
+	print_debug("Character %s 昏迷 30 分鐘無人搬走，自動傳送藥草鋪治療" % character_name)
+
+	# TODO：實現自動傳送邏輯（awaiting #162 或專門的傳送 issue）
+	# 記錄治療開始時間，_update_treatment() 會處理倒計時
+	_treatment_start_minute = GameClock.hour * 60 + GameClock.minute
+	_treatment_location = "herb_shop"
+
+	# 進入治療時移除昏迷狀態（治療與昏迷互斥）
+	_set_condition(CONDITION_INCAPACITATED, false)
+	_incapacitation_start_minute = -1
+
+## 每遊戲分鐘檢查治療進度。60 分鐘治療完成後解除所有異常狀態
+func _update_treatment() -> void:
+	if _treatment_start_minute == -1:
+		return
+
+	var current_minute := GameClock.hour * 60 + GameClock.minute
+	var elapsed_minutes := (current_minute - _treatment_start_minute) % (24 * 60)
+
+	# 治療完成：60 分鐘後解除所有異常狀態並結束昏迷
+	if elapsed_minutes >= 60:
+		_complete_treatment()
+
+## 治療完成：解除所有異常狀態、恢復 health 和 injury、結束昏迷
+func _complete_treatment() -> void:
+	print_debug("Character %s 藥草鋪治療完成" % character_name)
+
+	# 恢復 health 和 injury（《99》P-27、P-28）
+	if stats != null:
+		stats.set_value("health", 50.0)		# 設定一個中等恢復量
+		stats.set_value("injury", 0.0)
+
+		# 恢復其他生理數值到安全水平，避免治療完立即重新觸發 condition
+		stats.set_value("alcohol", 0.0)		# 清除酒精
+		stats.set_value("satiety", 50.0)	# 恢復飽食度
+		stats.set_value("hydration", 50.0)	# 恢復水分
+		stats.set_value("stamina", 50.0)	# 恢復體力
+		stats.set_value("wakefulness", 50.0)	# 恢復清醒度
+		stats.set_value("hygiene", 50.0)	# 恢復衛生
+
+	# 清除所有異常狀態
+	conditions.clear()
+	_incapacitation_start_minute = -1
+	_treatment_start_minute = -1
+	_treatment_location = ""
+
+	print_debug("Character %s 已恢復可行動" % character_name)
 
 
 # ---- 移動 ----
@@ -361,6 +542,10 @@ var last_move_target := Vector2.ZERO
 
 # 走 A* 路徑到指定的世界座標；找不到路徑回傳 false
 func move_to(target: Vector2) -> bool:
+	# 昏迷或治療中無法移動
+	if _is_movement_locked():
+		return false
+
 	var nav = get_tree().get_first_node_in_group("nav_grid")
 	if nav == null:
 		push_error("Character.move_to: 場景裡沒有 NavGrid")
@@ -423,6 +608,8 @@ func talk_to(other: Character) -> String:
 		return TALK_TARGET_BUSY
 	if get_body_position().distance_to(other.get_body_position()) > TALK_RANGE:
 		return TALK_TOO_FAR
+	if not _has_line_of_sight(other):
+		return TALK_TARGET_NOT_VISIBLE
 	if not other.is_talk_interruptible():
 		return TALK_TARGET_UNINTERRUPTIBLE
 
@@ -435,21 +622,16 @@ func talk_to(other: Character) -> String:
 	get_tree().current_scene.add_child(conversation)
 	return TALK_OK
 
-# 找最近的可搭話對象。按鍵搭話用得到；指令是直接指名，不走這裡
-func find_nearest_character() -> Character:
-	var nearest: Character = null
-	var shortest := TALK_RANGE
-
-	for node in get_tree().get_nodes_in_group("characters"):
-		if node == self:
-			continue
-
-		var distance := get_body_position().distance_to(node.get_body_position())
-		if distance <= shortest:
-			shortest = distance
-			nearest = node
-
-	return nearest
+# 兩點之間有沒有牆擋住。跟 vision.gd 的 _has_line_of_sight() 同一個演算法
+# （direct_space_state 查 blocker_mask），但不透過 Vision 元件——talk_to() 可能
+# 被明確指名對象呼叫（debug 主控台、agent.gd 的 LLM 決策），這時候對象不一定
+# 在呼叫端 Vision 目前的可見集合裡（例如剛好卡在 0.2 秒的重新整理間隔之間），
+# 這裡要的是「現在這一刻真的擋不擋」，不是快取
+func _has_line_of_sight(other: Character) -> bool:
+	var params := PhysicsRayQueryParameters2D.create(
+		get_body_position(), other.get_body_position(), TALK_BLOCKER_MASK
+	)
+	return get_world_2d().direct_space_state.intersect_ray(params).is_empty()
 
 func enter_conversation(conversation: Node) -> void:
 	_conversation = conversation
@@ -525,28 +707,23 @@ func make_noise(radius: float = NOISE_RADIUS) -> void:
 
 var _working := false
 
+## _end_work() 需要的 workstation 參照，讓 force_interrupt() 可以在不依賴
+## _run_work() 協程本地變數的情況下，自己也呼叫得到 _end_work()
+var _current_workstation: Workstation = null
+
+## 每次 _end_work() 遞增，_run_work() 協程在建立時記住當下的號碼。
+## force_interrupt()（見《02》§3「被攻擊立即中斷，含 work 中」）當下就直接
+## 呼叫 _end_work() 立即釋放工作站、收掉進度條——不能拖到 _run_work() 下一次
+## GameClock.time_changed 才收尾（CodeRabbit review 抓到）：那段空窗期
+## 工作站仍算「有人在用」，其他角色會被 WORK_OCCUPIED 擋下來，明明沒有人真的
+## 在那裡工作。協程醒來後比對號碼：跟目前的號碼對不上，代表這個 session
+## 已經被 force_interrupt() 提早收尾過，單純 return，不能重複呼叫
+## _end_work()——這時 workstation 可能已經被下一個佔用者用掉
+var _work_session_id := 0
+
 
 func is_working() -> bool:
 	return _working
-
-# 世界物件版的「找最近的」：量的是 global_position，因為工作站、販賣機這些
-# StaticBody2D 的原點就是它們的位置。find_nearest_character() 不走這條——
-# 它要跳過自己，而且量的是 get_body_position()（角色的碰撞體相對節點有偏移）
-func _find_nearest_in_group(group: String, max_distance: float) -> Node2D:
-	var nearest: Node2D = null
-	var shortest := max_distance
-
-	for node in get_tree().get_nodes_in_group(group):
-		var distance := get_body_position().distance_to(node.global_position)
-		if distance <= shortest:
-			shortest = distance
-			nearest = node
-
-	return nearest
-
-# 找最近的可工作地點。E 鍵在工作站、販賣機與人之間比距離挑最近的（見 player.gd）
-func find_nearest_workstation() -> Workstation:
-	return _find_nearest_in_group("workstations", WORK_RANGE) as Workstation
 
 # 開始在某個工作站工作。成功回傳 WORK_OK（空字串）不代表錢已經到手——
 # 這裡只負責卡位、開始計時，真正撥款在 _run_work()，時間到了才給，
@@ -562,10 +739,11 @@ func work_at(workstation: Workstation) -> String:
 		return WORK_OCCUPIED
 
 	_working = true
+	_current_workstation = workstation
 	stop_moving()
 	if work_progress != null:
 		work_progress.show_progress(0.0)
-	_run_work(workstation)
+	_run_work(workstation, _work_session_id)
 	return WORK_OK
 
 # 數 GameClock.time_changed 發了幾次來算「過了幾個遊戲分鐘」，不是掛
@@ -573,20 +751,25 @@ func work_at(workstation: Workstation) -> String:
 # 遊戲時間變速的話兩邊就會對不上。進度條每過一個遊戲分鐘更新一次，
 # 不是照 _process() 的 delta 平滑跑——工作本身就是離散地一分鐘一分鐘算，
 # 進度條應該老實反映這件事，不用假裝連續
-func _run_work(workstation: Workstation) -> void:
+func _run_work(workstation: Workstation, session_id: int) -> void:
 	for i in WORK_DURATION_MINUTES:
 		await GameClock.time_changed
 
-		# 這個協程橫跨 5 個遊戲分鐘，中間什麼都可能發生。兩件事要在每次醒來時重驗：
+		# 這個協程橫跨 5 個遊戲分鐘，中間什麼都可能發生。三件事要在每次醒來時重驗：
 		#
-		# 一、工作站可能已經被移除。await 之後直接 workstation.release() 會炸
+		# 一、這個 session 可能已經被 force_interrupt() 收尾過（見它的註解，
+		#     還可能已經被下一次 work_at() 蓋掉）——不是自己的號碼了就直接
+		#     return，不能對這時可能已經被別人用掉的 workstation 再收尾一次。
+		# 二、工作站可能已經被移除。await 之後直接 workstation.release() 會炸
 		#     「call function on a previously freed instance」。
-		# 二、角色可能自己走開了——Player 一按方向鍵就蓋掉 work_at() 的 stop_moving()，
+		# 三、角色可能自己走開了——Player 一按方向鍵就蓋掉 work_at() 的 stop_moving()，
 		#     `_working` 攔不住移動。不重驗距離的話，按下 E 之後跑到地圖另一頭，
 		#     時間到照樣入帳，而且這 5 分鐘工作站一直被卡著、現場卻沒人。
 		#
-		# 兩種都是「沒有做完」，所以收尾但不撥款：錢是站在這裡做滿的報酬，
+		# 後兩種都是「沒有做完」，所以收尾但不撥款：錢是站在這裡做滿的報酬，
 		# 不是按下 E 的報酬
+		if session_id != _work_session_id:
+			return
 		if not is_instance_valid(workstation) \
 				or get_body_position().distance_to(workstation.global_position) > WORK_RANGE:
 			_end_work(workstation)
@@ -605,6 +788,11 @@ func _end_work(workstation: Workstation) -> void:
 	if is_instance_valid(workstation):
 		workstation.release(self)
 	_working = false
+	_current_workstation = null
+	# 遞增號碼：如果這次收尾是 force_interrupt() 提早觸發的，_run_work() 的
+	# 協程還在等下一次 GameClock.time_changed，讓它醒來後比對號碼發現對不上，
+	# 知道 session 已經收尾過，不用再收一次
+	_work_session_id += 1
 	if work_progress != null:
 		work_progress.hide_progress()
 	_on_work_finished()
@@ -617,9 +805,6 @@ func _on_work_finished() -> void:
 
 
 # ---- 購買 ----
-
-func find_nearest_vending_machine() -> VendingMachine:
-	return _find_nearest_in_group("vending_machines", BUY_RANGE) as VendingMachine
 
 # 跟販賣機買一件東西。買一件東西是兩件事，要一起成功（#63 明講的坑）：
 # spend() 扣款成功之後，add_item() 還是可能因為背包滿了回 ADD_NO_SPACE ——
@@ -658,6 +843,44 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 		money_popup.show_change(-price)
 
 	return BUY_OK
+
+
+# ---- 進食 ----
+
+# 找背包裡第一筆食物類物品的摘要（get_summary() 那份，含 item_id/count/slot），
+# 找不到回空字典。食物判斷走 ItemDatabase 的 category == "food"（#84 已落地），
+# 不是硬編碼白名單——#114 原本的建議是「先硬編碼、等 #84 落地後再改查表」，
+# #84 已經在這之前完成，沒有必要走回頭路
+func _find_food_slot() -> Dictionary:
+	for entry in inventory.get_summary():
+		var item_id: String = entry["item_id"]
+		if ItemDatabase.get_item(item_id).get("category", "") == "food":
+			return entry
+	return {}
+
+# 吃掉背包裡一份食物：扣一個、回復對應量的 satiety。沒有背包的角色
+# （EAT_NO_INVENTORY）或背包裡沒有食物（EAT_NO_FOOD）都要有明確原因碼，
+# 跟 TALK_*／WORK_*／BUY_* 同一套「每個動作都要能講出為什麼失敗」的規則。
+# remove_item() 的回傳值要先確認是 REMOVE_OK 才能加 satiety（CodeRabbit
+# review 抓到）——不然扣格子失敗（例如兩個來源同一 tick 搶同一份食物）時，
+# satiety 還是會被加上去，變成憑空回復
+func eat() -> String:
+	if inventory == null:
+		return EAT_NO_INVENTORY
+
+	var food := _find_food_slot()
+	if food.is_empty():
+		return EAT_NO_FOOD
+	if stats == null:
+		return EAT_NO_STATS
+
+	var item_id: String = food["item_id"]
+	var remove_reason := inventory.remove_item(item_id, 1)
+	if remove_reason != Inventory.REMOVE_OK:
+		return EAT_NO_FOOD
+
+	stats.add("satiety", EAT_SATIETY_RECOVERY.get(item_id, 0.0))
+	return EAT_OK
 
 
 # ---- 送禮 ----
@@ -748,6 +971,56 @@ func give_to(other: Character, item_id: String, count: int = 1) -> String:
 	return GIVE_OK
 
 
+# ---- 攻擊 ----
+
+## 攻擊命中必中——跟 steal／persuade 等動作不同，不依《01-2》§2 通用成功率
+## 公式擲骰，P-28 已拍板 MVP 不做閃避／格擋。硬規則只檢查目標是否存在、
+## 距離夠不夠近；命中後直接套用數值、強制中斷對方目前行動
+func attack(other: Character) -> String:
+	if other == null:
+		return ATTACK_TARGET_NOT_FOUND
+	if other == self:
+		return ATTACK_TARGET_IS_SELF
+	if get_body_position().distance_to(other.get_body_position()) > ATTACK_RANGE:
+		return ATTACK_TOO_FAR
+
+	if other.stats != null:
+		other.stats.add("health", ATTACK_HEALTH_DELTA)
+		other.stats.add("injury", ATTACK_INJURY_DELTA)
+		# 立即同步 bleeding／injury 衰減暫停，不等 _update_conditions() 的 10 分鐘
+		# 一次 tick——命中瞬間 injury 可能已經跨過 20 的門檻，晚同步的話這段空窗期
+		# injury 會繼續被 Stats._process() 的自然衰減蓋掉這次造成的傷害
+		other._set_condition(CONDITION_BLEEDING, other.stats.get_value("injury") >= 20.0)
+		other.stats.injury_decay_paused = other.has_condition(CONDITION_BLEEDING)
+	other.force_interrupt()
+	other._on_attacked(self)
+	return ATTACK_OK
+
+## 被攻擊的收尾鉤子。基底只是掛點——Player 沒有記憶系統可寫，只有 Agent
+## 需要把這件事記成事實句給下次決策／反思用（見 agent.gd 覆寫）
+func _on_attacked(_attacker: Character) -> void:
+	pass
+
+## 強制中斷目前行動，不徵詢 interruptible／能不能被搭話打斷——跟仲裁器的
+## 「搶占」判斷是兩回事，這裡是外部事件硬性發生（被攻擊等，《02》§3「立即
+## 中斷，含 work 中」）。工作中要立即呼叫 _end_work()：工作站的釋放與進度條
+## 收尾不能拖到 _run_work() 下一次 GameClock.time_changed 才做（CodeRabbit
+## review 抓到）——拖著的話那段空窗期工作站仍算「有人在用」，擋掉其他角色，
+## 而工作進度 UI 也還開著，跟角色已經不在工作的實際狀態對不上
+func force_interrupt() -> void:
+	stop_moving()
+	if is_in_conversation():
+		leave_conversation()
+	if _working:
+		_end_work(_current_workstation)
+	_on_action_interrupted()
+
+## 中斷後的收尾鉤子，讓子類別決定要不要重新規劃行程。基底不用管——
+## Player 沒有行程可言，只有 Agent 需要清目前任務並重新問決策
+func _on_action_interrupted() -> void:
+	pass
+
+
 # ---- 狀態快照 ----
 
 # 純資料的角色狀態，不含任何翻譯字串或 BBCode。debug_console.gd 的 status
@@ -816,6 +1089,10 @@ func get_save_data() -> Dictionary:
 	var data := {
 		"character_id": character_id,
 		"character_name": character_name,
+		"incapacitation_start_minute": _incapacitation_start_minute,
+		"is_being_carried": _is_being_carried,
+		"treatment_start_minute": _treatment_start_minute,
+		"treatment_location": _treatment_location,
 	}
 
 	if stats != null:
@@ -836,6 +1113,17 @@ func load_save_data(data: Dictionary) -> void:
 	if is_inside_tree():
 		_ensure_unique_id()
 	character_name = data.get("character_name", character_name)
+
+	# 還原昏迷與治療狀態（用 -1 作為哨兵值表示未進入該狀態）
+	_incapacitation_start_minute = data.get("incapacitation_start_minute", -1)
+	_is_being_carried = data.get("is_being_carried", false)
+	_treatment_start_minute = data.get("treatment_start_minute", -1)
+	_treatment_location = data.get("treatment_location", "")
+
+	# 治療與昏迷互斥（見 _send_to_herb_shop_for_treatment()），治療中的存檔優先還原成治療狀態，
+	# 不重建 CONDITION_INCAPACITATED；只有「昏迷中但還沒送醫」才需要重建
+	if _incapacitation_start_minute != -1 and _treatment_start_minute == -1:
+		_set_condition(CONDITION_INCAPACITATED, true)
 
 	if stats != null and data.has("stats"):
 		stats.load_save_data(data["stats"])
@@ -949,6 +1237,15 @@ func update_animation(desired_velocity: Vector2) -> void:
 # 這一幀要用的速度。基底只跟隨 A* 路徑，子類別覆寫來加上自己的驅動來源。
 # 對話中不自動移動 —— 但 Player 的輸入會蓋過這裡，走遠了由距離判定自然散場
 func _decide_velocity() -> Vector2:
+	# 被搬運時身體要跟著搬運者走，即使正昏迷或治療中（石化原地指的是不能「自己」
+	# 移動，不是身體釘死不能被搬走）——這個判斷要排在昏迷/治療鎖定之前
+	if is_being_hauled():
+		return _follow_hauler()
+
+	# 昏迷或治療中無法產生移動速度
+	if _is_movement_locked():
+		return Vector2.ZERO
+
 	if is_in_conversation():
 		return Vector2.ZERO
 
@@ -969,7 +1266,22 @@ func _follow_path() -> Vector2:
 		move_finished.emit(true)
 		return Vector2.ZERO
 
-	return body_position.direction_to(_path[_path_index]) * SPEED
+	return body_position.direction_to(_path[_path_index]) * effective_speed()
+
+# 被搬運中跟著搬運者移動
+func _follow_hauler() -> Vector2:
+	if _hauled_by.is_empty():
+		return Vector2.ZERO
+
+	var hauler: Character = _hauled_by[0]
+	if not is_instance_valid(hauler):
+		return Vector2.ZERO
+
+	var body_position := get_body_position()
+	if body_position.distance_to(hauler.get_body_position()) < ARRIVE_DISTANCE:
+		return Vector2.ZERO
+
+	return body_position.direction_to(hauler.get_body_position()) * hauler.effective_speed()
 
 # 該走卻幾乎沒位移（被地形頂住）就放棄，避免無限原地打轉
 func _check_stuck(delta: float) -> void:
@@ -991,3 +1303,57 @@ func _physics_process(delta: float) -> void:
 
 	if is_moving():
 		_check_stuck(delta)
+
+	# 搬運體力消耗（#161，《99》P-27 #3-2）
+	if _hauling_target != null and stats != null:
+		stats.add("stamina", -HAUL_STAMINA_DRAIN * delta)
+
+
+# ---- 搬運邏輯（#161） ----
+
+func is_being_hauled() -> bool:
+	return not _hauled_by.is_empty()
+
+func hauler_count() -> int:
+	return _hauled_by.size()
+
+func is_hauling() -> bool:
+	return _hauling_target != null
+
+func effective_speed() -> float:
+	return SPEED * _speed_multiplier
+
+func start_haul(target: Character) -> String:
+	if target == null:
+		return HAUL_TARGET_NOT_FOUND
+	if target == self:
+		return HAUL_TARGET_IS_SELF
+	if get_body_position().distance_to(target.get_body_position()) > HAUL_RANGE:
+		return HAUL_TOO_FAR
+
+	# 換搬別的目標前，先放掉原本那個，避免舊目標的 _hauled_by 留著搬不掉的殘留參照
+	if _hauling_target != null and _hauling_target != target:
+		stop_haul()
+
+	target._attach_haul(self)
+	_hauling_target = target
+	_speed_multiplier = HAUL_SPEED_MULTIPLIER
+	target.set_being_carried(true)		# #271: 通知昏迷機制
+	return HAUL_OK
+
+func stop_haul() -> void:
+	if _hauling_target != null:
+		var target := _hauling_target
+		target._detach_haul(self)
+		# 雙人搬運時（《99》P-27 #8），其中一人放手不該讓另一人還在搬的目標被標記成沒人搬
+		if not target.is_being_hauled():
+			target.set_being_carried(false)		# #271: 通知昏迷機制
+		_hauling_target = null
+	_speed_multiplier = 1.0
+
+func _attach_haul(hauler: Character) -> void:
+	if not _hauled_by.has(hauler):
+		_hauled_by.append(hauler)
+
+func _detach_haul(hauler: Character) -> void:
+	_hauled_by.erase(hauler)
