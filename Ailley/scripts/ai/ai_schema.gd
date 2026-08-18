@@ -462,6 +462,38 @@ static func validate_reflection(data: Dictionary) -> Dictionary:
 	return _ok({"summary": summary, "events": events})
 
 
+# 建角完成當下的一次性回應（《05》流程圖 ⑤，#122）：角色對自己性格設定的
+# 一句話吐槽。跟 validate_dialogue() 的 line 同一種必填、不可為空的態度——
+# 這通呼叫只打一次，沒有下一輪可以補救，空字串代表這次生成失敗，不是合法值
+static func validate_creation(data: Dictionary) -> Dictionary:
+	if not data.has("words_to_creator") or not data["words_to_creator"] is String:
+		return _fail(ERROR_BAD_SHAPE)
+
+	var text: String = (data["words_to_creator"] as String).strip_edges()
+	if text.is_empty():
+		return _fail(ERROR_BAD_SHAPE)
+	if text.length() > MAX_LINE_CHARS:
+		text = text.substr(0, MAX_LINE_CHARS)
+
+	return _ok({"words_to_creator": text})
+
+
+static func creation_response_schema() -> Dictionary:
+	return {
+		"type": "json_schema",
+		"json_schema": {
+			"name": "creation_response",
+			"schema": {
+				"type": "object",
+				"properties": {
+					"words_to_creator": {"type": "string", "maxLength": MAX_LINE_CHARS},
+				},
+				"required": ["words_to_creator"],
+			},
+		},
+	}
+
+
 # 選填字串欄位的共用驗證：缺席回空字串、型別錯回 null（呼叫端用 null 判斷失敗，
 # 因為合法值本身可以是空字串，不能拿空字串當失敗信號）、超長截斷不拒絕。
 # validate_dialogue() 的 line 沒有共用這個，因為它是必填且不可為空，跟這裡
