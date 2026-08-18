@@ -174,6 +174,20 @@ var _plan_update_requested := false
 ## 那個轉換瞬間，見 _reevaluate() 怎麼用它
 var _was_sleeping := false
 
+## #265：_reevaluate() 的重入保護（trampoline）。_pursue_current_task()
+## 選中 give/shout、或 talk 判定失敗時會呼叫 _finish_task_and_request_next()，
+## 它又呼叫一次 _reevaluate()——如果任務池裡連續好幾筆都是「一叫就結束」的
+## 任務，這條鏈會巢狀往下疊很多層函式呼叫（O(n) 呼叫堆疊深度、O(n²) 重複
+## 仲裁工作）。不能單純拿掉那次呼叫：等回應期間 fallback 任務不會被馬上
+## 接手，會空等到下一次 GameClock 分鐘變化（CodeRabbit review 抓到過的舊
+## bug）。也不能單純偵測到重入就跳過不做事：那樣這一輪就沒有任何地方去挑
+## 下一筆任務，一樣會退回空等的問題。改成迴圈：最外層呼叫真的執行
+## _reevaluate_once()，巢狀呼叫只設 _reevaluate_pending 然後直接返回，把呼叫
+## 堆疊收回最外層的 while 迴圈，迴圈再跑下一輪去挑下一筆任務——行為不變，
+## 深度收斂成固定
+var _reevaluating := false
+var _reevaluate_pending := false
+
 ## 這隻角色的決策來源，出生時決定一次，之後所有決策/對話呼叫都透過它——
 ## 跟《06》「decision_source／model_name 投放後不可改」的規則一致，不做成每次呼叫
 ## 才判斷（#155）
@@ -217,6 +231,14 @@ func _ready() -> void:
 	_provider = _make_provider()
 	_load_schedule()
 
+## 公開版的「重建 provider」（#122，CodeRabbit review 抓到的時序 bug）。
+## GameManager.deploy_from_library() 會在 add_child()（進而觸發這個節點的
+## _ready()）之後才套用建角面板選的 decision_source／model_name——那時候
+## _provider 已經照預設值（"local"）建好了，角色庫選的來源永遠不會生效。
+## 呼叫端設完那兩個欄位要接著呼叫這個，才會用最終的值重建一次
+func rebuild_provider() -> void:
+	_provider = _make_provider()
+
 	if vision != null:
 		vision.spotted.connect(_on_spotted)
 
@@ -255,13 +277,18 @@ func _make_provider() -> DecisionProvider:
 	if decision_source == "cloud":
 		if model_name.is_empty():
 			reason = "decision_source 'cloud' 但 model_name 是空的"
-		elif not AIService.config.has_valid_provider(model_name):
-			# 用 has_valid_provider() 不是 has_provider()：AIConfig 裡有這個項目
-			# 但 base_url/model 沒填齊時，AIService.request() 一樣擋成
-			# ERROR_NO_PROVIDER，只查存在的話這種設定會安靜地讓角色決策啞掉
-			reason = "decision_source 'cloud' 但 model_name '%s' 不是可用的 AIConfig provider（不存在或設定不全）" % model_name
 		else:
-			return RemoteLLMProvider.new(model_name)
+			# model_name（《06》）存的是給玩家看的型號字串（如
+			# "qwen2.5-7b-instruct"），不是 AIConfig.providers 字典的 key
+			# （如 "openrouter"）——那個 key 只是玩家自己取的代號，規格書
+			# 刻意不讓它進 model_name。查表方向要反過來：拿型號去掃
+			# providers 找 .model 相符的那個，再用那個 provider 真正的
+			# 名字去打 AIService.request()（見 AIConfig.get_provider_by_model()）
+			var provider := AIService.config.get_provider_by_model(model_name)
+			if provider == null or not provider.valid:
+				reason = "decision_source 'cloud' 但 model_name '%s' 沒有對應的可用 AIConfig provider（不存在或設定不全）" % model_name
+			else:
+				return RemoteLLMProvider.new(provider.name)
 	elif decision_source != "local":
 		reason = "decision_source '%s' 不是已知值" % decision_source
 
@@ -861,7 +888,22 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 #
 # 代價是 _pursue_current_task() 得自己認得「這個地點已經在處理了」，
 # 見它自己的註解
+#
+# #265：真正的重新仲裁邏輯搬進 _reevaluate_once()，這個函式只負責
+# trampoline——見上面 _reevaluating／_reevaluate_pending 的宣告註解
 func _reevaluate() -> void:
+	if _reevaluating:
+		_reevaluate_pending = true
+		return
+
+	_reevaluating = true
+	_reevaluate_pending = true
+	while _reevaluate_pending:
+		_reevaluate_pending = false
+		_reevaluate_once()
+	_reevaluating = false
+
+func _reevaluate_once() -> void:
 	var now_minutes := _now_minutes()
 
 	# 剛睡醒的偵測要在這裡的任何選任務邏輯跑之前先記下「進來的時候是不是
@@ -1169,6 +1211,12 @@ func _pursue_current_task() -> void:
 	if _reacting:
 		return
 
+	# murmur 沒有目標、也不用移動——講給自己聽當下就結束，不屬於「走到某個
+	# 地點」這件事，要另外分流，不能落進下面的地點判斷
+	if current_state == "murmur":
+		_pursue_murmur_task()
+		return
+
 	# give／shout 跟 talk 一樣要另外分流，不能落進下面的地點判斷：give 的目標是
 	# 會動的角色（跟 talk 同理），shout 則完全沒有 place／target 可言——原地喊
 	# 一聲就結束，不屬於「走到某個地點」這件事
@@ -1255,6 +1303,34 @@ func _pursue_talk_task() -> void:
 			return
 
 	var target_name: String = str(_current_task.get("params", {}).get("target", ""))
+
+	# schedule talk（target_name 為空）需要先到達指定地點再找人聊。
+	# LLM talk（target_name 非空）維持現有行為：直接追蹤目標角色。
+	if target_name.is_empty() and not current_place.is_empty():
+		var anchors := get_tree().get_first_node_in_group("place_anchors")
+		if anchors == null or not anchors.has(current_place):
+			if current_place != _pursued_place:
+				push_error("Agent %s: 沒有這個地點 %s" % [character_name, current_place])
+				_pursued_place = current_place
+			return
+
+		var place_pos: Vector2 = anchors.resolve(current_place)
+		if not _has_arrived_at(place_pos):
+			# 還沒到——跟 _pursue_current_task() 的節流邏輯一樣：
+			# 同一個地點只起步一次，還在走就繼續走
+			if current_place == _pursued_place and (is_moving() or _pursuit_done):
+				return
+			_pursued_place = current_place
+			_pursuit_done = false
+			if not move_to(place_pos):
+				push_warning("Agent %s: 走不到搭話地點 %s" % [character_name, current_place])
+				_pursuit_done = true
+			return
+		# 到了——停下、標記，繼續往下找人
+		stop_moving()
+		_pursued_place = current_place
+		_pursuit_done = true
+
 	var target := _find_character_by_name(target_name)
 
 	if target == null:
@@ -1303,6 +1379,38 @@ func _pursue_talk_task() -> void:
 
 	if _talk_pursuit_stuck_ticks == 3:
 		push_warning("Agent %s: 追不上搭話對象 %s，可能被卡住" % [character_name, target.character_name])
+
+# murmur 任務的執行（#162）：沒有目標、不用移動，講給自己聽當下就結束——不像
+# talk 要追著會動的目標走，也不像 nap／rest 那類要佔滿整段 duration。resolve()
+# 一過（murmur 沒有硬規則、不擲骰，恆成功）就講一句、立刻退出任務池
+func _pursue_murmur_task() -> void:
+	# CodeRabbit review：murmur 可能是從移動中的任務切換過來，不清掉舊路徑
+	# 的話角色會一邊沿用上一筆任務的移動、一邊講自語
+	if is_moving():
+		stop_moving()
+
+	var should_speak := true
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		should_speak = result["success"]
+
+	# 內容層跟 talk 同一套「模板先頂著，LLM 版之後再換」的分工（見
+	# note/技術/talk 動作設計.md）：murmur 沒有聽者，講的是給自己聽的話，
+	# 不能沿用 DialogueLines.reply() 那組面向對話對象的句子
+	if should_speak and stats != null:
+		say(DialogueLines.murmur(stats))
+
+	_remove_task(_current_task.get("id", ""))
+	_current_task = {}
+	current_place = ""
+	current_state = "idle"
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
+	# CodeRabbit review：_request_next_decision() 只有在非同步回應回來後才會
+	# 重新仲裁，不立刻補一次 _reevaluate() 的話，等回應期間排程或 fallback
+	# 任務不會被馬上接手，得空等到下一次 GameClock time_changed
+	_reevaluate()
 
 # 任務「做完了」的共同收尾：talk 判定失敗、give／shout 這種一次性動作執行完畢
 # 都要退出任務池、清掉目前任務狀態、主動補一次決策請求。

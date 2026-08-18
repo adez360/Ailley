@@ -128,6 +128,23 @@ score. Reply with JSON only, no prose, no code fence:
 {"summary": "<one sentence summarizing your day>",
  "events": [{"id": 0, "content": "<the event, in your own words, one sentence>", "valence": "positive|negative|neutral", "importance": 0}]}"""
 
+## 建角完成當下打一次的信封（《05》流程圖 ⑤，#122），跟 dialogue/plan/
+## reflection 平行的第四種類型。這一刻角色還沒有 Character 節點可以傳
+## （建角面板只丟出 Dictionary，投放才會生出節點），所以不能沿用吃 Character
+## 的 _system()——直接接 system_prompt 字串，跟 _system() 的接法一致
+## （人格段在前，規則接在後面）
+const CREATION_SYSTEM := """A character has just been created for a village life-sim game, based on the personality above.
+Write one short, first-person line — a wry, self-aware remark this character might mutter about their own personality traits, the way someone reads their own horoscope and snorts. Not a greeting, not addressed to anyone. Reply with JSON only, no prose, no code fence:
+{"words_to_creator": "<the one line>"}"""
+
+static func build_creation_envelope(system_prompt: String) -> Dictionary:
+	return {
+		"system": system_prompt + "\n\n" + CREATION_SYSTEM,
+		"payload": {"type": "creation"},
+		"response_format": AISchema.creation_response_schema(),
+	}
+
+
 ## character 是要反思的那隻 Agent。daily_events 是今天累積的事件陣列
 ## （agent.gd 的 _daily_events，每筆 {id, content}，睡前呼叫一次）。跟
 ## build_plan_envelope() 一樣沿用 _self_block()，不重新蒐集一次同一批角色狀態

@@ -248,6 +248,19 @@ func has_provider(provider_name: String) -> bool:
 	return get_provider(provider_name) != null
 
 
+## 依「型號字串」反查 provider（#122）。角色存的 `model_name`（《06》）是
+## 給玩家看的型號（如 `qwen2.5-7b-instruct`），不是 `providers` 字典的 key
+## （如 `local`）——那個 key 只是玩家自己在設定檔取的代號，規格書故意不讓它
+## 進 `model_name`，理由是「角色面板顯示『這隻由 local 驅動』沒有意義，玩家
+## 想看的是型號」。查表方向因此要反過來：拿型號去掃所有 provider 找 `.model`
+## 相符的那個，而不是照舊拿字串當 key 直接索引
+func get_provider_by_model(model: String) -> Provider:
+	for provider in providers.values():
+		if (provider as Provider).model == model:
+			return provider
+	return null
+
+
 ## 「這個名字真的打得出去嗎」。has_provider() 只查設定項存不存在，但 AIService.request()
 ## 擋的條件是 `provider == null or not provider.valid`——只用 has_provider() 事前檢查的
 ## 呼叫端，會放行一個存在但 base_url/model 沒填齊的設定項，然後每次請求都安靜收到
