@@ -607,9 +607,9 @@ func request_sleep_reflection() -> Dictionary:
 ## 之一」（呼叫端各自的理由見各呼叫處的註解）。這裡另外 or 上
 ## _plan_update_requested：上一輪模型如果申請過，這裡兌現、用完就消費掉——
 ## 不管呼叫端這次是為了什麼理由觸發，欠的那次都在這裡還
-func _request_next_decision(allow_update_plan: bool = false) -> void:
+func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	if _awaiting_decision:
-		return
+		return {"ok": false}
 	_awaiting_decision = true
 
 	var effective_allow_update_plan := allow_update_plan or _plan_update_requested
@@ -625,8 +625,13 @@ func _request_next_decision(allow_update_plan: bool = false) -> void:
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	_awaiting_decision = false
 
+	# 這次回應在 await 期間可能已經被 debug_set_llm_decision(false) 關掉——
+	# 淘汰它，不套用任何任務或計畫更新，跟從沒問過模型一樣
+	if not llm_decision_enabled:
+		return {"ok": false}
+
 	if not result["ok"]:
-		return
+		return {"ok": false}
 
 	var data: Dictionary = result["data"]
 
@@ -636,7 +641,7 @@ func _request_next_decision(allow_update_plan: bool = false) -> void:
 	print("[llm_decision] %s reasoning: %s" % [character_name, data.get("reasoning", "")])
 	print("[llm_decision] %s inner_monologue: %s" % [character_name, data.get("inner_monologue", "")])
 
-	_push_llm_tasks(data["tasks"], data)
+	var tasks_added := _push_llm_tasks(data["tasks"], data)
 
 	# 不管這輪有沒有拿到 update_plan 許可，模型都可能問「下次讓我改」——記
 	# 下來，下一次不管是哪個理由觸發 _request_next_decision() 都會兌現
@@ -651,6 +656,13 @@ func _request_next_decision(allow_update_plan: bool = false) -> void:
 		_apply_today_plan(update_plan)
 
 	_reevaluate()
+
+	return {
+		"ok": true,
+		"reasoning": data.get("reasoning", ""),
+		"inner_monologue": data.get("inner_monologue", ""),
+		"tasks_added": tasks_added,
+	}
 
 ## update_plan 回應整份取代 _today_plan，不是逐筆增刪改——四個開放時機語意上
 ## 都是「重寫」，不需要模型追蹤既有項目的 id 才能局部編輯，形狀跟驗證都簡單
@@ -690,8 +702,9 @@ func _today_plan_summary() -> Array[Dictionary]:
 ## response 帶的是同一次決策回應的 reasoning／inner_monologue，複製一份到
 ## 這批裡的每一筆 Task，讓「這個任務是為什麼被排進來的」跟任務本身綁在一起，
 ## 供之後《12》規格書的記憶系統直接從 Task 讀，不用另外對照決策回應的歷史記錄
-func _push_llm_tasks(tasks: Array[Dictionary], response: Dictionary) -> void:
+func _push_llm_tasks(tasks: Array[Dictionary], response: Dictionary) -> int:
 	var now_minutes := _now_minutes()
+	var accepted := 0
 
 	for task in tasks:
 		var params: Dictionary = task.get("params", {})
@@ -724,6 +737,9 @@ func _push_llm_tasks(tasks: Array[Dictionary], response: Dictionary) -> void:
 		task["reasoning"] = response.get("reasoning", "")
 		task["inner_monologue"] = response.get("inner_monologue", "")
 		_tasks.append(task)
+		accepted += 1
+
+	return accepted
 
 func _llm_task_count() -> int:
 	var count := 0
@@ -1578,29 +1594,20 @@ func debug_set_llm_decision(enabled: bool) -> Dictionary:
 	if not enabled or _awaiting_decision:
 		return {"triggered": false}
 
-	var pool_before := _llm_task_count()
-	await _request_next_decision(_today_plan_needs_new_goal())
+	# _request_next_decision() 回傳這次請求實際的驗證結果，不是靠任務池
+	# 前後淨變動去猜——_push_llm_tasks() 會先淘汰同 key 的舊任務再新增，
+	# 換舊為新時池子淨變動是 0，但這次請求其實成功了
+	var result := await _request_next_decision(_today_plan_needs_new_goal())
 
-	# _request_next_decision() 失敗時（AI 停用／逾時／驗證失敗）靜默放棄、
-	# 不留痕跡（見它自己的註解，fallback 頂著）——用新增的 llm 任務數判斷
-	# 這次到底成不成功，比另外設一個「上次決策 ok 嗎」的旗標更不會跟真正的
-	# 池子狀態脫鉤
-	var added := _llm_task_count() - pool_before
-	if added <= 0:
+	if not result["ok"]:
 		return {"triggered": true, "ok": false}
 
-	# 剛新增的這批任務都帶同一份 reasoning/inner_monologue（_push_llm_tasks()
-	# 逐筆複製同一份回應），抓最後一筆代表這次決策說了什麼
-	var latest: Dictionary = {}
-	for task in _tasks:
-		if task.get("source", "") == "llm":
-			latest = task
 	return {
 		"triggered": true,
 		"ok": true,
-		"reasoning": latest.get("reasoning", ""),
-		"inner_monologue": latest.get("inner_monologue", ""),
-		"tasks_added": added,
+		"reasoning": result.get("reasoning", ""),
+		"inner_monologue": result.get("inner_monologue", ""),
+		"tasks_added": result.get("tasks_added", 0),
 	}
 
 ## Debug 用：今天累積了哪些事件，給 reflect 指令在呼叫 request_sleep_reflection()
