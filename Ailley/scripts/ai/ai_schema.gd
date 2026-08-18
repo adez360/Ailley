@@ -316,7 +316,14 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false, no
 		# 100.9 能通過範圍檢查，換算成絕對值時被截斷成 100，變成一個沒被
 		# 驗證過的值。驗證通過後直接換算成 expires_at（絕對值）存進
 		# 下面的 tasks.append()，呼叫端不需要知道模型填的是相對時長
-		var expires_at := 0
+		#
+		# 欄位維持選填（#290 本文明講「要決定 required 與否」留待之後，不是
+		# 這個 PR 的範圍），但 CodeRabbit 抓到一個真的漏洞：沒填的話原本退回
+		# expires_at = 0，等於「永不過期」，跟這整個 PR 要擋的「任務永遠不過
+		# 期」目標矛盾。改成沒填時退回 MAX_EXPIRES_IN_MINUTES（一週）當預設
+		# 相對時長——不強制模型每次都要填，但省略時仍有個合理上限的存續時間，
+		# 不會退化成永久卡在池子裡
+		var expires_at := now_minutes + MAX_EXPIRES_IN_MINUTES
 		if task.has("expires_in_minutes"):
 			var expires_value: Variant = task["expires_in_minutes"]
 			if not (expires_value is int or expires_value is float):

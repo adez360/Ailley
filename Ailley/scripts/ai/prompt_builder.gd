@@ -66,8 +66,8 @@ You cannot rewrite today_plan this turn. If you want the chance to on your next 
 ## Agent.SCHEDULE_BASE_PRIORITY／TIME_BONUS／HYSTERESIS 算出來，不是另一個
 ## 手寫的數字——這三個常數改了，這裡的門檻會自動跟著動，不會再一次漂移
 const PLAN_SYSTEM_TAIL_TEMPLATE := """
-"priority" must be a number between %d and %d, on the same scale your schedule already uses. 10-110 is for ordinary preferences — a task already in its scheduled time window is worth 110, so an everyday preference at that level still won't outrank it. Only use %d-%d, and only for a genuine emergency happening right now (someone in danger, an attack) that would justify abandoning a meal or work already in progress — never for ordinary preferences.
-"duration" is your own estimate, in game minutes, of how long this action will take. It must be a positive number, up to %d (one full day) — never 0. Most actions take somewhere between 10 and 60 minutes; sleeping through the night can reasonably take several hundred.
+"priority" must be an integer between %d and %d, on the same scale your schedule already uses. 10-110 is for ordinary preferences — a task already in its scheduled time window is worth 110, so an everyday preference at that level still won't outrank it. Only use %d-%d, and only for a genuine emergency happening right now (someone in danger, an attack) that would justify abandoning a meal or work already in progress — never for ordinary preferences.
+"duration" is your own estimate, in game minutes, of how long this action will take. It must be a positive integer, up to %d (one full day) — never 0. Most actions take somewhere between 10 and 60 minutes; sleeping through the night can reasonably take several hundred.
 Reply with JSON only, no prose, no code fence:
 {"reasoning": "<why you decided this, brief>",
  "inner_monologue": "<what this character is thinking right now, first person>",
