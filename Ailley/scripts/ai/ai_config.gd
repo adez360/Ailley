@@ -76,6 +76,14 @@ class Provider extends RefCounted:
 	## schema）跟 layer 3（AISchema 硬驗證），不送 response_format 欄位
 	var supports_json_schema := true
 
+	## 這個 provider 的輸出格式是不是真的被文法層（GBNF）約束住，不只是「有 json_schema
+	## 支援」而已（#212）。預設 **false**——跟 supports_json_schema 的預設方向相反：
+	## 格式保證是少數本機 provider 才有的特性，不能假設大多數 provider 都有；沒宣告的
+	## provider 一律當作「可能需要重試」，最壞情況只是多重試幾次，不是正確性問題。
+	## LocalLLMProvider.max_validation_retries() 讀這個欄位決定要不要給重試次數，
+	## 不再用「provider 名字是不是字面值 "local"」判斷
+	var format_guaranteed := false
+
 	# 唯一准許把金鑰帶進輸出的路徑。頭尾各留 MASK_KEEP 碼，中間一律省略
 	func masked_key() -> String:
 		if api_key.is_empty():
@@ -206,6 +214,7 @@ func _parse_provider(provider_name: String, data: Dictionary) -> Provider:
 	provider.timeout = float(data.get("timeout", DEFAULT_TIMEOUT))
 	provider.api_key = str(data.get("api_key", "")).strip_edges()
 	provider.supports_json_schema = bool(data.get("supports_json_schema", true))
+	provider.format_guaranteed = bool(data.get("format_guaranteed", false))
 
 	# 空金鑰是合法的：本機 llama-server／ollama 這類服務根本不驗 Authorization，
 	# 逼它填一把假金鑰只是在替一條不合身的規則寫解法。金鑰空的時候
@@ -237,6 +246,19 @@ func get_provider(provider_name: String) -> Provider:
 
 func has_provider(provider_name: String) -> bool:
 	return get_provider(provider_name) != null
+
+
+## 依「型號字串」反查 provider（#122）。角色存的 `model_name`（《06》）是
+## 給玩家看的型號（如 `qwen2.5-7b-instruct`），不是 `providers` 字典的 key
+## （如 `local`）——那個 key 只是玩家自己在設定檔取的代號，規格書故意不讓它
+## 進 `model_name`，理由是「角色面板顯示『這隻由 local 驅動』沒有意義，玩家
+## 想看的是型號」。查表方向因此要反過來：拿型號去掃所有 provider 找 `.model`
+## 相符的那個，而不是照舊拿字串當 key 直接索引
+func get_provider_by_model(model: String) -> Provider:
+	for provider in providers.values():
+		if (provider as Provider).model == model:
+			return provider
+	return null
 
 
 ## 「這個名字真的打得出去嗎」。has_provider() 只查設定項存不存在，但 AIService.request()

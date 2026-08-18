@@ -6,12 +6,18 @@ extends CanvasLayer
 ## 欄寬取 12 的倍數 —— Cubic 11 的中文字寬是 12px，不是字級的 11。
 ##
 ## 六個維度的列由 DIMENSIONS 驅動生成，不手刻六份；增減維度只要改那張表。
-## 這也是整個面板在程式碼裡組、而不是把節點拉在場景裡的原因。
+## 這也是整個面板在程式碼裡組、而不是把節點拉在場景裡的原因。分頁 1／3 的
+## 選項清單（GENDERS／DECISION_SOURCES）同一個理由，也是表驅動。
 ##
-## 只負責蒐集資料，存檔時把 Dictionary 丟出 character_saved。
-## hexaco → personality 的轉換、system_prompt 組句都不在這裡（規格書 01-1）。
+## 只負責蒐集資料，存檔時把 Dictionary 丟出 character_saved，交給
+## GameManager.receive_created_character() 接手存檔驗證→角色生成→角色庫
+## 那段管線（規格書 05 流程圖）。hexaco → personality 的轉換、system_prompt
+## 組句都不在這裡（規格書 01-1）。
+##
+## 開 open() 是「建立新角色」；開 edit(id) 是把角色庫既有的一筆（僅未投放者，
+## 由角色庫首頁自己保證）灌回面板欄位，存檔時走「原地覆蓋」而不是新增一筆。
 
-## 使用者按下儲存且通過驗證。帶著六維數值與 character 文本
+## 使用者按下儲存且通過驗證。帶著六維數值、character 文本，與分頁 1／3 的欄位
 signal character_saved(data: Dictionary)
 signal closed()
 
@@ -29,6 +35,11 @@ const DEFAULT_VALUE := 50.0
 const STEP := 5.0
 const DESC_MAX := 250
 
+const NAME_MAX := 12
+const AGE_MIN := 16
+const AGE_MAX := 70
+const AGE_DEFAULT := 30
+
 const PANEL_SIZE := Vector2(560, 344)
 const LABEL_W := 48			# 中文 4 字 @ Cubic 11
 const VALUE_W := 20
@@ -44,15 +55,41 @@ const DIMENSIONS: Array[Dictionary] = [
 	{"field": "hex_openness", "key": "UI_CC_HEX_OPENNESS"},
 ]
 
+const GENDERS: Array[Dictionary] = [
+	{"value": "male", "key": "UI_CC_GENDER_MALE"},
+	{"value": "female", "key": "UI_CC_GENDER_FEMALE"},
+	{"value": "other", "key": "UI_CC_GENDER_OTHER"},
+]
+
+## 對應《12》的 DecisionProvider 三種 MVP 實作（規格書 05 §3-1）。human 目前
+## 沒有實作（decision_provider.gd 明講「HumanInput 留給之後的 issue」），但
+## 選它是合法的——agent.gd::_make_provider() 會安靜退回 LocalLLMProvider，
+## 不是這裡要擋的錯誤資料
+const DECISION_SOURCES: Array[Dictionary] = [
+	{"value": "local", "key": "UI_CC_SOURCE_LOCAL"},
+	{"value": "cloud", "key": "UI_CC_SOURCE_CLOUD"},
+	{"value": "human", "key": "UI_CC_SOURCE_HUMAN"},
+]
+
+## MVP 造型組（規格書 05 §5-0）：6 套現在長得一樣，只給編號與純色塊區分，
+## 不拿同一張圖 modulate 六色充數——實際 appearance[] 內容待《99》P-38 填
+const STYLE_COUNT := 6
+
 const BARK := Color("2F2522")
 const LOAM := Color("5D4A38")
 const CLAY := Color("75593C")
+const WHEAT := Color("D9C49A")
 const CREAM := Color("FAF3E8")
 const AMBER := Color("C96C23")
 const INK := Color("1A1512")
 const MOSS := Color("5D6145")
 const EMBER := Color("8B1F14")
 const HONEY := Color("F0A94E")
+const ASH := Color("7E8A93")
+
+## 造型組色塊，刻意不用 AMBER/HONEY——那兩色是選中狀態的強調色，
+## 拿來當底色會讓「這格被選中」跟「這格本來就這個顏色」分不清楚
+const STYLE_COLORS: Array[Color] = [LOAM, CLAY, WHEAT, MOSS, EMBER, ASH]
 
 const GRABBER := preload("res://assets/ui/slider_grabber.png")
 
@@ -66,8 +103,27 @@ var _desc_edit: TextEdit
 var _desc_count: Label
 var _save_button: Button
 
-var _deployed := 2
-var _deploy_max := 3
+var _tab_buttons: Array[Button] = []
+var _tab_pages: Array[Control] = []
+
+var _name_edit: LineEdit
+var _age_slider: HSlider
+var _age_value_label: Label
+var _gender_buttons: Array[Button] = []
+var _gender_selected := "other"
+
+var _source_buttons: Array[Button] = []
+var _decision_source := "human"
+var _model_dropdown: OptionButton
+var _model_name := ""
+var _model_hint: Label
+
+var _style_buttons: Array[Button] = []
+var _style_selected := -1
+
+## 編輯既有角色庫項目時記著它的 id，儲存時原地覆蓋而不是新增一筆；
+## 空字串代表「建立新角色」。見 edit()
+var _editing_id := ""
 
 ## 極端時蓋掉 theme 的 grabber_area。用 override 而不是 theme variation，
 ## 因為 variation 必須註冊 base type，而那只有編輯器 UI 做得到
@@ -76,8 +132,11 @@ var _ember_fill: StyleBoxFlat
 
 func _ready() -> void:
 	layer = 80
+	add_to_group("character_create_panel")	# character_library.gd 用這個找到面板，開 edit()
 	_ember_fill = _flat(EMBER, 2)
 	_build()
+	character_saved.connect(GameManager.receive_created_character)
+	_reset_fields()
 	_refresh_all()
 	close()
 
@@ -94,7 +153,24 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
+## 建立新角色。上一次編輯／建立留下的欄位一律清空，這個面板沒有「暫存草稿」
+## 的語意——見 close()
 func open() -> void:
+	_editing_id = ""
+	_reset_fields()
+	_refresh_all()
+	visible = true
+
+## 把角色庫既有的一筆（呼叫端保證是未投放者，規格書 05 §7-1）灌回面板欄位。
+## 找不到就安靜地什麼都不做——呼叫端（角色庫首頁）給的 id 應該永遠有效，
+## 找不到代表上一輪操作已經把它刪了，不是這裡該報錯的情況
+func edit(id: String) -> void:
+	var entry := GameManager.get_library_entry(id)
+	if entry.is_empty():
+		return
+	_editing_id = id
+	_load_entry(entry)
+	_refresh_all()
 	visible = true
 
 func close() -> void:
@@ -107,7 +183,61 @@ func collect() -> Dictionary:
 	for i in DIMENSIONS.size():
 		data[DIMENSIONS[i]["field"]] = int(_sliders[i].value)
 	data["character"] = _desc_edit.text.strip_edges()
+	data["character_name"] = _name_edit.text.strip_edges()
+	data["age"] = int(_age_slider.value)
+	data["gender"] = _gender_selected
+	data["decision_source"] = _decision_source
+	data["model_name"] = _model_name
+	# appearance[] 的實際內容（item_id／label）待《99》P-38 填，MVP 只驗證
+	# 「有沒有選」（_can_save() 那關），不在這裡假造內容
+	data["appearance"] = []
+	if not _editing_id.is_empty():
+		data["id"] = _editing_id
 	return data
+
+
+func _reset_fields() -> void:
+	_name_edit.text = ""
+	_age_slider.value = AGE_DEFAULT
+	_gender_selected = "other"
+	for slider in _sliders:
+		slider.value = DEFAULT_VALUE
+	_desc_edit.text = ""
+	_style_selected = -1
+	_apply_default_decision_source()
+
+func _load_entry(entry: Dictionary) -> void:
+	_name_edit.text = str(entry.get("character_name", ""))
+	_age_slider.value = int(entry.get("age", AGE_DEFAULT))
+	_gender_selected = str(entry.get("gender", "other"))
+	var hexaco: Dictionary = entry.get("hexaco", {})
+	for i in DIMENSIONS.size():
+		_sliders[i].value = hexaco.get(DIMENSIONS[i]["field"], DEFAULT_VALUE)
+	_desc_edit.text = str(entry.get("character", ""))
+	# appearance[] 內容本來就是空的（P-38 待填），沒有索引可以還原選中哪一格——
+	# 編輯外觀分頁時強制重選，不是這裡少寫了什麼
+	_style_selected = -1
+	_decision_source = str(entry.get("decision_source", "human"))
+	_model_name = str(entry.get("model_name", ""))
+
+## 決策來源預設值（規格書 05 §3-1）：有可用的本機 provider 就預選本機
+## （優先 AIConfig.default_provider 指到的那個，不是本機或不可用就退回本機
+## 清單第一個）；否則退到真人——不退到雲端，那會變成預設幫玩家選一個
+## 會產生帳單的選項
+func _apply_default_decision_source() -> void:
+	var locals := _providers_by_locality(true)
+	if locals.is_empty():
+		_decision_source = "human"
+		_model_name = ""
+		return
+
+	_decision_source = "local"
+	var config := AIService.config
+	var default_provider: AIConfig.Provider = config.get_provider("") if config != null else null
+	if default_provider != null and default_provider.valid and _is_local_url(default_provider.base_url):
+		_model_name = default_provider.model
+	else:
+		_model_name = locals[0].model
 
 
 func _build() -> void:
@@ -132,10 +262,15 @@ func _build() -> void:
 	col.add_child(_rule(CLAY))
 	col.add_child(_tabs())
 	col.add_child(_rule(BARK))
-	col.add_child(_slider_block())
-	col.add_child(_strength_block())
-	col.add_child(_description_block())
+
+	_tab_pages.append(_build_tab_basic())
+	_tab_pages.append(_build_tab_personality())
+	_tab_pages.append(_build_tab_appearance())
+	for page in _tab_pages:
+		col.add_child(page)
+
 	col.add_child(_footer())
+	_switch_tab(0)
 
 
 func _header() -> Control:
@@ -160,14 +295,111 @@ func _tabs() -> Control:
 		var b := Button.new()
 		b.text = keys[i]
 		b.custom_minimum_size.x = 60
-		if i == 1:
-			# 目前只有「個性」有內容；另外兩頁的規格分別在 §3 與 §5【待規劃】
+		b.pressed.connect(_switch_tab.bind(i))
+		row.add_child(b)
+		_tab_buttons.append(b)
+	return row
+
+func _switch_tab(index: int) -> void:
+	for i in _tab_pages.size():
+		_tab_pages[i].visible = (i == index)
+	for i in _tab_buttons.size():
+		var b := _tab_buttons[i]
+		if i == index:
 			b.add_theme_stylebox_override("normal", _flat(AMBER, 3, 8))
 			b.add_theme_color_override("font_color", INK)
 		else:
-			b.disabled = true
-		row.add_child(b)
-	return row
+			b.remove_theme_stylebox_override("normal")
+			b.remove_theme_color_override("font_color")
+
+
+## 分頁 1：基本資料 + 決策來源（規格書 05 §3、§3-1）
+func _build_tab_basic() -> Control:
+	var block := VBoxContainer.new()
+	block.add_theme_constant_override("separation", 6)
+
+	var name_row := HBoxContainer.new()
+	name_row.add_theme_constant_override("separation", 8)
+	name_row.add_child(_fixed_label("UI_CC_NAME", BARK, LABEL_W))
+	_name_edit = LineEdit.new()
+	_name_edit.max_length = NAME_MAX		# LineEdit 原生支援，不像 TextEdit 要自己截
+	_name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_name_edit.text_changed.connect(_on_name_changed)
+	name_row.add_child(_name_edit)
+	block.add_child(name_row)
+
+	var age_row := HBoxContainer.new()
+	age_row.add_theme_constant_override("separation", 8)
+	age_row.add_child(_fixed_label("UI_CC_AGE", BARK, LABEL_W))
+	_age_slider = HSlider.new()
+	_age_slider.min_value = AGE_MIN
+	_age_slider.max_value = AGE_MAX
+	_age_slider.step = 1
+	_age_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_age_slider.add_theme_icon_override("grabber", GRABBER)
+	_age_slider.add_theme_icon_override("grabber_highlight", GRABBER)
+	_age_slider.value_changed.connect(_on_age_changed)
+	age_row.add_child(_age_slider)
+	_age_value_label = Label.new()
+	_age_value_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	_age_value_label.custom_minimum_size.x = VALUE_W
+	_age_value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	age_row.add_child(_age_value_label)
+	block.add_child(age_row)
+
+	var gender_row := HBoxContainer.new()
+	gender_row.add_theme_constant_override("separation", 8)
+	gender_row.add_child(_fixed_label("UI_CC_GENDER", BARK, LABEL_W))
+	for entry in GENDERS:
+		var b := Button.new()
+		b.text = entry["key"]
+		b.pressed.connect(_on_gender_pressed.bind(entry["value"]))
+		gender_row.add_child(b)
+		_gender_buttons.append(b)
+	block.add_child(gender_row)
+
+	block.add_child(_rule(CLAY))
+	block.add_child(_decision_source_block())
+	return block
+
+func _decision_source_block() -> Control:
+	var block := VBoxContainer.new()
+	block.add_theme_constant_override("separation", 4)
+
+	var label_row := HBoxContainer.new()
+	label_row.add_child(_fixed_label("UI_CC_SOURCE", BARK, LABEL_W))
+	block.add_child(label_row)
+
+	var source_row := HBoxContainer.new()
+	source_row.add_theme_constant_override("separation", 4)
+	for entry in DECISION_SOURCES:
+		var b := Button.new()
+		b.text = entry["key"]
+		b.pressed.connect(_on_source_pressed.bind(entry["value"]))
+		source_row.add_child(b)
+		_source_buttons.append(b)
+	block.add_child(source_row)
+
+	_model_dropdown = OptionButton.new()
+	_model_dropdown.item_selected.connect(_on_model_selected)
+	block.add_child(_model_dropdown)
+
+	_model_hint = Label.new()
+	_model_hint.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	_model_hint.add_theme_color_override("font_color", EMBER)
+	block.add_child(_model_hint)
+
+	return block
+
+
+## 分頁 2：個性（六維滑桿 + 強度計數 + 自我描述），內容不變，只是搬進獨立分頁
+func _build_tab_personality() -> Control:
+	var block := VBoxContainer.new()
+	block.add_theme_constant_override("separation", 4)
+	block.add_child(_slider_block())
+	block.add_child(_strength_block())
+	block.add_child(_description_block())
+	return block
 
 func _slider_block() -> Control:
 	var block := VBoxContainer.new()
@@ -257,6 +489,44 @@ func _description_block() -> Control:
 	block.add_child(hint)
 	return block
 
+
+## 分頁 3：造型組挑選（規格書 05 §5-0，MVP 佔位）
+func _build_tab_appearance() -> Control:
+	var block := VBoxContainer.new()
+	block.add_theme_constant_override("separation", 4)
+
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 4)
+	grid.add_theme_constant_override("v_separation", 4)
+
+	for i in STYLE_COUNT:
+		var cell := VBoxContainer.new()
+
+		var swatch := Button.new()
+		swatch.custom_minimum_size = Vector2(48, 48)
+		swatch.text = str(i + 1)
+		swatch.pressed.connect(_on_style_pressed.bind(i))
+		cell.add_child(swatch)
+		_style_buttons.append(swatch)
+
+		var name_label := Label.new()
+		name_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+		name_label.text = L10n.tf("UI_CC_STYLE_NAME", {"n": i + 1})
+		name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		cell.add_child(name_label)
+
+		grid.add_child(cell)
+
+	block.add_child(grid)
+
+	var hint := Label.new()
+	hint.text = "UI_CC_STYLE_HINT"
+	hint.add_theme_color_override("font_color", CLAY)
+	block.add_child(hint)
+	return block
+
+
 func _footer() -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
@@ -294,6 +564,36 @@ func _on_description_changed() -> void:
 	_refresh_description()
 	_refresh_strength()
 
+func _on_name_changed(_new_text: String) -> void:
+	_refresh_strength()
+
+func _on_age_changed(value: float) -> void:
+	_age_value_label.text = str(int(value))
+
+func _on_gender_pressed(value: String) -> void:
+	_gender_selected = value
+	_refresh_gender_buttons()
+
+func _on_source_pressed(value: String) -> void:
+	if _source_buttons[_source_index(value)].disabled:
+		return
+	_decision_source = value
+	_model_name = ""		# 換來源要重選，避免帶著另一邊的型號字串跑
+	_refresh_source_buttons()
+	_refresh_model_dropdown()
+	_refresh_strength()
+
+func _on_model_selected(index: int) -> void:
+	if index < 0 or index >= _model_dropdown.item_count:
+		return
+	_model_name = _model_dropdown.get_item_text(index)
+	_refresh_strength()
+
+func _on_style_pressed(index: int) -> void:
+	_style_selected = index
+	_refresh_style_buttons()
+	_refresh_strength()
+
 func _on_random_pressed() -> void:
 	# 隨機但保證落在可存檔區間：先全部置中，再挑 2 個推向兩端
 	for slider in _sliders:
@@ -302,12 +602,16 @@ func _on_random_pressed() -> void:
 	picks.shuffle()
 	for i in picks.slice(0, EXTREME_MIN_WITH_DESC + 1):
 		_sliders[i].value = (randi_range(0, 4) * STEP) if randf() < 0.5 else (100.0 - randi_range(0, 4) * STEP)
+	# 「整個角色隨機」純組合既有邏輯（規格書 05 §6）：分頁 2 滑桿 + 分頁 3
+	# 隨機挑一套造型組。決策來源刻意不隨機——那是玩家的成本決定，不是角色設定
+	_style_selected = randi_range(0, STYLE_COUNT - 1)
 	_refresh_all()
 
 func _on_save_pressed() -> void:
 	if not _can_save():
 		return
 	character_saved.emit(collect())
+	close()
 
 
 func _extreme_count() -> int:
@@ -323,15 +627,35 @@ func _extreme_min() -> int:
 
 func _can_save() -> bool:
 	var n := _extreme_count()
-	return n >= _extreme_min() and n <= EXTREME_MAX
+	if n < _extreme_min() or n > EXTREME_MAX:
+		return false
+	if _name_edit.text.strip_edges().is_empty():
+		return false
+	if _style_selected < 0:
+		return false
+	if _decision_source in ["local", "cloud"] and _model_name.is_empty():
+		return false
+	return true
 
 
 func _refresh_all() -> void:
-	_slots_label.text = L10n.tf("UI_CC_SLOTS", {"used": _deployed, "max": _deploy_max})
+	_slots_label.text = L10n.tf("UI_CC_SLOTS", {"used": _deployed_count(), "max": GameManager.DEPLOY_CAP})
 	for i in _sliders.size():
 		_refresh_slider(i)
 	_refresh_description()
 	_refresh_strength()
+	_age_value_label.text = str(int(_age_slider.value))
+	_refresh_gender_buttons()
+	_refresh_source_buttons()
+	_refresh_model_dropdown()
+	_refresh_style_buttons()
+
+func _deployed_count() -> int:
+	var n := 0
+	for entry in GameManager.character_library:
+		if entry.get("deployed", false):
+			n += 1
+	return n
 
 func _refresh_slider(index: int) -> void:
 	var slider := _sliders[index]
@@ -369,6 +693,97 @@ func _refresh_strength() -> void:
 
 	_save_button.disabled = not _can_save()
 
+func _refresh_gender_buttons() -> void:
+	for i in GENDERS.size():
+		var selected: bool = GENDERS[i]["value"] == _gender_selected
+		_style_selected_button(_gender_buttons[i], selected)
+
+func _refresh_source_buttons() -> void:
+	var locals := _providers_by_locality(true)
+	var clouds := _providers_by_locality(false)
+	for i in DECISION_SOURCES.size():
+		var value: String = DECISION_SOURCES[i]["value"]
+		var b := _source_buttons[i]
+		if value == "local":
+			b.disabled = locals.is_empty()
+		elif value == "cloud":
+			b.disabled = clouds.is_empty()
+		else:
+			b.disabled = false
+		_style_selected_button(b, value == _decision_source)
+
+func _refresh_model_dropdown() -> void:
+	_model_dropdown.clear()
+	_model_dropdown.visible = _decision_source != "human"
+	_model_hint.visible = false
+
+	if _decision_source == "human":
+		_model_name = ""
+		return
+
+	var pool := _providers_by_locality(_decision_source == "local")
+	if pool.is_empty():
+		_model_name = ""
+		_model_hint.text = L10n.t("UI_CC_SOURCE_NO_PROVIDER")
+		_model_hint.visible = true
+		return
+
+	var selected_index := 0
+	for i in pool.size():
+		var p: AIConfig.Provider = pool[i]
+		_model_dropdown.add_item(p.model)
+		if p.model == _model_name:
+			selected_index = i
+
+	if _model_name.is_empty() or not pool.any(func(p): return p.model == _model_name):
+		_model_name = pool[selected_index].model
+
+	_model_dropdown.selected = selected_index
+
+func _refresh_style_buttons() -> void:
+	for i in _style_buttons.size():
+		var b := _style_buttons[i]
+		var selected := i == _style_selected
+		var box := _flat(STYLE_COLORS[i], 0, 0)
+		box.border_width_left = 2
+		box.border_width_right = 2
+		box.border_width_top = 2
+		box.border_width_bottom = 2
+		box.border_color = AMBER if selected else STYLE_COLORS[i]
+		b.add_theme_stylebox_override("normal", box)
+
+
+## AIConfig 裡「base_url 指向本機」的 provider（規格書 05 §3-1）。用常見的
+## loopback 位址判斷，跟專案裡沒有其他更精確的判斷依據——provider 設定檔
+## 本身沒有一個「這是不是本機」的旗標可以查
+func _providers_by_locality(local: bool) -> Array[AIConfig.Provider]:
+	var result: Array[AIConfig.Provider] = []
+	var config := AIService.config
+	if config == null:
+		return result
+	for provider in config.providers.values():
+		var p: AIConfig.Provider = provider
+		if p.valid and _is_local_url(p.base_url) == local:
+			result.append(p)
+	return result
+
+func _is_local_url(base_url: String) -> bool:
+	return base_url.contains("localhost") or base_url.contains("127.0.0.1")
+
+func _source_index(value: String) -> int:
+	for i in DECISION_SOURCES.size():
+		if DECISION_SOURCES[i]["value"] == value:
+			return i
+	return -1
+
+
+func _style_selected_button(b: Button, selected: bool) -> void:
+	if selected:
+		b.add_theme_stylebox_override("normal", _flat(AMBER, 3, 8))
+		b.add_theme_color_override("font_color", INK)
+	else:
+		b.remove_theme_stylebox_override("normal")
+		b.remove_theme_color_override("font_color")
 
 func _fixed_label(key: String, colour: Color, width: int) -> Label:
 	var l := Label.new()

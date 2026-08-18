@@ -58,8 +58,52 @@ const BUY_TOO_FAR := "TOO_FAR"
 const BUY_ITEM_NOT_FOUND := "ITEM_NOT_FOUND"		# 販賣機沒有賣這個 item_id
 const BUY_NO_INVENTORY := "NO_INVENTORY"		# 沒有背包的角色沒辦法買東西
 
+const GIVE_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE 一樣的距離門檻，2 格
+
+## give_to() 的失敗原因碼，形狀比照 TALK_*／BUY_*。除了這四個，give_to()
+## 還會**原樣轉傳** Inventory 自己的原因碼（`NOT_FOUND`、`INVALID_COUNT`、
+## `NO_SPACE`），不在這裡重新取名——理由跟 buy_from() 一樣
+const GIVE_OK := ""
+const GIVE_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const GIVE_TARGET_IS_SELF := "TARGET_IS_SELF"
+const GIVE_TOO_FAR := "TOO_FAR"
+const GIVE_NO_INVENTORY := "NO_INVENTORY"
+
+const HAUL_RANGE := 32.0		# 跟 TALK_RANGE／GIVE_RANGE 一樣的距離門檻，2 格
+const HAUL_SPEED_MULTIPLIER := 0.5		# 搬運時速度倍率（《99》P-27 #3-1）
+const HAUL_STAMINA_DRAIN := 3.0			# 搬運者每現實秒額外扣的體力（《99》P-27 #3-2）
+
+const HAUL_OK := ""
+const HAUL_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const HAUL_TARGET_IS_SELF := "TARGET_IS_SELF"
+const HAUL_TOO_FAR := "TOO_FAR"
+
 ## 滑鼠指到時套在 sprite 上的描邊
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
+
+## 8 種定案情緒 enum（《02》§1-1，12 種草案已作廢）。neutral 是「沒有特別感受」
+## 的必要預設值，不是湊數的第 8 種
+const EMOTION_TYPES := [
+	"joy", "anger", "sadness", "fear", "surprise", "disgust", "anticipation", "neutral",
+]
+const EMOTION_NEGATIVE := ["anger", "sadness", "fear", "disgust"]	# 見《02》§1-4 人格係數公式
+
+const EMOTION_BASE_DURATION := 12	# tick，2 遊戲小時（《02》§1-4）
+const EMOTION_DURATION_MIN := 1
+const EMOTION_DURATION_MAX := 144	# 一遊戲日上限
+
+## 8 種生理衍生 condition，全部「門檻自動」套路（《02》§2-2）
+const CONDITION_INJURED := "injured"
+const CONDITION_BLEEDING := "bleeding"
+const CONDITION_DRUNK := "drunk"
+const CONDITION_STARVING := "starving"
+const CONDITION_DEHYDRATED := "dehydrated"
+const CONDITION_EXHAUSTED := "exhausted"
+const CONDITION_SLEEPY := "sleepy"
+const CONDITION_FILTHY := "filthy"
+
+## MVP 新機制：昏迷狀態（#160，《99》P-27）
+const CONDITION_INCAPACITATED := "incapacitated"
 
 ## 角色的身分，全遊戲唯一且不隨改名而變：存檔、記憶連結、交誼區都靠它指人。
 ## 是內部識別字，不拿來顯示，也**不要去解析它** —— 格式只有 generate_id() 說了算。
@@ -76,6 +120,43 @@ const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader
 ## （#120，《01-2》§1 流程圖的「④ 寫回 last_action_result」）。目前只有 Agent
 ## 會寫這個欄位，Player 沒有 LLM 決策，留在 Character 是給 UI/debug 共用的掛點
 var last_action_result := ""
+
+## 給 LLM 讀的常駐人格段（#117，《01-1》§5、《01-3》§1 的 System 級）：
+## 行為準則 ＋ `character` 自述 ＋ 外觀文字，組一次之後逐字元不變——那是
+## llama-server 每個 slot 命中 KV cache 的前提。沒有人格資料的角色拿到的是
+## 只有開場白與結尾句的最小版本，不是空字串（模型看到空欄位會自行編造）
+var system_prompt := ""
+
+## 引擎用的 10 項人格數值（《01》§2，由 Personality.hexaco_to_personality() 產出）。
+## **不注入 prompt**——那是給成功率公式（agent.gd 的 _roll_success()）與記憶
+## 衰減率讀的，模型讀的是上面那段文字。本地模型看到 `curiosity: 60` 沒有基準，
+## 不知道 60 是高是低，也分不出 60 跟 55（《01》§2-1）。
+## 沒有人格資料的角色是空字典，讀的人一律用 .get(key, 0.0)
+var personality := {}
+
+## AI 唯一可自行宣告的內在狀態（《02》§1）。引擎不計算情緒，只負責倒數 duration_left，
+## 見 set_emotion() 與 _tick_emotion()
+var emotion := {
+	"type": "neutral",
+	"intensity": 0,
+	"cause_event_id": "",
+	"duration_left": 0,
+}
+
+## 特殊狀態陣列，元素形狀 {type, turns_left}（《02》§2-1）。全部由引擎寫入，
+## LLM 不可宣告；目前只實作 8 種生理衍生 condition，見 _update_conditions()
+var conditions: Array[Dictionary] = []
+
+## 搬運相關狀態（#161，《99》P-27）
+var _hauling_target: Character = null		# 目前正在搬運誰
+var _hauled_by: Array[Character] = []		# 目前正被誰搬運
+var _speed_multiplier := 1.0				# 速度倍率（搬運時為 50%）
+
+## 昏迷相關狀態（#160，《99》P-27）
+var _incapacitation_start_minute := -1		# 昏迷開始的遊戲分鐘
+var _is_being_carried := false				# 標記正在被搬運
+var _treatment_start_minute := -1			# 藥草鋪治療開始時間
+var _treatment_location := ""				# 治療地點
 
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
@@ -141,7 +222,21 @@ func _ready() -> void:
 	_ensure_unique_id()
 	add_to_group("characters")
 
+	# 人格要在 _ensure_unique_id() 之後才組：種子用的是最終的 character_id。
+	# 種子而不是真的隨機——《01-1》§4 每個極端維度有 3 種語氣變體，真隨機的話
+	# 同一隻角色每次開遊戲的人格文案都不一樣，而 system_prompt 的設計前提是
+	# 「組好之後逐字元不變」。存檔接上之後（#21）改讀存下來的那份，
+	# Personality 那邊不用改
+	var persona := Personality.from_identity(identity, character_id)
+	personality = persona["personality"]
+	system_prompt = persona["system_prompt"]
+
 	sprite.play("idle_" + facing)
+
+	# emotion.duration_left／conditions[].turns_left 都是離散單位，用 GameClock 既有的
+	# 「每遊戲分鐘」訊號驅動比自己在 _process(delta) 裡做累加器精簡（agent.gd 也是這樣接的），
+	# 且會跟著 GameClock 的時間流速走，不會像 stats.gd 的連續 drift 那樣綁死真實秒數
+	GameClock.time_changed.connect(_on_game_minute)
 
 # 隨機的 UUID v4。刻意不帶任何語意 —— 擁有者、名字、行程都不編進去，
 # 那些各自是欄位。把 owner 寫進 id 的話，帳號系統一改就得替所有存檔寫遷移
@@ -178,6 +273,105 @@ func _find_id_holder(id: String) -> Character:
 		if other != self and other.character_id == id:
 			return other as Character
 	return null
+
+
+# ---- 情緒與狀態 ----
+
+## 1 tick = 10 遊戲分鐘（《02》§1-4：12 tick = 2 遊戲小時）。GameClock.time_changed
+## 每遊戲分鐘觸發一次，所以要每累積 10 次才真正跑一次 tick，不是每次都跑——
+## 拿規格書自己的算例反查：joy intensity=60、stability=90、grudge=75 應該是
+## 9 tick ≈ 1.5 小時（90 遊戲分鐘），不是 9 遊戲分鐘
+const TICK_GAME_MINUTES := 10
+var _tick_minute_accum := 0
+
+func _on_game_minute(_hour: int, _minute: int) -> void:
+	_tick_minute_accum += 1
+	if _tick_minute_accum < TICK_GAME_MINUTES:
+		return
+	_tick_minute_accum = 0
+
+	_tick_emotion()
+	_update_conditions()
+
+## AI 宣告新情緒。type 必須是 EMOTION_TYPES 之一，intensity 0–100。
+## stability／grudge 是《02》§1-4 持續時間公式的人格係數，人格資料還沒接上
+## Character（#117），呼叫端拿不到真實值時用 50.0（中性值）當預設——
+## 比照 memory.gd::decay_all() 對 grudge 的既有做法
+func set_emotion(type: String, intensity: int, cause_event_id: String = "",
+		stability: float = 50.0, grudge: float = 50.0) -> void:
+	if not EMOTION_TYPES.has(type):
+		push_error("Character.set_emotion: 不是定案的情緒 enum：%s" % type)
+		return
+
+	intensity = clampi(intensity, 0, 100)
+	emotion = {
+		"type": type,
+		"intensity": intensity,
+		"cause_event_id": cause_event_id,
+		"duration_left": _calc_emotion_duration(type, intensity, stability, grudge),
+	}
+
+## 《02》§1-4：duration = 基礎時長 × (intensity/50) × 人格係數，夾制 1~144 tick
+func _calc_emotion_duration(type: String, intensity: int, stability: float, grudge: float) -> int:
+	if type == "neutral":
+		return 0
+
+	var personality_factor := 1.0 + (50.0 - stability) / 100.0
+	if EMOTION_NEGATIVE.has(type):
+		personality_factor += (grudge - 50.0) / 100.0
+
+	var duration := EMOTION_BASE_DURATION * (intensity / 50.0) * personality_factor
+	return clampi(roundi(duration), EMOTION_DURATION_MIN, EMOTION_DURATION_MAX)
+
+## 每遊戲分鐘倒數一次；歸零轉回 neutral（《02》§1-3 規則 4）
+func _tick_emotion() -> void:
+	if emotion["type"] == "neutral":
+		return
+
+	emotion["duration_left"] -= 1
+	if emotion["duration_left"] <= 0:
+		emotion = {"type": "neutral", "intensity": 0, "cause_event_id": "", "duration_left": 0}
+
+func has_condition(type: String) -> bool:
+	for c in conditions:
+		if c["type"] == type:
+			return true
+	return false
+
+func _set_condition(type: String, present: bool) -> void:
+	var had := has_condition(type)
+	if present and not had:
+		conditions.append({"type": type, "turns_left": -1})
+	elif not present and had:
+		conditions = conditions.filter(func(c): return c["type"] != type)
+
+## 依生理值重新檢查 8 種生理衍生 condition，全部「門檻自動」——條件不成立
+## 下次檢查就自動移除（《02》§2-2／§2-3 規則 4）。只做偵測與新增/移除；
+## 行為成功率／說真心話機率留給 #120，exhausted「強制昏睡」是行動佔用邏輯，
+## 留給該動作自己處理，filthy 效果待《99》P-35 重新設計，這裡都不做
+func _update_conditions() -> void:
+	if stats == null:
+		return
+
+	var injury := stats.get_value("injury")
+	_set_condition(CONDITION_INJURED, injury > 0.0)
+	_set_condition(CONDITION_BLEEDING, injury >= 20.0)
+	_set_condition(CONDITION_DRUNK, stats.get_value("alcohol") > 30.0)
+	_set_condition(CONDITION_STARVING, stats.get_value("satiety") < 10.0)
+	_set_condition(CONDITION_DEHYDRATED, stats.get_value("hydration") < 10.0)
+	_set_condition(CONDITION_EXHAUSTED, stats.get_value("stamina") <= 0.0)
+	_set_condition(CONDITION_SLEEPY, stats.get_value("wakefulness") < 15.0)
+	_set_condition(CONDITION_FILTHY, stats.get_value("hygiene") < 20.0)
+
+	# bleeding／starving／dehydrated 的直接數值效果（《02》§2-2 效果欄），
+	# 跟成功率無關所以不算 #120 的範圍。injury 自然衰減暫停是唯一的例外規則
+	if has_condition(CONDITION_BLEEDING):
+		stats.add("health", -1.5)
+	if has_condition(CONDITION_STARVING):
+		stats.add("health", -0.5)
+	if has_condition(CONDITION_DEHYDRATED):
+		stats.add("health", -1.0)
+	stats.injury_decay_paused = has_condition(CONDITION_BLEEDING)
 
 
 # ---- 移動 ----
@@ -489,6 +683,94 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 	return BUY_OK
 
 
+# ---- 送禮 ----
+
+# 把物品從自己的背包轉移到對方背包。跟 buy_from() 一樣是「兩件事要一起成功」，
+# 但這裡不能照抄 buy_from() 的「先做、失敗再補償」寫法：一筆 give 可能橫跨好幾個
+# 腐壞程度不同的格子（remove_item_detailed() 照原樣拆開），若其中一筆送到一半
+# 才發現對方背包滿了，前面幾筆已經真的進了對方背包——不撤回就不是「兩件事一起
+# 成功」，撤回又得從對方背包裡精確挑出剛剛那幾筆（跟對方原有的同物品混在一起，
+# 挑錯格的風險不小）。
+#
+# 解法是先在對方背包的副本上，用真正的 add_item() 邏輯模擬全部加一遍——不是
+# 自己另外設計一套「空間夠不夠」的公式來猜（那正是 buy_from() 註解裡刻意避開的
+# 「猜錯要再重算一次堆疊規則」問題），模擬跑的就是等一下真的會執行的那個函式，
+# 兩者不可能對不上。全部模擬通過才正式套用到對方背包，任何一筆會失敗就整批
+# 作廢，沒有半成功的中間狀態（CodeRabbit review 抓到，#158）。
+#
+# 用 remove_item_detailed() 而不是 remove_item()：後者只回一個原因碼，逐筆的
+# decay／durability 資訊會直接消失，送到對方那邊等於變成一批全新狀態（腐壞
+# 程度歸零、耐久類物品甚至會被誤標成不追蹤耐久）。
+#
+# 不改動 relations 任何欄位——送禮的真實意圖交給雙方後續行為自己演，
+# 不是引擎蓋章（見《99》決策紀錄、CLAUDE.md「遊戲機制規格：AI 自主性自檢」）
+func give_to(other: Character, item_id: String, count: int = 1) -> String:
+	if other == null:
+		return GIVE_TARGET_NOT_FOUND
+	if other == self:
+		return GIVE_TARGET_IS_SELF
+	if inventory == null or other.inventory == null:
+		return GIVE_NO_INVENTORY
+	if get_body_position().distance_to(other.get_body_position()) > GIVE_RANGE:
+		return GIVE_TOO_FAR
+
+	# 送出失敗時要原封不動退回——remove 前先留一份快照。不能靠事後逐筆
+	# add_item() 補回去：那會照它的堆疊規則重新分組，跟原本各筆分開的格子、
+	# 各自的 decay 不一定對得上（CodeRabbit review 抓到）
+	var snapshot := inventory.slots.duplicate(true)
+
+	# notify=false：這筆移除還沒確定算數，可能整批回滾——發了 changed 的話，
+	# 訂閱者會在轉移成不成功還沒有結論前，看到來源背包暫時少了東西
+	# （CodeRabbit review 抓到）。確定結果後這個函式自己決定要不要發
+	var removal: Dictionary = inventory.remove_item_detailed(item_id, count, false)
+	if removal["reason"] != Inventory.REMOVE_OK:
+		return removal["reason"]
+
+	var chunks: Array = removal["removed"]
+
+	# 模擬：副本上的格子跟對方現在的背包一模一樣，跑一遍會不會塞不下
+	var sim := Inventory.new()
+	sim.slots = other.inventory.slots.duplicate(true)
+	var blocked_reason := ""
+	for chunk in chunks:
+		var sim_reason: String = sim.add_item(item_id, chunk["count"], chunk["decay"], chunk["durability"])
+		if sim_reason != Inventory.ADD_OK:
+			blocked_reason = sim_reason
+			break
+	sim.free()
+
+	if blocked_reason != "":
+		# 模擬就擋下來了，對方背包從頭到尾沒被動過——用快照原封不動還原自己的
+		# 背包，不能逐筆 add_item() 補回去，那會照它的堆疊規則重新分組。
+		# 上面的移除故意沒發 changed，這裡還原後也不發：淨變化是 0，不該讓
+		# 外部訂閱者看到一次「來源背包變了」的暫態事件
+		inventory.slots = snapshot
+		return blocked_reason
+
+	# 模擬全部通過，正式套用到對方背包——不會再失敗，因為套用的規則、對方背包
+	# 當下的狀態，跟模擬時完全一樣（中間沒有任何 await，不會有別的呼叫端插進來改動）。
+	# notify=false：逐筆發 changed 的話，訂閱者會在轉移途中看到對方背包只收到
+	# 一部分物品的暫態，而且訂閱者若在收到事件當下改動對方背包，會讓後面幾筆
+	# 跟模擬時的假設對不上（CodeRabbit review 抓到）——靜音到全部套用完再發一次，
+	# 迴圈中途連訊號都不發，這個假設就不會被打破
+	for chunk in chunks:
+		var add_reason: String = other.inventory.add_item(
+			item_id, chunk["count"], chunk["decay"], chunk["durability"], false
+		)
+		if add_reason != Inventory.ADD_OK:
+			# 理論上不會發生（模擬已經驗過），真的發生代表上面那個「不會被
+			# 打斷」的假設被打破了——這裡不試著回滾（已經進去的 chunk 混進
+			# 對方背包，退不乾淨），只留一個明確的錯誤讓它可被追查
+			push_error("Character.give_to(): 模擬通過但正式套用失敗（%s）——%s 的背包可能在轉移途中被改動" % [add_reason, other.character_name])
+
+	# 上面的移除跟正式套用都故意沒發 changed，整筆轉移確定成功才在這裡對兩邊
+	# 背包各發一次——跟失敗時完全不發是對稱的：一次真的發生的變化只對應一次事件
+	inventory.changed.emit()
+	other.inventory.changed.emit()
+
+	return GIVE_OK
+
+
 # ---- 狀態快照 ----
 
 # 純資料的角色狀態，不含任何翻譯字串或 BBCode。debug_console.gd 的 status
@@ -512,6 +794,10 @@ func get_state_snapshot() -> Dictionary:
 		"in_conversation": is_in_conversation(),
 		"working": is_working(),
 		"last_action_result": last_action_result,
+		# 深拷貝：Dictionary／Array 是傳參照，直接放進 snapshot 的話呼叫端改了
+		# 快照會連帶改到 Character 內部狀態，繞過 set_emotion() 的驗證
+		"emotion": emotion.duplicate(true),
+		"conditions": conditions.duplicate(true),
 	}
 
 	if stats != null:
@@ -666,7 +952,10 @@ func _current_frame_texture() -> Texture2D:
 # 不是解算後的 velocity——貼平物件時想往物件方向走，move_and_slide() 會把那個分量
 # 直接歸零，若 facing 也照 velocity 判斷就會卡在貼上去之前的方向，永遠轉不過來面對
 # 眼前的東西（#108）。walk / idle 動畫另外照解算後的 velocity 判斷：貼平時人確實
-# 沒有在動，播 idle 才對，只是 facing 要跟上輸入方向
+# 沒有在動，播 idle 才對，只是 facing 要跟上輸入方向。
+# 判斷用容差而非精確比較 == Vector2.ZERO——沿角度貼著障礙物滑動時，
+# move_and_slide() 可能把 velocity 解算成極小但非零的殘值，跟 _check_stuck()
+# 同一個理由、用同一個門檻（SPEED * 0.1）
 func update_animation(desired_velocity: Vector2) -> void:
 	var dir := desired_velocity.normalized()
 
@@ -678,13 +967,16 @@ func update_animation(desired_velocity: Vector2) -> void:
 			facing = "right"
 			sprite.flip_h = dir.x < 0
 
-	sprite.play(("walk_" if velocity != Vector2.ZERO else "idle_") + facing)
+	sprite.play(("walk_" if get_real_velocity().length() > SPEED * 0.1 else "idle_") + facing)
 
 # 這一幀要用的速度。基底只跟隨 A* 路徑，子類別覆寫來加上自己的驅動來源。
 # 對話中不自動移動 —— 但 Player 的輸入會蓋過這裡，走遠了由距離判定自然散場
 func _decide_velocity() -> Vector2:
 	if is_in_conversation():
 		return Vector2.ZERO
+
+	if is_being_hauled():
+		return _follow_hauler()
 
 	if is_moving():
 		return _follow_path()
@@ -703,7 +995,22 @@ func _follow_path() -> Vector2:
 		move_finished.emit(true)
 		return Vector2.ZERO
 
-	return body_position.direction_to(_path[_path_index]) * SPEED
+	return body_position.direction_to(_path[_path_index]) * effective_speed()
+
+# 被搬運中跟著搬運者移動
+func _follow_hauler() -> Vector2:
+	if _hauled_by.is_empty():
+		return Vector2.ZERO
+
+	var hauler: Character = _hauled_by[0]
+	if not is_instance_valid(hauler):
+		return Vector2.ZERO
+
+	var body_position := get_body_position()
+	if body_position.distance_to(hauler.get_body_position()) < ARRIVE_DISTANCE:
+		return Vector2.ZERO
+
+	return body_position.direction_to(hauler.get_body_position()) * hauler.effective_speed()
 
 # 該走卻幾乎沒位移（被地形頂住）就放棄，避免無限原地打轉
 func _check_stuck(delta: float) -> void:
@@ -725,3 +1032,63 @@ func _physics_process(delta: float) -> void:
 
 	if is_moving():
 		_check_stuck(delta)
+
+	# 搬運體力消耗（#161，《99》P-27 #3-2）
+	if _hauling_target != null and stats != null:
+		stats.add("stamina", -HAUL_STAMINA_DRAIN * delta)
+
+
+# ---- 搬運邏輯（#161） ----
+
+func is_being_hauled() -> bool:
+	return not _hauled_by.is_empty()
+
+func hauler_count() -> int:
+	return _hauled_by.size()
+
+func is_hauling() -> bool:
+	return _hauling_target != null
+
+func effective_speed() -> float:
+	return SPEED * _speed_multiplier
+
+func start_haul(target: Character) -> String:
+	if target == null:
+		return HAUL_TARGET_NOT_FOUND
+	if target == self:
+		return HAUL_TARGET_IS_SELF
+	if get_body_position().distance_to(target.get_body_position()) > HAUL_RANGE:
+		return HAUL_TOO_FAR
+
+	# 換搬別的目標前，先放掉原本那個，避免舊目標的 _hauled_by 留著搬不掉的殘留參照
+	if _hauling_target != null and _hauling_target != target:
+		stop_haul()
+
+	target._attach_haul(self)
+	_hauling_target = target
+	_speed_multiplier = HAUL_SPEED_MULTIPLIER
+	target.set_being_carried(true)		# #271: 通知昏迷機制
+	return HAUL_OK
+
+func stop_haul() -> void:
+	if _hauling_target != null:
+		var target := _hauling_target
+		target._detach_haul(self)
+		# 雙人搬運時（《99》P-27 #8），其中一人放手不該讓另一人還在搬的目標被標記成沒人搬
+		if not target.is_being_hauled():
+			target.set_being_carried(false)		# #271: 通知昏迷機制
+		_hauling_target = null
+	_speed_multiplier = 1.0
+
+func _attach_haul(hauler: Character) -> void:
+	if not _hauled_by.has(hauler):
+		_hauled_by.append(hauler)
+
+func _detach_haul(hauler: Character) -> void:
+	_hauled_by.erase(hauler)
+
+func set_being_carried(is_carried: bool) -> void:
+	if is_carried and has_condition(CONDITION_INCAPACITATED):
+		_is_being_carried = true
+	elif not is_carried:
+		_is_being_carried = false

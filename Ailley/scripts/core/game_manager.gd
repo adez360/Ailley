@@ -19,17 +19,32 @@ var npc_data = {}
 # key 用節點名不用 character_id —— id 是生成的 UUID，人在 json 裡手寫不出來
 var schedule_assignments = {}
 
-# 節點名 -> {character_id, character_name}。場景裡固定的 NPC，身分（id/顯示名）
-# 是設計時決定好的資料，不是執行期才生、需要被記住的狀態——寫死在這裡才能讓
-# character_id 跨場次穩定（relationships 拿它當 key，變了等於失憶）。
+# 節點名 -> {character_id, character_name, hexaco, character}。場景裡固定的 NPC，
+# 身分（id/顯示名/人格）是設計時決定好的資料，不是執行期才生、需要被記住的
+# 狀態——寫死在這裡才能讓 character_id 跨場次穩定（relationships 拿它當 key，
+# 變了等於失憶），也讓兩隻 Agent 有各自不同的人格而不是共用場景預設值。
 # 跟 schedule_assignments 一樣用節點名查表，跟它分兩塊是因為「用哪份行程」與
-# 「我是誰」是兩件不同的事（見 agent.gd schedule_template 的註解）
+# 「我是誰」是兩件不同的事（見 agent.gd schedule_template 的註解）。
+#
+# hexaco 六維與 character 自述怎麼變成 personality 十項與 system_prompt，
+# 見 scripts/character/personality.gd（#117，《01-1》§3～§5）
 var identity_assignments = {}
 
 # template_id -> 模板資料（character_name/system_prompt/words_to_creator）。
 # #73 的角色庫：先用記憶體清單，不等存檔系統——模板資料是寫死的 json，
 # 重開遊戲不會消失，不需要真的存檔
 var character_templates = {}
+
+# 玩家自建角色（#122）：靈魂庫，已建立但尚未投放的完整角色紀錄。先用記憶體
+# 清單，不等存檔系統（#21/#22）——理由跟 character_templates 同一條，這則的
+# 重點是把「建角→存檔驗證→角色生成→角色庫→投放」這條管線走通，真正的跨場次
+# 持久化留給存檔系統落地時接上，不是這個容量上限本身依賴存不存得住
+const CHARACTER_LIBRARY_CAP := 15
+
+# 世界內同時投放上限（《10》B21，預設 5、房主可下修，這次先固定預設值）
+const DEPLOY_CAP := 5
+
+var character_library: Array[Dictionary] = []
 
 func _ready():
 	load_npc_data()
@@ -74,7 +89,7 @@ func get_npc(id:String):
 func get_schedule_template(node_name:String)->String:
 	return str(schedule_assignments.get(node_name, ""))
 
-# 這個節點名對應的固定身分（{character_id, character_name}）。沒指派就回空字典，
+# 這個節點名對應的固定身分（{character_id, character_name, hexaco, character}）。沒指派就回空字典，
 # 由呼叫端（character.gd::_ready()）退回生成 UUID／節點名。Player 與動態生成的
 # 角色節點名都查不到，自然落回原本行為
 func get_npc_identity(node_name:String)->Dictionary:
@@ -170,6 +185,165 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 	if not name_given:
 		character.character_name = character.name.to_lower()
 
+	return character
+
+
+# ---- 角色庫（#122，玩家自建角色）----
+
+# 把建角面板 collect() 出來的資料轉成角色庫的一筆紀錄並存進去。面板只負責
+# 蒐集資料（character_create.gd 的既有原則），存檔驗證→角色生成→角色庫這段
+# 管線接在這裡，由 character_create.gd 開場連的 character_saved 訊號觸發
+func receive_created_character(data: Dictionary) -> void:
+	# collect() 帶 "id" 代表面板走的是 edit()（規格書 05 §7-1「編輯」），
+	# 要原地覆蓋既有那筆，不是新增——不然編輯一次角色庫就多一筆同名孤兒紀錄，
+	# 而且會再打一次一次性的 words_to_creator（CodeRabbit review 抓到）
+	var editing_id := str(data.get("id", ""))
+	var existing := get_library_entry(editing_id) if not editing_id.is_empty() else {}
+
+	# 已投放的不可編輯（《05》§7-1）。面板端 edit() 只讀不到已投放的？不，
+	# 面板本身不擋——角色庫首頁才擋（編輯按鈕對已投放者 disabled），這裡是
+	# 資料層最後一道防線，跟 remove_from_library() 對已投放者的擋法一致
+	if not existing.is_empty() and existing.get("deployed", false):
+		push_warning("GameManager: %s 已投放，不能編輯" % existing["character_name"])
+		return
+
+	if existing.is_empty() and character_library.size() >= CHARACTER_LIBRARY_CAP:
+		push_warning("GameManager: 角色庫已滿（上限 %d），%s 沒有存進去" % [CHARACTER_LIBRARY_CAP, data.get("character_name", "")])
+		return
+
+	var hexaco := {}
+	for key in ["hex_honesty", "hex_emotionality", "hex_extraversion", "hex_agreeableness", "hex_conscientiousness", "hex_openness"]:
+		hexaco[key] = data.get(key, 50)
+	var description := str(data.get("character", ""))
+
+	var id: String = existing["id"] if not existing.is_empty() else Character.generate_id()
+	var persona := Personality.from_identity({"hexaco": hexaco, "character": description}, id)
+
+	var entry := {
+		"id": id,
+		"character_name": str(data.get("character_name", "")),
+		"age": int(data.get("age", 30)),
+		"gender": str(data.get("gender", "other")),
+		"decision_source": str(data.get("decision_source", "human")),
+		"model_name": str(data.get("model_name", "")),
+		"hexaco": hexaco,
+		"character": description,
+		"appearance": data.get("appearance", []),
+		"personality": persona["personality"],
+		"system_prompt": persona["system_prompt"],
+		# 編輯時沿用既有的 words_to_creator——人格改了不代表要重打一次
+		# 只在建立當下才有意義的一次性 AI 呼叫
+		"words_to_creator": str(existing.get("words_to_creator", "")),
+		"deployed": false,
+	}
+
+	if existing.is_empty():
+		character_library.append(entry)
+		_generate_words_to_creator(entry)
+	else:
+		character_library[character_library.find(existing)] = entry
+
+
+# 建角完成當下打一次的 AI 呼叫（規格書 05 流程圖 ⑤），跟 plan/dialogue/
+# reflection 平行的第四種信封類型，只在這一刻打一次。fire-and-forget：
+# 存檔本身不等這通請求，跟 workstation.gd::_run_work() 同一種協程模式——
+# 角色已經進角色庫，AI 回應晚到只補 words_to_creator 這一個欄位。
+# requester_id 用角色自己的 id，跟其他角色/Agent 的行程重排各自分開算配額
+func _generate_words_to_creator(entry: Dictionary) -> void:
+	var envelope := PromptBuilder.build_creation_envelope(entry["system_prompt"])
+	var result: Dictionary = await AIService.request(envelope, entry["id"], AIService.Policy.SCHEDULED)
+	if not result["ok"]:
+		return
+	var validated := AISchema.validate_creation(result["data"])
+	if not validated["ok"]:
+		return
+	entry["words_to_creator"] = validated["data"]["words_to_creator"]
+
+
+func get_library_entry(id: String) -> Dictionary:
+	for entry in character_library:
+		if entry["id"] == id:
+			return entry
+	return {}
+
+
+# 已投放的角色不能刪——刪了場上生出來的 Character 節點會變孤兒（沒有任何
+# 紀錄指向它），deploy_from_library() 的 deployed_count 也只掃
+# character_library，刪掉之後計數會下降，變成可以無視 DEPLOY_CAP 重複投放
+# （CodeRabbit review 抓到）。要收回一隻已投放角色，先做的是撤回（見《05》
+# §7-3，這則不含撤回機制的實作），不是直接刪角色庫紀錄
+func remove_from_library(id: String) -> bool:
+	for i in character_library.size():
+		if character_library[i]["id"] == id:
+			if character_library[i].get("deployed", false):
+				push_warning("GameManager: %s 已投放，先收回才能刪除" % character_library[i]["character_name"])
+				return false
+			identity_assignments.erase(id)
+			character_library.remove_at(i)
+			return true
+	return false
+
+
+# 複製一份，新 id、名字加後綴、投放狀態重置（《05》§7-1「複製」）
+func duplicate_library_entry(id: String) -> Dictionary:
+	var source := get_library_entry(id)
+	if source.is_empty() or character_library.size() >= CHARACTER_LIBRARY_CAP:
+		return {}
+
+	var copy := source.duplicate(true)
+	copy["id"] = Character.generate_id()
+	copy["character_name"] = source["character_name"] + L10n.t("UI_CL_COPY_SUFFIX")
+	copy["deployed"] = false
+	character_library.append(copy)
+	return copy
+
+
+# 投放：把角色庫的靈魂生成這個世界的肉體副本（《05》§7-2、§7-3）。已投放的
+# 不能重複投放——一份靈魂同時只該有一具肉體，是《05》§7-1「已投放的角色
+# 不可編輯」規則的自然延伸
+func deploy_from_library(id: String) -> Character:
+	var entry := get_library_entry(id)
+	if entry.is_empty() or entry.get("deployed", false):
+		return null
+
+	var deployed_count := 0
+	for e in character_library:
+		if e.get("deployed", false):
+			deployed_count += 1
+	if deployed_count >= DEPLOY_CAP:
+		push_warning("GameManager: 世界投放上限已滿（%d），%s 沒有投放" % [DEPLOY_CAP, entry["character_name"]])
+		return null
+
+	# 借用既有的 identity_assignments 查表機制：spawn_character() 會把節點名
+	# 設成 character_id，Character._ready() 讀 GameManager.get_npc_identity(name)
+	# 組 system_prompt/personality——註冊在這張表下，_ready() 不用改就能撿到
+	# 這隻角色真正的人格資料，而不是撿到空字典、退回沒有人格的最小版 system_prompt
+	identity_assignments[entry["id"]] = {
+		"character_id": entry["id"],
+		"character_name": entry["character_name"],
+		"hexaco": entry["hexaco"],
+		"character": entry["character"],
+	}
+
+	var character := spawn_character(preload("res://scenes/agent.tscn"), {
+		"character_id": entry["id"],
+		"character_name": entry["character_name"],
+	})
+
+	# decision_source／model_name 是 agent.gd 的 @export 欄位，用 get()/set()
+	# 而不是型別轉型——跟 spawn_character() 判斷 schedule_template 同一種寫法，
+	# 因為這裡收的是泛型 Character
+	if character.get("decision_source") != null:
+		character.set("decision_source", entry["decision_source"])
+		character.set("model_name", entry["model_name"])
+		# spawn_character() 內的 add_child() 已經觸發過 _ready()，_provider
+		# 那時候是照 @export 預設值（"local"）建的——上面兩行剛套上去的值
+		# 要重建一次 provider 才會生效，不然角色庫選的來源形同沒選
+		# （CodeRabbit review 抓到的時序 bug）
+		if character.has_method("rebuild_provider"):
+			character.rebuild_provider()
+
+	entry["deployed"] = true
 	return character
 
 

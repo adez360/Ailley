@@ -1,4 +1,4 @@
-extends SaveService
+extends "res://scripts/save/save_service.gd"
 class_name SqliteSaveService
 
 ## SaveService 的 SQLite 實作，走 DatabaseManager autoload 存取 user://game.db。
