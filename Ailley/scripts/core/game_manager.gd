@@ -161,6 +161,16 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 	if identity.has("character_name"):
 		character.character_name = identity["character_name"]
 
+	# words_to_creator 只有角色庫投放這條路徑會給（那份是建角當下就生成好、
+	# 可能已人工檢閱過的內容）。要在 add_child() 觸發 _ready() 之前設好——
+	# Agent._ready() 呼叫的 _generate_words_to_creator() 一看到欄位已經有內容
+	# 就不會再打一次多餘的 AI 呼叫（見那邊的 is_empty() 防呆，CodeRabbit review
+	# 抓到「角色庫已生成的內容會被非同步回應蓋掉」，這裡才是真正補上傳遞路徑）。
+	# 用 get()/set() 而不是型別轉型：這欄只有 Agent 才有，spawn_character() 收的
+	# 是泛型 Character，不該假設一定是 Agent
+	if identity.has("words_to_creator") and character.get("words_to_creator") != null:
+		character.set("words_to_creator", identity["words_to_creator"])
+
 	character.name = (
 		character.character_id if not character.character_id.is_empty()
 		else Character.generate_id()
@@ -328,6 +338,7 @@ func deploy_from_library(id: String) -> Character:
 	var character := spawn_character(preload("res://scenes/agent.tscn"), {
 		"character_id": entry["id"],
 		"character_name": entry["character_name"],
+		"words_to_creator": entry.get("words_to_creator", ""),
 	})
 
 	# decision_source／model_name 是 agent.gd 的 @export 欄位，用 get()/set()
