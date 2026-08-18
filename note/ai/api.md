@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-17
+updated: 2026-08-19
 ---
 
 # api
@@ -23,6 +23,7 @@ env  Godot 4.5.1-stable · gl_compatibility · default_texture_filter=0
 GameManager   scripts/core/game_manager.gd
 GameClock     scripts/core/GameClock.gd
 AIService     scripts/ai/ai_service.gd
+DatabaseManager   database/DatabaseManager.gd
 _mcp_game_helper  addons/godot_ai/runtime/game_helper.gd   † 勿移除
 ```
 
@@ -1171,6 +1172,37 @@ var hour := 8 · var minute := 0 · var day := 1
 † 要「第幾天」一律讀 day / 訂 day_changed，不要自己比對 hour 有沒有變小 ——
   私有計數重開遊戲歸零，靠它擋的東西（每日配額）等於沒擋
 ⚠ day 還沒持久化，重開仍從 1 開始 —— 要等世界存檔（#21）
+```
+
+## DatabaseManager — database/DatabaseManager.gd · autoload · Node
+
+```gdscript
+const DATABASE_PATH := "user://game.db"
+var db: SQLite
+var is_ready := false                        # false 時所有公開方法早退
+
+func query(sql: String, bindings: Array = []) -> bool
+func get_last_result() -> Array              # 上一次 query()/select() 的原始結果
+func select(table: String, conditions: String = "", columns: Array = ["*"]) -> Array
+func insert(table: String, data: Dictionary) -> bool
+func update(table: String, data: Dictionary, conditions: String) -> bool
+func delete(table: String, conditions: String) -> bool
+func begin_transaction() -> bool             # BEGIN IMMEDIATE，拿不到寫鎖立刻失敗
+func commit_transaction() -> bool
+func rollback_transaction() -> bool
+```
+
+```text
+conditions 是原始 SQL WHERE 子句（不含 WHERE），只能由程式碼組，不可放模型/玩家輸入字串
+data 的值一律走 bindings 綁定，不拼進 SQL 字串
+select() 找不到列回傳 []，不是 error；update()/delete() 空 conditions 直接擋掉
+  （避免整表更新/清空），is_ready=false 時任何方法都回 false/[]
+⚠ insert() 走 addon 的 insert_row()，update()/delete() 不走 update_rows()/delete_rows()
+  ——這兩個 addon 方法會把外層 begin_transaction() 開的交易提早 COMMIT 掉，改自己
+  拼 query_with_bindings() 的 UPDATE/DELETE，值仍是綁定參數
+沒有重試／backoff：MVP 單一 process 對應單一連線，多 process 搶同一份 game.db
+  目前沒有呼叫端會製造這個情境（無多人連線）
+→ 技術/存檔.md
 ```
 
 ## data/
