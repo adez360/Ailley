@@ -125,6 +125,10 @@ var _talk_pursuit_last_distance := INF
 var _give_pursuit_stuck_ticks := 0
 var _give_pursuit_last_distance := INF
 
+# attack 任務用的卡住偵測，跟 _give_pursuit_* 同一套理由與同一套收尾方式
+var _attack_pursuit_stuck_ticks := 0
+var _attack_pursuit_last_distance := INF
+
 # 自己成功發起、目前正在進行中的 talk 任務 id／來源。只在 talk_to() 真的成功
 # 那一刻設值，exit_conversation() 靠這個而不是「當下的 _current_task」判斷對話
 # 結束時該清掉哪一筆——理由見 exit_conversation() 自己的註解。
@@ -767,6 +771,25 @@ func _on_work_finished() -> void:
 	_push_daily_event("你剛結束了一段工作站的工作")
 	_reevaluate()
 
+# 被攻擊等外部事件強制中斷（《02》§3 中斷規則）時的收尾。跟
+# _finish_task_and_request_next() 類似但刻意不 _remove_task()——這不是任務
+# 做完或判定失敗，只是被打斷，還在池子裡的話下次重新仲裁時值得重新考慮要不要
+# 繼續做（例如原本在走去做別的事，被打斷後可能還是想繼續走過去）
+func _on_action_interrupted() -> void:
+	_pursued_place = ""
+	_pursuit_done = false
+	_current_task = {}
+	current_place = ""
+	current_state = "idle"
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
+	_reevaluate()
+
+# 被攻擊記成事實句（純客觀事件，不貼「這很可怕」之類的主觀標籤——見 CLAUDE.md
+# 「遊戲機制規格：AI 自主性自檢」），讓下次決策／睡前反思能讀到發生過這件事
+func _on_attacked(attacker: Character) -> void:
+	_push_daily_event("你被 %s 攻擊了" % attacker.character_name)
+
 # 基底的快照加上行程表這一段。schedule/current_place/current_state 宣告在這裡，
 # 所以是這裡負責放進去 —— 基底不必去猜誰有行程表
 func get_state_snapshot() -> Dictionary:
@@ -993,9 +1016,12 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 
 	_select(best, now_minutes)
 
-## 《01-2》§3 完整表格，數字照抄，含目前還沒接上執行邏輯的動作（#159 等落地時
+## 《01-2》§3 完整表格，數字照抄，含目前還沒接上執行邏輯的動作（等落地時
 ## 直接呼叫 _roll_success()，不用重寫一次成功率公式）。struggle 例外太多
 ## （不擲骰、搭 haul 檢查點），不套用這裡，見《01-2》§3 附註
+##
+## 刻意不含 attack：P-28 已拍板 MVP 必中、不做閃避／格擋，不是《01-2》§2
+## 通用成功率公式的技能檢定，resolve() 的 "attack" 分支直接放行，不查這張表
 const SUCCESS_PARAMS := {
 	"hunt_small": {"base": 0.60, "trait": "courage", "coef": 0.002},
 	"hunt_large": {"base": 0.30, "trait": "courage", "coef": 0.003},
@@ -1004,7 +1030,6 @@ const SUCCESS_PARAMS := {
 	"steal": {"base": 0.35, "trait": "courage", "coef": 0.0025},
 	"persuade": {"base": 0.40, "trait": "sociability", "coef": 0.003},
 	"perform": {"base": 0.70, "trait": "romanticism", "coef": 0.003},
-	"attack": {"base": 0.50, "trait": "courage", "coef": 0.0025},
 }
 
 ## 《01-2》§2 通用成功率公式，純數學，跟哪個動作無關——不在 SUCCESS_PARAMS
@@ -1111,6 +1136,16 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			var count: int = int(params.get("count", 1))
 			if inventory == null or not inventory.has_item(item_id, count):
 				return {"success": false, "reason": "身上沒有這件東西，送不出去"}
+		"attack":
+			# 必中（《99》P-28），不落進下面的 _roll_success()——那張表刻意沒收
+			# attack，這裡硬規則過了就直接放行，不擲骰
+			var target_name: String = str(params.get("target", ""))
+			var matches := _find_all_characters_by_name(target_name)
+			if matches.is_empty():
+				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
+			if matches.size() > 1:
+				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
+			return {"success": true, "reason": ""}
 		# move_to/sleep/nap/rest/wash/idle/shout 目前都沒有額外的硬規則要擋
 		# （shout 沒有目標、沒有前提，天生沒有硬規則可擋）
 		_:
@@ -1149,6 +1184,8 @@ func _select(task: Dictionary, now_minutes: int) -> void:
 	_talk_pursuit_last_distance = INF
 	_give_pursuit_stuck_ticks = 0
 	_give_pursuit_last_distance = INF
+	_attack_pursuit_stuck_ticks = 0
+	_attack_pursuit_last_distance = INF
 
 # 往 _current_task 的方向前進。無條件每次重算都跑一次，不管這次有沒有
 # 剛選定新任務——對話中會在這裡先返回、不移動，等下一次重算（對話結束後
@@ -1191,6 +1228,10 @@ func _pursue_current_task() -> void:
 
 	if current_state == "shout":
 		_pursue_shout_task()
+		return
+
+	if current_state == "attack":
+		_pursue_attack_task()
 		return
 
 	# talk 任務的目標是另一個角色，不是固定地點——current_place 對它一律是空的
@@ -1518,6 +1559,64 @@ func _give_failure_message(failure: String) -> String:
 			return "對方身上放不下了，禮物送不出去"
 		_:
 			return "禮物沒有送成功"
+
+# attack 任務的執行（#159）：目標跟 give 一樣是會動的角色，沿用同一套「走一次、
+# 卡住偵測」節流，跟 give 不同的只有終點呼叫的是 attack() 不是 give_to()——
+# 必中，resolve() 已經在硬規則那關保證這裡不會再失敗
+func _pursue_attack_task() -> void:
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		if not result["success"]:
+			_finish_task_and_request_next()
+			return
+
+	var params: Dictionary = _current_task.get("params", {})
+	var target_name: String = str(params.get("target", ""))
+	var target := _find_character_by_name(target_name)
+
+	if target == null:
+		last_action_result = "找不到這個人，可能已經離開了"
+		_finish_task_and_request_next()
+		return
+
+	var distance := get_body_position().distance_to(target.get_body_position())
+	if distance > ATTACK_RANGE:
+		if not move_to(target.get_body_position()):
+			push_warning("Agent %s: 走不到攻擊對象 %s" % [character_name, target.character_name])
+			last_action_result = "靠近不了對方，攻擊不到"
+			_finish_task_and_request_next()
+			return
+
+		if distance >= _attack_pursuit_last_distance - 1.0:
+			_attack_pursuit_stuck_ticks += 1
+		else:
+			_attack_pursuit_stuck_ticks = 0
+		_attack_pursuit_last_distance = distance
+
+		if _attack_pursuit_stuck_ticks >= 3:
+			push_warning("Agent %s: 攻擊對象 %s 卡住走不到，放棄" % [character_name, target.character_name])
+			last_action_result = "靠近不了對方，攻擊不到"
+			_finish_task_and_request_next()
+		return
+
+	stop_moving()
+	last_action_result = _attack_failure_message(attack(target))
+	_finish_task_and_request_next()
+
+# attack() 失敗原因碼轉中文，格式跟 _give_failure_message() 一致
+func _attack_failure_message(failure: String) -> String:
+	match failure:
+		Character.ATTACK_OK:
+			return ""
+		Character.ATTACK_TARGET_NOT_FOUND:
+			return "找不到這個人，可能已經離開了"
+		Character.ATTACK_TARGET_IS_SELF:
+			return "不能攻擊自己"
+		Character.ATTACK_TOO_FAR:
+			return "距離太遠，攻擊不到"
+		_:
+			return "攻擊沒有成功"
 
 # shout 任務的執行（#158）：不像 give／talk 有會動的目標要追，原地喊一聲當下
 # 就結束，不需要追逐或等待抵達——resolve() 一過就廣播，立刻退出任務池

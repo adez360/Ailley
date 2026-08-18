@@ -74,10 +74,14 @@ const ALLOWED_ACTIONS := [
 # 就退出任務池，不像 nap 那類佔滿整段 duration。persuade 不在這裡——見 #227，
 # 它需要的待回應事實句機制目前完全沒有地基
 #
+# attack 是 #159 接上的：跟 give 同一套「目標會動、一次執行完就退出任務池」
+# 模式（_pursue_attack_task()），差別是必中（《99》P-28），resolve() 對它
+# 不擲骰，直接放行
+#
 # haul／struggle 是 #161 接上的：haul 是長動作，占住整段 duration（跟 nap 一樣），
 # 但不用 params.place —— 搬運去哪由搬運者自己決定。struggle 是短動作，只在被搬運
 # 時有效，走各自的 _pursue_struggle_task()，執行完就退出任務池
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "murmur", "give", "shout", "haul", "struggle"]
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "murmur", "give", "shout", "haul", "struggle", "attack"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -258,7 +262,7 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) ->
 		# 還沒有）：沒有 target 的 talk 任務會被 _pursue_talk_task() 誤判成
 		# 「目標不存在」一路帶進任務池才發現，不如在這一層就擋掉，跟這個檔案
 		# 「外來內容一律不信任」的原則一致，不等到執行層才發現資料是空的
-		if task["action"] == "talk":
+		if ["talk", "attack"].has(task["action"]):
 			var talk_params: Dictionary = task.get("params", {})
 			var target: Variant = talk_params.get("target")
 			if not target is String or (target as String).strip_edges().is_empty():
