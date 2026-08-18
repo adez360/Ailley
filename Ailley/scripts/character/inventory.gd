@@ -10,6 +10,12 @@ extends Node
 ##
 ## 金錢也在這裡：規格書 01 §3-3 把 money 與 inventory 同樣歸在 economy 底下，
 ## 為了一個 int 另外開一個節點，換到的只是多一個 get_node_or_null 要防。
+##
+## 物品使用（use_item()）不查 DatabaseManager——Character 負責從 item definition
+## 取得 effect_satiety/effect_hydration/effect_alcohol/effect_injury 與
+## is_consumable，再呼叫 inventory.use_item(item_id, stats, effects, is_consumable)。
+## Inventory 只負責：1. 確認物品存在 2. 確認是否可消耗 3. 套用 Stats 效果
+## 4. 成功後消耗 1 個物品
 
 ## 格子或金錢真的變了才發。只在成功的異動上發——失敗是原子的、什麼都沒動，
 ## 發出去只會讓顯示端白刷一次。
@@ -20,9 +26,16 @@ extends Node
 ## 不是「哪一格變了」，帶了反而每個顯示端都要判斷這則跟自己有沒有關係
 signal changed
 
+## 外部直接覆蓋 slots（例如存檔載入）後用來補發變更通知，
+## 讓 InventorySlotButton / Hotbar / InventoryPanel 同步刷新。
+## 外部不要直接 emit_signal("changed")。
+func notify_changed() -> void:
+	changed.emit()
+
 const HOTBAR_SIZE := 9
 const MAIN_SIZE := 27
 const SIZE := HOTBAR_SIZE + MAIN_SIZE		# index 0..8 快捷欄，9..35 主背包
+const MAX_STACK := 30
 
 ## 同 item_id 且 decay 差距在這個範圍內才能疊進同一格。08 §4 規則 #1
 const STACK_DECAY_TOLERANCE := 10
@@ -37,6 +50,14 @@ const ADD_INVALID_COUNT := "INVALID_COUNT"
 const REMOVE_OK := ""
 const REMOVE_NOT_FOUND := "NOT_FOUND"
 const REMOVE_INVALID_COUNT := "INVALID_COUNT"
+
+## use_item() 的回傳原因碼
+const USE_OK := ""
+const USE_NOT_FOUND := "NOT_FOUND"
+const USE_NOT_CONSUMABLE := "NOT_CONSUMABLE"
+const USE_INVALID_STATS := "INVALID_STATS"
+const USE_INVALID_EFFECT := "INVALID_EFFECT"
+const USE_REMOVE_FAILED := "REMOVE_FAILED"
 
 ## 開局身上有多少錢。規格書 01 §3-3
 const DEFAULT_MONEY := 300
@@ -128,19 +149,49 @@ func add_item(item_id: String, count: int = 1, decay: int = 0, durability: int =
 		changed.emit()
 	return reason
 
+# 每一格最多疊 MAX_STACK。先算總容量（相容既有格的剩餘空間 + 空格 * MAX_STACK）
+# 不夠就整批擋下，不會半途占掉一部分槽位又回報 ADD_NO_SPACE
 func _add_stackable(item_id: String, count: int, decay: int) -> String:
-	var target := _find_stackable_slot(item_id, decay)
-	if target != -1:
-		var slot: Dictionary = slots[target]
-		slot["count"] = int(slot["count"]) + count
-		slot["decay"] = maxi(int(slot["decay"]), decay)		# 取較差（較高）的 decay
-		return ADD_OK
-
-	var empty := find_first_empty()
-	if empty == -1:
+	var total_capacity := 0
+	for slot in slots:
+		if slot.is_empty():
+			total_capacity += MAX_STACK
+			continue
+		if slot["item_id"] != item_id or int(slot["durability"]) >= 0:
+			continue
+		if absi(int(slot["decay"]) - decay) > STACK_DECAY_TOLERANCE:
+			continue
+		total_capacity += MAX_STACK - int(slot["count"])
+	if total_capacity < count:
 		return ADD_NO_SPACE
 
-	slots[empty] = {"item_id": item_id, "count": count, "decay": decay, "durability": -1}
+	# 先填相容的既有格，每格補到 MAX_STACK 為止
+	var remaining := count
+	for i in SIZE:
+		if remaining <= 0:
+			break
+		var slot: Dictionary = slots[i]
+		if slot.is_empty() or slot["item_id"] != item_id or int(slot["durability"]) >= 0:
+			continue
+		if absi(int(slot["decay"]) - decay) > STACK_DECAY_TOLERANCE:
+			continue
+		var space := MAX_STACK - int(slot["count"])
+		if space <= 0:
+			continue
+		var add_count := mini(remaining, space)
+		slot["count"] = int(slot["count"]) + add_count
+		slot["decay"] = maxi(int(slot["decay"]), decay)		# 取較差（較高）的 decay
+		remaining -= add_count
+
+	# 還有剩的就開新格，每個新格一樣上限 MAX_STACK
+	while remaining > 0:
+		var empty := find_first_empty()
+		if empty == -1:
+			return ADD_NO_SPACE
+		var add_count := mini(remaining, MAX_STACK)
+		slots[empty] = {"item_id": item_id, "count": add_count, "decay": decay, "durability": -1}
+		remaining -= add_count
+
 	return ADD_OK
 
 func _add_unstackable(item_id: String, count: int, decay: int, durability: int) -> String:
@@ -157,18 +208,6 @@ func _add_unstackable(item_id: String, count: int, decay: int, durability: int) 
 	for i in empties:
 		slots[i] = {"item_id": item_id, "count": 1, "decay": decay, "durability": durability}
 	return ADD_OK
-
-# 同 item_id、無 durability（decay 類）、decay 差距在容許範圍內的既有格。找不到回 -1
-func _find_stackable_slot(item_id: String, decay: int) -> int:
-	for i in SIZE:
-		var slot: Dictionary = slots[i]
-		if slot.is_empty() or slot["item_id"] != item_id:
-			continue
-		if int(slot["durability"]) >= 0:
-			continue
-		if absi(int(slot["decay"]) - decay) <= STACK_DECAY_TOLERANCE:
-			return i
-	return -1
 
 # 移除物品，成功回傳 REMOVE_OK，數量不足回傳 REMOVE_NOT_FOUND 且不動任何格——
 # 同樣是原子的，不會先扣掉一部分才發現不夠。
@@ -215,6 +254,58 @@ func _remove_item_detailed(item_id: String, count: int, notify: bool = true) -> 
 	if notify:
 		changed.emit()
 	return {"reason": REMOVE_OK, "removed": removed}
+
+
+# ---- 使用 ----
+
+# 使用一個消耗品。effects 格式：
+# {"effect_satiety": 40, "effect_hydration": 20, "effect_alcohol": 25, "effect_injury": -30}
+# Stats.add() 會負責將數值限制在 0~100。只有效果套用成功，才會消耗背包中的 1 個物品——
+# 順序反過來的話，remove 失敗會讓效果套用了卻沒扣物品，兩邊帳對不上
+func use_item(item_id: String, stats: Stats, effects: Dictionary, is_consumable: bool = true) -> String:
+	if stats == null:
+		push_warning("[Inventory] 使用物品失敗：Stats 不存在。")
+		return USE_INVALID_STATS
+
+	if not has_item(item_id, 1):
+		push_warning("[Inventory] 使用物品失敗：背包沒有 %s。" % item_id)
+		return USE_NOT_FOUND
+
+	if not is_consumable:
+		push_warning("[Inventory] %s 不是可消耗物品。" % item_id)
+		return USE_NOT_CONSUMABLE
+
+	var effect_satiety := float(effects.get("effect_satiety", 0.0))
+	var effect_hydration := float(effects.get("effect_hydration", 0.0))
+	var effect_alcohol := float(effects.get("effect_alcohol", 0.0))
+	var effect_injury := float(effects.get("effect_injury", 0.0))
+
+	if not is_finite(effect_satiety) or not is_finite(effect_hydration) \
+			or not is_finite(effect_alcohol) or not is_finite(effect_injury):
+		push_error("[Inventory] %s 的物品效果包含無效數值。" % item_id)
+		return USE_INVALID_EFFECT
+
+	if effect_satiety != 0.0:
+		stats.add("satiety", effect_satiety)
+	if effect_hydration != 0.0:
+		stats.add("hydration", effect_hydration)
+	if effect_alcohol != 0.0:
+		stats.add("alcohol", effect_alcohol)
+	if effect_injury != 0.0:
+		stats.add("injury", effect_injury)
+
+	var remove_reason := remove_item(item_id, 1)
+	if remove_reason != REMOVE_OK:
+		push_error("[Inventory] 使用 %s 後移除物品失敗：%s" % [item_id, remove_reason])
+		return USE_REMOVE_FAILED
+
+	print("[Inventory] 使用物品：%s | satiety=%+.1f hydration=%+.1f alcohol=%+.1f injury=%+.1f" % [
+		item_id, effect_satiety, effect_hydration, effect_alcohol, effect_injury
+	])
+	return USE_OK
+
+
+# ---- 搬移 ----
 
 # 搬到空格；目的地非空就失敗，不覆蓋。要交換兩個已佔用的格用 swap_slot()
 func move_slot(from: int, to: int) -> bool:
