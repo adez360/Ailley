@@ -108,6 +108,12 @@ func insert(table: String, data: Dictionary) -> bool:
 	return false
 
 
+## 不走 addon 的 db.update_rows()——實測過（2026-08-18）它會把外層
+## begin_transaction() 開的交易提早 COMMIT 掉（db.delete_rows() 同一個
+## 毛病，db.insert_row() 沒有），"cannot commit - no transaction is active"
+## 就是這樣來的，跟呼叫端寫得對不對無關。改用 query_with_bindings() 自己
+## 拼帶 ? 佔位符的 UPDATE，值一樣是綁定參數，不是拼字串，不影響檔頭那條
+## 「不要自己把值拼進 SQL 字串」的規則
 func update(
 	table: String,
 	data: Dictionary,
@@ -121,7 +127,17 @@ func update(
 		push_error("[Database] UPDATE requires conditions.")
 		return false
 
-	if db.update_rows(table, conditions, data):
+	var assignments := []
+	var bindings := []
+	for key in data:
+		assignments.append("%s = ?" % key)
+		bindings.append(data[key])
+
+	var sql := "UPDATE %s SET %s WHERE %s" % [
+		table, ", ".join(assignments), conditions
+	]
+
+	if db.query_with_bindings(sql, bindings):
 		return true
 
 	push_error(
@@ -131,6 +147,9 @@ func update(
 	return false
 
 
+## 同 update() 的理由，不走 db.delete_rows()——它一樣會把外層交易提早
+## COMMIT 掉。conditions 本來就是隻能由程式碼組的原始 SQL（見檔頭），
+## 這裡沒有值要綁定，直接拼進 DELETE 語句
 func delete(table: String, conditions: String) -> bool:
 	if not _require_ready():
 		return false
@@ -140,7 +159,7 @@ func delete(table: String, conditions: String) -> bool:
 		push_error("[Database] DELETE requires conditions.")
 		return false
 
-	if db.delete_rows(table, conditions):
+	if db.query_with_bindings("DELETE FROM %s WHERE %s" % [table, conditions], []):
 		return true
 
 	push_error(
