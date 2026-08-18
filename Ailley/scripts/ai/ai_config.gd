@@ -76,6 +76,14 @@ class Provider extends RefCounted:
 	## schema）跟 layer 3（AISchema 硬驗證），不送 response_format 欄位
 	var supports_json_schema := true
 
+	## 這個 provider 的輸出格式是不是真的被文法層（GBNF）約束住，不只是「有 json_schema
+	## 支援」而已（#212）。預設 **false**——跟 supports_json_schema 的預設方向相反：
+	## 格式保證是少數本機 provider 才有的特性，不能假設大多數 provider 都有；沒宣告的
+	## provider 一律當作「可能需要重試」，最壞情況只是多重試幾次，不是正確性問題。
+	## LocalLLMProvider.max_validation_retries() 讀這個欄位決定要不要給重試次數，
+	## 不再用「provider 名字是不是字面值 "local"」判斷
+	var format_guaranteed := false
+
 	# 唯一准許把金鑰帶進輸出的路徑。頭尾各留 MASK_KEEP 碼，中間一律省略
 	func masked_key() -> String:
 		if api_key.is_empty():
@@ -206,6 +214,7 @@ func _parse_provider(provider_name: String, data: Dictionary) -> Provider:
 	provider.timeout = float(data.get("timeout", DEFAULT_TIMEOUT))
 	provider.api_key = str(data.get("api_key", "")).strip_edges()
 	provider.supports_json_schema = bool(data.get("supports_json_schema", true))
+	provider.format_guaranteed = bool(data.get("format_guaranteed", false))
 
 	# 空金鑰是合法的：本機 llama-server／ollama 這類服務根本不驗 Authorization，
 	# 逼它填一把假金鑰只是在替一條不合身的規則寫解法。金鑰空的時候

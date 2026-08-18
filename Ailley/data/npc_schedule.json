@@ -4,8 +4,32 @@
 		"Agent2": "npc006"
 	},
 	"identities": {
-		"Agent": {"character_id": "aji", "character_name": "阿吉"},
-		"Agent2": {"character_id": "alan", "character_name": "阿嵐"}
+		"Agent": {
+			"character_id": "aji",
+			"character_name": "阿吉",
+			"hexaco": {
+				"hex_honesty": 50,
+				"hex_emotionality": 15,
+				"hex_extraversion": 15,
+				"hex_agreeableness": 50,
+				"hex_conscientiousness": 85,
+				"hex_openness": 50
+			},
+			"character": "崩塌前是機房維修員，獨自活過三次斷電。說話很短，不耐煩時會發出鼻音。最在乎自己的東西不被別人碰。"
+		},
+		"Agent2": {
+			"character_id": "alan",
+			"character_name": "阿嵐",
+			"hexaco": {
+				"hex_honesty": 50,
+				"hex_emotionality": 80,
+				"hex_extraversion": 90,
+				"hex_agreeableness": 85,
+				"hex_conscientiousness": 50,
+				"hex_openness": 50
+			},
+			"character": "在村口擺過幾年攤，認得每個人的臉。話一開頭就停不下來，別人為難時忍不住想幫忙。"
+		}
 	},
 	"villagers": [
 		{
