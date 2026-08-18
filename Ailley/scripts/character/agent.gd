@@ -1111,9 +1111,8 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			var count: int = int(params.get("count", 1))
 			if inventory == null or not inventory.has_item(item_id, count):
 				return {"success": false, "reason": "身上沒有這件東西，送不出去"}
-		# move_to/sleep/nap/rest/wash/idle/eat/shout 目前都沒有額外的硬規則要擋
-		# （eat 落地後要在這裡加「宣稱吃了背包裡沒有的食物」的檢查，見 #114；
-		# shout 沒有目標、沒有前提，天生沒有硬規則可擋）
+		# move_to/sleep/nap/rest/wash/idle/shout 目前都沒有額外的硬規則要擋
+		# （shout 沒有目標、沒有前提，天生沒有硬規則可擋）
 		_:
 			pass
 
@@ -1198,6 +1197,12 @@ func _pursue_current_task() -> void:
 	# （params 裝的是 target 不是 place），要另外分流，不能落進下面的地點判斷
 	if current_state == "talk":
 		_pursue_talk_task()
+		return
+
+	# eat 跟 talk 一樣是「呼叫一次就完成」的動作，不能落進下面的地點判斷——
+	# 那條路徑只會讓角色走去 params.place 站著，沒有任何東西會真的呼叫 eat()
+	if current_state == "eat":
+		_pursue_eat_task()
 		return
 
 	if current_place.is_empty():
@@ -1341,6 +1346,40 @@ func _pursue_talk_task() -> void:
 
 	if _talk_pursuit_stuck_ticks == 3:
 		push_warning("Agent %s: 追不上搭話對象 %s，可能被卡住" % [character_name, target.character_name])
+
+# eat 任務的執行（#114）：跟 talk 一樣是「呼叫一次就完成」，不是靠 duration
+# 逐分鐘回復的動作，所以不走通用的地點追逐路徑，做完立刻收尾。
+# resolve() 呼叫的理由跟 _pursue_talk_task() 一樣：eat 不在 SUCCESS_PARAMS 上，
+# resolve() 對它只走硬規則檢查（背包裡有沒有食物），沒有隨機性，每分鐘重算
+# 結果都一樣，這裡只是重新確認前置條件沒變。不能直接沿用 _finish_task_and_request_next()：
+# 那個共用收尾無條件 _remove_task()，schedule 來源的 eat 任務不能被移除（見下方）
+func _pursue_eat_task() -> void:
+	stop_moving()
+	var proceed := true
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		proceed = result["success"]
+
+	if proceed:
+		var reason := eat()
+		last_action_result = reason
+		if reason != Character.EAT_OK:
+			push_warning("Agent %s: eat 失敗（%s）" % [character_name, reason])
+
+	# 不管成功失敗都收尾：跟 _pursue_talk_task() 的 resolve() 失敗分支一樣，
+	# 這筆任務不留在池子裡繼續佔位（吃不到就是吃不到，不會下一分鐘自己變出食物），
+	# 立刻交還決策權給下一輪。schedule 來源的任務不移出池子——它是時間的函數，
+	# 靠 window 自然退場，跟 _reevaluate() 事件驅動觸發那段的收尾邏輯同一套規則
+	# （見 [[行程佇列與任務仲裁]]「中斷之後怎麼辦」），移掉的話明天同一個 window
+	# 不會再被選中
+	if _current_task.get("source", "") == "llm":
+		_remove_task(_current_task.get("id", ""))
+	_current_task = {}
+	current_place = ""
+	current_state = "idle"
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
 
 # murmur 任務的執行（#162）：沒有目標、不用移動，講給自己聽當下就結束——不像
 # talk 要追著會動的目標走，也不像 nap／rest 那類要佔滿整段 duration。resolve()
