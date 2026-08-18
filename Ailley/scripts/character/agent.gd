@@ -1255,15 +1255,27 @@ func _pursue_talk_task() -> void:
 			_finish_task_and_request_next()
 			return
 
+	# #281：schedule 來源的 talk 任務（npc_schedule.json 轉換，見
+	# _tasks_from_schedule_json()）從來不帶 target——排程的 talk 語意本來就是
+	# 「這個時段去這個地點社交」，不是跟特定某人有約，跟 llm 來源那種一定會
+	# 指名（見 ai_schema.gd 的驗證）不一樣。target_name 為空時退回
+	# find_nearest_character()（原本按鍵搭話在用的同一個函式，TALK_RANGE
+	# 內找最近的人、排除自己），不是把「沒有指定對象」硬套進
+	# _find_character_by_name() 這個「照名字精準比對」的函式
 	var target_name: String = str(_current_task.get("params", {}).get("target", ""))
-	var target := _find_character_by_name(target_name)
+	var target: Character = _find_character_by_name(target_name) if not target_name.is_empty() \
+			else find_nearest_character()
 
 	if target == null:
-		# 找不到人只報一次，理由跟「地點打錯只報一次」一樣——這個函式每個
-		# 遊戲分鐘跑一次，目標一直不存在的話不能每分鐘洗一次錯誤。借用
-		# _pursued_place 當去重鍵：talk 任務跟 place 任務不會同時是目前任務，
-		# 語意上不衝突，不用另外開欄位
-		if target_name != _pursued_place:
+		# target_name 為空時（排程來源，沒指定對象）找不到附近的人是正常
+		# 情況——這個地點暫時沒人，不是錯誤，安靜等下一個遊戲分鐘再找，直到
+		# window 過期被仲裁器自然收掉，不用 push_error 洗版。只有「明確指名
+		# 了對象卻找不到」（llm 來源，target 依驗證規則一定非空）才是真的
+		# 異常，才報錯——理由跟「地點打錯只報一次」一樣，這個函式每個遊戲
+		# 分鐘跑一次，同一個錯誤不能每分鐘洗一次。借用 _pursued_place 當
+		# 去重鍵：talk 任務跟 place 任務不會同時是目前任務，語意上不衝突，
+		# 不用另外開欄位
+		if not target_name.is_empty() and target_name != _pursued_place:
 			push_error("Agent %s: 找不到搭話對象 %s" % [character_name, target_name])
 			_pursued_place = target_name
 		return
