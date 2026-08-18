@@ -170,6 +170,20 @@ var _plan_update_requested := false
 ## 那個轉換瞬間，見 _reevaluate() 怎麼用它
 var _was_sleeping := false
 
+## #265：_reevaluate() 的重入保護（trampoline）。_pursue_current_task()
+## 選中 give/shout、或 talk 判定失敗時會呼叫 _finish_task_and_request_next()，
+## 它又呼叫一次 _reevaluate()——如果任務池裡連續好幾筆都是「一叫就結束」的
+## 任務，這條鏈會巢狀往下疊很多層函式呼叫（O(n) 呼叫堆疊深度、O(n²) 重複
+## 仲裁工作）。不能單純拿掉那次呼叫：等回應期間 fallback 任務不會被馬上
+## 接手，會空等到下一次 GameClock 分鐘變化（CodeRabbit review 抓到過的舊
+## bug）。也不能單純偵測到重入就跳過不做事：那樣這一輪就沒有任何地方去挑
+## 下一筆任務，一樣會退回空等的問題。改成迴圈：最外層呼叫真的執行
+## _reevaluate_once()，巢狀呼叫只設 _reevaluate_pending 然後直接返回，把呼叫
+## 堆疊收回最外層的 while 迴圈，迴圈再跑下一輪去挑下一筆任務——行為不變，
+## 深度收斂成固定
+var _reevaluating := false
+var _reevaluate_pending := false
+
 ## 這隻角色的決策來源，出生時決定一次，之後所有決策/對話呼叫都透過它——
 ## 跟《06》「decision_source／model_name 投放後不可改」的規則一致，不做成每次呼叫
 ## 才判斷（#155）
@@ -838,7 +852,22 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 #
 # 代價是 _pursue_current_task() 得自己認得「這個地點已經在處理了」，
 # 見它自己的註解
+#
+# #265：真正的重新仲裁邏輯搬進 _reevaluate_once()，這個函式只負責
+# trampoline——見上面 _reevaluating／_reevaluate_pending 的宣告註解
 func _reevaluate() -> void:
+	if _reevaluating:
+		_reevaluate_pending = true
+		return
+
+	_reevaluating = true
+	_reevaluate_pending = true
+	while _reevaluate_pending:
+		_reevaluate_pending = false
+		_reevaluate_once()
+	_reevaluating = false
+
+func _reevaluate_once() -> void:
 	var now_minutes := _now_minutes()
 
 	# 剛睡醒的偵測要在這裡的任何選任務邏輯跑之前先記下「進來的時候是不是
