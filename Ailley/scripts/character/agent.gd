@@ -920,20 +920,27 @@ func _on_noise_heard(_source: Character) -> void:
 
 	say(L10n.t("DLG_NOISE_ALERT"))
 
-## 回復類動作每遊戲分鐘回多少 stamina（#112）。《07》§2-3 只給相對關係——sleep
-## 回復量最大、nap「與睡覺同模組但較低」、rest「小幅回復」——沒有給數字，所以
-## 這三個值是待實跑校準的暫定值，不是規格定案。#118 只校準了仲裁常數
-## （HYSTERESIS／MIN_COMMIT／LLM_WAIT_MIN_COMMIT／MIN_ACTION_DURATION／
+## 回復類動作每遊戲分鐘回多少（目標欄位＋數量，#214）。《07》§2-3 只給相對
+## 關係——sleep 回復量最大、nap「與睡覺同模組但較低」、rest「小幅回復」——
+## 沒有給數字，所以這三個值是待實跑校準的暫定值，不是規格定案。#118 只校準了
+## 仲裁常數（HYSTERESIS／MIN_COMMIT／LLM_WAIT_MIN_COMMIT／MIN_ACTION_DURATION／
 ## LLM_TASK_POOL_CAP，見上方各自的說明），沒有涵蓋這裡，這三個值還沒實測過。
 ##
 ## 對照基準：stamina 的自然衰減是每現實秒 1.0（Stats.SPEC 的 drift），而一個遊戲
 ## 分鐘正好是一現實秒，所以淨回復是這裡的值減 1
 ##
-## wash 不列在這裡：它該回復的是 `hygiene`（Stats.SPEC 已有這一項，見 #115），
-## 但要不要把 wash 接上是另一則任務，這裡先不擴大範圍硬接。idle 也不列——
-## 發呆本來就不回復任何東西，它的用途是「合法地什麼都不做」，讓 AI 逾時或
-## 沒事可做時有一個不必假裝在忙的選項
-const STAMINA_RECOVERY := {"sleep": 6.0, "nap": 4.0, "rest": 2.0}
+## 表的形狀是「動作 -> {stat, amount}」而不是單純「動作 -> 數字」：不同動作
+## 要回復的欄位不見得相同（wash 該回復的是 `hygiene` 不是 `stamina`），單純
+## 數字表沒辦法表達這件事，加一個目標欄位不同的動作就得連表的形狀一起改。
+## wash 不列在這裡——要不要把它接上是另一則任務（#241）,這裡先不擴大範圍硬接，
+## 但表的形狀已經能直接多加一行，不必再重寫。idle 也不列——發呆本來就不回復
+## 任何東西，它的用途是「合法地什麼都不做」，讓 AI 逾時或沒事可做時有一個
+## 不必假裝在忙的選項
+const ACTION_RECOVERY := {
+	"sleep": {"stat": "stamina", "amount": 6.0},
+	"nap": {"stat": "stamina", "amount": 4.0},
+	"rest": {"stat": "stamina", "amount": 2.0},
+}
 
 # 到了定點才開始回復——還在走去床邊的路上不算在睡覺。沒有指定地點的任務
 # （LLM 完全可以只回 {"action": "rest"}）本來就原地做，is_moving() 一樣是 false，
@@ -941,9 +948,10 @@ const STAMINA_RECOVERY := {"sleep": 6.0, "nap": 4.0, "rest": 2.0}
 func _apply_action_recovery() -> void:
 	if stats == null or is_moving():
 		return
-	var recovery: float = STAMINA_RECOVERY.get(current_state, 0.0)
-	if recovery > 0.0:
-		stats.add("stamina", recovery)
+	var recovery: Dictionary = ACTION_RECOVERY.get(current_state, {})
+	if recovery.is_empty():
+		return
+	stats.add(recovery["stat"], recovery["amount"])
 
 func _on_time_changed(_hour: int, _minute: int) -> void:
 	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務

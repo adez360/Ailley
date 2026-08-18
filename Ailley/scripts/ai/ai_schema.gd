@@ -59,7 +59,7 @@ const ALLOWED_ACTIONS := [
 #
 # nap／rest／wash／idle 是 #112 接上的：四個都只動 Stats 跟角色 state，不需要新
 # 場景物件或新資源，所以走的是仲裁器既有的「移動到 params.place（沒給就原地）、
-# 佔用 duration」路徑，沒有各自的執行函式。回復量見 agent.gd 的 STAMINA_RECOVERY
+# 佔用 duration」路徑，沒有各自的執行函式。回復量見 agent.gd 的 ACTION_RECOVERY
 #
 # eat 是 #114 接上的：跟 talk 一樣是「呼叫一次就完成」的動作，不是靠 duration
 # 逐分鐘回復，所以沒有走 nap/rest 那條通用路徑——agent.gd 特化了一個
