@@ -500,6 +500,31 @@ static func creation_response_schema() -> Dictionary:
 	}
 
 
+# #164 天神之石觸發判定：AI 收到已經想好的那句話，決定現在要不要說出口。
+# 純布林是非題，跟 validate_creation() 不是同一種「內容要不要清洗」的驗證
+static func validate_words_to_creator_choice(data: Dictionary) -> Dictionary:
+	if not data.has("say_it") or not data["say_it"] is bool:
+		return _fail(ERROR_BAD_SHAPE)
+
+	return _ok({"say_it": data["say_it"]})
+
+
+static func words_to_creator_choice_schema() -> Dictionary:
+	return {
+		"type": "json_schema",
+		"json_schema": {
+			"name": "words_to_creator_choice",
+			"schema": {
+				"type": "object",
+				"properties": {
+					"say_it": {"type": "boolean"},
+				},
+				"required": ["say_it"],
+			},
+		},
+	}
+
+
 # 選填字串欄位的共用驗證：缺席回空字串、型別錯回 null（呼叫端用 null 判斷失敗，
 # 因為合法值本身可以是空字串，不能拿空字串當失敗信號）、超長截斷不拒絕。
 # validate_dialogue() 的 line 沒有共用這個，因為它是必填且不可為空，跟這裡

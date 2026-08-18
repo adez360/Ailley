@@ -32,6 +32,16 @@ const NOTICE_PAUSE := 2.0
 @export var decision_source := "local"		# "local" / "cloud"
 @export var model_name := ""				# decision_source == "cloud" 時，AIConfig 的 provider 名字
 
+## #164：角色對「自己被設定成這種性格」想說的一句話，建角當下生成一次、之後唯讀
+## （《99》P-10）。角色庫（尚未投放）那條路徑已經有了（game_manager.gd 的
+## _generate_words_to_creator()）；場景固定 NPC 走的是 npc_schedule.json 這條，
+## 完全沒有這欄，所以在這裡的 _ready() 補打一次同一種一次性 AI 呼叫
+var words_to_creator := ""
+
+## 是否已經對玩家說出過 words_to_creator，一生只說一次。骰中但 AI 選擇不說
+## 不算數，機會不消耗，見 maybe_speak_to_creator()（《99》P-10 #3）
+var _words_to_creator_spoken := false
+
 ## schedule 任務給中間值，靠 time_bonus 拉開跟其他來源的差距，
 ## 不是靠 base priority 本身——見 [[行程佇列與任務仲裁]] 的「待決」那節
 const SCHEDULE_BASE_PRIORITY := 10.0
@@ -220,12 +230,57 @@ func _push_daily_event(content: String) -> void:
 	if _daily_events.size() > DAILY_EVENTS_CAP:
 		_daily_events.pop_front()
 
+## #164：天神之石的話傳到範圍內的角色（world/god_stone_input.gd 逐一呼叫）。
+## 記一筆事實句（跟 _on_spotted() 的 "你第一次注意到 %s" 同一種寫法，不經
+## L10n——這是餵給 LLM 反思的內部事實句，不是玩家會看到的 UI 文字），
+## 同時骰一次天神之石觸發判定
+func hear_god_stone(line: String) -> void:
+	_push_daily_event("你在天神之石附近聽到一個聲音，說：「%s」" % line)
+	maybe_speak_to_creator()
+
+## #164 + 《99》P-10：25% 機率觸發（情緒強度 ≥70 時 40%），中了才問 AI 要不要
+## 真的說出口——中了但 AI 選擇不說一樣不消耗機會，下次再被叫到還能再骰
+## （P-10 #3：「是否消耗機會？否」）。只有骰中且 AI 決定說，才會真的說一次、
+## 這輩子不會再說第二次
+func maybe_speak_to_creator() -> void:
+	if words_to_creator.is_empty() or _words_to_creator_spoken:
+		return
+
+	var chance := 0.4 if int(emotion.get("intensity", 0)) >= 70 else 0.25
+	if randf() >= chance:
+		return
+
+	var envelope := PromptBuilder.build_words_to_creator_envelope(self)
+	var validator := func(data: Dictionary) -> Dictionary:
+		return AISchema.validate_words_to_creator_choice(data)
+	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
+	if not result["ok"] or not result["data"]["say_it"]:
+		return
+
+	_words_to_creator_spoken = true
+	say(words_to_creator)
+
+## 場景固定 NPC 沒有預先生成好的 words_to_creator（見上方欄位註解），開機時
+## fire-and-forget 補打一次——跟 game_manager.gd::_generate_words_to_creator()
+## 同一種呼叫，慢到或失敗就是這輩子沒有這句話可觸發，不擋開機、不重試
+## （P-10 的重試/備用句庫決議是角色庫那條路徑的範圍，這裡先對齊現有實作深度）
+func _generate_words_to_creator() -> void:
+	var envelope := PromptBuilder.build_creation_envelope(system_prompt)
+	var result: Dictionary = await AIService.request(envelope, character_id, AIService.Policy.SCHEDULED)
+	if not result["ok"]:
+		return
+	var validated := AISchema.validate_creation(result["data"])
+	if not validated["ok"]:
+		return
+	words_to_creator = validated["data"]["words_to_creator"]
+
 
 func _ready() -> void:
 	super()
 	add_to_group("agents")
 	_provider = _make_provider()
 	_load_schedule()
+	_generate_words_to_creator()
 
 ## 公開版的「重建 provider」（#122，CodeRabbit review 抓到的時序 bug）。
 ## GameManager.deploy_from_library() 會在 add_child()（進而觸發這個節點的

@@ -145,6 +145,21 @@ static func build_creation_envelope(system_prompt: String) -> Dictionary:
 	}
 
 
+## #164 天神之石觸發判定骰中之後才問的一次性小信封：角色早就想好的那句話
+## （words_to_creator）現在要不要說出口。不沿用 PLAN_SYSTEM 那套完整 tasks
+## schema——這裡只是個是非題，混進每次決策都要付出的那份大 schema 不划算
+const WORDS_TO_CREATOR_SYSTEM := """Someone just spoke into a mysterious stone nearby, addressing the village at large — you may or may not have been among who it reached. You have a private thought you've never said aloud, about how you were made: "%s"
+Decide naturally, in character, whether this moment feels right to finally say it out loud. Reply with JSON only, no prose, no code fence:
+{"say_it": <true or false>}"""
+
+static func build_words_to_creator_envelope(character: Character) -> Dictionary:
+	return {
+		"system": _system(character, WORDS_TO_CREATOR_SYSTEM % character.words_to_creator),
+		"payload": {"type": "words_to_creator_choice"},
+		"response_format": AISchema.words_to_creator_choice_schema(),
+	}
+
+
 ## character 是要反思的那隻 Agent。daily_events 是今天累積的事件陣列
 ## （agent.gd 的 _daily_events，每筆 {id, content}，睡前呼叫一次）。跟
 ## build_plan_envelope() 一樣沿用 _self_block()，不重新蒐集一次同一批角色狀態
