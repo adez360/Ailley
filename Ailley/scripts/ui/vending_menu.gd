@@ -1,7 +1,7 @@
 class_name VendingMenu
 extends CanvasLayer
 
-## 販賣機商品選單。E 鍵在販賣機旁開啟（見 player.gd 的 find_nearest_vending_machine()），
+## 販賣機商品選單。E 鍵在販賣機旁開啟（見 player.gd 的候選偵測），
 ## 點一項商品就呼叫 buyer.buy_from(machine, item_id)——真正的購買邏輯在
 ## character.gd，這裡只負責「選哪一項」的介面，跟 InventoryPanel 對 27 格
 ## 主背包的分工是同一種：UI 不碰資料，只轉發使用者的選擇。

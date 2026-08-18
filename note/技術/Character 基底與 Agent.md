@@ -42,7 +42,7 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 | `character_name` | 玩家取的名字，顯示用，指令也用它指名 | 是 | 是 |
 | `schedule_template`（僅 Agent） | 用哪份行程資料，對應 `npc_schedule.json` 的鍵 | — | 是 |
 
-兩個欄位都空時，`character.gd::_ready()` 依序試三層：
+任一欄位為空時，`character.gd::_ready()` 對該欄位依序試三層：
 
 | 順位 | 來源 | 給誰用 |
 | --- | --- | --- |

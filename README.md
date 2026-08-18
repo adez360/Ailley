@@ -92,4 +92,4 @@ note/              Obsidian 筆記庫 —— 專案所有文件都在這
 
 ## 授權
 
-未定。
+[Apache License 2.0](LICENSE)。

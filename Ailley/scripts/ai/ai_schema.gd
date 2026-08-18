@@ -21,10 +21,10 @@ extends RefCounted
 ## reasoning/inner_monologue、單次回應筆數上限、跟送出去用的 JSON Schema。
 
 # §5.3 的動作白名單，換成《07 地點與行動》《11 人際互動與社交行為》拍板後的
-# 22 個動作（issue #88）。不在這張表上的 action 一律拒絕 —— 用白名單而不是
+# 動作（issue #88）。不在這張表上的 action 一律拒絕 —— 用白名單而不是
 # 黑名單，是因為黑名單漏掉的那一項就是被打穿的那一項。
 #
-# 刻意不含 spec 沒有的 "work"：《07》《11》的 22 個動作裡沒有它，嚴格照 spec。
+# 刻意不含 spec 沒有的 "work"：《07》《11》的動作裡沒有它，嚴格照 spec。
 # 這只影響 LLM 回應的驗證——schedule 來源的任務（npc_schedule.json 轉換）是
 # agent.gd 直接建構、不經過這裡，既有的 work 排程不受影響；影響的是 LLM 之後
 # 不能自己決定叫角色去打工，只有寫死在 npc_schedule.json 的排程能觸發 work。
@@ -32,9 +32,12 @@ extends RefCounted
 # "move_to" 沿用既有命名，不改成 spec 用的 "move"——兩者語意完全一樣，只是
 # 命名不同，改名要動 agent.gd／debug_console.gd／api.md 好幾處引用，不值得
 # 為了對齊規格書用詞冒這個風險
+#
+# "murmur"（自語，#162）原本 #88 population 時漏掉——《11》§1 拍板的 MVP 動作
+# 清單本來就有 murmur，只是那次沒被列進來，不是這次新拍板決定要加
 const ALLOWED_ACTIONS := [
 	# A 溝通類
-	"talk", "persuade", "give", "report", "shout", "perform",
+	"talk", "persuade", "give", "report", "shout", "perform", "murmur",
 	# B 工作與消費類
 	"hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink",
 	# C 動作與移動類
@@ -49,24 +52,36 @@ const ALLOWED_ACTIONS := [
 # 而不是在驗證層擋掉 —— 兩者是不同的失敗，混在一起 debug 時會分不清
 # work 與 buy 不在這裡：Character.work_at()／buy_from() 做出來了，但沒有任何
 # 執行層把一筆 {"action": "work"} 對應到一個 Workstation 實例，而它們需要
-# 節點參照、find_nearest_workstation()／find_nearest_vending_machine() 只看得到 32px。
+# 節點參照，player.gd 的候選偵測也只看 32px 範圍內、面向著的物件。
 # buy 還多缺一個「買哪個 item_id」的來源——目前只有玩家從 vending_menu 點得出來。
 # 列進來的話就變成「白名單宣稱做得到、實際靜默不做」，正是上面那段註解要避免的
 # 混淆。等執行層接得到再加（talk 的動作執行留給 #90，其餘留給各自的 issue）
 #
 # nap／rest／wash／idle 是 #112 接上的：四個都只動 Stats 跟角色 state，不需要新
 # 場景物件或新資源，所以走的是仲裁器既有的「移動到 params.place（沒給就原地）、
-# 佔用 duration」路徑，沒有各自的執行函式。回復量見 agent.gd 的 STAMINA_RECOVERY
+# 佔用 duration」路徑，沒有各自的執行函式。回復量見 agent.gd 的 ACTION_RECOVERY
+#
+# eat 是 #114 接上的：跟 talk 一樣是「呼叫一次就完成」的動作，不是靠 duration
+# 逐分鐘回復，所以沒有走 nap/rest 那條通用路徑——agent.gd 特化了一個
+# _pursue_eat_task()（寫法照抄 _pursue_talk_task()），resolve() 也加了
+# 「背包裡有沒有食物」的硬規則檢查，避免 LLM 宣稱吃了背包裡沒有的東西
+#
+# murmur 是 #162 接上的：跟 idle 平行、純機率觸發（見《99》P-23），沒有目標、
+# 不用移動，走自己的 _pursue_murmur_task()，一次執行完就退出任務池
 #
 # give／shout 是 #158 接上的：跟 talk 一樣目標會動（give）或完全不需要目標
 # （shout），走各自的 _pursue_give_task()／_pursue_shout_task()，一次執行完
 # 就退出任務池，不像 nap 那類佔滿整段 duration。persuade 不在這裡——見 #227，
 # 它需要的待回應事實句機制目前完全沒有地基
 #
+# attack 是 #159 接上的：跟 give 同一套「目標會動、一次執行完就退出任務池」
+# 模式（_pursue_attack_task()），差別是必中（《99》P-28），resolve() 對它
+# 不擲骰，直接放行
+#
 # haul／struggle 是 #161 接上的：haul 是長動作，占住整段 duration（跟 nap 一樣），
 # 但不用 params.place —— 搬運去哪由搬運者自己決定。struggle 是短動作，只在被搬運
 # 時有效，走各自的 _pursue_struggle_task()，執行完就退出任務池
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "give", "shout", "haul", "struggle"]
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "murmur", "give", "shout", "haul", "struggle", "attack"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -247,7 +262,7 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) ->
 		# 還沒有）：沒有 target 的 talk 任務會被 _pursue_talk_task() 誤判成
 		# 「目標不存在」一路帶進任務池才發現，不如在這一層就擋掉，跟這個檔案
 		# 「外來內容一律不信任」的原則一致，不等到執行層才發現資料是空的
-		if task["action"] == "talk":
+		if ["talk", "attack"].has(task["action"]):
 			var talk_params: Dictionary = task.get("params", {})
 			var target: Variant = talk_params.get("target")
 			if not target is String or (target as String).strip_edges().is_empty():
@@ -489,6 +504,31 @@ static func creation_response_schema() -> Dictionary:
 					"words_to_creator": {"type": "string", "maxLength": MAX_LINE_CHARS},
 				},
 				"required": ["words_to_creator"],
+			},
+		},
+	}
+
+
+# #164 天神之石觸發判定：AI 收到已經想好的那句話，決定現在要不要說出口。
+# 純布林是非題，跟 validate_creation() 不是同一種「內容要不要清洗」的驗證
+static func validate_words_to_creator_choice(data: Dictionary) -> Dictionary:
+	if not data.has("say_it") or not data["say_it"] is bool:
+		return _fail(ERROR_BAD_SHAPE)
+
+	return _ok({"say_it": data["say_it"]})
+
+
+static func words_to_creator_choice_schema() -> Dictionary:
+	return {
+		"type": "json_schema",
+		"json_schema": {
+			"name": "words_to_creator_choice",
+			"schema": {
+				"type": "object",
+				"properties": {
+					"say_it": {"type": "boolean"},
+				},
+				"required": ["say_it"],
 			},
 		},
 	}
