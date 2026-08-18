@@ -254,6 +254,10 @@ func get_input_direction() -> Vector2:
 	).normalized()
 
 func _decide_velocity() -> Vector2:
+	# 昏迷中無法移動（即使有輸入也不回應）
+	if has_condition(CONDITION_INCAPACITATED):
+		return Vector2.ZERO
+
 	var input_dir := get_input_direction()
 
 	# 手動操作優先，直接中斷自動移動

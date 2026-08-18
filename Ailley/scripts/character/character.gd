@@ -271,6 +271,11 @@ const TICK_GAME_MINUTES := 10
 var _tick_minute_accum := 0
 
 func _on_game_minute(_hour: int, _minute: int) -> void:
+	# 昏迷與治療檢查每遊戲分鐘執行（與 GameClock.time_changed 同步）
+	_update_incapacitation()
+	_update_treatment()
+
+	# 情緒與其他 condition 每 10 遊戲分鐘執行一次（tick 機制）
 	_tick_minute_accum += 1
 	if _tick_minute_accum < TICK_GAME_MINUTES:
 		return
@@ -278,8 +283,6 @@ func _on_game_minute(_hour: int, _minute: int) -> void:
 
 	_tick_emotion()
 	_update_conditions()
-	_update_incapacitation()
-	_update_treatment()
 
 ## AI 宣告新情緒。type 必須是 EMOTION_TYPES 之一，intensity 0–100。
 ## stability／grudge 是《02》§1-4 持續時間公式的人格係數，人格資料還沒接上
@@ -376,6 +379,7 @@ func _start_incapacitation() -> void:
 	_set_condition(CONDITION_INCAPACITATED, true)
 	_incapacitation_start_minute = GameClock.hour * 60 + GameClock.minute
 	_is_being_carried = false
+	stop_moving()  # 立即停止移動
 	print_debug("Character %s 進入昏迷，計時器已啟動" % character_name)
 
 ## 每遊戲分鐘檢查昏迷狀態：
@@ -403,6 +407,11 @@ func _end_incapacitation() -> void:
 	_set_condition(CONDITION_INCAPACITATED, false)
 	_incapacitation_start_minute = -1
 	_is_being_carried = false
+
+	# 恢復少量 health 避免立即重新進入昏迷（被搬走表示獲得基礎救助）
+	if stats != null:
+		stats.set_value("health", 10.0)
+
 	print_debug("Character %s 昏迷已結束（被搬走）" % character_name)
 
 ## 由搬運動作（#161 haul）調用，標記此角色正在被搬運。
@@ -415,12 +424,20 @@ func set_being_carried(is_carried: bool) -> void:
 
 ## 自動傳送到藥草鋪並開始治療
 func _send_to_herb_shop_for_treatment() -> void:
+	# 治療已開始時不重複設置（避免重置計時器）
+	if _treatment_start_minute != -1:
+		return
+
 	print_debug("Character %s 昏迷 30 分鐘無人搬走，自動傳送藥草鋪治療" % character_name)
 
 	# TODO：實現自動傳送邏輯（awaiting #162 或專門的傳送 issue）
-	# 暫時記錄治療開始時間，_update_treatment() 會處理倒計時
+	# 記錄治療開始時間，_update_treatment() 會處理倒計時
 	_treatment_start_minute = GameClock.hour * 60 + GameClock.minute
 	_treatment_location = "herb_shop"
+
+	# 進入治療時移除昏迷狀態（治療與昏迷互斥）
+	_set_condition(CONDITION_INCAPACITATED, false)
+	_incapacitation_start_minute = -1
 
 ## 每遊戲分鐘檢查治療進度。60 分鐘治療完成後解除所有異常狀態
 func _update_treatment() -> void:
@@ -443,6 +460,14 @@ func _complete_treatment() -> void:
 		stats.set_value("health", 50.0)		# 設定一個中等恢復量
 		stats.set_value("injury", 0.0)
 
+		# 恢復其他生理數值到安全水平，避免治療完立即重新觸發 condition
+		stats.set_value("alcohol", 0.0)		# 清除酒精
+		stats.set_value("satiety", 50.0)	# 恢復飽食度
+		stats.set_value("hydration", 50.0)	# 恢復水分
+		stats.set_value("stamina", 50.0)	# 恢復體力
+		stats.set_value("wakefulness", 50.0)	# 恢復清醒度
+		stats.set_value("hygiene", 50.0)	# 恢復衛生
+
 	# 清除所有異常狀態
 	conditions.clear()
 	_incapacitation_start_minute = -1
@@ -462,6 +487,10 @@ var last_move_target := Vector2.ZERO
 
 # 走 A* 路徑到指定的世界座標；找不到路徑回傳 false
 func move_to(target: Vector2) -> bool:
+	# 昏迷中無法移動
+	if has_condition(CONDITION_INCAPACITATED):
+		return false
+
 	var nav = get_tree().get_first_node_in_group("nav_grid")
 	if nav == null:
 		push_error("Character.move_to: 場景裡沒有 NavGrid")
@@ -917,6 +946,10 @@ func get_save_data() -> Dictionary:
 	var data := {
 		"character_id": character_id,
 		"character_name": character_name,
+		"incapacitation_start_minute": _incapacitation_start_minute,
+		"is_being_carried": _is_being_carried,
+		"treatment_start_minute": _treatment_start_minute,
+		"treatment_location": _treatment_location,
 	}
 
 	if stats != null:
@@ -937,6 +970,12 @@ func load_save_data(data: Dictionary) -> void:
 	if is_inside_tree():
 		_ensure_unique_id()
 	character_name = data.get("character_name", character_name)
+
+	# 還原昏迷與治療狀態（用 -1 作為哨兵值表示未進入該狀態）
+	_incapacitation_start_minute = data.get("incapacitation_start_minute", -1)
+	_is_being_carried = data.get("is_being_carried", false)
+	_treatment_start_minute = data.get("treatment_start_minute", -1)
+	_treatment_location = data.get("treatment_location", "")
 
 	if stats != null and data.has("stats"):
 		stats.load_save_data(data["stats"])
@@ -1050,6 +1089,10 @@ func update_animation(desired_velocity: Vector2) -> void:
 # 這一幀要用的速度。基底只跟隨 A* 路徑，子類別覆寫來加上自己的驅動來源。
 # 對話中不自動移動 —— 但 Player 的輸入會蓋過這裡，走遠了由距離判定自然散場
 func _decide_velocity() -> Vector2:
+	# 昏迷中無法產生移動速度
+	if has_condition(CONDITION_INCAPACITATED):
+		return Vector2.ZERO
+
 	if is_in_conversation():
 		return Vector2.ZERO
 
