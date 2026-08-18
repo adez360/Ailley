@@ -154,6 +154,27 @@ static func initialize(db) -> bool:
 
 	var stored_version := _get_user_version(db)
 
+	# 資料庫版本比目前程式碼認得的還新——大概是切回舊分支、
+	# 但 user:// 資料夾（依專案名稱，不分 worktree）被新分支開過。
+	# 不能往下走：schemas 陣列建的是舊分支自己認得的欄位，MIGRATIONS
+	# 也不含新分支已經套用過的項目，繼續執行會把 user_version 誤降回
+	# CURRENT_VERSION、讓新分支的 migration 之後被重複套用。
+	if stored_version > CURRENT_VERSION:
+		push_error(
+			"[DatabaseSchema] Database version %d is newer than this build supports (%d). Refusing to open."
+			% [stored_version, CURRENT_VERSION]
+		)
+		return false
+
+
+	# 全新資料庫（sqlite_master 裡一張 table 都沒有）跟「已經有 table、
+	# 只是從沒記錄過版本」的既有資料庫（同樣 stored_version == 0）要分開
+	# 處理：下面 schemas 陣列的 CREATE TABLE 建的一律是目前最新欄位，
+	# 全新資料庫建完就已經是 CURRENT_VERSION 的形狀，不該再套用歷史
+	# MIGRATIONS 的 ALTER TABLE——那是為了把舊表結構補到新形狀，
+	# 套在剛用最新定義建出來的表上只會撞欄位已存在而失敗。
+	var is_fresh_database := stored_version == 0 and not _has_existing_tables(db)
+
 
 	# =================================================
 	# 整批包在一個 transaction 裡。
@@ -187,7 +208,7 @@ static func initialize(db) -> bool:
 		return false
 
 
-	if not _apply_migrations(db, stored_version, MIGRATIONS):
+	if not is_fresh_database and not _apply_migrations(db, stored_version, MIGRATIONS):
 		db.query("ROLLBACK;")
 		return false
 
@@ -250,6 +271,24 @@ static func _apply_migrations(
 		return false
 
 	return true
+
+
+## 查 sqlite_master 有沒有任何應用程式 table，用來分辨「全新資料庫」跟
+## 「已經有 table、只是沒記錄過版本」的既有資料庫（兩者 user_version
+## 都是 0）。查詢本身失敗時保守回傳 true（當作有既有 table）——
+## 誤判成既有資料庫頂多多套用不需要的 migration，誤判成全新資料庫則會
+## 漏掉真正需要的 migration，後者的後果更嚴重。
+static func _has_existing_tables(db) -> bool:
+	if not db.query(
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1;"
+	):
+		push_error(
+			"[DatabaseSchema] Failed to query sqlite_master: "
+			+ db.error_message
+		)
+		return true
+
+	return not db.query_result.is_empty()
 
 
 ## PRAGMA user_version 是存在資料庫檔頭的整數，新資料庫預設是 0。
