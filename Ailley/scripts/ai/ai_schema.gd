@@ -41,6 +41,8 @@ const ALLOWED_ACTIONS := [
 	"move_to", "sleep", "nap", "rest", "wash", "idle",
 	# D 敵對類
 	"steal", "attack",
+	# E 搬運類（#161，《99》P-27）
+	"haul", "struggle",
 ]
 
 # 本輪真正有實作的動作。其餘動作驗證會過，但執行層要回 NOT_IMPLEMENTED，
@@ -60,7 +62,11 @@ const ALLOWED_ACTIONS := [
 # （shout），走各自的 _pursue_give_task()／_pursue_shout_task()，一次執行完
 # 就退出任務池，不像 nap 那類佔滿整段 duration。persuade 不在這裡——見 #227，
 # 它需要的待回應事實句機制目前完全沒有地基
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "give", "shout"]
+#
+# haul／struggle 是 #161 接上的：haul 是長動作，占住整段 duration（跟 nap 一樣），
+# 但不用 params.place —— 搬運去哪由搬運者自己決定。struggle 是短動作，只在被搬運
+# 時有效，走各自的 _pursue_struggle_task()，執行完就退出任務池
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "give", "shout", "haul", "struggle"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
