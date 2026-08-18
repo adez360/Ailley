@@ -7,9 +7,11 @@ extends Node
 ## 2. 建立所有資料表（實際內容在 DatabaseSchema）
 ## 3. 把 godot-sqlite 的 CRUD 轉出去
 ##
-## CRUD 一律走 addon 的 insert_row / select_rows / update_rows / delete_rows，
-## 值會由 addon 綁定成參數。不要自己把值拼進 SQL 字串 ——
-## 這個專案的記憶內容是 LLM 產的，拼字串等於把它交給模型改寫。
+## select() / insert() 走 addon 的 select_rows / insert_row；update() / delete()
+## 改走 query_with_bindings() 自己拼 SQL（見兩個函式的註解——addon 的
+## update_rows / delete_rows 會把外層 begin_transaction() 開的交易提早
+## COMMIT 掉）。不管走哪條路，值一律用 bindings 綁定，不自己把值拼進 SQL
+## 字串 —— 這個專案的記憶內容是 LLM 產的，拼字串等於把它交給模型改寫。
 ##
 ## conditions 參數是 WHERE 子句（不含 WHERE 關鍵字），它是原始 SQL，
 ## 只能由程式碼自己組，不可以放模型或玩家輸入的字串。
@@ -169,8 +171,18 @@ func delete(table: String, conditions: String) -> bool:
 	return false
 
 
+## BEGIN IMMEDIATE，不是預設的 deferred BEGIN——deferred 讓兩個連線可以先各自
+## 讀到同一份快照，其中一個要寫入時才去搶鎖，衝突時機不確定（有時第一次寫入
+## 就失敗、有時要等到 commit 才失敗）。IMMEDIATE 在 BEGIN 當下就直接拿寫鎖，
+## 拿不到立刻確定失敗，不會有「讀完才發現寫不進去」的中間態。
+##
+## 沒有重試／backoff：MVP 單一 Godot process 對應單一 db 連線，同一個連線
+## 不會有兩個交易互搶（實測過，第二次 BEGIN 直接失敗，見
+## note/技術/存檔.md），這裡預留的是「多個 process 搶同一份 game.db」的情況，
+## 目前沒有任何呼叫端會製造這個情境（沒有多人連線）。真的接上多 process
+## 寫入時才需要決定重試策略，不在這裡先猜
 func begin_transaction() -> bool:
-	return query("BEGIN TRANSACTION;")
+	return query("BEGIN IMMEDIATE;")
 
 
 func commit_transaction() -> bool:

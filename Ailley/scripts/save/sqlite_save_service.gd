@@ -29,6 +29,14 @@ const STATE_COLUMNS := [
 	"hygiene", "alcohol", "health", "injury",
 ]
 
+## npc_state 撈不到那一列時（例如 npc 存在但還沒存過狀態）用這份補齊
+## STATE_COLUMNS，不要回傳空 stats——跟檔頭「缺值補預設值，不省略 key」
+## 一致。數值抄自 NPCStateSchema.gd 的 DEFAULT，兩邊要一起改
+const STATE_DEFAULTS := {
+	"satiety": 100.0, "hydration": 80.0, "stamina": 80.0, "wakefulness": 90.0,
+	"hygiene": 70.0, "alcohol": 0.0, "health": 100.0, "injury": 0.0,
+}
+
 
 ## 讀一個角色的完整資料，找不到回傳空 Dictionary
 ##
@@ -46,9 +54,9 @@ func get_character(id: String) -> Dictionary:
 
 	var stats := {}
 	var state_rows := DatabaseManager.select("npc_state", "npc_id = '%s'" % _esc(id))
-	if not state_rows.is_empty():
-		for key in STATE_COLUMNS:
-			stats[key] = state_rows[0][key]
+	var state_row: Dictionary = state_rows[0] if not state_rows.is_empty() else {}
+	for key in STATE_COLUMNS:
+		stats[key] = state_row.get(key, STATE_DEFAULTS[key])
 	data["stats"] = stats
 
 	var relationships := {}
