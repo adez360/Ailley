@@ -382,6 +382,11 @@ func _start_incapacitation() -> void:
 	stop_moving()  # 立即停止移動
 	print_debug("Character %s 進入昏迷，計時器已啟動" % character_name)
 
+## 昏迷或治療中都不能動：昏迷是「石化原地」，治療是「住院中」，兩者共用同一個
+## 移動鎖（《99》P-27／藥草鋪筆記），供 move_to() 與 _decide_velocity()（含 Player 覆寫）共用
+func _is_movement_locked() -> bool:
+	return has_condition(CONDITION_INCAPACITATED) or _treatment_start_minute != -1
+
 ## 每遊戲分鐘檢查昏迷狀態：
 ## 1. 若被搬走（#161 設置 _is_being_carried），立即結束昏迷
 ## 2. 若昏迷 30 分鐘無人搬走，自動傳送藥草鋪並開始治療（待藥草鋪傳送機制完成）
@@ -487,8 +492,8 @@ var last_move_target := Vector2.ZERO
 
 # 走 A* 路徑到指定的世界座標；找不到路徑回傳 false
 func move_to(target: Vector2) -> bool:
-	# 昏迷中無法移動
-	if has_condition(CONDITION_INCAPACITATED):
+	# 昏迷或治療中無法移動
+	if _is_movement_locked():
 		return false
 
 	var nav = get_tree().get_first_node_in_group("nav_grid")
@@ -977,6 +982,11 @@ func load_save_data(data: Dictionary) -> void:
 	_treatment_start_minute = data.get("treatment_start_minute", -1)
 	_treatment_location = data.get("treatment_location", "")
 
+	# 治療與昏迷互斥（見 _send_to_herb_shop_for_treatment()），治療中的存檔優先還原成治療狀態，
+	# 不重建 CONDITION_INCAPACITATED；只有「昏迷中但還沒送醫」才需要重建
+	if _incapacitation_start_minute != -1 and _treatment_start_minute == -1:
+		_set_condition(CONDITION_INCAPACITATED, true)
+
 	if stats != null and data.has("stats"):
 		stats.load_save_data(data["stats"])
 	if relationships != null and data.has("relationships"):
@@ -1089,8 +1099,8 @@ func update_animation(desired_velocity: Vector2) -> void:
 # 這一幀要用的速度。基底只跟隨 A* 路徑，子類別覆寫來加上自己的驅動來源。
 # 對話中不自動移動 —— 但 Player 的輸入會蓋過這裡，走遠了由距離判定自然散場
 func _decide_velocity() -> Vector2:
-	# 昏迷中無法產生移動速度
-	if has_condition(CONDITION_INCAPACITATED):
+	# 昏迷或治療中無法產生移動速度
+	if _is_movement_locked():
 		return Vector2.ZERO
 
 	if is_in_conversation():

@@ -254,8 +254,8 @@ func get_input_direction() -> Vector2:
 	).normalized()
 
 func _decide_velocity() -> Vector2:
-	# 昏迷中無法移動（即使有輸入也不回應）
-	if has_condition(CONDITION_INCAPACITATED):
+	# 昏迷或治療中無法移動（即使有輸入也不回應）
+	if _is_movement_locked():
 		return Vector2.ZERO
 
 	var input_dir := get_input_direction()
