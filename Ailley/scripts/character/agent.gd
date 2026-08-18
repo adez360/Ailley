@@ -1185,9 +1185,11 @@ func _pursue_current_task() -> void:
 		_pursue_shout_task()
 		return
 
-	# talk 任務的目標是另一個角色，不是固定地點——current_place 對它一律是空的
-	# （params 裝的是 target 不是 place），要另外分流，不能落進下面的地點判斷
-	if current_state == "talk":
+	# talk 任務的目標若是特定角色（llm 來源，一定指名，_select() 沒填 place，
+	# current_place 是空的），沒有地點要先走，直接分流去搭話；schedule 來源
+	# （不指名，params.place 是排定的地點）current_place 非空，要落進下面的
+	# 地點判斷先走到那個地點，抵達後才開始找人搭話，不能在原地就地找人
+	if current_state == "talk" and current_place.is_empty():
 		_pursue_talk_task()
 		return
 
@@ -1207,11 +1209,15 @@ func _pursue_current_task() -> void:
 	var target: Vector2 = anchors.resolve(current_place)
 
 	# 已經在目的地就沒事要做。這一步不做的話，「早就到了」會被誤報成「走不到」：
-	# move_to() 對「路徑不足兩點」一律回傳 false，而站在原地正好就是這種情形
+	# move_to() 對「路徑不足兩點」一律回傳 false，而站在原地正好就是這種情形。
+	# talk 任務抵達地點後每個遊戲分鐘都要重新找人（人會動），跟其他地點式
+	# 任務「到了就結束」不一樣，所以這裡額外分流呼叫 _pursue_talk_task()
 	if _has_arrived_at(target):
 		stop_moving()
 		_pursued_place = current_place
 		_pursuit_done = true
+		if current_state == "talk":
+			_pursue_talk_task()
 		return
 
 	# 地點沒換的話，這一趟只起步一次：還在走就繼續走（重下指令會重設
