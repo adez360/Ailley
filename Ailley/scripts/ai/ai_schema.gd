@@ -59,7 +59,7 @@ const ALLOWED_ACTIONS := [
 #
 # nap／rest／wash／idle 是 #112 接上的：四個都只動 Stats 跟角色 state，不需要新
 # 場景物件或新資源，所以走的是仲裁器既有的「移動到 params.place（沒給就原地）、
-# 佔用 duration」路徑，沒有各自的執行函式。回復量見 agent.gd 的 STAMINA_RECOVERY
+# 佔用 duration」路徑，沒有各自的執行函式。回復量見 agent.gd 的 ACTION_RECOVERY
 #
 # murmur 是 #162 接上的：跟 idle 平行、純機率觸發（見《99》P-23），沒有目標、
 # 不用移動，走自己的 _pursue_murmur_task()，一次執行完就退出任務池

@@ -234,7 +234,7 @@ const MIN_COMMIT := 2.0                      # 遊戲分鐘；做不滿就不讓
 const LLM_WAIT_MIN_COMMIT := 5.0             # 等待決策回覆期間蓋掉 MIN_COMMIT
 const MIN_ACTION_DURATION := 10.0            # llm 任務 duration 引擎端下限（遊戲分鐘）
 const LLM_TASK_POOL_CAP := 20                # 只算 source=="llm" 的筆數
-const ENERGY_RECOVERY := {sleep: 6.0, nap: 4.0, rest: 2.0}   # 每遊戲分鐘回多少 energy（#112），暫定值
+const ACTION_RECOVERY := {sleep: {stat: stamina, amount: 6.0}, nap: {stat: stamina, amount: 4.0}, rest: {stat: stamina, amount: 2.0}}   # 動作->{stat,amount}（#112／#214），暫定值
 const DEBUG_TASK_PRIORITY := 999.0           # act 指令推進來的任務分數，壓過任何 schedule 任務
 const SUCCESS_PARAMS := {                    # 《01-2》§3 成功率表照抄，含尚未接執行邏輯的動作（#120）
     hunt_small/hunt_large/gather/fish/steal/persuade/perform/attack
@@ -262,10 +262,10 @@ func debug_push_task(action, params, duration) -> void     # act 指令用；走
 回復類動作（#112）
 † nap/rest/wash/idle 沒有各自的執行函式——四個都走仲裁器既有的
   「移動到 params.place（沒給就原地）、佔用 duration」路徑
-† energy 回復在 _on_time_changed() 每遊戲分鐘結算一次（_apply_action_recovery()），
+† 回復在 _on_time_changed() 每遊戲分鐘結算一次（_apply_action_recovery()），
   先結算再 _reevaluate()：反過來的話最後一分鐘會用新任務的 current_state 算
 † is_moving() 為真時不回復——還在走去床邊的路上不算在睡覺
-† wash 不在 ENERGY_RECOVERY 表上：它回復的是 hygiene，Stats.SPEC 還沒有這一項；
+† wash 不在 ACTION_RECOVERY 表上：它該回復 hygiene，接上是另一則任務（#241）；
   idle 也不在，發呆本來就不回復任何東西
 † 主場景沒有湖泊／深井錨點（只有 home_001/farm/restaurant/square），
   《07》§2-3 要求的 wash 地點限制等地點補齊後才有得檢查
