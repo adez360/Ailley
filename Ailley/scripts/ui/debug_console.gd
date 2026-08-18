@@ -557,12 +557,24 @@ func _cmd_ai_decision(args: PackedStringArray) -> void:
 	var agent := character as Agent
 
 	if not turn_on:
-		agent.debug_set_llm_decision(false)
+		await agent.debug_set_llm_decision(false)
 		_print("[color=888888]%s 的 llm_decision_enabled 關閉[/color]" % character.character_name)
 		return
 
-	_print("[color=888888]%s 正在問地端模型...[/color]" % character.character_name)
+	# 呼叫前先問一次是不是已經有一份請求在飛——只有真的要送出新請求時才印
+	# 「正在問...」，不然舊 config／額度／逾時的等待訊息會蓋到一個其實沒有
+	# 真的送出請求的情況上
+	if not agent.is_decision_in_flight():
+		_print("[color=888888]%s 正在問地端模型...[/color]" % character.character_name)
+
 	var result: Dictionary = await agent.debug_set_llm_decision(true)
+
+	# triggered=false 代表根本沒送出新請求（已經有一份在飛，見
+	# Agent._awaiting_decision），不是模型端出了什麼問題——跟下面驗證/逾時
+	# 失敗的訊息要分開講，不然會誤導人去查 config 或重試一個其實沒壞的東西
+	if not result.get("triggered", false):
+		_error("%s 已經有一次決策請求在進行中，稍後再試" % character.character_name)
+		return
 
 	if not result.get("ok", false):
 		_error("這次沒問到——可能是 AI 停用／逾時／驗證失敗，走了 fallback。可以再打一次 ai_decision %s on 重試，或先用 ai 指令確認 config 有沒有生效" % character.character_name)
