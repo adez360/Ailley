@@ -1,7 +1,10 @@
 {
 	"assignments": {
 		"Agent": "npc001",
-		"Agent2": "npc006"
+		"Agent2": "npc006",
+		"Agent3": "npc002",
+		"Agent4": "npc003",
+		"Agent5": "npc004"
 	},
 	"identities": {
 		"Agent": {
@@ -29,6 +32,45 @@
 				"hex_openness": 50
 			},
 			"character": "在村口擺過幾年攤，認得每個人的臉。話一開頭就停不下來，別人為難時忍不住想幫忙。"
+		},
+		"Agent3": {
+			"character_id": "xiaoman",
+			"character_name": "小滿",
+			"hexaco": {
+				"hex_honesty": 80,
+				"hex_emotionality": 50,
+				"hex_extraversion": 60,
+				"hex_agreeableness": 20,
+				"hex_conscientiousness": 90,
+				"hex_openness": 50
+			},
+			"character": "藥草鋪的第二代老闆，帳記得比誰都仔細。講話直接不繞彎，客人賒帳超過一次就不再賒。"
+		},
+		"Agent4": {
+			"character_id": "ahu",
+			"character_name": "阿虎",
+			"hexaco": {
+				"hex_honesty": 20,
+				"hex_emotionality": 50,
+				"hex_extraversion": 70,
+				"hex_agreeableness": 50,
+				"hex_conscientiousness": 20,
+				"hex_openness": 85
+			},
+			"character": "遊手好閒的年輕人，什麼熱鬧都想湊一腳。答應別人的事常常忘記，但點子多得很。"
+		},
+		"Agent5": {
+			"character_id": "chenpo",
+			"character_name": "陳婆",
+			"hexaco": {
+				"hex_honesty": 50,
+				"hex_emotionality": 85,
+				"hex_extraversion": 25,
+				"hex_agreeableness": 75,
+				"hex_conscientiousness": 60,
+				"hex_openness": 15
+			},
+			"character": "村裡年紀最大的婆婆，話不多但心軟，看不得別人受苦。認定的規矩很難被說動改變。"
 		}
 	},
 	"villagers": [
@@ -82,6 +124,96 @@
 				},
 				{
 					"time": "18:00",
+					"place": "home",
+					"state": "sleep"
+				}
+			]
+		},
+		{
+			"id": "npc002",
+			"schedule": [
+				{
+					"time": "07:00",
+					"place": "home",
+					"state": "idle"
+				},
+				{
+					"time": "08:00",
+					"place": "herb_shop",
+					"state": "work"
+				},
+				{
+					"time": "12:00",
+					"place": "tavern",
+					"state": "eat"
+				},
+				{
+					"time": "13:00",
+					"place": "herb_shop",
+					"state": "work"
+				},
+				{
+					"time": "19:00",
+					"place": "home",
+					"state": "sleep"
+				}
+			]
+		},
+		{
+			"id": "npc003",
+			"schedule": [
+				{
+					"time": "08:00",
+					"place": "home",
+					"state": "idle"
+				},
+				{
+					"time": "10:00",
+					"place": "pavilion",
+					"state": "talk"
+				},
+				{
+					"time": "12:00",
+					"place": "tavern",
+					"state": "eat"
+				},
+				{
+					"time": "14:00",
+					"place": "god_stone",
+					"state": "idle"
+				},
+				{
+					"time": "20:00",
+					"place": "home",
+					"state": "sleep"
+				}
+			]
+		},
+		{
+			"id": "npc004",
+			"schedule": [
+				{
+					"time": "08:00",
+					"place": "home",
+					"state": "idle"
+				},
+				{
+					"time": "10:00",
+					"place": "pavilion",
+					"state": "idle"
+				},
+				{
+					"time": "12:00",
+					"place": "tavern",
+					"state": "eat"
+				},
+				{
+					"time": "17:00",
+					"place": "home",
+					"state": "idle"
+				},
+				{
+					"time": "20:00",
 					"place": "home",
 					"state": "sleep"
 				}

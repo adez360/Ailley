@@ -1,4 +1,4 @@
-[gd_scene load_steps=29 format=4 uid="uid://bianwxowjctjk"]
+[gd_scene load_steps=68 format=4 uid="uid://bianwxowjctjk"]
 
 [ext_resource type="Script" uid="uid://djdfer2luq3s5" path="res://scripts/ui/pause.gd" id="1_a8y0u"]
 [ext_resource type="PackedScene" uid="uid://v21qv1icuh5m" path="res://scenes/player.tscn" id="1_ljsu2"]
@@ -17,11 +17,23 @@
 [ext_resource type="PackedScene" uid="uid://c5fffesir3r4v" path="res://scenes/workstation.tscn" id="12_0ld40"]
 [ext_resource type="Script" uid="uid://bnxsowwm2cpvd" path="res://scripts/world/places.gd" id="12_sc7p8"]
 [ext_resource type="PackedScene" uid="uid://bta26yf1ol1rm" path="res://scenes/vending_machine.tscn" id="13_yc10j"]
+[ext_resource type="Script" uid="uid://brs4ddsru544r" path="res://scripts/character/agent.gd" id="15_dgi5k"]
 [ext_resource type="Script" uid="uid://dej3fk4srven5" path="res://scripts/ui/status_panel.gd" id="15_jbj1t"]
+[ext_resource type="Texture2D" uid="uid://pcq7ouq5pyt8" path="res://assets/characters/16x16 Idle-Sheet.png" id="16_j8jky"]
 [ext_resource type="Texture2D" uid="uid://b06f01r4ovc0r" path="res://assets/ui/Setting menu.png" id="16_muem4"]
 [ext_resource type="Script" uid="uid://bghlt4yqp6xrt" path="res://scripts/ui/inventory_panel.gd" id="17_dp3eg"]
+[ext_resource type="Texture2D" uid="uid://b4byn4agp2182" path="res://assets/characters/16x16 Walk-Sheet.png" id="17_kmb1v"]
 [ext_resource type="Script" uid="uid://hism2nudt3ss" path="res://scripts/ui/hotbar.gd" id="17_muem4"]
+[ext_resource type="Script" uid="uid://clx4a8kt1td2c" path="res://scripts/character/stats.gd" id="18_fuf3a"]
+[ext_resource type="Script" uid="uid://b4eisddipih7n" path="res://scripts/character/relationships.gd" id="19_pibwh"]
+[ext_resource type="PackedScene" uid="uid://bu84ty6ven6ig" path="res://scenes/bubble.tscn" id="20_c6pm6"]
+[ext_resource type="Script" uid="uid://dwjkqsh1u8723" path="res://scripts/ui/bubble.gd" id="21_5he1u"]
 [ext_resource type="Script" uid="uid://dm5y3oyvsultm" path="res://scripts/ui/vending_menu.gd" id="21_jscy8"]
+[ext_resource type="Texture2D" uid="uid://psuc66kghr5u" path="res://assets/ui/chatbox-1.png" id="22_5poiv"]
+[ext_resource type="Script" uid="uid://xne7q5cyfgre" path="res://scripts/character/vision.gd" id="23_2cjbq"]
+[ext_resource type="Script" uid="uid://rojhhinafyq2" path="res://scripts/character/inventory.gd" id="24_chjal"]
+[ext_resource type="Script" uid="uid://cebdk6kq4c7ip" path="res://scripts/ui/work_progress.gd" id="25_cjqg0"]
+[ext_resource type="Script" uid="uid://t6axa01hiamc" path="res://scripts/ui/money_popup.gd" id="26_vchkt"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_pl1ev"]
 texture = ExtResource("3_y8peb")
@@ -147,6 +159,213 @@ terrain_set_0/terrain_0/color = Color(0.93333334, 0.50980395, 0.93333334, 1)
 terrain_set_0/terrain_1/name = "FG -Sprite-0001.png"
 terrain_set_0/terrain_1/color = Color(0.5, 0.4375, 0.25, 1)
 sources/0 = SubResource("TileSetAtlasSource_pl1ev")
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_bolw2"]
+atlas = ExtResource("16_j8jky")
+region = Rect2(0, 96, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ph8if"]
+atlas = ExtResource("16_j8jky")
+region = Rect2(24, 96, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_saf0w"]
+atlas = ExtResource("16_j8jky")
+region = Rect2(48, 96, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_t3bqt"]
+atlas = ExtResource("16_j8jky")
+region = Rect2(72, 96, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_2oalf"]
+atlas = ExtResource("16_j8jky")
+region = Rect2(0, 0, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_u3iyl"]
+atlas = ExtResource("16_j8jky")
+region = Rect2(24, 0, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_nbt1w"]
+atlas = ExtResource("16_j8jky")
+region = Rect2(48, 0, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_wnf3w"]
+atlas = ExtResource("16_j8jky")
+region = Rect2(72, 0, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_6o5p3"]
+atlas = ExtResource("16_j8jky")
+region = Rect2(0, 48, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_0eivw"]
+atlas = ExtResource("16_j8jky")
+region = Rect2(24, 48, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_4svyn"]
+atlas = ExtResource("16_j8jky")
+region = Rect2(48, 48, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_72x1t"]
+atlas = ExtResource("16_j8jky")
+region = Rect2(72, 48, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_1smnr"]
+atlas = ExtResource("17_kmb1v")
+region = Rect2(0, 96, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_a81pj"]
+atlas = ExtResource("17_kmb1v")
+region = Rect2(24, 96, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_qcr6v"]
+atlas = ExtResource("17_kmb1v")
+region = Rect2(48, 96, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_67atn"]
+atlas = ExtResource("17_kmb1v")
+region = Rect2(72, 96, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ex2eu"]
+atlas = ExtResource("17_kmb1v")
+region = Rect2(0, 0, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_mbd0g"]
+atlas = ExtResource("17_kmb1v")
+region = Rect2(24, 0, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_vrxfj"]
+atlas = ExtResource("17_kmb1v")
+region = Rect2(48, 0, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_prjjm"]
+atlas = ExtResource("17_kmb1v")
+region = Rect2(72, 0, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_0o88x"]
+atlas = ExtResource("17_kmb1v")
+region = Rect2(0, 48, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_r32kb"]
+atlas = ExtResource("17_kmb1v")
+region = Rect2(24, 48, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_4k4qa"]
+atlas = ExtResource("17_kmb1v")
+region = Rect2(48, 48, 24, 24)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_lcxbh"]
+atlas = ExtResource("17_kmb1v")
+region = Rect2(72, 48, 24, 24)
+
+[sub_resource type="SpriteFrames" id="SpriteFrames_nmuq1"]
+animations = [{
+"frames": [{
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_bolw2")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_ph8if")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_saf0w")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_t3bqt")
+}],
+"loop": true,
+"name": &"idle_back",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_2oalf")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_u3iyl")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_nbt1w")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_wnf3w")
+}],
+"loop": true,
+"name": &"idle_front",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_6o5p3")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_0eivw")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_4svyn")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_72x1t")
+}],
+"loop": true,
+"name": &"idle_right",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_1smnr")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_a81pj")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_qcr6v")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_67atn")
+}],
+"loop": true,
+"name": &"walk_back",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_ex2eu")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_mbd0g")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_vrxfj")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_prjjm")
+}],
+"loop": true,
+"name": &"walk_front",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_0o88x")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_r32kb")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_4k4qa")
+}, {
+"duration": 1.0,
+"texture": SubResource("AtlasTexture_lcxbh")
+}],
+"loop": true,
+"name": &"walk_right",
+"speed": 5.0
+}]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_k443m"]
+radius = 6.0
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_porbj"]
+radius = 80.0
 
 [sub_resource type="StyleBoxTexture" id="StyleBoxTexture_jbj1t"]
 texture = ExtResource("16_muem4")
@@ -286,6 +505,243 @@ position = Vector2(185, 50)
 
 [node name="VendingMachineHerbShop" parent="Node2D" instance=ExtResource("13_yc10j")]
 position = Vector2(-120, 88)
+
+[node name="Agent3" type="CharacterBody2D" parent="Node2D" instance=ExtResource("6_nnngi")]
+position = Vector2(-90, -60)
+collision_layer = 2
+script = ExtResource("15_dgi5k")
+schedule_template = "npc001"
+
+[node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="Node2D/Agent3"]
+sprite_frames = SubResource("SpriteFrames_nmuq1")
+animation = &"idle_front"
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Node2D/Agent3"]
+position = Vector2(0, 6)
+shape = SubResource("CircleShape2D_k443m")
+
+[node name="Stats" type="Node" parent="Node2D/Agent3"]
+script = ExtResource("18_fuf3a")
+
+[node name="Relationships" type="Node" parent="Node2D/Agent3"]
+script = ExtResource("19_pibwh")
+
+[node name="Bubble" type="Node2D" parent="Node2D/Agent3" instance=ExtResource("20_c6pm6")]
+z_index = 10
+position = Vector2(0, -10)
+script = ExtResource("21_5he1u")
+
+[node name="Box" type="NinePatchRect" parent="Node2D/Agent3/Bubble"]
+texture = ExtResource("22_5poiv")
+region_rect = Rect2(6.065604, 6.3701286, 38.97128, 37.284065)
+patch_margin_left = 10
+patch_margin_top = 9
+patch_margin_right = 11
+patch_margin_bottom = 12
+
+[node name="Label" type="Label" parent="Node2D/Agent3/Bubble/Box"]
+layout_mode = 0
+theme_type_variation = &"BubbleLabel"
+horizontal_alignment = 1
+autowrap_mode = 3
+clip_text = true
+
+[node name="Vision" type="Area2D" parent="Node2D/Agent3"]
+position = Vector2(0, 6)
+collision_layer = 0
+collision_mask = 2
+script = ExtResource("23_2cjbq")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Node2D/Agent3/Vision"]
+shape = SubResource("CircleShape2D_porbj")
+
+[node name="Inventory" type="Node" parent="Node2D/Agent3"]
+script = ExtResource("24_chjal")
+
+[node name="WorkProgress" type="Node2D" parent="Node2D/Agent3"]
+z_index = 10
+position = Vector2(0, -14)
+script = ExtResource("25_cjqg0")
+
+[node name="Background" type="ColorRect" parent="Node2D/Agent3/WorkProgress"]
+mouse_filter = 2
+
+[node name="Fill" type="ColorRect" parent="Node2D/Agent3/WorkProgress"]
+mouse_filter = 2
+
+[node name="MoneyPopup" type="Node2D" parent="Node2D/Agent3"]
+z_index = 10
+position = Vector2(0, -18)
+script = ExtResource("26_vchkt")
+
+[node name="Label" type="Label" parent="Node2D/Agent3/MoneyPopup"]
+offset_left = -14.0
+offset_top = -7.0
+offset_right = 14.0
+offset_bottom = 7.0
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Memory" type="Node" parent="Node2D/Agent3"]
+script = ExtResource("3_jscy8")
+
+[node name="Agent4" type="CharacterBody2D" parent="Node2D" instance=ExtResource("6_nnngi")]
+position = Vector2(-60, -60)
+collision_layer = 2
+script = ExtResource("15_dgi5k")
+schedule_template = "npc001"
+
+[node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="Node2D/Agent4"]
+sprite_frames = SubResource("SpriteFrames_nmuq1")
+animation = &"idle_front"
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Node2D/Agent4"]
+position = Vector2(0, 6)
+shape = SubResource("CircleShape2D_k443m")
+
+[node name="Stats" type="Node" parent="Node2D/Agent4"]
+script = ExtResource("18_fuf3a")
+
+[node name="Relationships" type="Node" parent="Node2D/Agent4"]
+script = ExtResource("19_pibwh")
+
+[node name="Bubble" type="Node2D" parent="Node2D/Agent4" instance=ExtResource("20_c6pm6")]
+z_index = 10
+position = Vector2(0, -10)
+script = ExtResource("21_5he1u")
+
+[node name="Box" type="NinePatchRect" parent="Node2D/Agent4/Bubble"]
+texture = ExtResource("22_5poiv")
+region_rect = Rect2(6.065604, 6.3701286, 38.97128, 37.284065)
+patch_margin_left = 10
+patch_margin_top = 9
+patch_margin_right = 11
+patch_margin_bottom = 12
+
+[node name="Label" type="Label" parent="Node2D/Agent4/Bubble/Box"]
+layout_mode = 0
+theme_type_variation = &"BubbleLabel"
+horizontal_alignment = 1
+autowrap_mode = 3
+clip_text = true
+
+[node name="Vision" type="Area2D" parent="Node2D/Agent4"]
+position = Vector2(0, 6)
+collision_layer = 0
+collision_mask = 2
+script = ExtResource("23_2cjbq")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Node2D/Agent4/Vision"]
+shape = SubResource("CircleShape2D_porbj")
+
+[node name="Inventory" type="Node" parent="Node2D/Agent4"]
+script = ExtResource("24_chjal")
+
+[node name="WorkProgress" type="Node2D" parent="Node2D/Agent4"]
+z_index = 10
+position = Vector2(0, -14)
+script = ExtResource("25_cjqg0")
+
+[node name="Background" type="ColorRect" parent="Node2D/Agent4/WorkProgress"]
+mouse_filter = 2
+
+[node name="Fill" type="ColorRect" parent="Node2D/Agent4/WorkProgress"]
+mouse_filter = 2
+
+[node name="MoneyPopup" type="Node2D" parent="Node2D/Agent4"]
+z_index = 10
+position = Vector2(0, -18)
+script = ExtResource("26_vchkt")
+
+[node name="Label" type="Label" parent="Node2D/Agent4/MoneyPopup"]
+offset_left = -14.0
+offset_top = -7.0
+offset_right = 14.0
+offset_bottom = 7.0
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Memory" type="Node" parent="Node2D/Agent4"]
+script = ExtResource("3_jscy8")
+
+[node name="Agent5" type="CharacterBody2D" parent="Node2D" instance=ExtResource("6_nnngi")]
+position = Vector2(-30, -60)
+collision_layer = 2
+script = ExtResource("15_dgi5k")
+schedule_template = "npc001"
+
+[node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="Node2D/Agent5"]
+sprite_frames = SubResource("SpriteFrames_nmuq1")
+animation = &"idle_front"
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Node2D/Agent5"]
+position = Vector2(0, 6)
+shape = SubResource("CircleShape2D_k443m")
+
+[node name="Stats" type="Node" parent="Node2D/Agent5"]
+script = ExtResource("18_fuf3a")
+
+[node name="Relationships" type="Node" parent="Node2D/Agent5"]
+script = ExtResource("19_pibwh")
+
+[node name="Bubble" type="Node2D" parent="Node2D/Agent5" instance=ExtResource("20_c6pm6")]
+z_index = 10
+position = Vector2(0, -10)
+script = ExtResource("21_5he1u")
+
+[node name="Box" type="NinePatchRect" parent="Node2D/Agent5/Bubble"]
+texture = ExtResource("22_5poiv")
+region_rect = Rect2(6.065604, 6.3701286, 38.97128, 37.284065)
+patch_margin_left = 10
+patch_margin_top = 9
+patch_margin_right = 11
+patch_margin_bottom = 12
+
+[node name="Label" type="Label" parent="Node2D/Agent5/Bubble/Box"]
+layout_mode = 0
+theme_type_variation = &"BubbleLabel"
+horizontal_alignment = 1
+autowrap_mode = 3
+clip_text = true
+
+[node name="Vision" type="Area2D" parent="Node2D/Agent5"]
+position = Vector2(0, 6)
+collision_layer = 0
+collision_mask = 2
+script = ExtResource("23_2cjbq")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Node2D/Agent5/Vision"]
+shape = SubResource("CircleShape2D_porbj")
+
+[node name="Inventory" type="Node" parent="Node2D/Agent5"]
+script = ExtResource("24_chjal")
+
+[node name="WorkProgress" type="Node2D" parent="Node2D/Agent5"]
+z_index = 10
+position = Vector2(0, -14)
+script = ExtResource("25_cjqg0")
+
+[node name="Background" type="ColorRect" parent="Node2D/Agent5/WorkProgress"]
+mouse_filter = 2
+
+[node name="Fill" type="ColorRect" parent="Node2D/Agent5/WorkProgress"]
+mouse_filter = 2
+
+[node name="MoneyPopup" type="Node2D" parent="Node2D/Agent5"]
+z_index = 10
+position = Vector2(0, -18)
+script = ExtResource("26_vchkt")
+
+[node name="Label" type="Label" parent="Node2D/Agent5/MoneyPopup"]
+offset_left = -14.0
+offset_top = -7.0
+offset_right = 14.0
+offset_bottom = 7.0
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Memory" type="Node" parent="Node2D/Agent5"]
+script = ExtResource("3_jscy8")
 
 [node name="DebugConsole" parent="." instance=ExtResource("6_pl1ev")]
 
