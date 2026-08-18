@@ -141,6 +141,16 @@ const MAX_TASK_DURATION := 1440.0
 const MIN_EXPIRES_IN_MINUTES := 1
 const MAX_EXPIRES_IN_MINUTES := 10080
 
+# #264：give 的 count 只驗過型別／有限性／整數值，沒有上界——跟 #224 修的
+# priority INF 問題同一類，極端浮點數（如 1e18）能通過這些檢查，卻在後續
+# Character.give_to() → Inventory.remove_item_detailed() 的 int() 轉型
+# 產生平台相關、不可靠的結果。Inventory 本身沒有全域堆疊上限可以借用
+# （_add_stackable() 一格可以無限疊加），所以自訂一個純粹擋「離譜大」的
+# 上限——999 遠超過任何合理的遊戲內送禮數量，也遠低於 float64 精度出問題
+# 的量級（2^53 附近），不是真的想限制玩法
+const MIN_GIVE_COUNT := 1
+const MAX_GIVE_COUNT := 999
+
 const ERROR_NOT_JSON := "not_json"
 const ERROR_NOT_OBJECT := "not_object"
 const ERROR_NO_CONTENT := "no_content"
@@ -301,10 +311,17 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minute
 			if not target is String or (target as String).strip_edges().is_empty():
 				return _fail(ERROR_BAD_SHAPE)
 
-		# give 動作的 count 參數驗證：拒絕分數值（如 2.5），只接受整數或代表整數的浮點數（如 3.0）
-		# JSON 解析可能把整數解成浮點數，所以兩種型別都要接受，但必須是整數值
+		# give 動作的 params 驗證（#264）：target 比照 talk，缺失／非字串／
+		# 空字串在這一層就擋掉，不要等到 _pursue_give_task() 才被動吸收成
+		# 「找不到這個人」。count 拒絕分數值（如 2.5），只接受整數或代表整數
+		# 的浮點數（如 3.0）——JSON 解析可能把整數解成浮點數，所以兩種型別都
+		# 要接受，但必須是整數值
 		if task["action"] == "give":
 			var give_params: Dictionary = task.get("params", {})
+			var give_target: Variant = give_params.get("target")
+			if not give_target is String or (give_target as String).strip_edges().is_empty():
+				return _fail(ERROR_BAD_SHAPE)
+
 			if give_params.has("count"):
 				var count_value: Variant = give_params["count"]
 				if not (count_value is int or count_value is float):
@@ -316,6 +333,13 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minute
 					return _fail(ERROR_BAD_SHAPE)
 				# 拒絕分數：檢查浮點數是否等於其整數部分
 				if count_value is float and count_value != floor(count_value):
+					return _fail(ERROR_BAD_SHAPE)
+				# #264：跟 priority/duration 同一套「不只驗型別，還要驗量級」——
+				# 上面的檢查放行了任何有限整數值，包含 1e18 這種會讓後續 int()
+				# 轉型不可靠的離譜大數字。count 沒有 MIN_TASK_* 那種必填設計
+				# （模型不給就退回預設值 1，合法），所以只在欄位真的存在時才驗範圍
+				var count_float := float(count_value)
+				if count_float < MIN_GIVE_COUNT or count_float > MAX_GIVE_COUNT:
 					return _fail(ERROR_BAD_SHAPE)
 
 		# #268／#290：expires_in_minutes（模型填的相對時長）現在有跟
