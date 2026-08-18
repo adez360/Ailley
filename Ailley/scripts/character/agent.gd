@@ -42,6 +42,9 @@ var words_to_creator := ""
 ## 不算數，機會不消耗，見 maybe_speak_to_creator()（《99》P-10 #3）
 var _words_to_creator_spoken := false
 
+## 判定是否要說出口的 AI 呼叫進行中（見 maybe_speak_to_creator() 的鎖）
+var _words_to_creator_pending := false
+
 ## schedule 任務給中間值，靠 time_bonus 拉開跟其他來源的差距，
 ## 不是靠 base priority 本身——見 [[行程佇列與任務仲裁]] 的「待決」那節
 const SCHEDULE_BASE_PRIORITY := 10.0
@@ -236,24 +239,36 @@ func _push_daily_event(content: String) -> void:
 ## 同時骰一次天神之石觸發判定
 func hear_god_stone(line: String) -> void:
 	_push_daily_event("你在天神之石附近聽到一個聲音，說：「%s」" % line)
-	maybe_speak_to_creator()
+	maybe_speak_to_creator(line)
 
 ## #164 + 《99》P-10：25% 機率觸發（情緒強度 ≥70 時 40%），中了才問 AI 要不要
 ## 真的說出口——中了但 AI 選擇不說一樣不消耗機會，下次再被叫到還能再骰
 ## （P-10 #3：「是否消耗機會？否」）。只有骰中且 AI 決定說，才會真的說一次、
-## 這輩子不會再說第二次
-func maybe_speak_to_creator() -> void:
-	if words_to_creator.is_empty() or _words_to_creator_spoken:
+## 這輩子不會再說第二次。
+##
+## heard_line 是玩家在天神之石說的那句話，傳給 AI 當判斷依據（不傳的話 AI
+## 只知道「有人說話」，不知道說了什麼，沒什麼好「自然判斷」的——CodeRabbit
+## review 抓到）
+##
+## _words_to_creator_pending 鎖住判定期間：AI 回應可能超過天神之石的 5 秒
+## 冷卻，玩家能在同一個判定還沒回來時再說一次話，兩次呼叫若都只查
+## _words_to_creator_spoken 會一起通過早退檢查，兩個回應都成立時就會說兩次
+## ——CodeRabbit review 抓到的競態
+func maybe_speak_to_creator(heard_line: String) -> void:
+	if words_to_creator.is_empty() or _words_to_creator_spoken or _words_to_creator_pending:
 		return
 
 	var chance := 0.4 if int(emotion.get("intensity", 0)) >= 70 else 0.25
 	if randf() >= chance:
 		return
 
-	var envelope := PromptBuilder.build_words_to_creator_envelope(self)
+	_words_to_creator_pending = true
+	var envelope := PromptBuilder.build_words_to_creator_envelope(self, heard_line)
 	var validator := func(data: Dictionary) -> Dictionary:
 		return AISchema.validate_words_to_creator_choice(data)
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
+	_words_to_creator_pending = false
+
 	if not result["ok"] or not result["data"]["say_it"]:
 		return
 
@@ -263,14 +278,23 @@ func maybe_speak_to_creator() -> void:
 ## 場景固定 NPC 沒有預先生成好的 words_to_creator（見上方欄位註解），開機時
 ## fire-and-forget 補打一次——跟 game_manager.gd::_generate_words_to_creator()
 ## 同一種呼叫，慢到或失敗就是這輩子沒有這句話可觸發，不擋開機、不重試
-## （P-10 的重試/備用句庫決議是角色庫那條路徑的範圍，這裡先對齊現有實作深度）
+## （P-10 的重試/備用句庫決議是角色庫那條路徑的範圍，這裡先對齊現有實作深度）。
+## 請求前後都檢查空字串，避免非同步回應回來時蓋掉已經有內容的欄位——
+## 角色庫投放的角色會由 game_manager.gd::spawn_character() 在 add_child()
+## 觸發這裡的 _ready() 之前就先填好 words_to_creator，這裡的第一道檢查會
+## 直接跳過、不浪費一次多餘的 AI 呼叫；只有場景固定 NPC（沒有這條預填路徑）
+## 才會真的走到底（CodeRabbit review 抓到）
 func _generate_words_to_creator() -> void:
+	if not words_to_creator.is_empty():
+		return
 	var envelope := PromptBuilder.build_creation_envelope(system_prompt)
 	var result: Dictionary = await AIService.request(envelope, character_id, AIService.Policy.SCHEDULED)
 	if not result["ok"]:
 		return
 	var validated := AISchema.validate_creation(result["data"])
 	if not validated["ok"]:
+		return
+	if not words_to_creator.is_empty():
 		return
 	words_to_creator = validated["data"]["words_to_creator"]
 
