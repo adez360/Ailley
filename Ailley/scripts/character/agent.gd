@@ -1564,6 +1564,45 @@ func debug_push_task(action: String, params: Dictionary, duration: float) -> voi
 	_push_llm_tasks(tasks, {})
 	_reevaluate()
 
+## Debug 用：切換 llm_decision_enabled（issue #282，debug_console.gd 的
+## ai_decision 指令）。開啟時立刻等待一次真正的 _request_next_decision()，
+## 不等自然觸發條件（任務做完、剛睡醒）——組員下指令當下就要看得到效果。
+## 走跟正式路徑完全一樣的 _request_next_decision()，不另開捷徑，理由跟
+## debug_push_task() 一樣：驗到的才是真正會跑的那條。
+##
+## 回傳值給 debug_console.gd 印出來當「這次真的問過模型」的可視覺驗證：
+## reasoning／inner_monologue 是模型當次回應的自由文字，不是寫死的字串，
+## 印得出這兩項就代表這趟真的打了地端模型，不是接了個假資料
+func debug_set_llm_decision(enabled: bool) -> Dictionary:
+	llm_decision_enabled = enabled
+	if not enabled or _awaiting_decision:
+		return {"triggered": false}
+
+	var pool_before := _llm_task_count()
+	await _request_next_decision(_today_plan_needs_new_goal())
+
+	# _request_next_decision() 失敗時（AI 停用／逾時／驗證失敗）靜默放棄、
+	# 不留痕跡（見它自己的註解，fallback 頂著）——用新增的 llm 任務數判斷
+	# 這次到底成不成功，比另外設一個「上次決策 ok 嗎」的旗標更不會跟真正的
+	# 池子狀態脫鉤
+	var added := _llm_task_count() - pool_before
+	if added <= 0:
+		return {"triggered": true, "ok": false}
+
+	# 剛新增的這批任務都帶同一份 reasoning/inner_monologue（_push_llm_tasks()
+	# 逐筆複製同一份回應），抓最後一筆代表這次決策說了什麼
+	var latest: Dictionary = {}
+	for task in _tasks:
+		if task.get("source", "") == "llm":
+			latest = task
+	return {
+		"triggered": true,
+		"ok": true,
+		"reasoning": latest.get("reasoning", ""),
+		"inner_monologue": latest.get("inner_monologue", ""),
+		"tasks_added": added,
+	}
+
 ## Debug 用：今天累積了哪些事件，給 reflect 指令在呼叫 request_sleep_reflection()
 ## 前先印出來看。只回 content——debug 顯示不需要知道內部的 id
 func get_daily_events() -> Array[String]:
