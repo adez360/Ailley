@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://xqribn8mdubp"]
+
+[ext_resource type="Script" uid="uid://bdtfba2jvsev" path="res://scripts/ui/character_library.gd" id="1_hmvok"]
+
+[node name="CharacterLibrary" type="CanvasLayer"]
+script = ExtResource("1_hmvok")

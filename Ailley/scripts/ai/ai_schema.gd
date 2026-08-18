@@ -44,6 +44,8 @@ const ALLOWED_ACTIONS := [
 	"move_to", "sleep", "nap", "rest", "wash", "idle",
 	# D 敵對類
 	"steal", "attack",
+	# E 搬運類（#161，《99》P-27）
+	"haul", "struggle",
 ]
 
 # 本輪真正有實作的動作。其餘動作驗證會過，但執行層要回 NOT_IMPLEMENTED，
@@ -66,7 +68,11 @@ const ALLOWED_ACTIONS := [
 # （shout），走各自的 _pursue_give_task()／_pursue_shout_task()，一次執行完
 # 就退出任務池，不像 nap 那類佔滿整段 duration。persuade 不在這裡——見 #227，
 # 它需要的待回應事實句機制目前完全沒有地基
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "murmur", "give", "shout"]
+#
+# haul／struggle 是 #161 接上的：haul 是長動作，占住整段 duration（跟 nap 一樣），
+# 但不用 params.place —— 搬運去哪由搬運者自己決定。struggle 是短動作，只在被搬運
+# 時有效，走各自的 _pursue_struggle_task()，執行完就退出任務池
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "murmur", "give", "shout", "haul", "struggle"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -460,6 +466,38 @@ static func validate_reflection(data: Dictionary) -> Dictionary:
 		})
 
 	return _ok({"summary": summary, "events": events})
+
+
+# 建角完成當下的一次性回應（《05》流程圖 ⑤，#122）：角色對自己性格設定的
+# 一句話吐槽。跟 validate_dialogue() 的 line 同一種必填、不可為空的態度——
+# 這通呼叫只打一次，沒有下一輪可以補救，空字串代表這次生成失敗，不是合法值
+static func validate_creation(data: Dictionary) -> Dictionary:
+	if not data.has("words_to_creator") or not data["words_to_creator"] is String:
+		return _fail(ERROR_BAD_SHAPE)
+
+	var text: String = (data["words_to_creator"] as String).strip_edges()
+	if text.is_empty():
+		return _fail(ERROR_BAD_SHAPE)
+	if text.length() > MAX_LINE_CHARS:
+		text = text.substr(0, MAX_LINE_CHARS)
+
+	return _ok({"words_to_creator": text})
+
+
+static func creation_response_schema() -> Dictionary:
+	return {
+		"type": "json_schema",
+		"json_schema": {
+			"name": "creation_response",
+			"schema": {
+				"type": "object",
+				"properties": {
+					"words_to_creator": {"type": "string", "maxLength": MAX_LINE_CHARS},
+				},
+				"required": ["words_to_creator"],
+			},
+		},
+	}
 
 
 # 選填字串欄位的共用驗證：缺席回空字串、型別錯回 null（呼叫端用 null 判斷失敗，
