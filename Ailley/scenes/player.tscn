@@ -10,6 +10,7 @@
 [ext_resource type="Script" uid="uid://rojhhinafyq2" path="res://scripts/character/inventory.gd" id="8_smehm"]
 [ext_resource type="Script" uid="uid://cebdk6kq4c7ip" path="res://scripts/ui/work_progress.gd" id="9_ur7pv"]
 [ext_resource type="Script" uid="uid://t6axa01hiamc" path="res://scripts/ui/money_popup.gd" id="10_y4r1p"]
+[ext_resource type="Script" uid="uid://l3boughq0c6q" path="res://scripts/character/memory.gd" id="11_d2wvv"]
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_bolw2"]
 atlas = ExtResource("2_cl37t")
@@ -278,6 +279,9 @@ offset_right = 14.0
 offset_bottom = 7.0
 horizontal_alignment = 1
 vertical_alignment = 1
+
+[node name="Memory" type="Node" parent="."]
+script = ExtResource("11_d2wvv")
 
 [node name="InteractArea" type="Area2D" parent="."]
 position = Vector2(0, 6)

@@ -965,13 +965,14 @@ memory 區塊          {recent: Array[String], core: Array[String]}   # L2/L4 �
 ## AISchema — scripts/ai/ai_schema.gd · class_name · RefCounted
 
 ```gdscript
-const ALLOWED_ACTIONS := [                   # 《07》《11》拍板的 22 個，不含 spec 沒有的 "work"
-    talk, persuade, give, report, shout, perform,
-    hunt_small, hunt_large, gather, fish, buy, sell, eat, drink,
-    move_to, sleep, nap, rest, wash, idle,
-    steal, attack,
-]
-const IMPLEMENTED_ACTIONS := [move_to, talk, sleep, nap, rest, wash, idle]   # 後四個是 #112 接上的
+const ALLOWED_ACTIONS := [                   # 《07》《11》拍板的動作，不含 spec 沒有的 "work"
+    "talk", "persuade", "give", "report", "shout", "perform", "murmur",
+    "hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink",
+    "move_to", "sleep", "nap", "rest", "wash", "idle",
+    "steal", "attack",
+]                                             # murmur 是 #162 補上的，#88 population 時漏列
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "murmur"]
+# 後四個（nap/rest/wash/idle）是 #112 接上的，murmur 是 #162 接上的
 const MAX_TASKS_PER_RESPONSE := 5            # 單次決策回應最多幾筆任務
 const MAX_LINE_CHARS := 200                  # dialogue line／reasoning／inner_monologue 共用的截斷長度
 const ERROR_NOT_JSON := "not_json"
