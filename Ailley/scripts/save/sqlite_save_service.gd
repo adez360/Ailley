@@ -97,7 +97,14 @@ func save_character(id: String, data: Dictionary) -> bool:
 		DatabaseManager.rollback_transaction()
 		return false
 
-	return DatabaseManager.commit_transaction()
+	if DatabaseManager.commit_transaction():
+		return true
+
+	# COMMIT 失敗不保證交易已經結束（SQLite 可能因為 SQLITE_BUSY 之類的原因
+	# 讓交易繼續留著）——沒有這個 rollback，下一次 begin_transaction() 會
+	# 因為交易還在跑而失敗，之後所有存檔都會跟著壞掉
+	DatabaseManager.rollback_transaction()
+	return false
 
 
 ## 讀一個世界的完整資料
@@ -115,10 +122,15 @@ func get_world(id: String) -> Dictionary:
 			"position": [float(row["pos_x"]), float(row["pos_y"])],
 		}
 		# current_place / current_state 只有 Agent 才有意義，Player 存進來的
-		# 是 NULL——跟 GameManager.get_world_save_data() 的條件式加欄位對齊
-		if row.get("current_place") != null:
-			entry["current_place"] = row["current_place"]
-			entry["current_state"] = row["current_state"]
+		# 是 NULL——跟 GameManager.get_world_save_data() 的條件式加欄位對齊。
+		# 兩欄在 schema 上各自獨立可為 NULL，current_place 有值但
+		# current_state 是 NULL 時不能把 null 塞進回傳的 Dictionary——跟檔頭
+		# 「不回傳 null」的規則一致，正規化成空字串
+		var current_place = row.get("current_place")
+		if current_place != null:
+			entry["current_place"] = String(current_place)
+			var current_state = row.get("current_state")
+			entry["current_state"] = "" if current_state == null else String(current_state)
 		characters[row["npc_id"]] = entry
 
 	return {
@@ -150,7 +162,13 @@ func save_world(id: String, data: Dictionary) -> bool:
 		DatabaseManager.rollback_transaction()
 		return false
 
-	return DatabaseManager.commit_transaction()
+	if DatabaseManager.commit_transaction():
+		return true
+
+	# 同 save_character() 的理由：COMMIT 失敗不代表交易已經結束，沒有這個
+	# rollback 下一次 begin_transaction() 會跟著失敗
+	DatabaseManager.rollback_transaction()
+	return false
 
 
 ## ===================================================================
@@ -243,9 +261,11 @@ func _replace_world_characters(world_id: String, characters: Dictionary) -> bool
 			"pos_x": float(position[0]) if position.size() > 0 else 0.0,
 			"pos_y": float(position[1]) if position.size() > 1 else 0.0,
 		}
-		if entry.has("current_place"):
-			row["current_place"] = entry["current_place"]
-			row["current_state"] = entry.get("current_state", "")
+		var current_place = entry.get("current_place")
+		if current_place != null:
+			row["current_place"] = String(current_place)
+			var current_state = entry.get("current_state")
+			row["current_state"] = "" if current_state == null else String(current_state)
 
 		if not DatabaseManager.insert("world_character_state", row):
 			return false

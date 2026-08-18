@@ -7,11 +7,12 @@ extends Node
 ## 2. 建立所有資料表（實際內容在 DatabaseSchema）
 ## 3. 把 godot-sqlite 的 CRUD 轉出去
 ##
-## select() / insert() 走 addon 的 select_rows / insert_row；update() / delete()
-## 改走 query_with_bindings() 自己拼 SQL（見兩個函式的註解——addon 的
-## update_rows / delete_rows 會把外層 begin_transaction() 開的交易提早
-## COMMIT 掉）。不管走哪條路，值一律用 bindings 綁定，不自己把值拼進 SQL
-## 字串 —— 這個專案的記憶內容是 LLM 產的，拼字串等於把它交給模型改寫。
+## 只有 insert() 走 addon 的 insert_row；select() / update() / delete() 都是
+## 自己拼 SQL 交給 query_with_bindings()（update() / delete() 見兩個函式的
+## 註解——addon 的 update_rows / delete_rows 會把外層 begin_transaction()
+## 開的交易提早 COMMIT 掉）。不管走哪條路，data 的值一律用 bindings 綁定，
+## 不自己把值拼進 SQL 字串 —— 這個專案的記憶內容是 LLM 產的，拼字串等於
+## 把它交給模型改寫。
 ##
 ## conditions 參數是 WHERE 子句（不含 WHERE 關鍵字），它是原始 SQL，
 ## 只能由程式碼自己組，不可以放模型或玩家輸入的字串。
@@ -127,6 +128,11 @@ func update(
 	# 空 conditions 會變成「更新整張表」，不是呼叫端想要的
 	if conditions.strip_edges().is_empty():
 		push_error("[Database] UPDATE requires conditions.")
+		return false
+
+	# 空 data 會拼出 "UPDATE t SET  WHERE ..."，SET 後面沒有欄位是語法錯誤
+	if data.is_empty():
+		push_error("[Database] UPDATE requires data.")
 		return false
 
 	var assignments := []
