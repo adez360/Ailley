@@ -31,9 +31,17 @@ extends "res://scripts/save/save_service.gd"
 ## 鎖的授予範圍是「這個 process 的存活期間」：第一次成功寫入某個 id 時取得，
 ## 直到 process 正常結束（_exit_tree）才釋放；不會每次寫入都重新搶鎖，因為同一
 ## process 重複取自己持有的鎖必定成功，等於沒有互斥效果。當機留下的鎖不會造成
-## 死鎖——下一個 process 來搶鎖時發現 pid 已經不在跑，清掉殘留閘門後重新
-## 發布一次接手，不用玩家手動砍檔；兩個 process 同時判定死鎖並搶接手時，
-## 一樣只有一個能贏得那次 rename，另一個會正確地拿到失敗，不會誤判成功。
+## 死鎖——下一個 process 來搶鎖時發現 pid 已經不在跑，透過 _reclaim_stale_lock()
+## 接手：接手本身也是先原子搬走再檢查內容，證實真的死了才清掉、發現其實還
+## 活著就搬回去，見該函式註解。兩個 process 同時判定死鎖並搶接手時，只有
+## 一個能贏得那次搬走，另一個會正確地拿到失敗或把東西還回去，不會誤判成功。
+##
+## 已知殘留限制：這一整套只靠 rename/mkdir 的原子性做互斥，沒有真正的作業系統
+## 鎖（flock／LockFileEx，GDScript 沒有介面能叫）。正常的兩個 process 互搶
+## 已經涵蓋（含死鎖接手），但三個以上 process 同時對同一個 id 搶死鎖接手時，
+## _reclaim_stale_lock() 的「搬回去」那一步理論上仍可能因為第三者插隊而失敗
+## ——這個專案單機、最多兩個 process 會碰同一份存檔，用不到為了這個機率去接
+## 原生擴充套件換真正的系統鎖。
 
 const CHARACTERS_DIR := "user://saves/characters"
 const WORLDS_DIR := "user://saves/worlds"
@@ -104,14 +112,45 @@ func _acquire_write_lock(path: String) -> bool:
 		])
 		return false
 
-	# 死鎖：清掉殘留的閘門後重新發布一次接手——輸給同時接手的別人時
-	# _publish_lock_claim() 的 rename 一樣會失敗，不會誤判成功
-	_remove_lock_dir(lock_dir)
-	if not _publish_lock_claim(lock_dir):
-		push_error("JsonSaveService: %s 接手死鎖失敗，可能被別的 process 搶先接手，本次寫入被拒絕" % path)
+	# 死鎖：接手。_reclaim_stale_lock() 內部會再驗一次，防止「兩個 process
+	# 都判斷死鎖、其中一個接手成功後，另一個把它剛發布的新鎖也清掉」
+	if _reclaim_stale_lock(lock_dir) and _publish_lock_claim(lock_dir):
+		_held_locks[lock_dir] = true
+		return true
+
+	push_error("JsonSaveService: %s 接手死鎖失敗，可能被別的 process 搶先接手或搶先發布新鎖，本次寫入被拒絕" % path)
+	return false
+
+
+## 把「這是死鎖」的判斷跟「移除它」合成同一個不可被插隊的步驟：先用
+## DirAccess.rename_absolute() 把 lock_dir 整個搬到只有這次呼叫看得到的
+## 隔離目錄——來源不存在時 rename 一樣會失敗，所以兩個 process 同時想搬走
+## 同一個 lock_dir，只有一個搬得走，這一步本身沒有競態。
+##
+## 搬走之後才檢查內容：如果證實真的是死掉的持有者，清掉、回傳 true 讓呼叫端
+## 接著發布新鎖；如果搬走後發現其實是活著的（代表判斷死鎖到真正搬走這段
+## 極短的時間內，原本的死鎖已經被別的 process 清掉、且已經發布了合法的新
+## 鎖），原封不動搬回去，不動任何人的東西，回傳 false 讓這次接手失敗。
+##
+## 殘留的極端邊緣情況：搬回去那一步本身如果又被第三個 process 搶先佔用
+## 目的地，會導致這份內容真的遺失——這是三個以上 process 同時對同一份存檔
+## 搶死鎖接手才會踩到的極窄窗口，用純檔案系統原語（沒有 flock／LockFileEx
+## 這類作業系統原生鎖）做不到完全杜絕，單機、最多 2 個 process 的規模用不到
+## 為了它去接原生擴充套件。
+func _reclaim_stale_lock(lock_dir: String) -> bool:
+	var quarantine_dir := "%s.reclaiming.%d.%d" % [lock_dir, OS.get_process_id(), Time.get_ticks_usec()]
+	if DirAccess.rename_absolute(lock_dir, quarantine_dir) != OK:
 		return false
 
-	_held_locks[lock_dir] = true
+	var holder := _read_lock_info(quarantine_dir)
+	var holder_pid := int(holder.get("pid", -1))
+	if holder_pid > 0 and holder_pid != OS.get_process_id() and _is_pid_alive(holder_pid):
+		if DirAccess.rename_absolute(quarantine_dir, lock_dir) != OK:
+			push_error("JsonSaveService: %s 接手死鎖後發現原持有者其實還活著，但已無法歸還鎖（可能有第三個 process 同時搶鎖），這份鎖資訊遺失" % lock_dir)
+		return false
+
+	DirAccess.remove_absolute(quarantine_dir.path_join(LOCK_INFO_FILENAME))
+	DirAccess.remove_absolute(quarantine_dir)
 	return true
 
 
