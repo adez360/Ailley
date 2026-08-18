@@ -11,7 +11,7 @@ static func create(db) -> bool:
 
 		grave_id INTEGER NOT NULL,
 
-		highlight_order INTEGER NOT NULL DEFAULT 0,
+		highlight_order INTEGER NOT NULL,
 
 		content TEXT NOT NULL,
 

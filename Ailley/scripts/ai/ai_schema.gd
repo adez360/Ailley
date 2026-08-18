@@ -21,10 +21,10 @@ extends RefCounted
 ## reasoning/inner_monologue、單次回應筆數上限、跟送出去用的 JSON Schema。
 
 # §5.3 的動作白名單，換成《07 地點與行動》《11 人際互動與社交行為》拍板後的
-# 22 個動作（issue #88）。不在這張表上的 action 一律拒絕 —— 用白名單而不是
+# 動作（issue #88）。不在這張表上的 action 一律拒絕 —— 用白名單而不是
 # 黑名單，是因為黑名單漏掉的那一項就是被打穿的那一項。
 #
-# 刻意不含 spec 沒有的 "work"：《07》《11》的 22 個動作裡沒有它，嚴格照 spec。
+# 刻意不含 spec 沒有的 "work"：《07》《11》的動作裡沒有它，嚴格照 spec。
 # 這只影響 LLM 回應的驗證——schedule 來源的任務（npc_schedule.json 轉換）是
 # agent.gd 直接建構、不經過這裡，既有的 work 排程不受影響；影響的是 LLM 之後
 # 不能自己決定叫角色去打工，只有寫死在 npc_schedule.json 的排程能觸發 work。
@@ -32,22 +32,27 @@ extends RefCounted
 # "move_to" 沿用既有命名，不改成 spec 用的 "move"——兩者語意完全一樣，只是
 # 命名不同，改名要動 agent.gd／debug_console.gd／api.md 好幾處引用，不值得
 # 為了對齊規格書用詞冒這個風險
+#
+# "murmur"（自語，#162）原本 #88 population 時漏掉——《11》§1 拍板的 MVP 動作
+# 清單本來就有 murmur，只是那次沒被列進來，不是這次新拍板決定要加
 const ALLOWED_ACTIONS := [
 	# A 溝通類
-	"talk", "persuade", "give", "report", "shout", "perform",
+	"talk", "persuade", "give", "report", "shout", "perform", "murmur",
 	# B 工作與消費類
 	"hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink",
 	# C 動作與移動類
 	"move_to", "sleep", "nap", "rest", "wash", "idle",
 	# D 敵對類
 	"steal", "attack",
+	# E 搬運類（#161，《99》P-27）
+	"haul", "struggle",
 ]
 
 # 本輪真正有實作的動作。其餘動作驗證會過，但執行層要回 NOT_IMPLEMENTED，
 # 而不是在驗證層擋掉 —— 兩者是不同的失敗，混在一起 debug 時會分不清
 # work 與 buy 不在這裡：Character.work_at()／buy_from() 做出來了，但沒有任何
 # 執行層把一筆 {"action": "work"} 對應到一個 Workstation 實例，而它們需要
-# 節點參照、find_nearest_workstation()／find_nearest_vending_machine() 只看得到 32px。
+# 節點參照，player.gd 的候選偵測也只看 32px 範圍內、面向著的物件。
 # buy 還多缺一個「買哪個 item_id」的來源——目前只有玩家從 vending_menu 點得出來。
 # 列進來的話就變成「白名單宣稱做得到、實際靜默不做」，正是上面那段註解要避免的
 # 混淆。等執行層接得到再加（talk 的動作執行留給 #90，其餘留給各自的 issue）
@@ -55,7 +60,28 @@ const ALLOWED_ACTIONS := [
 # nap／rest／wash／idle 是 #112 接上的：四個都只動 Stats 跟角色 state，不需要新
 # 場景物件或新資源，所以走的是仲裁器既有的「移動到 params.place（沒給就原地）、
 # 佔用 duration」路徑，沒有各自的執行函式。回復量見 agent.gd 的 STAMINA_RECOVERY
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle"]
+#
+# eat 是 #114 接上的：跟 talk 一樣是「呼叫一次就完成」的動作，不是靠 duration
+# 逐分鐘回復，所以沒有走 nap/rest 那條通用路徑——agent.gd 特化了一個
+# _pursue_eat_task()（寫法照抄 _pursue_talk_task()），resolve() 也加了
+# 「背包裡有沒有食物」的硬規則檢查，避免 LLM 宣稱吃了背包裡沒有的東西
+#
+# murmur 是 #162 接上的：跟 idle 平行、純機率觸發（見《99》P-23），沒有目標、
+# 不用移動，走自己的 _pursue_murmur_task()，一次執行完就退出任務池
+#
+# give／shout 是 #158 接上的：跟 talk 一樣目標會動（give）或完全不需要目標
+# （shout），走各自的 _pursue_give_task()／_pursue_shout_task()，一次執行完
+# 就退出任務池，不像 nap 那類佔滿整段 duration。persuade 不在這裡——見 #227，
+# 它需要的待回應事實句機制目前完全沒有地基
+#
+# attack 是 #159 接上的：跟 give 同一套「目標會動、一次執行完就退出任務池」
+# 模式（_pursue_attack_task()），差別是必中（《99》P-28），resolve() 對它
+# 不擲骰，直接放行
+#
+# haul／struggle 是 #161 接上的：haul 是長動作，占住整段 duration（跟 nap 一樣），
+# 但不用 params.place —— 搬運去哪由搬運者自己決定。struggle 是短動作，只在被搬運
+# 時有效，走各自的 _pursue_struggle_task()，執行完就退出任務池
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "murmur", "give", "shout", "haul", "struggle", "attack"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -72,6 +98,27 @@ const MAX_PLAN_ITEMS := 10
 # （_today_plan_sentence()），單筆文字要是無上限，被誘導或壞掉的回應可以
 # 讓 prompt 越長越大。跟 MAX_LINE_CHARS 一樣的道理，數字也直接沿用
 const MAX_PLAN_TEXT_CHARS := MAX_LINE_CHARS
+
+# #224：LLM 任務 priority／duration 的合理範圍。實跑觀察到只給文字說明
+# 量級不夠——模型會回 Infinity、或 1e15／5000 這種有限但失控的數字，
+# 讓那筆任務在仲裁時永遠贏、永遠換不掉（見 agent.gd HYSTERESIS 的說明）。
+# 這裡是「真的保證」的第三層，跟送給模型的 json_schema minimum/maximum
+# （PromptBuilder.plan_response_schema，第一層）、prompt 文字量級說明
+# （PLAN_SYSTEM_TAIL，第二層）三層都設同一組數字，不是只靠其中一層。
+#
+# 上限 125：跟 agent.gd 的 TIME_BONUS(100)／SCHEDULE_BASE_PRIORITY(10) 對齊——
+# 進時間窗的 schedule 任務分數是 110，加 HYSTERESIS(5) 換任務門檻是 115；
+# 125 留一點餘裕給「這件事真的值得打斷正在做的事」的極端例外，但因為離
+# 日常範圍（10~50）有明顯間隔，prompt 措辭會把它講成罕見例外，不是常態
+const MIN_TASK_PRIORITY := 0.0
+const MAX_TASK_PRIORITY := 125.0
+
+# 上限 1440：一個完整遊戲日（分鐘）。duration 失控的後果比 priority 輕
+# （只是「這件事做久一點才問下一步」，不像 priority 失控會讓任務永久卡死），
+# 但還是要一個「怎麼樣都不該超過」的物理天花板；1440 不會誤傷合法的長時長
+# 任務（LLM 可能自己選 "sleep"，一覺睡到天亮可以到 8~14 小時＝480~840 分鐘）
+const MIN_TASK_DURATION := 0.0
+const MAX_TASK_DURATION := 1440.0
 
 const ERROR_NOT_JSON := "not_json"
 const ERROR_NOT_OBJECT := "not_object"
@@ -215,19 +262,61 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) ->
 		# 還沒有）：沒有 target 的 talk 任務會被 _pursue_talk_task() 誤判成
 		# 「目標不存在」一路帶進任務池才發現，不如在這一層就擋掉，跟這個檔案
 		# 「外來內容一律不信任」的原則一致，不等到執行層才發現資料是空的
-		if task["action"] == "talk":
+		if ["talk", "attack"].has(task["action"]):
 			var talk_params: Dictionary = task.get("params", {})
 			var target: Variant = talk_params.get("target")
 			if not target is String or (target as String).strip_edges().is_empty():
 				return _fail(ERROR_BAD_SHAPE)
 
-		if task.has("expires_at") and not (task["expires_at"] is int or task["expires_at"] is float):
+		# give 動作的 count 參數驗證：拒絕分數值（如 2.5），只接受整數或代表整數的浮點數（如 3.0）
+		# JSON 解析可能把整數解成浮點數，所以兩種型別都要接受，但必須是整數值
+		if task["action"] == "give":
+			var give_params: Dictionary = task.get("params", {})
+			if give_params.has("count"):
+				var count_value: Variant = give_params["count"]
+				if not (count_value is int or count_value is float):
+					return _fail(ERROR_BAD_SHAPE)
+				# INF 等於自己的 floor()，上面那個分數檢查放不住它，之後 int(INF)
+				# 又是不可靠的行為（實測過會生出平台相關的最小整數值）——跟 #224
+				# priority/duration 擋 INF／NaN 同一個理由，count 也不能少這關
+				if not is_finite(float(count_value)):
+					return _fail(ERROR_BAD_SHAPE)
+				# 拒絕分數：檢查浮點數是否等於其整數部分
+				if count_value is float and count_value != floor(count_value):
+					return _fail(ERROR_BAD_SHAPE)
+
+		# #224：is int/float 放行 INF／NAN——實測過模型真的會回 priority: Infinity
+		# （改完量級指引那次驗到的），INF 一旦被當成合法分數，仲裁器
+		# `best_score < current_score + HYSTERESIS` 永遠算不出「贏過它」，
+		# 那個任務就再也換不掉。expires_at 沒有定義過合理範圍，只補 is_finite()；
+		# 同一種外來內容不能信任的問題，沒理由只擋 priority 一個欄位
+		if task.has("expires_at") and not ((task["expires_at"] is int or task["expires_at"] is float) and is_finite(float(task["expires_at"]))):
 			return _fail(ERROR_BAD_SHAPE)
 
-		if task.has("duration") and not (task["duration"] is int or task["duration"] is float):
+		# duration／priority 現在是必填（見上面 plan_response_schema() 的
+		# required 清單同步改過）：兩者都要落在 MIN_TASK_*／MAX_TASK_* 範圍內，
+		# 缺欄位一律當失敗處理——不能只在「欄位存在」時才檢查範圍，模型乾脆
+		# 不給這兩個欄位就會繞過檢查，退回 .get(..., 0.0) 的預設值，
+		# 正好是想擋的那個退化情況（實測踩過這個漏洞）。這是三層保證裡
+		# 「真的保證」的那一層，json_schema 的 minimum/maximum／required
+		# （層 1）與 prompt 文字說明（層 2）都可能沒生效（provider 不支援
+		# schema、或模型沒照文字指示），這裡不能只信任前兩層
+		if not task.has("duration"):
+			return _fail(ERROR_BAD_SHAPE)
+		var duration_value: Variant = task["duration"]
+		if not (duration_value is int or duration_value is float):
+			return _fail(ERROR_BAD_SHAPE)
+		var duration_float := float(duration_value)
+		if not is_finite(duration_float) or duration_float <= MIN_TASK_DURATION or duration_float > MAX_TASK_DURATION:
 			return _fail(ERROR_BAD_SHAPE)
 
-		if task.has("priority") and not (task["priority"] is int or task["priority"] is float):
+		if not task.has("priority"):
+			return _fail(ERROR_BAD_SHAPE)
+		var priority_value: Variant = task["priority"]
+		if not (priority_value is int or priority_value is float):
+			return _fail(ERROR_BAD_SHAPE)
+		var priority_float := float(priority_value)
+		if not is_finite(priority_float) or priority_float < MIN_TASK_PRIORITY or priority_float > MAX_TASK_PRIORITY:
 			return _fail(ERROR_BAD_SHAPE)
 
 		# 只複製驗證過的欄位，不是原封不動放行 task。plan_response_schema() 沒有
@@ -347,6 +436,11 @@ static func validate_reflection(data: Dictionary) -> Dictionary:
 		var id_value: Variant = event["id"]
 		if not (id_value is int or id_value is float):
 			return _fail(ERROR_BAD_SHAPE)
+		# 帶小數的 id 直接拒絕，不做截斷——#210 之後呼叫端會拿這個 id 去跟
+		# events_sent 的整數 id 做嚴格比對，截斷值（1.5 → 1）若剛好撞上一個
+		# 真實存在的 id，會被誤判成合法匹配，等於放行一個幻覺出來的 id
+		if id_value is float and id_value != roundf(id_value):
+			return _fail(ERROR_BAD_SHAPE)
 		var event_id: int = int(id_value)
 
 		if not event.has("content") or not event["content"] is String:
@@ -381,6 +475,38 @@ static func validate_reflection(data: Dictionary) -> Dictionary:
 		})
 
 	return _ok({"summary": summary, "events": events})
+
+
+# 建角完成當下的一次性回應（《05》流程圖 ⑤，#122）：角色對自己性格設定的
+# 一句話吐槽。跟 validate_dialogue() 的 line 同一種必填、不可為空的態度——
+# 這通呼叫只打一次，沒有下一輪可以補救，空字串代表這次生成失敗，不是合法值
+static func validate_creation(data: Dictionary) -> Dictionary:
+	if not data.has("words_to_creator") or not data["words_to_creator"] is String:
+		return _fail(ERROR_BAD_SHAPE)
+
+	var text: String = (data["words_to_creator"] as String).strip_edges()
+	if text.is_empty():
+		return _fail(ERROR_BAD_SHAPE)
+	if text.length() > MAX_LINE_CHARS:
+		text = text.substr(0, MAX_LINE_CHARS)
+
+	return _ok({"words_to_creator": text})
+
+
+static func creation_response_schema() -> Dictionary:
+	return {
+		"type": "json_schema",
+		"json_schema": {
+			"name": "creation_response",
+			"schema": {
+				"type": "object",
+				"properties": {
+					"words_to_creator": {"type": "string", "maxLength": MAX_LINE_CHARS},
+				},
+				"required": ["words_to_creator"],
+			},
+		},
+	}
 
 
 # 選填字串欄位的共用驗證：缺席回空字串、型別錯回 null（呼叫端用 null 判斷失敗，
@@ -419,11 +545,11 @@ static func plan_response_schema(allow_update_plan: bool = false) -> Dictionary:
 				"properties": {
 					"action": {"type": "string", "enum": ALLOWED_ACTIONS},
 					"params": {"type": "object"},
-					"priority": {"type": "number"},
-					"duration": {"type": "number"},
+					"priority": {"type": "number", "minimum": MIN_TASK_PRIORITY, "maximum": MAX_TASK_PRIORITY},
+					"duration": {"type": "number", "exclusiveMinimum": MIN_TASK_DURATION, "maximum": MAX_TASK_DURATION},
 					"expires_at": {"type": "number"},
 				},
-				"required": ["action"],
+				"required": ["action", "priority", "duration"],
 			},
 		},
 	}

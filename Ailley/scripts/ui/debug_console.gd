@@ -31,6 +31,9 @@ func _ready() -> void:
 		"nav": {"run": _cmd_nav, "usage": "nav rebuild", "help": "HELP_NAV"},
 		"inv": {"run": _cmd_inv, "usage": "inv [name] / inv give <item_id> [count]", "help": "HELP_INV"},
 		"money": {"run": _cmd_money, "usage": "money <amount>", "help": "HELP_MONEY"},
+		# 同上，help 留空：#116 手動設定 emotion 用的 debug 入口，正式的角色資訊
+		# 面板（《15》）不做 emotion 手動編輯，這是唯一的手動設定方式
+		"emotion": {"run": _cmd_emotion, "usage": "emotion <name> <type> [intensity]", "help": ""},
 		"ai": {"run": _cmd_ai, "usage": "ai [dialogue] [@provider] [text]", "help": "HELP_AI"},
 		"locale": {"run": _cmd_locale, "usage": "locale [code]", "help": "HELP_LOCALE"},
 		# help 留空：先不進 locale/console.csv，避免動到翻譯資源匯入（這台機器上
@@ -41,6 +44,9 @@ func _ready() -> void:
 		# 同上，help 留空：#167 驗證記憶結構用的 debug 入口，之後有正式的
 		# 角色資訊面板（《15》）接上之後再收進正式指令表
 		"memory": {"run": _cmd_memory, "usage": "memory <name>", "help": ""},
+		# 同上，help 留空：#117 驗證人格注入用的 debug 入口。system_prompt 是
+		# 唯一送進 LLM 的人格表達，肉眼看不到它就沒辦法判斷人格有沒有真的接上
+		"persona": {"run": _cmd_persona, "usage": "persona <name>", "help": ""},
 		# 同上，help 留空：#168 手動觸發睡眠反思的 debug 入口。真正的睡眠動作
 		# （#112）落地前，這是端到端測試整條反思管線唯一的方式
 		"reflect": {"run": _cmd_reflect, "usage": "reflect <name>", "help": ""},
@@ -48,6 +54,11 @@ func _ready() -> void:
 		# debug 入口，之後有正式的建角面板/角色庫 UI（#122）接上之後再收進
 		# 正式指令表
 		"spawn": {"run": _cmd_spawn, "usage": "spawn <template_id>", "help": ""},
+		# 同上，help 留空：#122 玩家自建角色的入口。建角面板／角色庫首頁本身
+		# 沒有任何 HUD 按鈕可以點開（規格書 05 沒有定義掛點），比照 spawn 的
+		# 先例走 debug 指令打通管線，不等一個像素風的開場選單
+		"charnew": {"run": _cmd_charnew, "usage": "charnew", "help": ""},
+		"charlib": {"run": _cmd_charlib, "usage": "charlib", "help": ""},
 		# 同上，help 留空：#21 驗證 SaveService 讀寫進出點用的 debug 入口，
 		# 真正的存讀時機（睡前自動存檔等）是後續 issue 才接
 		"save": {"run": _cmd_save, "usage": "save", "help": ""},
@@ -326,6 +337,18 @@ func _cmd_status(args: PackedStringArray) -> void:
 	if snapshot["working"]:
 		_field("CON_FIELD_WORK", L10n.t("CON_STATE_ACTIVE"))
 
+	var emotion: Dictionary = snapshot["emotion"]
+	_field("CON_FIELD_EMOTION", "%s (intensity %d, %d tick)" % [
+		emotion["type"], emotion["intensity"], emotion["duration_left"]
+	])
+
+	var conditions: Array = snapshot["conditions"]
+	if not conditions.is_empty():
+		var parts: Array[String] = []
+		for c in conditions:
+			parts.append(str(c["type"]))
+		_field("CON_FIELD_CONDITIONS", SEP.join(parts))
+
 	# 直接掃 Stats.SPEC，所以之後加數值不用回來改這裡。
 	# SPEC 的 label 存的是翻譯 key，翻譯在這個顯示端做
 	if snapshot.has("stats"):
@@ -421,6 +444,34 @@ func _cmd_tasks(args: PackedStringArray) -> void:
 			score["total"], score["base"], score["time"], score["need"], score["age"],
 		])
 
+# persona <name>：印出這隻角色的 system_prompt（送給 LLM 的那一段）與 10 項
+# personality（引擎自己算成功率用的，不進 prompt）。#117 驗證用。
+#
+# 兩個都印是刻意的：這則的重點就是「同一份 HEXACO 輸入產出兩種表達，讀者不同」，
+# 只印一個看不出它們是同一份資料的兩面
+func _cmd_persona(args: PackedStringArray) -> void:
+	if args.size() != 1:
+		_error("persona <name>")
+		return
+
+	var character := _get_character(args[0])
+	if character == null:
+		return
+
+	_print("[color=88ccff]%s[/color][color=888888]  system_prompt（送進 LLM 的 system 段）[/color]" % character.character_name)
+	# system_prompt 的來源是 npc_schedule.json 的 character 欄位，那是人在資料檔
+	# 裡編輯的自由文字——進 RichTextLabel 前一律 escape，理由同 _cmd_memory()
+	_print("[color=888888]%s[/color]" % _escape_bbcode(character.system_prompt))
+
+	if character.personality.is_empty():
+		_print("[color=888888]personality：（沒有人格資料，成功率公式的人格項當 0）[/color]")
+		return
+
+	var parts: Array[String] = []
+	for key in character.personality:
+		parts.append("%s=%d" % [key, character.personality[key]])
+	_print("[color=888888]personality（引擎用，不進 prompt）：%s[/color]" % "  ".join(parts))
+
 # act <name> <action> [place|target]
 #
 # #112 驗證用：直接推一筆任務進 Agent 的池子，看它真的去做那個動作。走的是
@@ -451,11 +502,12 @@ func _cmd_act(args: PackedStringArray) -> void:
 		])
 		return
 
-	# talk 的參數是人不是地點（見 agent.gd::_pursue_talk_task()），其餘動作
-	# 一律吃 place。這裡照 action 分流，不要求下指令的人自己記得填哪個 key
+	# talk／attack 的參數是人不是地點（見 agent.gd::_pursue_talk_task()／
+	# _pursue_attack_task()），其餘動作一律吃 place。這裡照 action 分流，
+	# 不要求下指令的人自己記得填哪個 key
 	var params := {}
 	if args.size() == 3:
-		params["target" if action == "talk" else "place"] = args[2]
+		params["target" if ["talk", "attack"].has(action) else "place"] = args[2]
 
 	# is_in_group("agents") 不會幫 GDScript 縮窄靜態型別，顯式轉型才能讓
 	# debug_push_task()（Agent-only）這個呼叫真的是型別安全的
@@ -540,7 +592,7 @@ func _cmd_reflect(args: PackedStringArray) -> void:
 		_error("反思失敗（可能撞到速率限制或驗證失敗），今天的事留著，下次再試")
 		return
 
-	_print("[color=888888]反思完成，當日摘要：%s[/color]" % _escape_bbcode(character.last_reflection_summary))
+	_print("[color=888888]反思完成，當日摘要：%s[/color]" % _escape_bbcode(agent.last_reflection_summary))
 	_print("[color=888888]記憶列表：[/color]")
 	_cmd_memory(args)
 
@@ -568,6 +620,22 @@ func _cmd_spawn(args: PackedStringArray) -> void:
 	_print("[color=88ff88]生成角色 %s[/color][color=888888]  id %s[/color]" % [
 		character.character_name, character.character_id
 	])
+
+# charnew / charlib   開啟建角面板／角色庫首頁（#122）。兩個面板都用
+# group 找節點，本檔不持有直接參照——跟找角色用 get_tree() 找節點同一個理由
+func _cmd_charnew(_args: PackedStringArray) -> void:
+	var panel := get_tree().get_first_node_in_group("character_create_panel")
+	if panel == null:
+		_error("找不到建角面板")
+		return
+	panel.open()
+
+func _cmd_charlib(_args: PackedStringArray) -> void:
+	var panel := get_tree().get_first_node_in_group("character_library_panel")
+	if panel == null:
+		_error("找不到角色庫面板")
+		return
+	panel.open()
 
 # save   存下目前世界裡每個角色 + 這個世界本身。驗證 SaveService 的讀寫
 # 進出點確實接得起來（#21）——真正該在什麼時機自動存檔（睡前等）是後續 issue
@@ -798,6 +866,42 @@ const AI_PROBE_TEXT := "hello from ailley"
 # 連打兩次 ai dialogue 應該兩次都過
 #
 # 每次都先 reload_config()，玩家剛寫完 user://ai_config.json 不用重開遊戲
+# emotion <name> <type> [intensity]
+#
+# #116 AC 要求要有 debug 方式「手動設定/觀察」emotion；status 已經做了觀察，
+# 這裡補上設定的一半。intensity 省略時用 60（中等強度，好觀察 duration_left
+# 倒數而不用每次都手動打數字）
+func _cmd_emotion(args: PackedStringArray) -> void:
+	if args.size() < 2 or args.size() > 3:
+		_error(L10n.t("CON_USAGE_EMOTION"))
+		return
+
+	var character := _get_character(args[0])
+	if character == null:
+		return
+
+	var type := args[1]
+	if not Character.EMOTION_TYPES.has(type):
+		_error(L10n.tf("CON_EMOTION_INVALID_TYPE", {
+			"type": type, "valid": ", ".join(Character.EMOTION_TYPES)
+		}))
+		return
+
+	var intensity := 60
+	if args.size() == 3:
+		if not args[2].is_valid_int():
+			_error(L10n.t("CON_USAGE_EMOTION"))
+			return
+		intensity = args[2].to_int()
+
+	character.set_emotion(type, intensity)
+	_print(L10n.tf("CON_EMOTION_OK", {
+		"name": character.character_name,
+		"type": character.emotion["type"],
+		"intensity": character.emotion["intensity"],
+		"duration": character.emotion["duration_left"],
+	}))
+
 func _cmd_ai(args: PackedStringArray) -> void:
 	AIService.reload_config()
 	var config: AIConfig = AIService.config
