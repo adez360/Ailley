@@ -13,4 +13,6 @@ func _ready() -> void:
 	_on_time_changed(GameClock.hour, GameClock.minute)
 
 func _on_time_changed(hour: int, minute: int) -> void:
-	text = "%02d:%02d" % [hour, minute]
+	## GameClock 保證跨日時先發 day_changed 再發 time_changed（見 GameClock.gd:29），
+	## 所以這裡直接讀 GameClock.day 就是當下那天，不用另外訂閱 day_changed 自己存一份。
+	text = "第 %d 天 %02d:%02d" % [GameClock.day, hour, minute]

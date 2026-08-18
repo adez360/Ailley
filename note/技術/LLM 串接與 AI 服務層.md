@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-17
+updated: 2026-08-18
 ---
 
 # LLM 串接與 AI 服務層
@@ -86,9 +86,10 @@ WebSocket 在本專案有位置，但是**另一條線**：
 | `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers` 與全域的速率限制三個旋鈕 |
 | `ai_service.gd` | **正式線唯一碰網路的地方**。autoload。節點池、佇列、逾時、速率限制、重試 |
 | `ai_schema.gd` | 回應驗證：`JSON.parse_string` → null 檢查 → 逐欄位型別檢查 → `action` 白名單 |
-| `prompt_builder.gd` | 由 Character 組出請求信封。dialogue 信封已實作，plan 還沒 |
+| `prompt_builder.gd` | 由 Character 組出請求信封（dialogue／plan／reflection／creation 皆已實作）。system 段前綴每個角色的人格摘要，見下方「人格資料」 |
 
-`data/personas.json` — 人格資料，Agent 以 `@export var persona_id` 指定（尚未實作）。
+人格資料在 `npc_schedule.json` 的 `identities`（節點名查表），組成 system 段的
+第一截，見 [[人格與 System Prompt]]。
 
 > [!note] `user://` 在 repo 之外
 > Linux 下 `user://` ＝ `~/.local/share/godot/app_userdata/ailley4.3/`。
@@ -105,7 +106,7 @@ llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key
 	"enabled": true,
 	"default_provider": "local",
 	"providers": {
-		"local":      {"base_url": "http://127.0.0.1:8080/v1", "api_key": "", "model": "qwen2.5-7b-instruct", "timeout": 10.0},
+		"local":      {"base_url": "http://127.0.0.1:8080/v1", "api_key": "", "model": "qwen2.5-7b-instruct", "timeout": 10.0, "format_guaranteed": true},
 		"openrouter": {"base_url": "https://openrouter.ai/api/v1", "api_key": "sk-or-v1-…", "model": "openai/gpt-4o-mini", "timeout": 10.0}
 	},
 	"min_interval_sec": 30.0
@@ -148,8 +149,18 @@ llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key
 
 ## JSON 信封
 
-對話與行程**共用同一個信封**，用 `type` 區分。dialogue 那半邊已經實作
-（`PromptBuilder.build_dialogue_envelope()`），plan 還沒。
+對話與行程**共用同一個信封**，用 `type` 區分。dialogue／plan／reflection／
+creation 四種都已經實作（`PromptBuilder.build_dialogue_envelope()`／
+`build_plan_envelope()`／`build_reflection_envelope()`／
+`build_creation_envelope()`）。
+
+`creation` 是 #122 加的第四種：建角完成當下打一次的一次性呼叫（規格書 05
+流程圖 ⑤，`words_to_creator`——角色對自己性格設定的一句話吐槽）。這一刻
+角色還沒有 `Character` 節點（建角面板只丟出 Dictionary，投放才生節點），
+所以不沿用吃 `Character` 的 `_system()`，直接接剛算好的 `system_prompt`
+字串。呼叫端是 `GameManager.receive_created_character()`，fire-and-forget
+（跟 `workstation.gd::_run_work()` 同一種協程模式）：存檔本身不等這通請求，
+角色先進角色庫，AI 回應晚到只補 `words_to_creator` 這一個欄位。
 
 ### 請求
 
@@ -165,7 +176,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
   "type": "dialogue",
   "self": {
     "id": "agent", "name": "小明",
-    "stats": {"satiety": 42.0, "energy": 88.0, "social": 12.0, "fun": 60.0, "mood": 55.0},
+    "stats": {"satiety": 42.0, "hydration": 65.0, "stamina": 70.0, "wakefulness": 88.0, "hygiene": 60.0, "alcohol": 0.0, "health": 100.0, "injury": 0.0, "social": 12.0, "fun": 60.0, "mood": 55.0},
     "time": {"hour": 9, "minute": 30},
     "place": "farm",
     "current_action": "work"
@@ -434,23 +445,53 @@ provider，`RemoteLLMProvider` 建構時帶入要打哪個 provider 名字（對
 存不存在，但 `AIService.request()` 擋的條件是 `provider == null or not
 provider.valid`，只查存在會放行設定不全的項目、然後每次請求安靜失敗。
 
-每隻 Agent 出生時依 `decision_source`（`@export`，#122 落地前的佔位欄位，
-不是真實角色資料）建一次 provider，存成 `_provider` 成員變數，之後所有決策
-／對話呼叫都用它——對應《06》「`decision_source`／`model_name` 投放後不可改」，
-不是每次呼叫才重新判斷。三種資料異常都安靜退回 `LocalLLMProvider`、
-`push_warning` 帶原因：`decision_source` 打錯字／空字串；`"cloud"` 但
-`model_name` 是空的；`"cloud"` 但 `model_name` 不是可用的 provider。
-空字串要跟打錯字分開判斷，是因為不擋住的話它會被 `AIConfig.get_provider()`
-解析成 `default_provider`，讓角色實際打本機模型、卻頂著 `RemoteLLMProvider`
-的身分（連帶套用錯的重試次數），而且沒有任何警告。
+每隻 Agent 出生時依 `decision_source`（`@export`）建一次 provider，存成
+`_provider` 成員變數，之後所有決策／對話呼叫都用它——對應《06》
+「`decision_source`／`model_name` 投放後不可改」，不是每次呼叫才重新判斷。
+`decision_source`／`model_name` 這兩欄由 #122 的建角面板寫入、經
+`GameManager.deploy_from_library()` 在投放當下套進節點，不再是佔位值。
+
+> [!warning] 套欄位跟建 provider 的時序要對：套完要重建，不能只 set 完就算了
+> `spawn_character()` 內的 `add_child()` 會同步觸發 `_ready()`，`_provider`
+> 那時候就照 `@export` 當下的值（預設 `"local"`）建好了；`deploy_from_library()`
+> 是在 `spawn_character()` **回傳之後**才 `set()` 建角面板選的
+> `decision_source`／`model_name`，這時候才 set 已經來不及讓 `_provider`
+> 讀到新值（CodeRabbit review 抓到）。解法是 `agent.gd` 開一個公開的
+> `rebuild_provider()`（內容就是重跑一次 `_provider = _make_provider()`），
+> `deploy_from_library()` 套完兩個欄位後接著呼叫它。
+
+三種資料異常都安靜退回 `LocalLLMProvider`、`push_warning` 帶原因：
+`decision_source` 打錯字／空字串（含合法但未實作的 `"human"`，見下方
+「不在這一版」）；`"cloud"` 但 `model_name` 是空的；`"cloud"` 但 `model_name`
+沒有對應的可用 provider。
+
+> [!warning] `model_name` 存的是型號字串，不是 provider 名字——查表方向要反過來
+> 《06》規格與範例（`"model_name": "qwen2.5-7b-instruct"`）明講這欄是給玩家看
+> 的型號，不是 `AIConfig.providers` 字典的 key（如 `"openrouter"`，那只是玩家
+> 自己取的代號）。所以 `_make_provider()` 的 `cloud` 分支不能拿 `model_name`
+> 直接當 key 查 `AIConfig.get_provider()`（那是 #155 一開始的寫法，找不到會
+> 誤判成「provider 不存在」），要用 `AIConfig.get_provider_by_model(model_name)`
+> 反查——掃所有 provider 找 `.model` 相符的那一個，再用那個 provider 真正的
+> `.name` 建構 `RemoteLLMProvider`。`decision_source == "local"` 不受影響：
+> `LocalLLMProvider` 本來就無條件打字面值叫 `"local"` 的 provider，完全不讀
+> `model_name`，那一欄純粹是給角色面板顯示用的。
 
 `agent.gd::_decide_with_retry()` 集中處理「decide → parse_completion →
 validate」，內容驗證失敗（`parse_completion()` 或 `AISchema.validate_*()`
 回傳 `ok=false`）時依 `DecisionProvider.max_validation_retries()` 重試：
-`RemoteLLMProvider` 2 次（《12》§3.4／P-22 #3），`LocalLLMProvider` 0 次
-（GBNF 已在文法層保證格式，出錯代表更根本的問題，重試沒有意義）。
-`LocalLLMProvider` 退回 `default_provider` 的那條路例外，一樣給 2 次——
-打到的多半不是 GBNF 端點，「文法層已保證格式」這個前提不成立。
+`RemoteLLMProvider` 固定 2 次（《12》§3.4／P-22 #3）；`LocalLLMProvider` 改讀
+`AIConfig.get_provider(_provider_name).format_guaranteed`（#212）——這個 provider
+的輸出格式有沒有被文法層（如 GBNF）保證，true 給 0 次（保證格式，出錯代表更根本
+的問題，重試沒有意義）、false 給 2 次，不再用「provider 名字是不是字面值 `"local"`」
+判斷。玩家的 `ai_config.json` 要幫 `"local"` 那筆 provider 補上
+`"format_guaranteed": true` 才能維持原本的 0 次重試行為，沒補的話會安全退化成
+2 次（多重試幾次，不是正確性問題）。
+
+`DecisionProvider.decide()` 現在是共用的基底實作（#213），`LocalLLMProvider`／
+`RemoteLLMProvider` 都不再各自覆寫；`is_retry` 改包在 `DecisionContext`
+（`scripts/ai/decision_context.gd`）物件裡傳遞，不再是逐層宣告的 `bool` 參數
+（#217）——未來 `HumanInput`／`RemotePlayer` 新增請求層級中繼資訊時只改
+`DecisionContext` 加欄位，不用逐層加參數、逐層轉發。
 `AIService` 層級的失敗（見上方第 6 點）不進這個重試迴圈，直接回傳給呼叫端
 走 fallback——「這次問不到」與「問到了但答案壞掉」是兩種不同情境。
 
@@ -492,7 +533,6 @@ JSON Schema → GBNF 的轉換器。
       要先實跑量出「一場對話平均幾輪」才有辦法訂
 - [ ] 軟壓力（system prompt 叫模型「聊久了該收尾」）到底有沒有用，未知數
 - [ ] 尚未對真正的 OpenRouter 打過請求，TLS/DNS 與真實回應格式未驗證
-- [ ] 人格資料的欄位結構——`data/personas.json` 要放哪些欄位才夠組 system prompt
 - [ ] 成本上限機制的具體設計
 - [ ] 記憶系統上線前，Agent 的對話逐字稿要不要先存記憶體就好
 - [ ] `response_format` 的 json_schema 送出去之後，模型端真的照著回、還是仍需要
@@ -515,11 +555,17 @@ Godot 端也沒有任何程式呼叫它。下面是驗證期間量到、**還在
 | Godot `Stats.SPEC` | poc_village_sim `physiology` | 換算 |
 | --- | --- | --- |
 | `satiety`（100=飽→0=餓，原欄位名 `hunger`，2026-08-16 改名，見《99》P-32） | `hunger`（0=飽→100=餓） | **方向相反**：`poc_hunger = 100 - godot_satiety` |
-| `energy`（100=飽滿→0=沒力） | `stamina`（同方向） | 直接映射，不用轉 |
+| `stamina`（100=飽滿→0=沒力） | `stamina`（同方向） | 同名同方向，直接映射，不用轉 |
 | `fun`（100=不無聊→0=無聊） | `boredom`（方向相反） | **方向相反**：`poc_boredom = 100 - godot_fun` |
 | `social` | 無對應欄位 | poc 沒有獨立追蹤社交需求 |
 | `mood` | 無對應欄位 | poc 的「情緒」是 AI 自己宣告的 `emotion`，不是 physiology 數值 |
-| （無） | `thirst`／`health`／`money` | Godot `Stats.SPEC` 沒有這三項的資料來源 |
+| （無） | `money` | Godot `Stats.SPEC` 沒有這項的資料來源 |
+
+> [!note] `hydration`／`health` 現在 Stats.SPEC 有欄位了，但跟 poc 的方向對照還沒查證
+> 《01》§4-1 擴充（issue #115）之後 Godot 端已經有 `hydration`／`health`，
+> 對得上 poc 的 `thirst`／`health`。但 poc_village_sim 是本機獨立專案、不在這個
+> repo，這兩項實際的 range 與方向沒有查過原始碼確認，不能照抄 `hunger`／`stamina`
+> 的既有換算模式假設。之後真的要移植門檻邏輯時，要先讀 poc 原始碼補上這兩列。
 
 > [!warning] 給之後寫正式 GDScript 版本的人（確認是使用者自己，見上方 2026-08-12 更新）
 > 如果那份重寫照抄了 poc_village_sim 已驗證過的門檻邏輯（`characters.py` 的
