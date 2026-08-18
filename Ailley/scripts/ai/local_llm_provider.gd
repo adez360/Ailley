@@ -5,9 +5,6 @@ extends DecisionProvider
 ## note/技術/LLM 串接與 AI 服務層.md 的設定慣例）。
 const PROVIDER_NAME := "local"
 
-## 實際要傳給 AIService.request() 的名字：PROVIDER_NAME，或退回 "" (＝ default_provider)
-var _provider_name: String
-
 ## 玩家的 ai_config.json 不保證真的有一個可用的 "local" provider（可能只設了
 ## default_provider、取了別的名字，或有這個項目但 base_url/model 沒填齊）。直接把
 ## PROVIDER_NAME 硬傳給 AIService.request() 的話，這些情況一律是 ERROR_NO_PROVIDER，
@@ -23,13 +20,11 @@ func _init() -> void:
 	_provider_name = ""
 
 
-func decide(envelope: Dictionary, requester_id: String, policy: AIService.Policy, is_retry: bool = false) -> Dictionary:
-	return await AIService.request(envelope, requester_id, policy, _provider_name, is_retry)
-
-
 ## 《12》§3.4 說本地無重試語意，理由是本地靠 GBNF 在文法層保證格式，重試沒有意義。
-## 但退回 default_provider 之後打到的多半不是那個 GBNF 端點，那個理由就不成立了，
-## 此時比照 RemoteLLMProvider 給 2 次——不然同一個雲端模型，decision_source="cloud"
-## 有 2 次重試、走 local fallback 進來卻是驗證失敗就直接掛掉
+## 但退回 default_provider 之後打到的多半不是那個 GBNF 端點，那個理由就不成立了。
+## #212：改問 AIConfig.Provider.format_guaranteed 這個宣告出來的能力，不再用
+## 「provider 名字是不是字面值 "local"」判斷——名字只是我們自己取的識別字，
+## 真正決定「有沒有格式保證」的是設定檔那筆 provider 自己的屬性
 func max_validation_retries() -> int:
-	return 0 if _provider_name == PROVIDER_NAME else 2
+	var provider := AIService.config.get_provider(_provider_name)
+	return 0 if provider != null and provider.format_guaranteed else 2

@@ -86,9 +86,10 @@ WebSocket 在本專案有位置，但是**另一條線**：
 | `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers` 與全域的速率限制三個旋鈕 |
 | `ai_service.gd` | **正式線唯一碰網路的地方**。autoload。節點池、佇列、逾時、速率限制、重試 |
 | `ai_schema.gd` | 回應驗證：`JSON.parse_string` → null 檢查 → 逐欄位型別檢查 → `action` 白名單 |
-| `prompt_builder.gd` | 由 Character 組出請求信封。dialogue 信封已實作，plan 還沒 |
+| `prompt_builder.gd` | 由 Character 組出請求信封（dialogue／plan／reflection 皆已實作）。system 段前綴每個角色的人格摘要，見下方「人格資料」 |
 
-`data/personas.json` — 人格資料，Agent 以 `@export var persona_id` 指定（尚未實作）。
+人格資料在 `npc_schedule.json` 的 `identities`（節點名查表），組成 system 段的
+第一截，見 [[人格與 System Prompt]]。
 
 > [!note] `user://` 在 repo 之外
 > Linux 下 `user://` ＝ `~/.local/share/godot/app_userdata/ailley4.3/`。
@@ -105,7 +106,7 @@ llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key
 	"enabled": true,
 	"default_provider": "local",
 	"providers": {
-		"local":      {"base_url": "http://127.0.0.1:8080/v1", "api_key": "", "model": "qwen2.5-7b-instruct", "timeout": 10.0},
+		"local":      {"base_url": "http://127.0.0.1:8080/v1", "api_key": "", "model": "qwen2.5-7b-instruct", "timeout": 10.0, "format_guaranteed": true},
 		"openrouter": {"base_url": "https://openrouter.ai/api/v1", "api_key": "sk-or-v1-…", "model": "openai/gpt-4o-mini", "timeout": 10.0}
 	},
 	"min_interval_sec": 30.0
@@ -148,8 +149,9 @@ llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key
 
 ## JSON 信封
 
-對話與行程**共用同一個信封**，用 `type` 區分。dialogue 那半邊已經實作
-（`PromptBuilder.build_dialogue_envelope()`），plan 還沒。
+對話與行程**共用同一個信封**，用 `type` 區分。dialogue／plan／reflection
+三種都已經實作（`PromptBuilder.build_dialogue_envelope()`／
+`build_plan_envelope()`／`build_reflection_envelope()`）。
 
 ### 請求
 
@@ -447,10 +449,19 @@ provider.valid`，只查存在會放行設定不全的項目、然後每次請�
 `agent.gd::_decide_with_retry()` 集中處理「decide → parse_completion →
 validate」，內容驗證失敗（`parse_completion()` 或 `AISchema.validate_*()`
 回傳 `ok=false`）時依 `DecisionProvider.max_validation_retries()` 重試：
-`RemoteLLMProvider` 2 次（《12》§3.4／P-22 #3），`LocalLLMProvider` 0 次
-（GBNF 已在文法層保證格式，出錯代表更根本的問題，重試沒有意義）。
-`LocalLLMProvider` 退回 `default_provider` 的那條路例外，一樣給 2 次——
-打到的多半不是 GBNF 端點，「文法層已保證格式」這個前提不成立。
+`RemoteLLMProvider` 固定 2 次（《12》§3.4／P-22 #3）；`LocalLLMProvider` 改讀
+`AIConfig.get_provider(_provider_name).format_guaranteed`（#212）——這個 provider
+的輸出格式有沒有被文法層（如 GBNF）保證，true 給 0 次（保證格式，出錯代表更根本
+的問題，重試沒有意義）、false 給 2 次，不再用「provider 名字是不是字面值 `"local"`」
+判斷。玩家的 `ai_config.json` 要幫 `"local"` 那筆 provider 補上
+`"format_guaranteed": true` 才能維持原本的 0 次重試行為，沒補的話會安全退化成
+2 次（多重試幾次，不是正確性問題）。
+
+`DecisionProvider.decide()` 現在是共用的基底實作（#213），`LocalLLMProvider`／
+`RemoteLLMProvider` 都不再各自覆寫；`is_retry` 改包在 `DecisionContext`
+（`scripts/ai/decision_context.gd`）物件裡傳遞，不再是逐層宣告的 `bool` 參數
+（#217）——未來 `HumanInput`／`RemotePlayer` 新增請求層級中繼資訊時只改
+`DecisionContext` 加欄位，不用逐層加參數、逐層轉發。
 `AIService` 層級的失敗（見上方第 6 點）不進這個重試迴圈，直接回傳給呼叫端
 走 fallback——「這次問不到」與「問到了但答案壞掉」是兩種不同情境。
 
@@ -492,7 +503,6 @@ JSON Schema → GBNF 的轉換器。
       要先實跑量出「一場對話平均幾輪」才有辦法訂
 - [ ] 軟壓力（system prompt 叫模型「聊久了該收尾」）到底有沒有用，未知數
 - [ ] 尚未對真正的 OpenRouter 打過請求，TLS/DNS 與真實回應格式未驗證
-- [ ] 人格資料的欄位結構——`data/personas.json` 要放哪些欄位才夠組 system prompt
 - [ ] 成本上限機制的具體設計
 - [ ] 記憶系統上線前，Agent 的對話逐字稿要不要先存記憶體就好
 - [ ] `response_format` 的 json_schema 送出去之後，模型端真的照著回、還是仍需要

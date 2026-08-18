@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-16
+updated: 2026-08-17
 ---
 
 # Character 基底與 Agent
@@ -232,6 +232,57 @@ Agent/Agent2 是場景裡的靜態節點，`_ready()` 時自己查表更貼近�
 > 存檔還沒接上、沒有任何持久化資料綁在這兩個值上，改動成本目前是零；
 > 要對齊規格就趁現在。追蹤見 issue #69 的 PR 討論。
 
+## 情緒 emotion 與特殊狀態 conditions
+
+`emotion`（單一物件）與 `conditions`（陣列）都直接是 `Character` 的欄位，不掛在
+`Stats` 底下——規格書《02》把兩者定義成獨立於生理數值的狀態層，`Stats` 只管
+`SPEC` 驅動的數值本身。`conditions` 的門檻檢查（`_update_conditions()`）讀
+`stats.get_value()`，但寫入的是 `Character.conditions`。
+
+> [!important] 「tick」= 10 遊戲分鐘，不是獨立的 tick 引擎、也不是 GameClock 的一遊戲分鐘
+> 規格書《02》§1-4 定義 12 tick = 2 遊戲小時（120 遊戲分鐘），也就是 1 tick = 10 遊戲分鐘
+> ——用規格書自己的算例反查就對得起來：joy intensity=60、stability=90、grudge=75 算出
+> 9 tick，規格書寫「約 1.5 小時」＝90 遊戲分鐘。專案目前沒有事件驅動的 tick 引擎
+> （見《02》§4 的流程圖，那套還沒實作），`emotion.duration_left` 與 `_update_conditions()`
+> 的門檻重新檢查都掛在 `GameClock.time_changed`（每遊戲分鐘觸發一次）上，但用
+> `Character._tick_minute_accum` 每累積 10 次才真正跑一次 tick，不是每次 `time_changed`
+> 都跑。這跟 `Stats._process(delta)` 的連續 real-time drift 是兩套不同的時間模型——
+> `Stats` 的「每 tick」drift 值是直接當「每真實秒」在用，沒有經過 GameClock，也沒有
+> 10 倍的换算。兩邊是刻意不同調的兩套機制，日後真的做 tick 引擎時要分別處理。
+
+### emotion（`set_emotion()`）
+
+- `type` 限定在 8 種定案 enum（`Character.EMOTION_TYPES`），`duration_left` 由
+  `_calc_emotion_duration()` 依《02》§1-4 公式算，夾制 1~144 tick
+- 公式吃 `stability`／`grudge` 兩個人格係數，人格資料還沒接上 `Character`（#117），
+  呼叫端拿不到真實值時用 50.0（中性值）當預設——比照 `memory.gd::decay_all()`
+  對 `grudge` 的既有做法，等 #117 落地後呼叫端改傳真實值即可，`set_emotion()`
+  本身不用改
+- `AISchema`／`prompt_builder.gd` 的 LLM 輸出端與 prompt 注入**沒有一併做**
+  （#116 本文列為選做項），目前只有 debug 主控台 `emotion <name> <type> [intensity]`
+  能手動觸發
+
+### conditions（`_update_conditions()`）
+
+8 種生理衍生 condition 全部「門檻自動」，每遊戲分鐘重新檢查一次：
+
+| 只做偵測 | 偵測＋直接數值效果 |
+| --- | --- |
+| `injured`／`drunk`／`sleepy`／`filthy` | `bleeding`（health −1.5/tick）／`starving`（health −0.5/tick）／`dehydrated`（health −1.0/tick） |
+
+`exhausted`（`stamina = 0`）目前也只做偵測——規格書寫的「強制昏睡」效果
+是行動佔用邏輯的一部分，留給接手 #160（昏迷狀態）的那則實作。
+
+行為成功率／說真心話機率（`injured`／`drunk` 的效果）刻意不做，留給 #120
+（成功率／硬規則檢查層）；`filthy` 的效果留給《99》P-35 重新設計。
+
+> [!important] `bleeding` 期間 `injury` 的自然衰減暫停，是 `Stats.injury_decay_paused` 一個 bool
+> 沒有做成通用的「暫停任意 key 的 drift」機制——目前全規格書只有這一個例外
+> （《02》§2-2 附注），加一個只為單一呼叫端存在的通用機制是提前的抽象化。
+> `Character._update_conditions()` 每次檢查完就把這個 bool 設成
+> `has_condition("bleeding")` 的目前值，`Stats._process()` 只在這個 key 上多一行
+> `continue`。真的出現第二個需要暫停 drift 的欄位時再抽成通用機制。
+
 ## 未做
 
 - Agent 不會對 `Stats` 反應，數值只是持續遞減。
@@ -241,7 +292,8 @@ Agent/Agent2 是場景裡的靜態節點，`_ready()` 時自己查表更貼近�
   已定義 15 個正式地點（一地點一筆記，見《[[Ailley]]》規格書索引），跟這裡的四個測試
   錨點名字對不上（`farm`/`restaurant`/`square` 等不在那 15 個裡），換真地圖時要重新對照
 - 行程表是靜態 JSON，之後換成 AI 維護的版本，見 [[行程佇列與任務仲裁]]
-- 兩隻 Agent 的行程與身分（`character_id` / 顯示名）已經不同，但**人格還沒有**：
-  沒有 `persona_id`，兩隻的性格參數仍然一模一樣
+- 兩隻 Agent 的行程、身分（`character_id` / 顯示名）與人格（`hexaco` + `character`
+  自述，寫在 `npc_schedule.json` 的 `identities`）都已經不同，見
+  [[人格與 System Prompt]]
 - 兩隻的家都是 `home_001`。已拍板「家要各自不同」（規格書《01》§1-1 `home_location_id`、
   《07_地點/家》），但還沒實作——地圖上要放幾間房子、怎麼指派給角色仍待規劃（《99》P-17 #12）
