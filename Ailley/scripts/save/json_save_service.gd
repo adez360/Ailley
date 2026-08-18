@@ -12,7 +12,12 @@ extends "res://scripts/save/save_service.gd"
 ## ERR_ALREADY_EXISTS，兩個 process 同時搶只會有一個拿到 OK，這是作業系統
 ## 保證的原子操作，不會像「先讀鎖檔內容、判斷沒人持有、再寫檔」那樣中間有
 ## 空窗期讓兩個 process 都以為自己搶到。鎖目錄底下放一個 info.json 記
-## { pid, acquired_at }，只有原子搶到閘門的那個 process 會寫它，不會跟人搶寫。
+## { pid, acquired_at }，只有原子搶到閘門的那個 process 會寫它，不會跟人搶寫；
+## 寫失敗就把閘門讓出來（見 _finish_acquire()），不留下搶到閘門卻沒人知道
+## 是誰的孤兒鎖。閘門建立跟 info.json 寫入這兩步不是同一個原子操作，看到
+## 閘門存在但讀不到 info.json 時用短暫重試分辨「剛贏的人還沒寫完」跟
+## 「真的是孤兒鎖」（見 _read_lock_info_confirmed()），不會把剛贏的人誤判成
+## 死鎖搶走。
 ##
 ## 存活判定問系統的 process 清單（_is_pid_alive()）——這一層要防的是兩個各自
 ## 獨立的 Godot process（例如兩個世界各自的 session）搶寫同一份存檔，PID 存活
@@ -62,13 +67,13 @@ func save_world(id: String, data: Dictionary) -> bool:
 	return _write(WORLDS_DIR, id, data)
 
 
-## process 正常結束時釋放這個 process 持有的所有鎖。當機（沒走到這裡）留下的
-## 鎖靠 _acquire_write_lock() 的存活判定接手，不靠這裡清
+## process 正常結束時釋放這個 process 持有的所有鎖。_held_locks 只會記這個
+## process 自己確認寫入成功的鎖（見 _finish_acquire()），不需要重讀 info.json
+## 再三確認是不是自己的。當機（沒走到這裡）留下的鎖靠 _acquire_write_lock()
+## 的存活判定接手，不靠這裡清
 func _exit_tree() -> void:
 	for lock_dir in _held_locks.keys():
-		var holder := _read_lock_info(lock_dir)
-		if int(holder.get("pid", -1)) == OS.get_process_id():
-			_remove_lock_dir(lock_dir)
+		_remove_lock_dir(lock_dir)
 	_held_locks.clear()
 
 
@@ -84,12 +89,12 @@ func _acquire_write_lock(path: String) -> bool:
 		DirAccess.make_dir_recursive_absolute(dir)
 
 	if DirAccess.make_dir_absolute(lock_dir) == OK:
-		_write_lock_info(lock_dir)
-		_held_locks[lock_dir] = true
-		return true
+		return _finish_acquire(lock_dir, path)
 
-	# 閘門已存在：可能是活著的別人持有，也可能是當機留下的死鎖
-	var holder := _read_lock_info(lock_dir)
+	# 閘門已存在：可能是活著的別人持有、剛搶到閘門但 info.json 還沒寫完
+	# （用短暫重試分辨，見 _read_lock_info_confirmed() 註解），也可能是
+	# 當機留下的死鎖
+	var holder := _read_lock_info_confirmed(lock_dir)
 	var holder_pid := int(holder.get("pid", -1))
 	if holder_pid > 0 and holder_pid != OS.get_process_id() and _is_pid_alive(holder_pid):
 		push_error("JsonSaveService: %s 寫入權目前被 PID %d 持有（於 %s 取得），本次寫入被拒絕" % [
@@ -104,35 +109,67 @@ func _acquire_write_lock(path: String) -> bool:
 		push_error("JsonSaveService: %s 接手死鎖失敗，可能被別的 process 搶先接手，本次寫入被拒絕" % path)
 		return false
 
-	_write_lock_info(lock_dir)
+	return _finish_acquire(lock_dir, path)
+
+
+## 原子搶到閘門之後才會呼叫：把鎖資訊寫進去確認所有權，寫失敗就把閘門讓出來
+## （fail-closed，不留一個「搶到閘門但沒人知道是誰」的孤兒鎖），不設定
+## _held_locks、回傳 false
+func _finish_acquire(lock_dir: String, path: String) -> bool:
+	if not _write_lock_info(lock_dir):
+		push_error("JsonSaveService: %s 鎖資訊寫入失敗，讓出鎖定，本次寫入被拒絕" % path)
+		_remove_lock_dir(lock_dir)
+		return false
 	_held_locks[lock_dir] = true
 	return true
 
 
-func _write_lock_info(lock_dir: String) -> void:
+func _write_lock_info(lock_dir: String) -> bool:
 	var file := FileAccess.open(lock_dir.path_join(LOCK_INFO_FILENAME), FileAccess.WRITE)
 	if file == null:
 		push_error("JsonSaveService: 無法寫入鎖資訊 %s（%s）" % [lock_dir, error_string(FileAccess.get_open_error())])
-		return
+		return false
 	file.store_string(JSON.stringify({
 		"pid": OS.get_process_id(),
 		"acquired_at": Time.get_unix_time_from_system(),
 	}))
 	file.close()
+	return true
 
 
-func _read_lock_info(lock_dir: String) -> Dictionary:
+## 閘門目錄跟 info.json 不是同一個原子操作寫進去的（閘門的原子性只保證
+## 「只有一個 process 能成功建立目錄」，不保證它建完的瞬間 info.json 已經
+## 存在）。剛贏得閘門的 process 緊接著就會寫 info.json，正常情況下幾乎
+## 瞬間完成；如果讀到閘門存在但 info.json 還沒出現，用短暫重試分辨兩種情況：
+## 剛贏的人還沒寫完（重試幾次就會出現），或是真的當機／寫入失敗留下的孤兒
+## 閘門（重試完還是沒有）。
+##
+## 讀不到確認的持有者資訊——不管是還沒寫完就重試完了、閘門在重試期間被釋放、
+## 還是內容壞掉——一律回傳空 Dictionary，呼叫端會走死鎖接手路徑，不會卡死：
+## 這裡要 fail-closed 的只有「這一次搶鎖」本身（讀不到活著的持有者就不能
+## 貿然宣告拿到手），不能連下一次搶鎖都一起卡住，否則等於要玩家手動砍檔
+## 案才能復原，違背 #23 的當機復原要求。
+func _read_lock_info_confirmed(lock_dir: String) -> Dictionary:
+	const RETRIES := 3
+	const RETRY_DELAY_MSEC := 20
+
 	var info_path := lock_dir.path_join(LOCK_INFO_FILENAME)
-	if not FileAccess.file_exists(info_path):
-		return {}
+	for attempt in RETRIES:
+		if not DirAccess.dir_exists_absolute(lock_dir):
+			return {} # 閘門在重試期間被原本的持有者釋放了，視同沒有鎖
 
-	var file := FileAccess.open(info_path, FileAccess.READ)
-	if file == null:
-		return {}
+		if FileAccess.file_exists(info_path):
+			var file := FileAccess.open(info_path, FileAccess.READ)
+			if file != null:
+				var parsed = JSON.parse_string(file.get_as_text())
+				file.close()
+				if parsed is Dictionary:
+					return parsed
 
-	var parsed = JSON.parse_string(file.get_as_text())
-	file.close()
-	return parsed if parsed is Dictionary else {}
+		if attempt < RETRIES - 1:
+			OS.delay_msec(RETRY_DELAY_MSEC)
+
+	return {}
 
 
 func _remove_lock_dir(lock_dir: String) -> void:
