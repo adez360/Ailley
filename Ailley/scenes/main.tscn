@@ -282,20 +282,11 @@ position = Vector2(-120, 88)
 [node name="Agent3" parent="Node2D" instance=ExtResource("6_nnngi")]
 position = Vector2(-90, -60)
 
-[node name="Memory" type="Node" parent="Node2D/Agent3"]
-script = ExtResource("3_jscy8")
-
 [node name="Agent4" parent="Node2D" instance=ExtResource("6_nnngi")]
 position = Vector2(-60, -60)
 
-[node name="Memory" type="Node" parent="Node2D/Agent4"]
-script = ExtResource("3_jscy8")
-
 [node name="Agent5" parent="Node2D" instance=ExtResource("6_nnngi")]
 position = Vector2(-30, -60)
-
-[node name="Memory" type="Node" parent="Node2D/Agent5"]
-script = ExtResource("3_jscy8")
 
 [node name="DebugConsole" parent="." instance=ExtResource("6_pl1ev")]
 
