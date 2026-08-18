@@ -922,15 +922,22 @@ func _reevaluate_once() -> void:
 
 	var now := "%02d:%02d" % [GameClock.hour, GameClock.minute]
 
+	# CodeRabbit review（#269）：過期任務先前只在下面的候選迴圈裡被 continue
+	# 跳過，從沒真的從 _tasks 移除——沒被選中又過期的 llm 任務會永久卡在池子
+	# 裡，持續佔用 LLM_TASK_POOL_CAP，直到角色重開機都清不掉；連 _current_task
+	# 過期時那條「清掉，不要留著」的路徑（見下面 elif 分支）也只清空了
+	# _current_task 這個變數本身，沒有把同一個 Dictionary 從 _tasks 裡拿掉。
+	# 在候選評分之前先單獨掃一次、真的 remove_at()，不論該任務是不是目前
+	# 正被 _current_task 指向；_current_task 過不過期、要不要換下一筆，仍由
+	# 後面既有的邏輯處理，這裡只負責把「已經確定沒機會了」的 Task 物件丟出池子
+	for i in range(_tasks.size() - 1, -1, -1):
+		if _is_expired(_tasks[i], now_minutes):
+			_tasks.remove_at(i)
+
 	var best: Dictionary = {}
 	var best_score := -INF
 
 	for task in _tasks:
-		# 過期任務不進入候選——expires_at 是「這件事的機會已經徹底過了」，
-		# 跟 window（「現在不是做這件事的時間，但之後還會再輪到」）是不同語意，
-		# 過期的候選不該被選中，也不該影響分數比較
-		if _is_expired(task, now_minutes):
-			continue
 		if not _in_window_or_unwindowed(task, now):
 			continue
 
