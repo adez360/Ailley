@@ -61,7 +61,7 @@ updated: 2026-08-18
 
 ## 附帶觀察
 
-第二輪第 27 次請求（GBNF 強制組）觸發過一次 `ai_schema.gd:102` 的
+第二輪 GBNF 強制組曾出現一次 `ai_schema.gd:102` 的
 `Exponent too high` 警告——跟第一輪記錄的那次一樣，是 priority 欄位飆出
 離譜大指數值的症狀（`AISchema` 的 `parse_object()` 解析數字時的邊界情況）。
 這個分支的 schema 仍是重構前的版本（`priority`/`duration` 型別是
