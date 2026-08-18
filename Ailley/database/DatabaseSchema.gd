@@ -40,6 +40,7 @@ static func initialize(db) -> bool:
 		# 01. World
 		# -------------------------------------------------
 
+		WorldSchema,
 		LocationSchema,
 
 
@@ -118,7 +119,14 @@ static func initialize(db) -> bool:
 
 		NPCWalletSchema,
 		MoneyTransactionSchema,
-		ItemTransactionSchema
+		ItemTransactionSchema,
+
+
+		# -------------------------------------------------
+		# 11. World Character State
+		# -------------------------------------------------
+
+		WorldCharacterStateSchema
 	]
 
 

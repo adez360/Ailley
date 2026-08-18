@@ -1177,6 +1177,12 @@ func _pursue_current_task() -> void:
 	if _reacting:
 		return
 
+	# murmur 沒有目標、也不用移動——講給自己聽當下就結束，不屬於「走到某個
+	# 地點」這件事，要另外分流，不能落進下面的地點判斷
+	if current_state == "murmur":
+		_pursue_murmur_task()
+		return
+
 	# give／shout 跟 talk 一樣要另外分流，不能落進下面的地點判斷：give 的目標是
 	# 會動的角色（跟 talk 同理），shout 則完全沒有 place／target 可言——原地喊
 	# 一聲就結束，不屬於「走到某個地點」這件事
@@ -1259,6 +1265,34 @@ func _pursue_talk_task() -> void:
 			return
 
 	var target_name: String = str(_current_task.get("params", {}).get("target", ""))
+
+	# schedule talk（target_name 為空）需要先到達指定地點再找人聊。
+	# LLM talk（target_name 非空）維持現有行為：直接追蹤目標角色。
+	if target_name.is_empty() and not current_place.is_empty():
+		var anchors := get_tree().get_first_node_in_group("place_anchors")
+		if anchors == null or not anchors.has(current_place):
+			if current_place != _pursued_place:
+				push_error("Agent %s: 沒有這個地點 %s" % [character_name, current_place])
+				_pursued_place = current_place
+			return
+
+		var place_pos: Vector2 = anchors.resolve(current_place)
+		if not _has_arrived_at(place_pos):
+			# 還沒到——跟 _pursue_current_task() 的節流邏輯一樣：
+			# 同一個地點只起步一次，還在走就繼續走
+			if current_place == _pursued_place and (is_moving() or _pursuit_done):
+				return
+			_pursued_place = current_place
+			_pursuit_done = false
+			if not move_to(place_pos):
+				push_warning("Agent %s: 走不到搭話地點 %s" % [character_name, current_place])
+				_pursuit_done = true
+			return
+		# 到了——停下、標記，繼續往下找人
+		stop_moving()
+		_pursued_place = current_place
+		_pursuit_done = true
+
 	var target := _find_character_by_name(target_name)
 
 	if target == null:
@@ -1307,6 +1341,38 @@ func _pursue_talk_task() -> void:
 
 	if _talk_pursuit_stuck_ticks == 3:
 		push_warning("Agent %s: 追不上搭話對象 %s，可能被卡住" % [character_name, target.character_name])
+
+# murmur 任務的執行（#162）：沒有目標、不用移動，講給自己聽當下就結束——不像
+# talk 要追著會動的目標走，也不像 nap／rest 那類要佔滿整段 duration。resolve()
+# 一過（murmur 沒有硬規則、不擲骰，恆成功）就講一句、立刻退出任務池
+func _pursue_murmur_task() -> void:
+	# CodeRabbit review：murmur 可能是從移動中的任務切換過來，不清掉舊路徑
+	# 的話角色會一邊沿用上一筆任務的移動、一邊講自語
+	if is_moving():
+		stop_moving()
+
+	var should_speak := true
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		should_speak = result["success"]
+
+	# 內容層跟 talk 同一套「模板先頂著，LLM 版之後再換」的分工（見
+	# note/技術/talk 動作設計.md）：murmur 沒有聽者，講的是給自己聽的話，
+	# 不能沿用 DialogueLines.reply() 那組面向對話對象的句子
+	if should_speak and stats != null:
+		say(DialogueLines.murmur(stats))
+
+	_remove_task(_current_task.get("id", ""))
+	_current_task = {}
+	current_place = ""
+	current_state = "idle"
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
+	# CodeRabbit review：_request_next_decision() 只有在非同步回應回來後才會
+	# 重新仲裁，不立刻補一次 _reevaluate() 的話，等回應期間排程或 fallback
+	# 任務不會被馬上接手，得空等到下一次 GameClock time_changed
+	_reevaluate()
 
 # 任務「做完了」的共同收尾：talk 判定失敗、give／shout 這種一次性動作執行完畢
 # 都要退出任務池、清掉目前任務狀態、主動補一次決策請求。
