@@ -170,3 +170,33 @@ func get_by_levels(levels: Array[int]) -> Dictionary[int, Array]:
 
 func _on_day_changed(_day: int) -> void:
 	decay_all()
+
+
+# ---- 存檔 ----
+
+## 只存 L2／L4，見 note/技術/存檔.md「記憶怎麼存」：L1 每局可重建、不用存；
+## L3（長期記憶庫）MVP 不做向量檢索，沒有檢索就沒有東西會再讀到它，存了也
+## 用不上。跟 Relationships.get_save_data() 同一套規則——直接吐內部資料，
+## 不另外包裝
+func get_save_data() -> Dictionary:
+	var saved: Array[Dictionary] = []
+	for entry in entries:
+		if entry["level"] == 2 or entry["level"] == 4:
+			saved.append(entry.duplicate(true))
+	return {"entries": saved}
+
+
+## 舊存檔沒有 memory 欄位時，呼叫端（Character.load_save_data()）根本不會
+## 呼叫這個函式，entries 維持初始的空陣列——不當成錯誤，見 AC。level 不是
+## 2／4 的項目防禦性略過（正常情況下不會發生，因為 get_save_data() 只寫這
+## 兩層，但存檔是外部檔案，不假設它沒被手改過）。_next_id 接續讀進來的最大
+## id，新記憶才不會撞號
+func load_save_data(data: Dictionary) -> void:
+	entries.clear()
+	_next_id = 0
+	for raw_entry in data.get("entries", []):
+		var entry: Dictionary = (raw_entry as Dictionary).duplicate(true)
+		if entry.get("level") != 2 and entry.get("level") != 4:
+			continue
+		entries.append(entry)
+		_next_id = maxi(_next_id, int(entry.get("id", 0)))

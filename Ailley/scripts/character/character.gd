@@ -832,7 +832,7 @@ func get_state_snapshot() -> Dictionary:
 
 # ---- 存檔 ----
 
-# 給 SaveService 存的角色資料：身分、數值、關係。跟 get_state_snapshot() 是
+# 給 SaveService 存的角色資料：身分、數值、關係、記憶（L2/L4）。跟 get_state_snapshot() 是
 # 兩份不同的東西，不要互相包裝——snapshot 要描述現況給 LLM 看（含 facing、
 # 動畫這類衍生狀態），這裡要能還原（座標屬於世界存檔，見 #21，不在這裡）
 func get_save_data() -> Dictionary:
@@ -845,6 +845,8 @@ func get_save_data() -> Dictionary:
 		data["stats"] = stats.get_save_data()
 	if relationships != null:
 		data["relationships"] = relationships.get_save_data()
+	if memory != null:
+		data["memory"] = memory.get_save_data()
 
 	return data
 
@@ -864,6 +866,8 @@ func load_save_data(data: Dictionary) -> void:
 		stats.load_save_data(data["stats"])
 	if relationships != null and data.has("relationships"):
 		relationships.load_save_data(data["relationships"])
+	if memory != null and data.has("memory"):
+		memory.load_save_data(data["memory"])
 
 
 # ---- 滑鼠選取 ----
