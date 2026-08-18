@@ -83,6 +83,19 @@ const HAUL_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
 const HAUL_TARGET_IS_SELF := "TARGET_IS_SELF"
 const HAUL_TOO_FAR := "TOO_FAR"
 
+const ATTACK_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE／GIVE_RANGE 一樣的距離門檻，2 格
+
+## attack() 的失敗原因碼，形狀比照 GIVE_*
+const ATTACK_OK := ""
+const ATTACK_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const ATTACK_TARGET_IS_SELF := "TARGET_IS_SELF"
+const ATTACK_TOO_FAR := "TOO_FAR"
+
+## 命中的數值效果（《99》P-28 已定案）：必中，MVP 不做閃避／格擋，
+## 不像 steal／persuade 等動作走 agent.gd 的 SUCCESS_PARAMS 擲骰
+const ATTACK_HEALTH_DELTA := -15.0
+const ATTACK_INJURY_DELTA := 20.0
+
 ## 滑鼠指到時套在 sprite 上的描邊
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
 
@@ -676,6 +689,20 @@ func make_noise(radius: float = NOISE_RADIUS) -> void:
 
 var _working := false
 
+## _end_work() 需要的 workstation 參照，讓 force_interrupt() 可以在不依賴
+## _run_work() 協程本地變數的情況下，自己也呼叫得到 _end_work()
+var _current_workstation: Workstation = null
+
+## 每次 _end_work() 遞增，_run_work() 協程在建立時記住當下的號碼。
+## force_interrupt()（見《02》§3「被攻擊立即中斷，含 work 中」）當下就直接
+## 呼叫 _end_work() 立即釋放工作站、收掉進度條——不能拖到 _run_work() 下一次
+## GameClock.time_changed 才收尾（CodeRabbit review 抓到）：那段空窗期
+## 工作站仍算「有人在用」，其他角色會被 WORK_OCCUPIED 擋下來，明明沒有人真的
+## 在那裡工作。協程醒來後比對號碼：跟目前的號碼對不上，代表這個 session
+## 已經被 force_interrupt() 提早收尾過，單純 return，不能重複呼叫
+## _end_work()——這時 workstation 可能已經被下一個佔用者用掉
+var _work_session_id := 0
+
 
 func is_working() -> bool:
 	return _working
@@ -694,10 +721,11 @@ func work_at(workstation: Workstation) -> String:
 		return WORK_OCCUPIED
 
 	_working = true
+	_current_workstation = workstation
 	stop_moving()
 	if work_progress != null:
 		work_progress.show_progress(0.0)
-	_run_work(workstation)
+	_run_work(workstation, _work_session_id)
 	return WORK_OK
 
 # 數 GameClock.time_changed 發了幾次來算「過了幾個遊戲分鐘」，不是掛
@@ -705,20 +733,25 @@ func work_at(workstation: Workstation) -> String:
 # 遊戲時間變速的話兩邊就會對不上。進度條每過一個遊戲分鐘更新一次，
 # 不是照 _process() 的 delta 平滑跑——工作本身就是離散地一分鐘一分鐘算，
 # 進度條應該老實反映這件事，不用假裝連續
-func _run_work(workstation: Workstation) -> void:
+func _run_work(workstation: Workstation, session_id: int) -> void:
 	for i in WORK_DURATION_MINUTES:
 		await GameClock.time_changed
 
-		# 這個協程橫跨 5 個遊戲分鐘，中間什麼都可能發生。兩件事要在每次醒來時重驗：
+		# 這個協程橫跨 5 個遊戲分鐘，中間什麼都可能發生。三件事要在每次醒來時重驗：
 		#
-		# 一、工作站可能已經被移除。await 之後直接 workstation.release() 會炸
+		# 一、這個 session 可能已經被 force_interrupt() 收尾過（見它的註解，
+		#     還可能已經被下一次 work_at() 蓋掉）——不是自己的號碼了就直接
+		#     return，不能對這時可能已經被別人用掉的 workstation 再收尾一次。
+		# 二、工作站可能已經被移除。await 之後直接 workstation.release() 會炸
 		#     「call function on a previously freed instance」。
-		# 二、角色可能自己走開了——Player 一按方向鍵就蓋掉 work_at() 的 stop_moving()，
+		# 三、角色可能自己走開了——Player 一按方向鍵就蓋掉 work_at() 的 stop_moving()，
 		#     `_working` 攔不住移動。不重驗距離的話，按下 E 之後跑到地圖另一頭，
 		#     時間到照樣入帳，而且這 5 分鐘工作站一直被卡著、現場卻沒人。
 		#
-		# 兩種都是「沒有做完」，所以收尾但不撥款：錢是站在這裡做滿的報酬，
+		# 後兩種都是「沒有做完」，所以收尾但不撥款：錢是站在這裡做滿的報酬，
 		# 不是按下 E 的報酬
+		if session_id != _work_session_id:
+			return
 		if not is_instance_valid(workstation) \
 				or get_body_position().distance_to(workstation.global_position) > WORK_RANGE:
 			_end_work(workstation)
@@ -737,6 +770,11 @@ func _end_work(workstation: Workstation) -> void:
 	if is_instance_valid(workstation):
 		workstation.release(self)
 	_working = false
+	_current_workstation = null
+	# 遞增號碼：如果這次收尾是 force_interrupt() 提早觸發的，_run_work() 的
+	# 協程還在等下一次 GameClock.time_changed，讓它醒來後比對號碼發現對不上，
+	# 知道 session 已經收尾過，不用再收一次
+	_work_session_id += 1
 	if work_progress != null:
 		work_progress.hide_progress()
 	_on_work_finished()
@@ -875,6 +913,56 @@ func give_to(other: Character, item_id: String, count: int = 1) -> String:
 	other.inventory.changed.emit()
 
 	return GIVE_OK
+
+
+# ---- 攻擊 ----
+
+## 攻擊命中必中——跟 steal／persuade 等動作不同，不依《01-2》§2 通用成功率
+## 公式擲骰，P-28 已拍板 MVP 不做閃避／格擋。硬規則只檢查目標是否存在、
+## 距離夠不夠近；命中後直接套用數值、強制中斷對方目前行動
+func attack(other: Character) -> String:
+	if other == null:
+		return ATTACK_TARGET_NOT_FOUND
+	if other == self:
+		return ATTACK_TARGET_IS_SELF
+	if get_body_position().distance_to(other.get_body_position()) > ATTACK_RANGE:
+		return ATTACK_TOO_FAR
+
+	if other.stats != null:
+		other.stats.add("health", ATTACK_HEALTH_DELTA)
+		other.stats.add("injury", ATTACK_INJURY_DELTA)
+		# 立即同步 bleeding／injury 衰減暫停，不等 _update_conditions() 的 10 分鐘
+		# 一次 tick——命中瞬間 injury 可能已經跨過 20 的門檻，晚同步的話這段空窗期
+		# injury 會繼續被 Stats._process() 的自然衰減蓋掉這次造成的傷害
+		other._set_condition(CONDITION_BLEEDING, other.stats.get_value("injury") >= 20.0)
+		other.stats.injury_decay_paused = other.has_condition(CONDITION_BLEEDING)
+	other.force_interrupt()
+	other._on_attacked(self)
+	return ATTACK_OK
+
+## 被攻擊的收尾鉤子。基底只是掛點——Player 沒有記憶系統可寫，只有 Agent
+## 需要把這件事記成事實句給下次決策／反思用（見 agent.gd 覆寫）
+func _on_attacked(_attacker: Character) -> void:
+	pass
+
+## 強制中斷目前行動，不徵詢 interruptible／能不能被搭話打斷——跟仲裁器的
+## 「搶占」判斷是兩回事，這裡是外部事件硬性發生（被攻擊等，《02》§3「立即
+## 中斷，含 work 中」）。工作中要立即呼叫 _end_work()：工作站的釋放與進度條
+## 收尾不能拖到 _run_work() 下一次 GameClock.time_changed 才做（CodeRabbit
+## review 抓到）——拖著的話那段空窗期工作站仍算「有人在用」，擋掉其他角色，
+## 而工作進度 UI 也還開著，跟角色已經不在工作的實際狀態對不上
+func force_interrupt() -> void:
+	stop_moving()
+	if is_in_conversation():
+		leave_conversation()
+	if _working:
+		_end_work(_current_workstation)
+	_on_action_interrupted()
+
+## 中斷後的收尾鉤子，讓子類別決定要不要重新規劃行程。基底不用管——
+## Player 沒有行程可言，只有 Agent 需要清目前任務並重新問決策
+func _on_action_interrupted() -> void:
+	pass
 
 
 # ---- 狀態快照 ----
