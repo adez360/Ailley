@@ -1182,7 +1182,7 @@ var db: SQLite
 var is_ready := false                        # false 時所有公開方法早退
 
 func query(sql: String, bindings: Array = []) -> bool
-func get_last_result() -> Array              # 上一次 query()/select() 的原始結果
+func get_last_result() -> Array              # 上一次 query()/select() 的原始結果；只查 db != null，不查 is_ready
 func select(table: String, conditions: String = "", columns: Array = ["*"]) -> Array
 func insert(table: String, data: Dictionary) -> bool
 func update(table: String, data: Dictionary, conditions: String) -> bool
@@ -1196,13 +1196,15 @@ func rollback_transaction() -> bool
 conditions 是原始 SQL WHERE 子句（不含 WHERE），只能由程式碼組，不可放模型/玩家輸入字串
 data 的值一律走 bindings 綁定，不拼進 SQL 字串
 select() 找不到列回傳 []，不是 error；update()/delete() 空 conditions 直接擋掉
-  （避免整表更新/清空），is_ready=false 時任何方法都回 false/[]
+  （避免整表更新/清空），is_ready=false 時除 get_last_result() 外都回 false/[]
+  （db 在 _ready() 一開頭就指派，早於 is_ready 判定，get_last_result() 只查
+  db != null，不查 is_ready）
 ⚠ insert() 走 addon 的 insert_row()，update()/delete() 不走 update_rows()/delete_rows()
   ——這兩個 addon 方法會把外層 begin_transaction() 開的交易提早 COMMIT 掉，改自己
   拼 query_with_bindings() 的 UPDATE/DELETE，值仍是綁定參數
 沒有重試／backoff：MVP 單一 process 對應單一連線，多 process 搶同一份 game.db
   目前沒有呼叫端會製造這個情境（無多人連線）
-→ 技術/存檔.md
+→ 技術/存檔
 ```
 
 ## data/
