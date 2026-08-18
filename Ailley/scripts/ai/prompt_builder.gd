@@ -250,6 +250,12 @@ static func _memory_block(character: Character) -> Dictionary:
 	var recent: Array[String] = []
 	for entry in buckets[2]:
 		recent.append(entry["content"])
+		# 《03》§4-2：被檢索到的記憶補回 decay_value（上限 DECAY_MAX），
+		# 否則這些記憶持續影響對話/決策卻照常衰減、終被刪除（CodeRabbit
+		# PR #200 抓到）。buckets 裡是 entries 的同一個 Dictionary 參照
+		# （get_by_levels 只分桶不複製），mark_retrieved 的改動會回饋回真正
+		# 存著的那一筆。L4 不衰減，不需要標
+		character.memory.mark_retrieved(entry)
 
 	var core: Array[String] = []
 	for entry in buckets[4]:
