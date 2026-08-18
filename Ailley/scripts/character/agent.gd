@@ -615,12 +615,17 @@ func _request_next_decision(allow_update_plan: bool = false) -> void:
 	var effective_allow_update_plan := allow_update_plan or _plan_update_requested
 	_plan_update_requested = false
 
+	# #268：捕一次 now_minutes，envelope 的 schema（送給模型的 expires_at 上限）
+	# 跟 validator 的驗證用同一個時間點——這通吃 await，重試之間可能過了不少
+	# 遊戲時間，用重新取得的「現在」驗證的話，範圍會跟模型當初收到的 schema
+	# 不一致，等於用一個模型從沒看過的更嚴格窗口去驗它的回應
+	var now_minutes := _now_minutes()
 	var visible: Array[Character] = vision.get_visible_characters() if vision != null else []
 	var envelope := PromptBuilder.build_plan_envelope(
-		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan
+		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan, now_minutes
 	)
 	var validator := func(data: Dictionary) -> Dictionary:
-		return AISchema.validate_tasks(data, effective_allow_update_plan)
+		return AISchema.validate_tasks(data, effective_allow_update_plan, now_minutes)
 
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	_awaiting_decision = false

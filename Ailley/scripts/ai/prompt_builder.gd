@@ -52,13 +52,21 @@ You cannot rewrite today_plan this turn. If you want the chance to on your next 
 ## 落在兩個分開的子區間，但這違背當初選連續數值（而非分類）的理由——
 ## _score() 是純加總公式，數值本來就該是連續的，挖洞等於做出一個「看起來
 ## 連續、其實不連續」的四不像。改成兩段**相鄰、不重疊**的子區間（10~110／
-## 111~125），[0,125] 整段都有明確意義，不需要額外的驗證分支；「很少用
-## 高分」單靠 prompt 措辭（明講 111~125 只給真的緊急）達成，不用驗證層
+## 緊急門檻~125），[0,125] 整段都有明確意義，不需要額外的驗證分支；「很少用
+## 高分」單靠 prompt 措辭（明講緊急門檻~125 只給真的緊急）達成，不用驗證層
 ## 物理擋一段數字。上下限數字用格式化帶入 AISchema 的
 ## MIN/MAX_TASK_PRIORITY、MAX_TASK_DURATION，不寫死——CodeRabbit review
 ## 抓到：常數改了這裡沒跟著改，prompt 講的量級會跟驗證層兜不起來
+##
+## #267：緊急門檻原本手寫死 111，但仲裁器 _consider_switch() 實際判斷是
+## `best_score < current_score + HYSTERESIS`——in-window 的 schedule 任務
+## score 是 SCHEDULE_BASE_PRIORITY+TIME_BONUS=110，加 HYSTERESIS(5) 換任務
+## 的門檻是 115，不是 111。111~114 這四個數字照 prompt 的範例老實回，一樣
+## 贏不過在窗任務，等於承諾了一件仲裁器做不到的事。改成從
+## Agent.SCHEDULE_BASE_PRIORITY／TIME_BONUS／HYSTERESIS 算出來，不是另一個
+## 手寫的數字——這三個常數改了，這裡的門檻會自動跟著動，不會再一次漂移
 const PLAN_SYSTEM_TAIL_TEMPLATE := """
-"priority" must be a number between %d and %d, on the same scale your schedule already uses. 10-110 is for ordinary preferences — a task already in its scheduled time window is worth 110, so an everyday preference at that level still won't outrank it. Only use 111-%d, and only for a genuine emergency happening right now (someone in danger, an attack) that would justify abandoning a meal or work already in progress — never for ordinary preferences.
+"priority" must be a number between %d and %d, on the same scale your schedule already uses. 10-110 is for ordinary preferences — a task already in its scheduled time window is worth 110, so an everyday preference at that level still won't outrank it. Only use %d-%d, and only for a genuine emergency happening right now (someone in danger, an attack) that would justify abandoning a meal or work already in progress — never for ordinary preferences.
 "duration" is your own estimate, in game minutes, of how long this action will take. It must be a positive number, up to %d (one full day) — never 0. Most actions take somewhere between 10 and 60 minutes; sleeping through the night can reasonably take several hundred.
 Reply with JSON only, no prose, no code fence:
 {"reasoning": "<why you decided this, brief>",
@@ -78,10 +86,16 @@ An empty "tasks" array means don't change anything."""
 static func _system(character: Character, rules: String) -> String:
 	return character.system_prompt + "\n\n" + rules
 
+## #267：緊急門檻 = 仲裁器真正用來比較的那個數字（進時間窗的 schedule 任務
+## 分數 SCHEDULE_BASE_PRIORITY+TIME_BONUS，加上要贏過它所需的 HYSTERESIS），
+## 從 Agent 的常數算出來，不是在這裡另外手寫一個
+static func _emergency_priority_threshold() -> int:
+	return int(Agent.SCHEDULE_BASE_PRIORITY + Agent.TIME_BONUS + Agent.HYSTERESIS)
+
 static func _plan_system_tail() -> String:
 	return PLAN_SYSTEM_TAIL_TEMPLATE % [
 		int(AISchema.MIN_TASK_PRIORITY), int(AISchema.MAX_TASK_PRIORITY),
-		int(AISchema.MAX_TASK_PRIORITY),
+		_emergency_priority_threshold(), int(AISchema.MAX_TASK_PRIORITY),
 		int(AISchema.MAX_TASK_DURATION),
 	]
 
@@ -194,9 +208,14 @@ static func turn_entry(speaker_name: String, text: String) -> Dictionary:
 ##
 ## allow_update_plan 決定要不要把 update_plan 這個條件式欄位放進 schema
 ## 跟提示詞（#89）——呼叫端（agent.gd）自己判斷現在是不是四個開放時機之一
+##
+## now_minutes（#268）：expires_at 的 schema 上限是相對現在的偏移量
+## （AISchema.MAX_EXPIRES_AT_OFFSET），要吃呼叫當下的絕對遊戲分鐘數
+## （agent.gd::_now_minutes()）才能算，呼叫端傳同一個值給
+## AISchema.validate_tasks()，兩邊用同一個時間點
 static func build_plan_envelope(
 	character: Character, visible: Array[Character], pool: Array[Dictionary],
-	today_plan: Array[Dictionary], allow_update_plan: bool
+	today_plan: Array[Dictionary], allow_update_plan: bool, now_minutes: int
 ) -> Dictionary:
 	var visible_block: Array[Dictionary] = []
 	for other in visible:
@@ -214,7 +233,7 @@ static func build_plan_envelope(
 				"memory": _memory_block(character),
 			},
 		},
-		"response_format": AISchema.plan_response_schema(allow_update_plan),
+		"response_format": AISchema.plan_response_schema(allow_update_plan, now_minutes),
 	}
 
 ## dialogue 與 plan 共用的角色自身區塊。直接沿用 get_state_snapshot()——
