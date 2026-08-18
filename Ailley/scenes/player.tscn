@@ -219,6 +219,9 @@ radius = 6.0
 [sub_resource type="CircleShape2D" id="CircleShape2D_6u2qc"]
 radius = 80.0
 
+[sub_resource type="CircleShape2D" id="CircleShape2D_y4r1p"]
+radius = 32.0
+
 [node name="Player" type="CharacterBody2D"]
 collision_layer = 2
 script = ExtResource("1_mbysm")
@@ -279,3 +282,11 @@ vertical_alignment = 1
 
 [node name="Memory" type="Node" parent="."]
 script = ExtResource("11_d2wvv")
+
+[node name="InteractArea" type="Area2D" parent="."]
+position = Vector2(0, 6)
+collision_layer = 0
+collision_mask = 4
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="InteractArea"]
+shape = SubResource("CircleShape2D_y4r1p")

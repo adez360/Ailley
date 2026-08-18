@@ -27,6 +27,11 @@ const TALK_TARGET_IS_SELF := "TARGET_IS_SELF"
 const TALK_TOO_FAR := "TOO_FAR"
 const TALK_TARGET_BUSY := "TARGET_BUSY"
 const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
+const TALK_TARGET_NOT_VISIBLE := "TARGET_NOT_VISIBLE"
+
+## 搭話的視線遮蔽判定用哪個 physics layer 擋。跟 vision.gd 的 blocker_mask
+## 同一個值（1 = terrain）——搭話比照視覺判定，人不是牆，不會互相擋視線
+const TALK_BLOCKER_MASK := 1
 
 const WORK_RANGE := 32.0		# 跟 TALK_RANGE 一樣的距離門檻，2 格
 
@@ -572,6 +577,8 @@ func talk_to(other: Character) -> String:
 		return TALK_TARGET_BUSY
 	if get_body_position().distance_to(other.get_body_position()) > TALK_RANGE:
 		return TALK_TOO_FAR
+	if not _has_line_of_sight(other):
+		return TALK_TARGET_NOT_VISIBLE
 	if not other.is_talk_interruptible():
 		return TALK_TARGET_UNINTERRUPTIBLE
 
@@ -584,21 +591,16 @@ func talk_to(other: Character) -> String:
 	get_tree().current_scene.add_child(conversation)
 	return TALK_OK
 
-# 找最近的可搭話對象。按鍵搭話用得到；指令是直接指名，不走這裡
-func find_nearest_character() -> Character:
-	var nearest: Character = null
-	var shortest := TALK_RANGE
-
-	for node in get_tree().get_nodes_in_group("characters"):
-		if node == self:
-			continue
-
-		var distance := get_body_position().distance_to(node.get_body_position())
-		if distance <= shortest:
-			shortest = distance
-			nearest = node
-
-	return nearest
+# 兩點之間有沒有牆擋住。跟 vision.gd 的 _has_line_of_sight() 同一個演算法
+# （direct_space_state 查 blocker_mask），但不透過 Vision 元件——talk_to() 可能
+# 被明確指名對象呼叫（debug 主控台、agent.gd 的 LLM 決策），這時候對象不一定
+# 在呼叫端 Vision 目前的可見集合裡（例如剛好卡在 0.2 秒的重新整理間隔之間），
+# 這裡要的是「現在這一刻真的擋不擋」，不是快取
+func _has_line_of_sight(other: Character) -> bool:
+	var params := PhysicsRayQueryParameters2D.create(
+		get_body_position(), other.get_body_position(), TALK_BLOCKER_MASK
+	)
+	return get_world_2d().direct_space_state.intersect_ray(params).is_empty()
 
 func enter_conversation(conversation: Node) -> void:
 	_conversation = conversation
@@ -678,25 +680,6 @@ var _working := false
 func is_working() -> bool:
 	return _working
 
-# 世界物件版的「找最近的」：量的是 global_position，因為工作站、販賣機這些
-# StaticBody2D 的原點就是它們的位置。find_nearest_character() 不走這條——
-# 它要跳過自己，而且量的是 get_body_position()（角色的碰撞體相對節點有偏移）
-func _find_nearest_in_group(group: String, max_distance: float) -> Node2D:
-	var nearest: Node2D = null
-	var shortest := max_distance
-
-	for node in get_tree().get_nodes_in_group(group):
-		var distance := get_body_position().distance_to(node.global_position)
-		if distance <= shortest:
-			shortest = distance
-			nearest = node
-
-	return nearest
-
-# 找最近的可工作地點。E 鍵在工作站、販賣機與人之間比距離挑最近的（見 player.gd）
-func find_nearest_workstation() -> Workstation:
-	return _find_nearest_in_group("workstations", WORK_RANGE) as Workstation
-
 # 開始在某個工作站工作。成功回傳 WORK_OK（空字串）不代表錢已經到手——
 # 這裡只負責卡位、開始計時，真正撥款在 _run_work()，時間到了才給，
 # 跟 talk_to() 開對話一樣是 fire-and-forget
@@ -766,9 +749,6 @@ func _on_work_finished() -> void:
 
 
 # ---- 購買 ----
-
-func find_nearest_vending_machine() -> VendingMachine:
-	return _find_nearest_in_group("vending_machines", BUY_RANGE) as VendingMachine
 
 # 跟販賣機買一件東西。買一件東西是兩件事，要一起成功（#63 明講的坑）：
 # spend() 扣款成功之後，add_item() 還是可能因為背包滿了回 ADD_NO_SPACE ——

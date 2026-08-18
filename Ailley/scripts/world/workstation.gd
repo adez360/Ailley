@@ -1,14 +1,14 @@
 class_name Workstation
 extends StaticBody2D
 
-## 可以工作賺錢的地點。距離判定交給 Character.find_nearest_workstation()／
-## work_at() 做（跟 TALK_RANGE 同一種簡單距離檢查，見 character.gd 的
+## 可以工作賺錢的地點。候選偵測交給 player.gd（Area2D 範圍 + 面向判定），
+## 距離的最終把關在 work_at()（跟 TALK_RANGE 同一種簡單距離檢查，見 character.gd 的
 ## "---- 工作 ----" 那節），這裡自己不查距離，只管「誰現在佔用著」。
 ##
-## StaticBody2D + CollisionShape2D 純粹是給 NavGrid 用的——NavGrid 的
-## rebuild() 是物理查詢，場景裡隨手擺的 StaticBody2D 會自動被算成障礙
-## （見 nav_grid.gd 開頭註解），角色不會穿過桌子走位。互動判定本身
-## 不靠這個碰撞體。
+## StaticBody2D + CollisionShape2D 同時做兩件事：NavGrid 的 rebuild() 是物理
+## 查詢，場景裡隨手擺的 StaticBody2D 會自動被算成障礙（見 nav_grid.gd 開頭
+## 註解），角色不會穿過桌子走位；collision_layer 另外掛了 interactable，
+## player.gd 的 InteractArea 就是靠偵測到這層才把工作站納入候選（issue #109）。
 ##
 ## 同一時間只有一個角色能用同一張工作站，靠 occupant 卡位——work_at()
 ## 呼叫 try_occupy() 失敗就回 Character.WORK_OCCUPIED，不會兩個角色
