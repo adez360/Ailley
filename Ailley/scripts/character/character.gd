@@ -866,8 +866,14 @@ func load_save_data(data: Dictionary) -> void:
 		stats.load_save_data(data["stats"])
 	if relationships != null and data.has("relationships"):
 		relationships.load_save_data(data["relationships"])
-	if memory != null and data.has("memory"):
-		memory.load_save_data(data["memory"])
+
+	# memory 一定呼叫，跟 stats／relationships 特意不同：這個角色可能是已經在
+	# 場上跑過、累積了新記憶的既有節點（debug console `load` 就是這樣用），
+	# 讀進來的存檔沒有 memory 欄位時要把記憶重設成空，而不是保留讀檔前的
+	# 舊記憶——Memory.load_save_data() 本身也會處理欄位缺失/格式錯誤
+	if memory != null:
+		var memory_data: Variant = data.get("memory", {})
+		memory.load_save_data(memory_data if memory_data is Dictionary else {})
 
 
 # ---- 滑鼠選取 ----
