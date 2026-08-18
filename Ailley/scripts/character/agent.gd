@@ -615,14 +615,15 @@ func _request_next_decision(allow_update_plan: bool = false) -> void:
 	var effective_allow_update_plan := allow_update_plan or _plan_update_requested
 	_plan_update_requested = false
 
-	# #268：捕一次 now_minutes，envelope 的 schema（送給模型的 expires_at 上限）
-	# 跟 validator 的驗證用同一個時間點——這通吃 await，重試之間可能過了不少
-	# 遊戲時間，用重新取得的「現在」驗證的話，範圍會跟模型當初收到的 schema
-	# 不一致，等於用一個模型從沒看過的更嚴格窗口去驗它的回應
+	# #268／#290：捕一次 now_minutes，給 validator 把模型填的 expires_in_minutes
+	# （相對時長）換算成任務池實際用的絕對 expires_at。envelope 的 schema
+	# 邊界（#290 拍板後）是固定常數，不再依賴這個時間點，但 validator 這裡
+	# 還是要——這通吃 await，重試之間可能過了不少遊戲時間，用重新取得的
+	# 「現在」換算的話，同一份回應在不同時間點驗證會算出不同的絕對值
 	var now_minutes := _now_minutes()
 	var visible: Array[Character] = vision.get_visible_characters() if vision != null else []
 	var envelope := PromptBuilder.build_plan_envelope(
-		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan, now_minutes
+		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan
 	)
 	var validator := func(data: Dictionary) -> Dictionary:
 		return AISchema.validate_tasks(data, effective_allow_update_plan, now_minutes)

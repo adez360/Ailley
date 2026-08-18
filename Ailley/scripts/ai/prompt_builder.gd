@@ -208,14 +208,9 @@ static func turn_entry(speaker_name: String, text: String) -> Dictionary:
 ##
 ## allow_update_plan 決定要不要把 update_plan 這個條件式欄位放進 schema
 ## 跟提示詞（#89）——呼叫端（agent.gd）自己判斷現在是不是四個開放時機之一
-##
-## now_minutes（#268）：expires_at 的 schema 上限是相對現在的偏移量
-## （AISchema.MAX_EXPIRES_AT_OFFSET），要吃呼叫當下的絕對遊戲分鐘數
-## （agent.gd::_now_minutes()）才能算，呼叫端傳同一個值給
-## AISchema.validate_tasks()，兩邊用同一個時間點
 static func build_plan_envelope(
 	character: Character, visible: Array[Character], pool: Array[Dictionary],
-	today_plan: Array[Dictionary], allow_update_plan: bool, now_minutes: int
+	today_plan: Array[Dictionary], allow_update_plan: bool
 ) -> Dictionary:
 	var visible_block: Array[Dictionary] = []
 	for other in visible:
@@ -233,7 +228,7 @@ static func build_plan_envelope(
 				"memory": _memory_block(character),
 			},
 		},
-		"response_format": AISchema.plan_response_schema(allow_update_plan, now_minutes),
+		"response_format": AISchema.plan_response_schema(allow_update_plan),
 	}
 
 ## dialogue 與 plan 共用的角色自身區塊。直接沿用 get_state_snapshot()——

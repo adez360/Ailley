@@ -111,22 +111,26 @@ const MAX_TASK_PRIORITY := 125.0
 const MIN_TASK_DURATION := 0.0
 const MAX_TASK_DURATION := 1440.0
 
-# #268：expires_at 沒有量級上限的問題（is_finite() 放行 1e300 這種有限但
-# 離譜的值，int() 轉型後行為不可靠，見 agent.gd::_is_expired() 的說明）。
-# 跟 priority/duration 不同，expires_at 語意上是「未來某個絕對遊戲分鐘數」，
-# 不是一個固定量級的分數，所以上限用「相對現在（now_minutes）的偏移量」，
-# 不是絕對數值——同一個偏移量在遊戲進行到第 5 天或第 50 天都一樣合理，
-# 絕對上限做不到這件事。
+# #268／#290：expires_at 沒有量級上限的問題（is_finite() 放行 1e300 這種
+# 有限但離譜的值，int() 轉型後行為不可靠，見 agent.gd::_is_expired() 的
+# 說明）。#290 拍板：模型填的是**相對時長**（expires_in_minutes，多久後
+# 過期），不是絕對遊戲分鐘數——理由是不想要求模型做「day×1440 + hour×60 +
+# minute + 偏移」這種複合算術，本地小模型算錯的機率明顯比回答一個相對量級
+# 高，算錯也不會被 GBNF 擋住（只要落在合法區間內），只有出區間才會被
+# validate_tasks() 擋下，白白增加失敗率。相對時長的邊界因此是固定常數，
+# 不用像先前設計那樣把 now_minutes 動態穿進 schema——跟 agent.gd 的
+# schedule／debug 任務用同一套「引擎自己把相對值換算成絕對值」模式
+# （_now_minutes() + duration），LLM 任務不是例外
 #
 # 上限抓一週（10080 分鐘）：目前預想會出現的約定行程（例如「明天中午一起
-# 打獵」）都在這個量級內；下限原本設 0（等於 now_minutes），但 CodeRabbit
-# review 抓到：agent.gd::_is_expired() 判斷過期用的是 `expires_at <=
-# now_minutes`，一筆 expires_at 剛好等於建立當下 now_minutes 的任務，
+# 打獵」）都在這個量級內；下限原本設 0，但 CodeRabbit review 抓到：
+# agent.gd::_is_expired() 判斷過期用的是 `expires_at <= now_minutes`，一筆
+# 相對時長剛好是 0 的任務，換算成絕對值後等於建立當下的 now_minutes，
 # 推進任務池後下一次仲裁就會被判定為已過期，等於一筆驗證通過、卻永遠
-# 執行不到的任務。下限改成 1，保證驗證通過的 expires_at 一定嚴格大於
-# 建立當下的 now_minutes，不會踩進「剛驗證完就過期」的窗口
-const MIN_EXPIRES_AT_OFFSET := 1
-const MAX_EXPIRES_AT_OFFSET := 10080
+# 執行不到的任務。下限改成 1，保證換算後的 expires_at 一定嚴格大於建立
+# 當下的 now_minutes，不會踩進「剛驗證完就過期」的窗口
+const MIN_EXPIRES_IN_MINUTES := 1
+const MAX_EXPIRES_IN_MINUTES := 10080
 
 const ERROR_NOT_JSON := "not_json"
 const ERROR_NOT_OBJECT := "not_object"
@@ -244,10 +248,13 @@ static func validate_dialogue(data: Dictionary) -> Dictionary:
 # 的是同一個值——不是這裡自己重新判斷「現在該不該開放」，那是 agent.gd 的
 # 職責，這裡只負責「如果不開放，多出來的 update_plan 要不要理」
 #
-# now_minutes（#268）：expires_at 的合理範圍是相對現在的偏移量，這個函式
-# 是 static 的、本來不吃時間，呼叫端（agent.gd::_request_next_decision()）
-# 要把 _now_minutes() 傳進來，跟組 schema 時 plan_response_schema() 拿到的
-# 是同一個時間點，避免同一輪決策裡 schema 允許的範圍跟這裡驗證的範圍不一致
+# now_minutes（#268／#290）：模型填的 expires_in_minutes 是相對時長，這裡
+# 驗證完範圍後直接換算成任務池實際使用的絕對 expires_at（now_minutes +
+# expires_in_minutes），跟 agent.gd 的 schedule／debug 任務用同一套換算，
+# 呼叫端只要繼續讀 task["expires_at"] 就好，不需要知道模型當初填的是相對值。
+# 這個函式是 static 的、本來不吃時間，呼叫端（agent.gd::_request_next_decision()）
+# 要把 _now_minutes() 傳進來——跟組 envelope 時是同一次呼叫、同一個時間點，
+# 不會因為這通吃 await 而在重試之間用不同的「現在」換算出不一致的絕對值
 static func validate_tasks(data: Dictionary, allow_update_plan: bool = false, now_minutes: int = 0) -> Dictionary:
 	if not data.has("tasks") or not data["tasks"] is Array:
 		return _fail(ERROR_BAD_SHAPE)
@@ -298,26 +305,27 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false, no
 				if count_value is float and count_value != floor(count_value):
 					return _fail(ERROR_BAD_SHAPE)
 
-		# #268：expires_at 現在有跟 priority/duration 同一套「相對現在的量級
-		# 上限」，不再只有 is_finite()——is_finite(1e300) 一樣是 true，擋不住
-		# 一個實質上永遠不會過期的任務（int() 轉型後行為不可靠，見 agent.gd
-		# ::_is_expired() 的說明）。範圍是 [now_minutes+MIN_EXPIRES_AT_OFFSET,
-		# now_minutes+MAX_EXPIRES_AT_OFFSET]：早於現在的值語意上是「已經過期」，
-		# 不該由模型自己宣告那個狀態。schema 宣告的型別是 integer（跟
-		# priority/duration 同一個理由），這裡也要擋小數——CodeRabbit review
-		# 抓到：沒擋的話 100.9 能通過範圍檢查，下面 tasks.append() 的
-		# int(task.get("expires_at", 0)) 會把它截斷成 100，變成一個沒被驗證過
-		# 的值（100 有沒有落在範圍內完全沒檢查過）
-		if task.has("expires_at"):
-			var expires_value: Variant = task["expires_at"]
+		# #268／#290：expires_in_minutes（模型填的相對時長）現在有跟
+		# priority/duration 同一套量級上限，不再只有 is_finite()——
+		# is_finite(1e300) 一樣是 true，擋不住一個實質上永遠不會過期的任務
+		# （int() 轉型後行為不可靠，見 agent.gd::_is_expired() 的說明）。
+		# 範圍是 [MIN_EXPIRES_IN_MINUTES, MAX_EXPIRES_IN_MINUTES]，固定常數，
+		# 不用像絕對值設計那樣動態依賴 now_minutes。schema 宣告的型別是
+		# integer（跟 priority/duration 同一個理由），這裡也要擋小數——
+		# CodeRabbit review 對前一版（絕對值）抓到的問題一樣適用：沒擋的話
+		# 100.9 能通過範圍檢查，換算成絕對值時被截斷成 100，變成一個沒被
+		# 驗證過的值。驗證通過後直接換算成 expires_at（絕對值）存進
+		# 下面的 tasks.append()，呼叫端不需要知道模型填的是相對時長
+		var expires_at := 0
+		if task.has("expires_in_minutes"):
+			var expires_value: Variant = task["expires_in_minutes"]
 			if not (expires_value is int or expires_value is float):
 				return _fail(ERROR_BAD_SHAPE)
 			var expires_float := float(expires_value)
-			var min_expires := float(now_minutes + MIN_EXPIRES_AT_OFFSET)
-			var max_expires := float(now_minutes + MAX_EXPIRES_AT_OFFSET)
 			if not is_finite(expires_float) or expires_float != floor(expires_float) \
-					or expires_float < min_expires or expires_float > max_expires:
+					or expires_float < MIN_EXPIRES_IN_MINUTES or expires_float > MAX_EXPIRES_IN_MINUTES:
 				return _fail(ERROR_BAD_SHAPE)
+			expires_at = now_minutes + int(expires_float)
 
 		# duration／priority 現在是必填（見上面 plan_response_schema() 的
 		# required 清單同步改過）：兩者都要落在 MIN_TASK_*／MAX_TASK_* 範圍內，
@@ -366,7 +374,7 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false, no
 			"params": task.get("params", {}),
 			"priority": float(task.get("priority", 0.0)),
 			"duration": float(task.get("duration", 0.0)),
-			"expires_at": int(task.get("expires_at", 0)),
+			"expires_at": expires_at,
 		})
 
 	# reasoning／inner_monologue：跟 validate_dialogue() 的 line 同一種處理
@@ -576,11 +584,11 @@ static func _validated_optional_line(data: Dictionary, key: String) -> Variant:
 # 支援 structured output 的雲端 provider（supports_json_schema=true）一樣
 # 會用它自己的機制強制輸出整數，跟 GBNF 無關，換型別不影響雲端相容性。
 #
-# now_minutes（#268）：expires_at 的合理上限是「相對現在的偏移量」
-# （MAX_EXPIRES_AT_OFFSET），不是固定量級，所以要吃呼叫當下的時間才能算出
-# 這次回應的 maximum——跟 validate_tasks() 收到的 now_minutes 是同一個呼叫端
-# 傳進來的同一個時間點，避免同一輪決策裡 schema 允許的範圍跟驗證的範圍不一致
-static func plan_response_schema(allow_update_plan: bool = false, now_minutes: int = 0) -> Dictionary:
+# #268／#290：expires_in_minutes 的邊界是固定常數（MIN/MAX_EXPIRES_IN_MINUTES），
+# 模型填的是相對時長，不需要像先前的絕對值設計那樣依賴呼叫當下的
+# now_minutes 動態算 schema 範圍——validate_tasks() 才需要 now_minutes
+# 把驗證過的相對值換算成絕對 expires_at，這個函式不用
+static func plan_response_schema(allow_update_plan: bool = false) -> Dictionary:
 	var properties := {
 		"reasoning": {"type": "string"},
 		"inner_monologue": {"type": "string"},
@@ -595,10 +603,10 @@ static func plan_response_schema(allow_update_plan: bool = false, now_minutes: i
 					"params": {"type": "object"},
 					"priority": {"type": "integer", "minimum": MIN_TASK_PRIORITY, "maximum": MAX_TASK_PRIORITY},
 					"duration": {"type": "integer", "exclusiveMinimum": MIN_TASK_DURATION, "maximum": MAX_TASK_DURATION},
-					"expires_at": {
+					"expires_in_minutes": {
 						"type": "integer",
-						"minimum": now_minutes + MIN_EXPIRES_AT_OFFSET,
-						"maximum": now_minutes + MAX_EXPIRES_AT_OFFSET,
+						"minimum": MIN_EXPIRES_IN_MINUTES,
+						"maximum": MAX_EXPIRES_IN_MINUTES,
 					},
 				},
 				"required": ["action", "priority", "duration"],
