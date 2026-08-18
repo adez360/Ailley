@@ -535,10 +535,18 @@ JSON Schema → GBNF 的轉換器。
 - [ ] 尚未對真正的 OpenRouter 打過請求，TLS/DNS 與真實回應格式未驗證
 - [ ] 成本上限機制的具體設計
 - [ ] 記憶系統上線前，Agent 的對話逐字稿要不要先存記憶體就好
-- [ ] `response_format` 的 json_schema 送出去之後，模型端真的照著回、還是仍需要
-      layer 2/3 兜底救回來——只驗證過本機 llama-server 自己轉 grammar 這條路徑
-      「有在動」（決策迴圈實測延遲 2.5-4 秒能量出來就是證據），沒有拿真實壞掉的
-      回應測過三層保證的退場路徑
+- [x] `response_format`／GBNF 強制路徑，與不送 `response_format` 的純 prompt
+      對照組，模型端可靠度差異（issue #245，2026-08-17；補測 2026-08-18，兩輪
+      合計、可重現性資訊、逐筆原始結果見《12》§7.3）：地端 provider 對兩者
+      （`supports_json_schema` 開關）各實測兩輪、合計 **100 次**，GBNF 強制
+      100/100 全過零失敗，純 prompt 約束（`supports_json_schema=false`，不送
+      `response_format`）97/100（第一輪 3 次 `action_not_allowed`，模型自己
+      生成白名單外的 action，例如 `"work"`；第二輪 50 次全過，沒有重現），沒有
+      出現社群回報過的 json_schema/grammar 衝突錯誤；合成的壞掉回應（缺欄位、
+      白名單外、型別錯）也測過 layer 2/3 的退場路徑，`AISchema.validate_tasks()`
+      全部正確擋下，`_decide_with_retry()` 的重試機制實測會真的觸發，不只是理論
+      上存在。GBNF 文法層強制比純 prompt 約束實測更可靠，剛好是現行預設值；
+      純 prompt 約束的失敗率落在個位數百分比，第一輪「6%」只是小樣本粗估
 
 ---
 
