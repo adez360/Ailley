@@ -213,6 +213,14 @@ func _ready() -> void:
 	_provider = _make_provider()
 	_load_schedule()
 
+## 公開版的「重建 provider」（#122，CodeRabbit review 抓到的時序 bug）。
+## GameManager.deploy_from_library() 會在 add_child()（進而觸發這個節點的
+## _ready()）之後才套用建角面板選的 decision_source／model_name——那時候
+## _provider 已經照預設值（"local"）建好了，角色庫選的來源永遠不會生效。
+## 呼叫端設完那兩個欄位要接著呼叫這個，才會用最終的值重建一次
+func rebuild_provider() -> void:
+	_provider = _make_provider()
+
 	if vision != null:
 		vision.spotted.connect(_on_spotted)
 

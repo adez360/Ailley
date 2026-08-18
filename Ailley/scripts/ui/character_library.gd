@@ -200,6 +200,7 @@ func _row(entry: Dictionary) -> Control:
 
 	var delete_button := Button.new()
 	delete_button.text = "UI_CL_BTN_DELETE"
+	delete_button.disabled = deployed		# 已投放的不能刪（見 GameManager.remove_from_library()）
 	delete_button.add_theme_color_override("font_color", EMBER)
 	delete_button.pressed.connect(_on_delete_pressed.bind(id))
 	row.add_child(delete_button)
@@ -234,7 +235,15 @@ func _on_duplicate_pressed(id: String) -> void:
 	_refresh()
 
 func _on_deploy_pressed(id: String) -> void:
-	GameManager.deploy_from_library(id)
+	# deploy_from_library() 回 null 有三種原因（查無此紀錄／已投放／世界投放
+	# 上限已滿），原本只印 push_warning，玩家在畫面上完全看不到任何反應
+	# （CodeRabbit review 抓到）。沿用既有的 _capacity_label 顯示位置，
+	# 不用另外開一塊 UI——下次 _refresh() 會把它蓋回正常的容量文字
+	if GameManager.deploy_from_library(id) == null:
+		_capacity_label.text = L10n.t("UI_CL_DEPLOY_FAILED")
+		_capacity_label.add_theme_color_override("font_color", EMBER)
+		return
+	_capacity_label.remove_theme_color_override("font_color")
 	_refresh()
 
 func _on_delete_pressed(id: String) -> void:

@@ -194,7 +194,20 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 # 蒐集資料（character_create.gd 的既有原則），存檔驗證→角色生成→角色庫這段
 # 管線接在這裡，由 character_create.gd 開場連的 character_saved 訊號觸發
 func receive_created_character(data: Dictionary) -> void:
-	if character_library.size() >= CHARACTER_LIBRARY_CAP:
+	# collect() 帶 "id" 代表面板走的是 edit()（規格書 05 §7-1「編輯」），
+	# 要原地覆蓋既有那筆，不是新增——不然編輯一次角色庫就多一筆同名孤兒紀錄，
+	# 而且會再打一次一次性的 words_to_creator（CodeRabbit review 抓到）
+	var editing_id := str(data.get("id", ""))
+	var existing := get_library_entry(editing_id) if not editing_id.is_empty() else {}
+
+	# 已投放的不可編輯（《05》§7-1）。面板端 edit() 只讀不到已投放的？不，
+	# 面板本身不擋——角色庫首頁才擋（編輯按鈕對已投放者 disabled），這裡是
+	# 資料層最後一道防線，跟 remove_from_library() 對已投放者的擋法一致
+	if not existing.is_empty() and existing.get("deployed", false):
+		push_warning("GameManager: %s 已投放，不能編輯" % existing["character_name"])
+		return
+
+	if existing.is_empty() and character_library.size() >= CHARACTER_LIBRARY_CAP:
 		push_warning("GameManager: 角色庫已滿（上限 %d），%s 沒有存進去" % [CHARACTER_LIBRARY_CAP, data.get("character_name", "")])
 		return
 
@@ -203,7 +216,7 @@ func receive_created_character(data: Dictionary) -> void:
 		hexaco[key] = data.get(key, 50)
 	var description := str(data.get("character", ""))
 
-	var id := Character.generate_id()
+	var id: String = existing["id"] if not existing.is_empty() else Character.generate_id()
 	var persona := Personality.from_identity({"hexaco": hexaco, "character": description}, id)
 
 	var entry := {
@@ -218,12 +231,17 @@ func receive_created_character(data: Dictionary) -> void:
 		"appearance": data.get("appearance", []),
 		"personality": persona["personality"],
 		"system_prompt": persona["system_prompt"],
-		"words_to_creator": "",
+		# 編輯時沿用既有的 words_to_creator——人格改了不代表要重打一次
+		# 只在建立當下才有意義的一次性 AI 呼叫
+		"words_to_creator": str(existing.get("words_to_creator", "")),
 		"deployed": false,
 	}
-	character_library.append(entry)
 
-	_generate_words_to_creator(entry)
+	if existing.is_empty():
+		character_library.append(entry)
+		_generate_words_to_creator(entry)
+	else:
+		character_library[character_library.find(existing)] = entry
 
 
 # 建角完成當下打一次的 AI 呼叫（規格書 05 流程圖 ⑤），跟 plan/dialogue/
@@ -249,9 +267,18 @@ func get_library_entry(id: String) -> Dictionary:
 	return {}
 
 
+# 已投放的角色不能刪——刪了場上生出來的 Character 節點會變孤兒（沒有任何
+# 紀錄指向它），deploy_from_library() 的 deployed_count 也只掃
+# character_library，刪掉之後計數會下降，變成可以無視 DEPLOY_CAP 重複投放
+# （CodeRabbit review 抓到）。要收回一隻已投放角色，先做的是撤回（見《05》
+# §7-3，這則不含撤回機制的實作），不是直接刪角色庫紀錄
 func remove_from_library(id: String) -> bool:
 	for i in character_library.size():
 		if character_library[i]["id"] == id:
+			if character_library[i].get("deployed", false):
+				push_warning("GameManager: %s 已投放，先收回才能刪除" % character_library[i]["character_name"])
+				return false
+			identity_assignments.erase(id)
 			character_library.remove_at(i)
 			return true
 	return false
@@ -309,6 +336,12 @@ func deploy_from_library(id: String) -> Character:
 	if character.get("decision_source") != null:
 		character.set("decision_source", entry["decision_source"])
 		character.set("model_name", entry["model_name"])
+		# spawn_character() 內的 add_child() 已經觸發過 _ready()，_provider
+		# 那時候是照 @export 預設值（"local"）建的——上面兩行剛套上去的值
+		# 要重建一次 provider 才會生效，不然角色庫選的來源形同沒選
+		# （CodeRabbit review 抓到的時序 bug）
+		if character.has_method("rebuild_provider"):
+			character.rebuild_provider()
 
 	entry["deployed"] = true
 	return character

@@ -451,6 +451,15 @@ provider.valid`，只查存在會放行設定不全的項目、然後每次請�
 `decision_source`／`model_name` 這兩欄由 #122 的建角面板寫入、經
 `GameManager.deploy_from_library()` 在投放當下套進節點，不再是佔位值。
 
+> [!warning] 套欄位跟建 provider 的時序要對：套完要重建，不能只 set 完就算了
+> `spawn_character()` 內的 `add_child()` 會同步觸發 `_ready()`，`_provider`
+> 那時候就照 `@export` 當下的值（預設 `"local"`）建好了；`deploy_from_library()`
+> 是在 `spawn_character()` **回傳之後**才 `set()` 建角面板選的
+> `decision_source`／`model_name`，這時候才 set 已經來不及讓 `_provider`
+> 讀到新值（CodeRabbit review 抓到）。解法是 `agent.gd` 開一個公開的
+> `rebuild_provider()`（內容就是重跑一次 `_provider = _make_provider()`），
+> `deploy_from_library()` 套完兩個欄位後接著呼叫它。
+
 三種資料異常都安靜退回 `LocalLLMProvider`、`push_warning` 帶原因：
 `decision_source` 打錯字／空字串（含合法但未實作的 `"human"`，見下方
 「不在這一版」）；`"cloud"` 但 `model_name` 是空的；`"cloud"` 但 `model_name`
