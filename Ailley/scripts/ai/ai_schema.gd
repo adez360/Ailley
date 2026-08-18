@@ -61,6 +61,11 @@ const ALLOWED_ACTIONS := [
 # 場景物件或新資源，所以走的是仲裁器既有的「移動到 params.place（沒給就原地）、
 # 佔用 duration」路徑，沒有各自的執行函式。回復量見 agent.gd 的 STAMINA_RECOVERY
 #
+# eat 是 #114 接上的：跟 talk 一樣是「呼叫一次就完成」的動作，不是靠 duration
+# 逐分鐘回復，所以沒有走 nap/rest 那條通用路徑——agent.gd 特化了一個
+# _pursue_eat_task()（寫法照抄 _pursue_talk_task()），resolve() 也加了
+# 「背包裡有沒有食物」的硬規則檢查，避免 LLM 宣稱吃了背包裡沒有的東西
+#
 # murmur 是 #162 接上的：跟 idle 平行、純機率觸發（見《99》P-23），沒有目標、
 # 不用移動，走自己的 _pursue_murmur_task()，一次執行完就退出任務池
 #
@@ -76,7 +81,7 @@ const ALLOWED_ACTIONS := [
 # haul／struggle 是 #161 接上的：haul 是長動作，占住整段 duration（跟 nap 一樣），
 # 但不用 params.place —— 搬運去哪由搬運者自己決定。struggle 是短動作，只在被搬運
 # 時有效，走各自的 _pursue_struggle_task()，執行完就退出任務池
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "murmur", "give", "shout", "haul", "struggle", "attack"]
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "murmur", "give", "shout", "haul", "struggle", "attack"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、

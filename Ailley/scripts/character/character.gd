@@ -63,6 +63,24 @@ const BUY_TOO_FAR := "TOO_FAR"
 const BUY_ITEM_NOT_FOUND := "ITEM_NOT_FOUND"		# 販賣機沒有賣這個 item_id
 const BUY_NO_INVENTORY := "NO_INVENTORY"		# 沒有背包的角色沒辦法買東西
 
+## eat() 的失敗原因碼，形狀比照 TALK_*／WORK_*／BUY_*
+const EAT_OK := ""
+const EAT_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法吃東西
+const EAT_NO_FOOD := "NO_FOOD"			# 背包裡沒有 ItemDatabase 分類為 food 的物品
+const EAT_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 satiety，不能先扣食物
+
+## 各食物 item_id 吃下去回復多少 satiety。抄《規格書 08》§3-1「飢餓回復」欄位
+## 取絕對值——那欄位是改名前（hunger，越低越好）留下的數字，P-32 把欄位改成
+## satiety（越高越好）之後，同一個量就是「回復多少 satiety」，方向反過來但
+## 數字不變。查不到的 item_id（理論上不會發生，_find_food_slot() 已經用
+## ItemDatabase 篩過 category）保守回 0，不讓 eat() 憑空生出滿足感
+const EAT_SATIETY_RECOVERY := {
+	"bread": 25.0,
+	"cooked_meat": 40.0,
+	"fish_dish": 35.0,
+	"herb_soup": 20.0,
+}
+
 const GIVE_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE 一樣的距離門檻，2 格
 
 ## give_to() 的失敗原因碼，形狀比照 TALK_*／BUY_*。除了這四個，give_to()
@@ -825,6 +843,44 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 		money_popup.show_change(-price)
 
 	return BUY_OK
+
+
+# ---- 進食 ----
+
+# 找背包裡第一筆食物類物品的摘要（get_summary() 那份，含 item_id/count/slot），
+# 找不到回空字典。食物判斷走 ItemDatabase 的 category == "food"（#84 已落地），
+# 不是硬編碼白名單——#114 原本的建議是「先硬編碼、等 #84 落地後再改查表」，
+# #84 已經在這之前完成，沒有必要走回頭路
+func _find_food_slot() -> Dictionary:
+	for entry in inventory.get_summary():
+		var item_id: String = entry["item_id"]
+		if ItemDatabase.get_item(item_id).get("category", "") == "food":
+			return entry
+	return {}
+
+# 吃掉背包裡一份食物：扣一個、回復對應量的 satiety。沒有背包的角色
+# （EAT_NO_INVENTORY）或背包裡沒有食物（EAT_NO_FOOD）都要有明確原因碼，
+# 跟 TALK_*／WORK_*／BUY_* 同一套「每個動作都要能講出為什麼失敗」的規則。
+# remove_item() 的回傳值要先確認是 REMOVE_OK 才能加 satiety（CodeRabbit
+# review 抓到）——不然扣格子失敗（例如兩個來源同一 tick 搶同一份食物）時，
+# satiety 還是會被加上去，變成憑空回復
+func eat() -> String:
+	if inventory == null:
+		return EAT_NO_INVENTORY
+
+	var food := _find_food_slot()
+	if food.is_empty():
+		return EAT_NO_FOOD
+	if stats == null:
+		return EAT_NO_STATS
+
+	var item_id: String = food["item_id"]
+	var remove_reason := inventory.remove_item(item_id, 1)
+	if remove_reason != Inventory.REMOVE_OK:
+		return EAT_NO_FOOD
+
+	stats.add("satiety", EAT_SATIETY_RECOVERY.get(item_id, 0.0))
+	return EAT_OK
 
 
 # ---- 送禮 ----
