@@ -7,25 +7,34 @@ extends "res://scripts/save/save_service.gd"
 ## 呼叫端（Character.get_save_data() 等）的事，這裡收到什麼 Dictionary 就存什麼，
 ## 見 note/規格書/14_存檔資料存取層規格書.md §2.2「整包讀寫」。
 ##
-## 並行寫入保護：單一 session 寫入鎖（#23）。鎖檔跟資料檔同目錄，副檔名
-## 加 .lock，內容只有 { pid, acquired_at }。存活判定問系統的 process 清單
-## （_is_pid_alive()）——這一層要防的是兩個各自獨立的 Godot process（例如
-## 兩個世界各自的 session）搶寫同一份存檔，PID 存活即可判斷，不需要心跳。
+## 並行寫入保護：單一 session 寫入鎖（#23）。每份存檔配一個同名 .lock「目錄」
+## 當互斥閘門——DirAccess.make_dir_absolute() 在目的地已存在時回傳
+## ERR_ALREADY_EXISTS，兩個 process 同時搶只會有一個拿到 OK，這是作業系統
+## 保證的原子操作，不會像「先讀鎖檔內容、判斷沒人持有、再寫檔」那樣中間有
+## 空窗期讓兩個 process 都以為自己搶到。鎖目錄底下放一個 info.json 記
+## { pid, acquired_at }，只有原子搶到閘門的那個 process 會寫它，不會跟人搶寫。
 ##
-## 注意：OS.is_process_running() 只認得 OS.create_process() 自己開出來的子行程，
-## 拿另一個獨立啟動的 Godot process 的 pid 去問一律回傳 false（實測驗證過），
-## 用不了，所以自己呼叫系統指令查。
+## 存活判定問系統的 process 清單（_is_pid_alive()）——這一層要防的是兩個各自
+## 獨立的 Godot process（例如兩個世界各自的 session）搶寫同一份存檔，PID 存活
+## 即可判斷，不需要心跳。OS.is_process_running() 只認得 OS.create_process()
+## 自己開出來的子行程，拿另一個獨立啟動的 Godot process 的 pid 去問一律回傳
+## false（實測驗證過），用不了，所以自己呼叫系統指令查。
 ##
 ## 鎖的授予範圍是「這個 process 的存活期間」：第一次成功寫入某個 id 時取得，
 ## 直到 process 正常結束（_exit_tree）才釋放；不會每次寫入都重新搶鎖，因為同一
 ## process 重複取自己持有的鎖必定成功，等於沒有互斥效果。當機留下的鎖不會造成
-## 死鎖——下一個 process 來搶鎖時發現 pid 已經不在跑，直接接手，不用玩家手動砍檔。
+## 死鎖——下一個 process 來搶鎖時發現 pid 已經不在跑，重新搶一次閘門接手，
+## 不用玩家手動砍檔。接手那一刻（清掉舊閘門、重建新閘門）本身仍有極窄的競態
+## 窗口——兩個 process 同時判定死鎖並搶接手時，只有一個會贏（第二次
+## make_dir_absolute() 一樣是原子的），另一個會正確地拿到失敗、不會誤判成功；
+## 單機小規模遊戲用不到更重的機制（例如檔案系統鎖）去補這個窗口。
 
 const CHARACTERS_DIR := "user://saves/characters"
 const WORLDS_DIR := "user://saves/worlds"
 const LOCK_SUFFIX := ".lock"
+const LOCK_INFO_FILENAME := "info.json"
 
-var _held_locks: Dictionary = {} # lock_path(String) -> true，這個 process 目前持有寫入權的存檔
+var _held_locks: Dictionary = {} # lock_dir(String) -> true，這個 process 目前持有寫入權的存檔
 
 
 func get_character(id: String) -> Dictionary:
@@ -54,23 +63,33 @@ func save_world(id: String, data: Dictionary) -> bool:
 
 
 ## process 正常結束時釋放這個 process 持有的所有鎖。當機（沒走到這裡）留下的
-## 鎖檔靠 _acquire_write_lock() 的存活判定接手，不靠這裡清
+## 鎖靠 _acquire_write_lock() 的存活判定接手，不靠這裡清
 func _exit_tree() -> void:
-	for lock_path in _held_locks.keys():
-		var holder := _read_lock(lock_path)
+	for lock_dir in _held_locks.keys():
+		var holder := _read_lock_info(lock_dir)
 		if int(holder.get("pid", -1)) == OS.get_process_id():
-			DirAccess.remove_absolute(lock_path)
+			_remove_lock_dir(lock_dir)
 	_held_locks.clear()
 
 
-## 成功（這個 process 已經持有或剛拿到鎖）回傳 true；鎖被別的活著的 process
-## 持有時回傳 false，並用 push_error 告知是哪個 pid、何時取得的
+## 成功（這個 process 已經持有或剛原子搶到鎖）回傳 true；鎖被別的活著的
+## process 持有時回傳 false，並用 push_error 告知是哪個 pid、何時取得的
 func _acquire_write_lock(path: String) -> bool:
-	var lock_path := path + LOCK_SUFFIX
-	if _held_locks.has(lock_path):
+	var lock_dir := path + LOCK_SUFFIX
+	if _held_locks.has(lock_dir):
 		return true
 
-	var holder := _read_lock(lock_path)
+	var dir := path.get_base_dir()
+	if not DirAccess.dir_exists_absolute(dir):
+		DirAccess.make_dir_recursive_absolute(dir)
+
+	if DirAccess.make_dir_absolute(lock_dir) == OK:
+		_write_lock_info(lock_dir)
+		_held_locks[lock_dir] = true
+		return true
+
+	# 閘門已存在：可能是活著的別人持有，也可能是當機留下的死鎖
+	var holder := _read_lock_info(lock_dir)
 	var holder_pid := int(holder.get("pid", -1))
 	if holder_pid > 0 and holder_pid != OS.get_process_id() and _is_pid_alive(holder_pid):
 		push_error("JsonSaveService: %s 寫入權目前被 PID %d 持有（於 %s 取得），本次寫入被拒絕" % [
@@ -78,24 +97,47 @@ func _acquire_write_lock(path: String) -> bool:
 		])
 		return false
 
-	var dir := path.get_base_dir()
-	if not DirAccess.dir_exists_absolute(dir):
-		DirAccess.make_dir_recursive_absolute(dir)
-
-	var tmp_path := lock_path + ".tmp"
-	var file := FileAccess.open(tmp_path, FileAccess.WRITE)
-	if file == null:
-		push_error("JsonSaveService: 無法建立鎖檔 %s（%s）" % [tmp_path, error_string(FileAccess.get_open_error())])
+	# 死鎖：接手。清掉殘留的閘門後重新原子搶一次——輸給同時接手的別人時
+	# make_dir_absolute() 一樣會回傳 ERR_ALREADY_EXISTS，不會誤判成功
+	_remove_lock_dir(lock_dir)
+	if DirAccess.make_dir_absolute(lock_dir) != OK:
+		push_error("JsonSaveService: %s 接手死鎖失敗，可能被別的 process 搶先接手，本次寫入被拒絕" % path)
 		return false
+
+	_write_lock_info(lock_dir)
+	_held_locks[lock_dir] = true
+	return true
+
+
+func _write_lock_info(lock_dir: String) -> void:
+	var file := FileAccess.open(lock_dir.path_join(LOCK_INFO_FILENAME), FileAccess.WRITE)
+	if file == null:
+		push_error("JsonSaveService: 無法寫入鎖資訊 %s（%s）" % [lock_dir, error_string(FileAccess.get_open_error())])
+		return
 	file.store_string(JSON.stringify({
 		"pid": OS.get_process_id(),
 		"acquired_at": Time.get_unix_time_from_system(),
 	}))
 	file.close()
-	DirAccess.rename_absolute(tmp_path, lock_path)
 
-	_held_locks[lock_path] = true
-	return true
+
+func _read_lock_info(lock_dir: String) -> Dictionary:
+	var info_path := lock_dir.path_join(LOCK_INFO_FILENAME)
+	if not FileAccess.file_exists(info_path):
+		return {}
+
+	var file := FileAccess.open(info_path, FileAccess.READ)
+	if file == null:
+		return {}
+
+	var parsed = JSON.parse_string(file.get_as_text())
+	file.close()
+	return parsed if parsed is Dictionary else {}
+
+
+func _remove_lock_dir(lock_dir: String) -> void:
+	DirAccess.remove_absolute(lock_dir.path_join(LOCK_INFO_FILENAME))
+	DirAccess.remove_absolute(lock_dir)
 
 
 ## 問系統這個 pid 還在不在跑。Windows 用 tasklist（找 CSV 那一行是不是以引號
@@ -111,19 +153,6 @@ func _is_pid_alive(pid: int) -> bool:
 		return false
 
 	return OS.execute("kill", ["-0", str(pid)], output) == 0
-
-
-func _read_lock(lock_path: String) -> Dictionary:
-	if not FileAccess.file_exists(lock_path):
-		return {}
-
-	var file := FileAccess.open(lock_path, FileAccess.READ)
-	if file == null:
-		return {}
-
-	var parsed = JSON.parse_string(file.get_as_text())
-	file.close()
-	return parsed if parsed is Dictionary else {}
 
 
 func _read(path: String) -> Dictionary:
