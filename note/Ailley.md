@@ -58,6 +58,7 @@ Ailley 是由 LLM 驅動的 2D 像素村莊（Godot 4.5.1）。
 
 - [[api]] —— 所有腳本的公開介面、group、碰撞分層、失敗原因碼、已知陷阱
 - [[changelog]] —— 被推翻的決定與被否決的方案。**筆記庫裡唯一可以寫「原本是什麼」的地方**
+- [[schema-gbnf-vs-prompt-reliability-log]] —— GBNF 強制 vs 純 prompt 約束可靠度測試的逐筆原始結果，供《12》§7.3 引用
 
 ### 規格書
 
