@@ -29,20 +29,25 @@ _mcp_game_helper  addons/godot_ai/runtime/game_helper.gd   † 勿移除
 ## groups
 
 ```text
-characters   全部 Character        nav_grid       NavGrid
-player       玩家                  place_anchors  main.tscn 的 Node2D/PlaceAnchors
-agents       全部 Agent            debug_overlay  DebugOverlay
-selection    Selection             follow_camera  FollowCamera
-workstations 全部 Workstation
+characters       全部 Character        nav_grid       NavGrid
+player           玩家                  place_anchors  main.tscn 的 Node2D/PlaceAnchors
+agents           全部 Agent            debug_overlay  DebugOverlay
+selection        Selection             follow_camera  FollowCamera
+workstations     全部 Workstation
+vending_machines 全部 VendingMachine
 ```
 
 ## collision layers
 
 ```text
-1 terrain    地形 TileSet physics_layer_0      layer=1  mask=—
-2 character  Player/Agent                      layer=2  mask=1
-             Vision (Area2D)                   layer=0  mask=2
+1 terrain      地形 TileSet physics_layer_0      layer=1        mask=—
+2 character    Player/Agent                      layer=2        mask=1
+               Vision (Area2D)                   layer=0        mask=2
+3 interactable Workstation/VendingMachine         layer=1|4(*)  mask=—
+               InteractArea (Area2D，player.gd)   layer=0        mask=4
 † 沒有人的 mask 含 2 ⇒ 角色之間不互撞，但照樣撞牆
+† (*) Workstation/VendingMachine 的 collision_layer 疊了 terrain(1)+interactable(4)=5，
+  同一個 StaticBody2D 兼職 NavGrid 障礙判定跟 InteractArea 的候選偵測（issue #109）
 † 設定寫在 .tscn 不寫在腳本，避免 inspector 改了被程式蓋掉
 ```
 
@@ -581,8 +586,9 @@ func set_highlighted(on: bool) -> void       # 切換 Highlight（Line2D）節�
 ```text
 _ready 自動 add_to_group("workstations")
 † 自己不查距離 — 候選偵測在 player.gd 的 InteractArea，最終把關在 Character.work_at()
-† StaticBody2D + CollisionShape2D 是給 NavGrid 的（可走性是物理查詢量出來的），
-  互動判定完全不靠它，只是「桌子擋路」的副作用
+† StaticBody2D + CollisionShape2D 身兼兩職：NavGrid 的可走性查詢（物理查詢量出來的，
+  桌子擋路），以及 collision_layer 疊的 interactable——InteractArea 靠偵測到這層
+  才把工作站納入候選（issue #109）
 ⚠ is_occupied() 必須用 is_instance_valid()，不能用 `occupant != null`
   Godot 4 裡 freed 物件 `!= null` 仍成立 ⇒ 佔用者被移除後工作站永遠鎖死，
   而 release() 比對的是已經不存在的角色、永遠清不掉。這也是角色工作到一半被 free 時

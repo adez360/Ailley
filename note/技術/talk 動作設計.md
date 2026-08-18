@@ -133,7 +133,7 @@ NavGrid 的障礙判定只查 `terrain`，不受影響），取代原本每次�
 | --- | --- | --- |
 | 搭話距離 | 32px（2 格） | `Character.TALK_RANGE` |
 | 散場距離 | 48px | 比搭話門檻寬鬆，講到一半才不會動不動就散 |
-| 面對面 | 不要求 | 操作上太苛 |
+| 面對面 | `talk_to()` 本身不要求（debug 主控台、`agent.gd` 的 LLM 決策直接指名對象呼叫） | 操作上太苛；但玩家按 `E` 走 `player.gd::_nearest_facing()` 候選篩選時仍會排除沒面向的目標（`FACING_DOT_THRESHOLD`，見 #102） |
 | 互動鍵 | `E` | |
 | 被搭話者的行程 | 暫停後重算 | 不是接續原路 |
 | 回補 | social +25、mood +5 | 只有正常講完才發；關係只記 `note_meeting()`，不動 `trust` |
