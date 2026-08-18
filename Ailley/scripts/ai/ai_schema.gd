@@ -119,9 +119,13 @@ const MAX_TASK_DURATION := 1440.0
 # 絕對上限做不到這件事。
 #
 # 上限抓一週（10080 分鐘）：目前預想會出現的約定行程（例如「明天中午一起
-# 打獵」）都在這個量級內；下限是 0，不早於現在——「已經過期」的任務不該
-# 由模型自己宣告，那是引擎執行後才會產生的狀態
-const MIN_EXPIRES_AT_OFFSET := 0
+# 打獵」）都在這個量級內；下限原本設 0（等於 now_minutes），但 CodeRabbit
+# review 抓到：agent.gd::_is_expired() 判斷過期用的是 `expires_at <=
+# now_minutes`，一筆 expires_at 剛好等於建立當下 now_minutes 的任務，
+# 推進任務池後下一次仲裁就會被判定為已過期，等於一筆驗證通過、卻永遠
+# 執行不到的任務。下限改成 1，保證驗證通過的 expires_at 一定嚴格大於
+# 建立當下的 now_minutes，不會踩進「剛驗證完就過期」的窗口
+const MIN_EXPIRES_AT_OFFSET := 1
 const MAX_EXPIRES_AT_OFFSET := 10080
 
 const ERROR_NOT_JSON := "not_json"
@@ -297,9 +301,13 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false, no
 		# #268：expires_at 現在有跟 priority/duration 同一套「相對現在的量級
 		# 上限」，不再只有 is_finite()——is_finite(1e300) 一樣是 true，擋不住
 		# 一個實質上永遠不會過期的任務（int() 轉型後行為不可靠，見 agent.gd
-		# ::_is_expired() 的說明）。範圍是 [now_minutes, now_minutes +
-		# MAX_EXPIRES_AT_OFFSET]：早於現在的值語意上是「已經過期」，不該由
-		# 模型自己宣告那個狀態
+		# ::_is_expired() 的說明）。範圍是 [now_minutes+MIN_EXPIRES_AT_OFFSET,
+		# now_minutes+MAX_EXPIRES_AT_OFFSET]：早於現在的值語意上是「已經過期」，
+		# 不該由模型自己宣告那個狀態。schema 宣告的型別是 integer（跟
+		# priority/duration 同一個理由），這裡也要擋小數——CodeRabbit review
+		# 抓到：沒擋的話 100.9 能通過範圍檢查，下面 tasks.append() 的
+		# int(task.get("expires_at", 0)) 會把它截斷成 100，變成一個沒被驗證過
+		# 的值（100 有沒有落在範圍內完全沒檢查過）
 		if task.has("expires_at"):
 			var expires_value: Variant = task["expires_at"]
 			if not (expires_value is int or expires_value is float):
@@ -307,7 +315,8 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false, no
 			var expires_float := float(expires_value)
 			var min_expires := float(now_minutes + MIN_EXPIRES_AT_OFFSET)
 			var max_expires := float(now_minutes + MAX_EXPIRES_AT_OFFSET)
-			if not is_finite(expires_float) or expires_float < min_expires or expires_float > max_expires:
+			if not is_finite(expires_float) or expires_float != floor(expires_float) \
+					or expires_float < min_expires or expires_float > max_expires:
 				return _fail(ERROR_BAD_SHAPE)
 
 		# duration／priority 現在是必填（見上面 plan_response_schema() 的
