@@ -1,0 +1,227 @@
+[gd_scene load_steps=15 format=3 uid="uid://wo0a0v2y4gj1"]
+
+[ext_resource type="PackedScene" uid="uid://cyrnw30ddh16r" path="res://scenes/debug_console.tscn" id="1_mphia"]
+[ext_resource type="PackedScene" uid="uid://q38st5oy2nj" path="res://scenes/chat_input.tscn" id="2_0m4u7"]
+[ext_resource type="Script" uid="uid://dm8733qx3w3uk" path="res://scripts/ui/time_label.gd" id="3_apjy4"]
+[ext_resource type="Script" uid="uid://dej3fk4srven5" path="res://scripts/ui/status_panel.gd" id="4_5n1hp"]
+[ext_resource type="Texture2D" uid="uid://b06f01r4ovc0r" path="res://assets/ui/Setting menu.png" id="5_eld54"]
+[ext_resource type="Script" uid="uid://bghlt4yqp6xrt" path="res://scripts/ui/inventory_panel.gd" id="6_3swnk"]
+[ext_resource type="Script" uid="uid://hism2nudt3ss" path="res://scripts/ui/hotbar.gd" id="7_qkknv"]
+[ext_resource type="PackedScene" uid="uid://cefpexpl7arvm" path="res://scenes/character_create.tscn" id="8_uxdf7"]
+[ext_resource type="PackedScene" uid="uid://xqribn8mdubp" path="res://scenes/character_library.tscn" id="9_5357l"]
+[ext_resource type="Script" uid="uid://djdfer2luq3s5" path="res://scripts/ui/pause.gd" id="10_iypfu"]
+[ext_resource type="PackedScene" uid="uid://d3no1g5djdk2s" path="res://scenes/god_stone_input.tscn" id="11_0m4u7"]
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_jbj1t"]
+texture = ExtResource("5_eld54")
+texture_margin_left = 6.0
+texture_margin_top = 28.0
+texture_margin_right = 6.0
+texture_margin_bottom = 6.0
+region_rect = Rect2(11, 12, 106, 122)
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_0ld40"]
+texture = ExtResource("5_eld54")
+texture_margin_left = 6.0
+texture_margin_top = 6.0
+texture_margin_right = 6.0
+texture_margin_bottom = 6.0
+region_rect = Rect2(139, 12, 106, 122)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_gqmmt"]
+content_margin_left = 6.0
+content_margin_top = 6.0
+content_margin_right = 6.0
+content_margin_bottom = 6.0
+bg_color = Color(0.05, 0.05, 0.07, 0.6)
+
+[node name="PersistentUI" type="Control"]
+layout_mode = 3
+anchors_preset = 0
+offset_right = 40.0
+offset_bottom = 40.0
+
+[node name="DebugConsole" parent="." instance=ExtResource("1_mphia")]
+
+[node name="ChatInput" parent="." instance=ExtResource("2_0m4u7")]
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="TimeLabel" type="Label" parent="HUD"]
+offset_left = 4.0
+offset_top = 2.0
+offset_right = 5.0
+offset_bottom = 25.0
+theme_type_variation = &"HUDLabel"
+script = ExtResource("3_apjy4")
+
+[node name="StatusPanel" type="CanvasLayer" parent="."]
+script = ExtResource("4_5n1hp")
+
+[node name="Panel" type="Panel" parent="StatusPanel"]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -75.0
+offset_top = -87.0
+offset_right = 75.0
+offset_bottom = 88.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxTexture_jbj1t")
+
+[node name="TitleBg" type="ColorRect" parent="StatusPanel/Panel"]
+layout_mode = 0
+anchor_right = 1.0
+offset_left = 6.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = 24.0
+mouse_filter = 2
+color = Color(0.8627451, 0.7254902, 0.5411765, 1)
+
+[node name="TitleLabel" type="Label" parent="StatusPanel/Panel"]
+layout_mode = 0
+anchor_right = 1.0
+offset_left = 6.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = 24.0
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+horizontal_alignment = 1
+vertical_alignment = 1
+clip_text = true
+
+[node name="VBox" type="VBoxContainer" parent="StatusPanel/Panel"]
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 10.0
+offset_top = 32.0
+offset_right = -10.0
+offset_bottom = -8.0
+mouse_filter = 2
+theme_override_constants/separation = 4
+
+[node name="AgeLabel" type="Label" parent="StatusPanel/Panel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+
+[node name="MoneyLabel" type="Label" parent="StatusPanel/Panel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+
+[node name="StatsBox" type="VBoxContainer" parent="StatusPanel/Panel/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="HintLabel" type="Label" parent="StatusPanel/Panel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+autowrap_mode = 3
+
+[node name="InventoryPanel" type="CanvasLayer" parent="."]
+script = ExtResource("6_3swnk")
+
+[node name="Panel" type="Panel" parent="InventoryPanel"]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -140.0
+offset_top = -80.0
+offset_right = 140.0
+offset_bottom = 80.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxTexture_0ld40")
+
+[node name="VBox" type="VBoxContainer" parent="InventoryPanel/Panel"]
+layout_mode = 0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 10.0
+offset_top = 8.0
+offset_right = -10.0
+offset_bottom = -8.0
+mouse_filter = 2
+theme_override_constants/separation = 6
+alignment = 1
+
+[node name="TitleLabel" type="Label" parent="InventoryPanel/Panel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+horizontal_alignment = 1
+
+[node name="MainGrid" type="GridContainer" parent="InventoryPanel/Panel/VBox"]
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_constants/h_separation = 3
+theme_override_constants/v_separation = 3
+columns = 9
+
+[node name="HintLabel" type="Label" parent="InventoryPanel/Panel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+horizontal_alignment = 1
+
+[node name="Hotbar" type="CanvasLayer" parent="."]
+script = ExtResource("7_qkknv")
+
+[node name="Backdrop" type="Panel" parent="Hotbar"]
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -135.0
+offset_top = -48.0
+offset_right = 135.0
+offset_bottom = -8.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_gqmmt")
+
+[node name="Grid" type="GridContainer" parent="Hotbar/Backdrop"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 6.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = -6.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/h_separation = 3
+columns = 9
+
+[node name="CharacterCreate" parent="." instance=ExtResource("8_uxdf7")]
+
+[node name="CharacterLibrary" parent="." instance=ExtResource("9_5357l")]
+
+[node name="Pause" type="CanvasLayer" parent="."]
+process_mode = 3
+layer = 10
+visible = false
+script = ExtResource("10_iypfu")
+
+[node name="Dim" type="ColorRect" parent="Pause"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0.10196, 0.08235, 0.07059, 0.6)
+
+[node name="Text" type="Label" parent="Pause"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme_type_variation = &"HUDLabel"
+text = "UI_PAUSED"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="GodStoneInput" parent="." instance=ExtResource("11_0m4u7")]
