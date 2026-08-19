@@ -10,10 +10,6 @@ extends Node2D
 ## 只服務一個 waypoint，不做多目標佇列——目前唯一的呼叫端（#305）一次
 ## 只會有一個進行中的說服請求，需要佇列的時候再加。
 
-## 進到這個距離內算抵達。沿用 Character.TALK_RANGE，不另訂新常數——
-## 「引導玩家去某個地點」跟「走到能對話的距離」在語意上是同一種「到了」
-const ARRIVE_DISTANCE := 32.0  # == Character.TALK_RANGE
-
 ## 距離連續變遠這麼久，判定玩家放棄，指標自動收掉
 const ABANDON_WINDOW_SEC := 4.0
 
@@ -81,7 +77,10 @@ func _process(delta: float) -> void:
 	var body_position := _character.get_body_position()
 	var distance := body_position.distance_to(_target_position)
 
-	if distance <= ARRIVE_DISTANCE:
+	# 沿用 Character.TALK_RANGE，不自己另訂一個同樣是 32.0 的常數——「引導玩家
+	# 去某個地點」跟「走到能對話的距離」在語意上是同一種「到了」，兩個常數各自
+	# 維護遲早會漂移（CodeRabbit review 抓到）
+	if distance <= Character.TALK_RANGE:
 		_finish(_on_arrived)
 		return
 
