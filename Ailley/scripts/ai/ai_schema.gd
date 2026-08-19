@@ -71,8 +71,7 @@ const ALLOWED_ACTIONS := [
 #
 # give／shout 是 #158 接上的：跟 talk 一樣目標會動（give）或完全不需要目標
 # （shout），走各自的 _pursue_give_task()／_pursue_shout_task()，一次執行完
-# 就退出任務池，不像 nap 那類佔滿整段 duration。persuade 不在這裡——見 #227，
-# 它需要的待回應事實句機制目前完全沒有地基
+# 就退出任務池，不像 nap 那類佔滿整段 duration。
 #
 # attack 是 #159 接上的：跟 give 同一套「目標會動、一次執行完就退出任務池」
 # 模式（_pursue_attack_task()），差別是必中（《99》P-28），resolve() 對它
@@ -81,7 +80,12 @@ const ALLOWED_ACTIONS := [
 # haul／struggle 是 #161 接上的：haul 是長動作，占住整段 duration（跟 nap 一樣），
 # 但不用 params.place —— 搬運去哪由搬運者自己決定。struggle 是短動作，只在被搬運
 # 時有效，走各自的 _pursue_struggle_task()，執行完就退出任務池
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "murmur", "give", "shout", "haul", "struggle", "attack"]
+#
+# persuade 是 #227 接上的：不擲骰，成敗交給被說服者自己的模型判斷（見《00》
+# 原則四）。發起者走 _pursue_persuade_task()，跟 give 一樣一次執行完就退出
+# 任務池；「送達」跟「被不被說動」是兩件事，這裡只管前者，後者是被說服者
+# 下一輪決策時的 persuaded 欄位，見 agent.gd::_resolve_pending_persuade()
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -256,6 +260,192 @@ static func validate_dialogue(data: Dictionary) -> Dictionary:
 	return _ok({"line": line, "end": end})
 
 
+# 單筆任務的通用邊界檢查：action 白名單、params 型別、talk/attack/give 的
+# 逐欄位檢查、expires_in_minutes 換算、priority／duration 範圍。從
+# validate_tasks() 的逐筆迴圈裡抽出來，讓 persuade 的 proposed_task
+# （#227）可以重用同一套，不用重複寫一份——proposed_task 跟 tasks[] 裡的
+# 一筆任務形狀完全相同，沒理由驗證規則不一樣。
+#
+# now_minutes（#268／#290）：expires_in_minutes 是相對時長，這裡換算成
+# 絕對 expires_at 要吃呼叫當下的時間——proposed_task 換算時用的是「發起者
+# 這次決策」的 now_minutes，不是被接受那一刻的；agent.gd::
+# _resolve_pending_persuade() 推進任務池前會重設這個值，見那邊的說明
+static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictionary:
+	if not task.has("action") or not task["action"] is String:
+		return _fail(ERROR_BAD_SHAPE)
+
+	var action: String = task["action"]
+	if not is_allowed_action(action):
+		return _fail(ERROR_ACTION_NOT_ALLOWED)
+
+	if task.has("params") and not task["params"] is Dictionary:
+		return _fail(ERROR_BAD_SHAPE)
+
+	# talk／attack／give 是目前有逐欄位驗證 params 的動作（talk 見 #90，
+	# attack 見 #159，give 見 #264；其餘動作還沒有）：沒有 target 的任務會被
+	# 各自的 _pursue_*_task() 誤判成「目標不存在」一路帶進任務池才發現，
+	# 不如在這一層就擋掉，跟這個檔案「外來內容一律不信任」的原則一致，
+	# 不等到執行層才發現資料是空的。give 的 target 檢查獨立成下面一段，
+	# 因為它還要多驗 count 的範圍，跟 talk／attack 共用的這段不同形狀
+	if ["talk", "attack"].has(action):
+		var talk_params: Dictionary = task.get("params", {})
+		var target: Variant = talk_params.get("target")
+		if not target is String or (target as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+
+	# give 動作的 params 驗證（#264）：target 比照 talk，缺失／非字串／
+	# 空字串在這一層就擋掉，不要等到 _pursue_give_task() 才被動吸收成
+	# 「找不到這個人」。count 拒絕分數值（如 2.5），只接受整數或代表整數
+	# 的浮點數（如 3.0）——JSON 解析可能把整數解成浮點數，所以兩種型別都
+	# 要接受，但必須是整數值
+	if action == "give":
+		var give_params: Dictionary = task.get("params", {})
+		var give_target: Variant = give_params.get("target")
+		if not give_target is String or (give_target as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+
+		if give_params.has("count"):
+			var count_value: Variant = give_params["count"]
+			if not (count_value is int or count_value is float):
+				return _fail(ERROR_BAD_SHAPE)
+			# INF 等於自己的 floor()，上面那個分數檢查放不住它，之後 int(INF)
+			# 又是不可靠的行為（實測過會生出平台相關的最小整數值）——跟 #224
+			# priority/duration 擋 INF／NaN 同一個理由，count 也不能少這關
+			if not is_finite(float(count_value)):
+				return _fail(ERROR_BAD_SHAPE)
+			# 拒絕分數：檢查浮點數是否等於其整數部分
+			if count_value is float and count_value != floor(count_value):
+				return _fail(ERROR_BAD_SHAPE)
+			# #264：跟 priority/duration 同一套「不只驗型別，還要驗量級」——
+			# 上面的檢查放行了任何有限整數值，包含 1e18 這種會讓後續 int()
+			# 轉型不可靠的離譜大數字。count 沒有 MIN_TASK_* 那種必填設計
+			# （模型不給就退回預設值 1，合法），所以只在欄位真的存在時才驗範圍
+			var count_float := float(count_value)
+			if count_float < MIN_GIVE_COUNT or count_float > MAX_GIVE_COUNT:
+				return _fail(ERROR_BAD_SHAPE)
+
+	# #268／#290：expires_in_minutes（模型填的相對時長）現在有跟
+	# priority/duration 同一套量級上限，不再只有 is_finite()——
+	# is_finite(1e300) 一樣是 true，擋不住一個實質上永遠不會過期的任務
+	# （int() 轉型後行為不可靠，見 agent.gd::_is_expired() 的說明）。
+	# 範圍是 [MIN_EXPIRES_IN_MINUTES, MAX_EXPIRES_IN_MINUTES]，固定常數，
+	# 不用像絕對值設計那樣動態依賴 now_minutes。schema 宣告的型別是
+	# integer（跟 priority/duration 同一個理由），這裡也要擋小數。
+	#
+	# 欄位維持選填（#290 本文明講「要決定 required 與否」留待之後），沒填
+	# 的話退回 MAX_EXPIRES_IN_MINUTES（一週）當預設相對時長，不會退化成
+	# 永久卡在池子裡
+	var expires_at := now_minutes + MAX_EXPIRES_IN_MINUTES
+	if task.has("expires_in_minutes"):
+		var expires_value: Variant = task["expires_in_minutes"]
+		if not (expires_value is int or expires_value is float):
+			return _fail(ERROR_BAD_SHAPE)
+		var expires_float := float(expires_value)
+		if not is_finite(expires_float) or expires_float != floor(expires_float) \
+				or expires_float < MIN_EXPIRES_IN_MINUTES or expires_float > MAX_EXPIRES_IN_MINUTES:
+			return _fail(ERROR_BAD_SHAPE)
+		expires_at = now_minutes + int(expires_float)
+
+	# duration／priority 現在是必填（見上面 plan_response_schema() 的
+	# required 清單同步改過）：兩者都要落在 MIN_TASK_*／MAX_TASK_* 範圍內，
+	# 缺欄位一律當失敗處理——不能只在「欄位存在」時才檢查範圍，模型乾脆
+	# 不給這兩個欄位就會繞過檢查，退回 .get(..., 0.0) 的預設值，
+	# 正好是想擋的那個退化情況（實測踩過這個漏洞）。這是三層保證裡
+	# 「真的保證」的那一層，json_schema 的 type/minimum/maximum／required
+	# （層 1）與 prompt 文字說明（層 2）都可能沒生效（provider 不支援
+	# schema、或模型沒照文字指示），這裡不能只信任前兩層
+	#
+	# #267：schema 層把型別從 number 收緊成 integer 之後（GBNF 只對
+	# integer 型別真的擋邊界，number 型別下 minimum/maximum 實測沒作用），
+	# 這裡也要求「數值上是整數」，維持三層同一組數字、同一種型別的原則，
+	# 不要 schema 層要求整數、驗證層卻繼續放行小數。用 float == floor(float)
+	# 判斷，不用 GDScript 的 `is int`——JSON 解析器看到 "10.0" 這種字面量
+	# 會回傳 float，那是純 prompt（沒有 schema 強制）路徑下模型完全可能
+	# 寫出的合法整數表示法，不該因為多了個小數點就整包拒絕
+	if not task.has("duration"):
+		return _fail(ERROR_BAD_SHAPE)
+	var duration_value: Variant = task["duration"]
+	if not (duration_value is int or duration_value is float):
+		return _fail(ERROR_BAD_SHAPE)
+	var duration_float := float(duration_value)
+	if not is_finite(duration_float) or duration_float != floor(duration_float) \
+			or duration_float <= MIN_TASK_DURATION or duration_float > MAX_TASK_DURATION:
+		return _fail(ERROR_BAD_SHAPE)
+
+	if not task.has("priority"):
+		return _fail(ERROR_BAD_SHAPE)
+	var priority_value: Variant = task["priority"]
+	if not (priority_value is int or priority_value is float):
+		return _fail(ERROR_BAD_SHAPE)
+	var priority_float := float(priority_value)
+	if not is_finite(priority_float) or priority_float != floor(priority_float) \
+			or priority_float < MIN_TASK_PRIORITY or priority_float > MAX_TASK_PRIORITY:
+		return _fail(ERROR_BAD_SHAPE)
+
+	# 只複製驗證過的欄位，不是原封不動放行 task。plan_response_schema() 沒有
+	# additionalProperties: false，而且 supports_json_schema 關掉的 provider
+	# 根本收不到 schema——模型多回一個欄位是隨時可能發生的事，不是異常。
+	# 放行的話 window 是字串就會讓 agent.gd 的 _in_window(window: Dictionary)
+	# 型別不符當掉，interruptible 則等於讓模型自己宣告「不准搶我」，
+	# 兩個都是把仲裁器的控制權交給回應內容。白名單跟 schema 宣告的一致
+	return _ok({
+		"action": action,
+		"params": task.get("params", {}),
+		"priority": float(task.get("priority", 0.0)),
+		"duration": float(task.get("duration", 0.0)),
+		"expires_at": expires_at,
+	})
+
+
+# persuade 專屬的 params 驗證（#227）：target／reason 必填非空字串，
+# proposed_task 選填——有填就重用 _validate_task_shape() 驗證它的形狀
+# （跟一般任務同一套邊界），不驗證內容合理性。reason 是說服的理由，自由
+# 文字、不驗證、不二次判定——跟 believed／persuaded 同一套「不驗證心智
+# 判斷內容」的原則，這裡只驗證格式，不驗證說服的理由站不站得住腳。
+# 刻意擋掉 proposed_task.action == "persuade"：巢狀說服（說服對方去說服
+# 別人）語意混亂，不是這個機制要支援的情境
+static func _validate_persuade_params(params: Variant, now_minutes: int) -> Dictionary:
+	if not params is Dictionary:
+		return _fail(ERROR_BAD_SHAPE)
+	var persuade_params := params as Dictionary
+
+	var target: Variant = persuade_params.get("target")
+	if not target is String or (target as String).strip_edges().is_empty():
+		return _fail(ERROR_BAD_SHAPE)
+	var target_name: String = (target as String).strip_edges()
+
+	var reason: Variant = persuade_params.get("reason")
+	if not reason is String or (reason as String).strip_edges().is_empty():
+		return _fail(ERROR_BAD_SHAPE)
+
+	# 跟 validate_dialogue() 的 line、update_plan 的 text 同一個理由：這段
+	# 文字會被 agent.gd::_fact_lines_summary() 原樣接進被說服者下一輪的
+	# fact_lines，沒有上限的話一句誘導或壞掉的回應可以讓對方的 prompt
+	# 越長越大。截斷而不是整包拒絕，跟其他自由文字欄位一致的寬鬆度
+	var reason_text: String = (reason as String).strip_edges()
+	if reason_text.length() > MAX_LINE_CHARS:
+		reason_text = reason_text.substr(0, MAX_LINE_CHARS)
+
+	var normalized := {
+		"target": target_name,
+		"reason": reason_text,
+	}
+
+	if persuade_params.has("proposed_task"):
+		var proposed: Variant = persuade_params["proposed_task"]
+		if not proposed is Dictionary:
+			return _fail(ERROR_BAD_SHAPE)
+		var proposed_task := proposed as Dictionary
+		if proposed_task.get("action") == "persuade":
+			return _fail(ERROR_BAD_SHAPE)
+		var proposed_result := _validate_task_shape(proposed_task, now_minutes)
+		if not proposed_result["ok"]:
+			return _fail(proposed_result["error"])
+		normalized["proposed_task"] = proposed_result["data"]
+
+	return _ok(normalized)
+
+
 # plan 回應的驗證。空陣列是合法的，意思是「不更新行程」。
 #
 # params 目前不逐欄位型別檢查——每個 action 的 params 形狀都不同（talk 對人、
@@ -292,136 +482,22 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minute
 			return _fail(ERROR_BAD_SHAPE)
 
 		var task := item as Dictionary
-		if not task.has("action") or not task["action"] is String:
-			return _fail(ERROR_BAD_SHAPE)
 
-		if not is_allowed_action(task["action"] as String):
-			return _fail(ERROR_ACTION_NOT_ALLOWED)
+		# persuade 的 params 驗證要在共用邊界檢查（_validate_task_shape()）
+		# 之前做（#227）：proposed_task 驗證通過後要正規化寫回 params，讓
+		# 共用邊界檢查與最後 append 進 tasks[] 的是同一份乾淨資料，不是模型
+		# 的原始輸入
+		if task.get("action") == "persuade":
+			var persuade_result := _validate_persuade_params(task.get("params"), now_minutes)
+			if not persuade_result["ok"]:
+				return _fail(persuade_result["error"])
+			task = task.duplicate()
+			task["params"] = persuade_result["data"]
 
-		if task.has("params") and not task["params"] is Dictionary:
-			return _fail(ERROR_BAD_SHAPE)
-
-		# talk／attack／give 是目前有逐欄位驗證 params 的動作（talk 見 #90，
-		# attack 見 #159，give 見 #264；其餘動作還沒有）：沒有 target 的任務會被
-		# 各自的 _pursue_*_task() 誤判成「目標不存在」一路帶進任務池才發現，
-		# 不如在這一層就擋掉，跟這個檔案「外來內容一律不信任」的原則一致，
-		# 不等到執行層才發現資料是空的。give 的 target 檢查獨立成下面一段，
-		# 因為它還要多驗 count 的範圍，跟 talk／attack 共用的這段不同形狀
-		if ["talk", "attack"].has(task["action"]):
-			var talk_params: Dictionary = task.get("params", {})
-			var target: Variant = talk_params.get("target")
-			if not target is String or (target as String).strip_edges().is_empty():
-				return _fail(ERROR_BAD_SHAPE)
-
-		# give 動作的 params 驗證（#264）：target 比照 talk，缺失／非字串／
-		# 空字串在這一層就擋掉，不要等到 _pursue_give_task() 才被動吸收成
-		# 「找不到這個人」。count 拒絕分數值（如 2.5），只接受整數或代表整數
-		# 的浮點數（如 3.0）——JSON 解析可能把整數解成浮點數，所以兩種型別都
-		# 要接受，但必須是整數值
-		if task["action"] == "give":
-			var give_params: Dictionary = task.get("params", {})
-			var give_target: Variant = give_params.get("target")
-			if not give_target is String or (give_target as String).strip_edges().is_empty():
-				return _fail(ERROR_BAD_SHAPE)
-
-			if give_params.has("count"):
-				var count_value: Variant = give_params["count"]
-				if not (count_value is int or count_value is float):
-					return _fail(ERROR_BAD_SHAPE)
-				# INF 等於自己的 floor()，上面那個分數檢查放不住它，之後 int(INF)
-				# 又是不可靠的行為（實測過會生出平台相關的最小整數值）——跟 #224
-				# priority/duration 擋 INF／NaN 同一個理由，count 也不能少這關
-				if not is_finite(float(count_value)):
-					return _fail(ERROR_BAD_SHAPE)
-				# 拒絕分數：檢查浮點數是否等於其整數部分
-				if count_value is float and count_value != floor(count_value):
-					return _fail(ERROR_BAD_SHAPE)
-				# #264：跟 priority/duration 同一套「不只驗型別，還要驗量級」——
-				# 上面的檢查放行了任何有限整數值，包含 1e18 這種會讓後續 int()
-				# 轉型不可靠的離譜大數字。count 沒有 MIN_TASK_* 那種必填設計
-				# （模型不給就退回預設值 1，合法），所以只在欄位真的存在時才驗範圍
-				var count_float := float(count_value)
-				if count_float < MIN_GIVE_COUNT or count_float > MAX_GIVE_COUNT:
-					return _fail(ERROR_BAD_SHAPE)
-
-		# #268／#290：expires_in_minutes（模型填的相對時長）現在有跟
-		# priority/duration 同一套量級上限，不再只有 is_finite()——
-		# is_finite(1e300) 一樣是 true，擋不住一個實質上永遠不會過期的任務
-		# （int() 轉型後行為不可靠，見 agent.gd::_is_expired() 的說明）。
-		# 範圍是 [MIN_EXPIRES_IN_MINUTES, MAX_EXPIRES_IN_MINUTES]，固定常數，
-		# 不用像絕對值設計那樣動態依賴 now_minutes。schema 宣告的型別是
-		# integer（跟 priority/duration 同一個理由），這裡也要擋小數——
-		# CodeRabbit review 對前一版（絕對值）抓到的問題一樣適用：沒擋的話
-		# 100.9 能通過範圍檢查，換算成絕對值時被截斷成 100，變成一個沒被
-		# 驗證過的值。驗證通過後直接換算成 expires_at（絕對值）存進
-		# 下面的 tasks.append()，呼叫端不需要知道模型填的是相對時長
-		#
-		# 欄位維持選填（#290 本文明講「要決定 required 與否」留待之後，不是
-		# 這個 PR 的範圍），但 CodeRabbit 抓到一個真的漏洞：沒填的話原本退回
-		# expires_at = 0，等於「永不過期」，跟這整個 PR 要擋的「任務永遠不過
-		# 期」目標矛盾。改成沒填時退回 MAX_EXPIRES_IN_MINUTES（一週）當預設
-		# 相對時長——不強制模型每次都要填，但省略時仍有個合理上限的存續時間，
-		# 不會退化成永久卡在池子裡
-		var expires_at := now_minutes + MAX_EXPIRES_IN_MINUTES
-		if task.has("expires_in_minutes"):
-			var expires_value: Variant = task["expires_in_minutes"]
-			if not (expires_value is int or expires_value is float):
-				return _fail(ERROR_BAD_SHAPE)
-			var expires_float := float(expires_value)
-			if not is_finite(expires_float) or expires_float != floor(expires_float) \
-					or expires_float < MIN_EXPIRES_IN_MINUTES or expires_float > MAX_EXPIRES_IN_MINUTES:
-				return _fail(ERROR_BAD_SHAPE)
-			expires_at = now_minutes + int(expires_float)
-
-		# duration／priority 現在是必填（見上面 plan_response_schema() 的
-		# required 清單同步改過）：兩者都要落在 MIN_TASK_*／MAX_TASK_* 範圍內，
-		# 缺欄位一律當失敗處理——不能只在「欄位存在」時才檢查範圍，模型乾脆
-		# 不給這兩個欄位就會繞過檢查，退回 .get(..., 0.0) 的預設值，
-		# 正好是想擋的那個退化情況（實測踩過這個漏洞）。這是三層保證裡
-		# 「真的保證」的那一層，json_schema 的 type/minimum/maximum／required
-		# （層 1）與 prompt 文字說明（層 2）都可能沒生效（provider 不支援
-		# schema、或模型沒照文字指示），這裡不能只信任前兩層
-		#
-		# #267：schema 層把型別從 number 收緊成 integer 之後（GBNF 只對
-		# integer 型別真的擋邊界，number 型別下 minimum/maximum 實測沒作用），
-		# 這裡也要求「數值上是整數」，維持三層同一組數字、同一種型別的原則，
-		# 不要 schema 層要求整數、驗證層卻繼續放行小數。用 float == floor(float)
-		# 判斷，不用 GDScript 的 `is int`——JSON 解析器看到 "10.0" 這種字面量
-		# 會回傳 float，那是純 prompt（沒有 schema 強制）路徑下模型完全可能
-		# 寫出的合法整數表示法，不該因為多了個小數點就整包拒絕
-		if not task.has("duration"):
-			return _fail(ERROR_BAD_SHAPE)
-		var duration_value: Variant = task["duration"]
-		if not (duration_value is int or duration_value is float):
-			return _fail(ERROR_BAD_SHAPE)
-		var duration_float := float(duration_value)
-		if not is_finite(duration_float) or duration_float != floor(duration_float) \
-				or duration_float <= MIN_TASK_DURATION or duration_float > MAX_TASK_DURATION:
-			return _fail(ERROR_BAD_SHAPE)
-
-		if not task.has("priority"):
-			return _fail(ERROR_BAD_SHAPE)
-		var priority_value: Variant = task["priority"]
-		if not (priority_value is int or priority_value is float):
-			return _fail(ERROR_BAD_SHAPE)
-		var priority_float := float(priority_value)
-		if not is_finite(priority_float) or priority_float != floor(priority_float) \
-				or priority_float < MIN_TASK_PRIORITY or priority_float > MAX_TASK_PRIORITY:
-			return _fail(ERROR_BAD_SHAPE)
-
-		# 只複製驗證過的欄位，不是原封不動放行 task。plan_response_schema() 沒有
-		# additionalProperties: false，而且 supports_json_schema 關掉的 provider
-		# 根本收不到 schema——模型多回一個欄位是隨時可能發生的事，不是異常。
-		# 放行的話 window 是字串就會讓 agent.gd 的 _in_window(window: Dictionary)
-		# 型別不符當掉，interruptible 則等於讓模型自己宣告「不准搶我」，
-		# 兩個都是把仲裁器的控制權交給回應內容。白名單跟 schema 宣告的一致
-		tasks.append({
-			"action": task["action"],
-			"params": task.get("params", {}),
-			"priority": float(task.get("priority", 0.0)),
-			"duration": float(task.get("duration", 0.0)),
-			"expires_at": expires_at,
-		})
+		var shape_result := _validate_task_shape(task, now_minutes)
+		if not shape_result["ok"]:
+			return _fail(shape_result["error"])
+		tasks.append(shape_result["data"])
 
 	# reasoning／inner_monologue：跟 validate_dialogue() 的 line 同一種處理
 	# 方式——選填字串，型別錯就整包拒絕，超長截斷不拒絕；缺席時給空字串，
@@ -484,12 +560,46 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minute
 
 		update_plan = plan_items
 
+	# persuaded／importance／valence（#227）：跟 request_plan_update 一樣，
+	# 任何時候都可以驗證放行，不受「這輪是否真的有待回應的說服事實句」影響
+	# ——呼叫端（agent.gd::_resolve_pending_persuade()）自己決定要不要理這幾
+	# 個欄位。省略 persuaded 視同「不被說動」；importance／valence 只在
+	# 純思想說服被接受時才有意義，省略時呼叫端會退回預設值，這裡不用管
+	# 「這次用不用得到」，只驗證型別／範圍——內容本身（信不信、重不重要）
+	# 不驗證、不二次判定，跟 believed 同一個原則
+	var persuaded := false
+	if data.has("persuaded"):
+		if not data["persuaded"] is bool:
+			return _fail(ERROR_BAD_SHAPE)
+		persuaded = data["persuaded"]
+
+	var importance := 50
+	if data.has("importance"):
+		var importance_value: Variant = data["importance"]
+		if not (importance_value is int or importance_value is float):
+			return _fail(ERROR_BAD_SHAPE)
+		var importance_float := float(importance_value)
+		if not is_finite(importance_float):
+			return _fail(ERROR_BAD_SHAPE)
+		# 跟 validate_reflection() 同一個理由：importance 是「這件事對我多重要」
+		# 的主觀分數，越界不是安全問題，夾制就好，不用整包 tasks 一起判失敗
+		importance = clampi(int(importance_float), 0, 100)
+
+	var valence := "neutral"
+	if data.has("valence"):
+		if not data["valence"] is String or not VALID_VALENCES.has(data["valence"]):
+			return _fail(ERROR_BAD_SHAPE)
+		valence = data["valence"]
+
 	return _ok({
 		"tasks": tasks,
 		"reasoning": reasoning,
 		"inner_monologue": inner_monologue,
 		"request_plan_update": request_plan_update,
 		"update_plan": update_plan,
+		"persuaded": persuaded,
+		"importance": importance,
+		"valence": valence,
 	})
 
 
@@ -659,7 +769,14 @@ static func _validated_optional_line(data: Dictionary, key: String) -> Variant:
 # 模型填的是相對時長，不需要像先前的絕對值設計那樣依賴呼叫當下的
 # now_minutes 動態算 schema 範圍——validate_tasks() 才需要 now_minutes
 # 把驗證過的相對值換算成絕對 expires_at，這個函式不用
-static func plan_response_schema(allow_update_plan: bool = false) -> Dictionary:
+#
+# has_pending_persuade 一樣是條件式欄位（#227）：只有這輪 context 真的帶了
+# 待回應的說服事實句，才把 persuaded／importance／valence 加進去。
+# importance／valence 只在「純思想說服」（沒有 proposed_task）被接受時才
+# 有意義，但這裡不細分「這筆待回應是行動說服還是純思想說服」——兩種都一起
+# 給這三個欄位，多給的那兩個模型不會用到就好，不值得為了少給兩個欄位
+# 多一個判斷維度，見 issue #227 討論串
+static func plan_response_schema(allow_update_plan: bool = false, has_pending_persuade: bool = false) -> Dictionary:
 	var properties := {
 		"reasoning": {"type": "string"},
 		"inner_monologue": {"type": "string"},
@@ -698,6 +815,11 @@ static func plan_response_schema(allow_update_plan: bool = false) -> Dictionary:
 				"required": ["text"],
 			},
 		}
+
+	if has_pending_persuade:
+		properties["persuaded"] = {"type": "boolean"}
+		properties["importance"] = {"type": "number", "minimum": 0, "maximum": 100}
+		properties["valence"] = {"type": "string", "enum": VALID_VALENCES}
 
 	return {
 		"type": "json_schema",
