@@ -81,6 +81,22 @@ const EAT_SATIETY_RECOVERY := {
 	"herb_soup": 20.0,
 }
 
+## drink() 的失敗原因碼，形狀比照 EAT_*（#163）
+const DRINK_OK := ""
+const DRINK_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法喝東西
+const DRINK_NO_DRINK := "NO_DRINK"		# 背包裡沒有 ItemDatabase 分類為 drink 的物品
+const DRINK_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 hydration，不能先扣飲品
+
+## 各飲品 item_id 喝下去回復多少 hydration。抄《規格書 08》§3-2「口渴回復」欄位
+## 取絕對值，理由跟 EAT_SATIETY_RECOVERY 一樣（改名前 thirst 越低越好，
+## P-32 改成 hydration 越高越好之後方向反過來、數字不變）。ale 喝下去也會
+## 加 alcohol，那條線是 #165 的範圍，這裡先不接
+const DRINK_HYDRATION_RECOVERY := {
+	"water": 40.0,
+	"ale": 20.0,
+	"spirit": 10.0,
+}
+
 const GIVE_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE 一樣的距離門檻，2 格
 
 ## give_to() 的失敗原因碼，形狀比照 TALK_*／BUY_*。除了這四個，give_to()
@@ -881,6 +897,39 @@ func eat() -> String:
 
 	stats.add("satiety", EAT_SATIETY_RECOVERY.get(item_id, 0.0))
 	return EAT_OK
+
+
+# ---- 飲用 ----
+
+# 找背包裡第一筆飲品類物品的摘要，找不到回空字典。跟 _find_food_slot() 同一招，
+# 走 ItemDatabase 的 category == "drink"，不是硬編碼白名單（#163）
+func _find_drink_slot() -> Dictionary:
+	for entry in inventory.get_summary():
+		var item_id: String = entry["item_id"]
+		if ItemDatabase.get_item(item_id).get("category", "") == "drink":
+			return entry
+	return {}
+
+# 喝掉背包裡一份飲品：扣一個、回復對應量的 hydration。跟 eat() 同一套
+# 「每個動作都要能講出為什麼失敗」規則與 remove_item() 先確認 REMOVE_OK
+# 才加值的順序（#163）
+func drink() -> String:
+	if inventory == null:
+		return DRINK_NO_INVENTORY
+
+	var item := _find_drink_slot()
+	if item.is_empty():
+		return DRINK_NO_DRINK
+	if stats == null:
+		return DRINK_NO_STATS
+
+	var item_id: String = item["item_id"]
+	var remove_reason := inventory.remove_item(item_id, 1)
+	if remove_reason != Inventory.REMOVE_OK:
+		return DRINK_NO_DRINK
+
+	stats.add("hydration", DRINK_HYDRATION_RECOVERY.get(item_id, 0.0))
+	return DRINK_OK
 
 
 # ---- 送禮 ----
