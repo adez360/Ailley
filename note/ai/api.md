@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-19
+updated: 2026-08-20
 ---
 
 # api
@@ -20,12 +20,15 @@ env  Godot 4.5.1-stable · gl_compatibility · default_texture_filter=0
 ## autoload
 
 ```text
-GameManager   scripts/core/game_manager.gd
-GameClock     scripts/core/GameClock.gd
-AIService     scripts/ai/ai_service.gd
-DatabaseManager   scripts/database/DatabaseManager.gd
+GameManager       scripts/core/game_manager.gd
+GameClock         scripts/core/GameClock.gd
+AIService         scripts/ai/ai_service.gd
+SaveService       scripts/save/json_save_service.gd
 _mcp_game_helper  addons/godot_ai/runtime/game_helper.gd   † 勿移除
+DatabaseManager   scripts/database/DatabaseManager.gd
 ```
+
+順序即 `project.godot` 的 autoload 載入順序。
 
 ## groups
 
