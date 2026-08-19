@@ -142,6 +142,18 @@ var _give_pursuit_last_distance := INF
 var _attack_pursuit_stuck_ticks := 0
 var _attack_pursuit_last_distance := INF
 
+# persuade 任務用的卡住偵測（#227），跟 _give_pursuit_* 同一套理由與收尾方式
+# （卡住就真的放棄，不是只警告）——共用邏輯見 _pursuit_stuck_progress()（#266）
+var _persuade_pursuit_stuck_ticks := 0
+var _persuade_pursuit_last_distance := INF
+
+# 送達（已對目標開口，不論對方是否忙碌拒絕）後設 true，擋掉 _pursue_persuade_task()
+# 後續每個 tick 重複呼叫 try_record_pending_persuade()／move_to()（P-09，
+# CodeRabbit review 抓到：persuade 原本送達當下就 _finish_task_and_request_next()，
+# 沒有真正佔滿 duration）。跟 give／shout「送達就結束」不同，persuade 佔滿
+# duration 走 gather／hunt_small 那套 _reevaluate_once() 通用收尾機制
+var _persuade_delivered := false
+
 # 自己成功發起、目前正在進行中的 talk 任務 id／來源。只在 talk_to() 真的成功
 # 那一刻設值，exit_conversation() 靠這個而不是「當下的 _current_task」判斷對話
 # 結束時該清掉哪一筆——理由見 exit_conversation() 自己的註解。
@@ -151,6 +163,14 @@ var _attack_pursuit_last_distance := INF
 # 觸發下一次決策請求
 var _active_talk_task_id := ""
 var _active_talk_task_source := ""
+
+# 待回應的說服嘗試（#227，《01-3》§3 事實句機制）。空字典代表沒有待回應；
+# 有值時形狀為 {"persuader": String, "reason": String, "proposed_task":
+# Dictionary}（"proposed_task" 只在行動說服時存在，純思想說服沒有這個 key）。
+# 單一欄位不是佇列——已有待回應記錄時新的說服直接判定失敗（見
+# try_record_pending_persuade()），不覆蓋、不排隊，避免舊記錄被靜默蓋掉、
+# 發起者完全不知道自己的嘗試消失了
+var _pending_persuade: Dictionary = {}
 
 # 正在對陌生人做「！」反應。那 2 秒刻意站著不動，期間不重新起步——
 # GameClock 一個遊戲分鐘就是 1 現實秒，不擋的話 1 秒後就被送回路上，
@@ -729,9 +749,19 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	# 還是要——這通吃 await，重試之間可能過了不少遊戲時間，用重新取得的
 	# 「現在」換算的話，同一份回應在不同時間點驗證會算出不同的絕對值
 	var now_minutes := _now_minutes()
+
+	# #227：捕一次「這輪送出的信封裡有沒有問到待回應的說服事實句」，跟
+	# envelope／schema 是同一個時間點。這通吃 await，等待期間可能有新的
+	# persuade 送達（原本是空的才收得進來，見 try_record_pending_persuade()
+	# 的忙碌拒絕）——但那份新記錄的事實句從沒進過這次送出去的 prompt，回應
+	# 回來後不能拿它去讀一個模型根本沒被問過的欄位，也不能因此清掉它，
+	# 所以下面只在 had_pending_persuade 為真時才碰 _pending_persuade
+	var had_pending_persuade := not _pending_persuade.is_empty()
+
 	var visible: Array[Character] = vision.get_visible_characters() if vision != null else []
 	var envelope := PromptBuilder.build_plan_envelope(
-		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan
+		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan,
+		_fact_lines_summary(), had_pending_persuade
 	)
 	var validator := func(data: Dictionary) -> Dictionary:
 		return AISchema.validate_tasks(data, effective_allow_update_plan, now_minutes)
@@ -770,6 +800,9 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	var update_plan: Variant = data.get("update_plan")
 	if update_plan != null:
 		_apply_today_plan(update_plan)
+
+	if had_pending_persuade:
+		_resolve_pending_persuade(data)
 
 	_reevaluate()
 
@@ -864,6 +897,36 @@ func _llm_task_count() -> int:
 		if task.get("source", "") == "llm":
 			count += 1
 	return count
+
+# 找出目前池子裡分數最低的 llm 來源任務並移除，讓一筆「一定要塞進去」的
+# 任務有位置——目前唯一呼叫端是 _resolve_pending_persuade()（見那邊的
+# 說明）。只挑 llm 來源，不動 schedule／debug 任務，跟 _push_llm_tasks()
+# dedup 邏輯篩選的範圍一致；用跟 _reevaluate_once() 選 best 候選同一套
+# _score()，被擠掉的一定是仲裁器接下來本來就最不會選中的那筆
+func _evict_lowest_priority_llm_task() -> void:
+	var now := "%02d:%02d" % [GameClock.hour, GameClock.minute]
+	var worst_id := ""
+	var worst_score := INF
+	for task in _tasks:
+		if task.get("source", "") != "llm":
+			continue
+		var score := _score(task, now)
+		if score < worst_score:
+			worst_score = score
+			worst_id = task.get("id", "")
+	if worst_id.is_empty():
+		return
+	_remove_task(worst_id)
+	# 被擠掉的剛好是目前正在做的那筆——照 _reevaluate_once() 過期清除那條
+	# 路徑同一套處理，不留著一個已經不在 _tasks 裡、卻還被 _current_task
+	# 指著的殘影
+	if _current_task.get("id", "") == worst_id:
+		stop_moving()
+		_pursued_place = ""
+		_pursuit_done = false
+		_current_task = {}
+		current_place = ""
+		current_state = "idle"
 
 func _remove_task(id: String) -> void:
 	if id.is_empty():
@@ -1176,13 +1239,18 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 ##
 ## 刻意不含 attack：P-28 已拍板 MVP 必中、不做閃避／格擋，不是《01-2》§2
 ## 通用成功率公式的技能檢定，resolve() 的 "attack" 分支直接放行，不查這張表
+##
+## 刻意不含 persuade：《00》原則四拍板它是心智判斷類行為，成敗交給被說服者
+## 自己的模型判斷，不是這裡的技能檢定（見 #227，resolve() 的 "persuade"
+## 分支直接放行，不查這張表）——CodeRabbit review 抓到舊資料殘留在這張表
+## 裡、resolve() 的 persuade 分支又漏了 return，兩個湊在一起會讓 persuade
+## 真的落進 _roll_success() 擲骰，直接違反這條拍板
 const SUCCESS_PARAMS := {
 	"hunt_small": {"base": 0.60, "trait": "courage", "coef": 0.002},
 	"hunt_large": {"base": 0.30, "trait": "courage", "coef": 0.003},
 	"gather": {"base": 0.80, "trait": "diligence", "coef": 0.001},
 	"fish": {"base": 0.55, "trait": "diligence", "coef": 0.0015},
 	"steal": {"base": 0.35, "trait": "courage", "coef": 0.0025},
-	"persuade": {"base": 0.40, "trait": "sociability", "coef": 0.003},
 	"perform": {"base": 0.70, "trait": "romanticism", "coef": 0.003},
 }
 
@@ -1300,8 +1368,23 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			if matches.size() > 1:
 				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
 			return {"success": true, "reason": ""}
-		# move_to/sleep/nap/rest/wash/idle/shout 目前都沒有額外的硬規則要擋
-		# （shout 沒有目標、沒有前提，天生沒有硬規則可擋）
+		"persuade":
+			# 跟 attack 同一套「硬規則過了就直接放行，不落進下面的 _roll_success()」
+			# ——persuade 不擲骰（見《00》原則四），成敗交給被說服者自己的模型
+			# 判斷，不是這裡的硬規則。SUCCESS_PARAMS 本來就不該有 persuade 的
+			# 條目（那是這個機制定案前殘留的舊資料，已經一併清掉），這裡少了
+			# return 的話會直接落進 _roll_success()，變成真的在擲骰，跟整個
+			# 設計互相矛盾
+			var target_name: String = str(params.get("target", ""))
+			var matches := _find_all_characters_by_name(target_name)
+			if matches.is_empty():
+				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
+			if matches.size() > 1:
+				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
+			return {"success": true, "reason": ""}
+		# move_to/sleep/nap/rest/wash/idle/eat/shout 目前都沒有額外的硬規則要擋
+		# （eat 落地後要在這裡加「宣稱吃了背包裡沒有的食物」的檢查，見 #114；
+		# shout 沒有目標、沒有前提，天生沒有硬規則可擋）
 		_:
 			pass
 
@@ -1340,6 +1423,9 @@ func _select(task: Dictionary, now_minutes: int) -> void:
 	_give_pursuit_last_distance = INF
 	_attack_pursuit_stuck_ticks = 0
 	_attack_pursuit_last_distance = INF
+	_persuade_pursuit_stuck_ticks = 0
+	_persuade_pursuit_last_distance = INF
+	_persuade_delivered = false
 
 # 往 _current_task 的方向前進。無條件每次重算都跑一次，不管這次有沒有
 # 剛選定新任務——對話中會在這裡先返回、不移動，等下一次重算（對話結束後
@@ -1398,6 +1484,11 @@ func _pursue_current_task() -> void:
 	# 那條路徑只會讓角色走去 params.place 站著，沒有任何東西會真的呼叫 eat()
 	if current_state == "eat":
 		_pursue_eat_task()
+		return
+
+	# persuade（#227）跟 talk／give 同理：目標是會動的角色，不是固定地點
+	if current_state == "persuade":
+		_pursue_persuade_task()
 		return
 
 	if current_place.is_empty():
@@ -1802,6 +1893,193 @@ func _attack_failure_message(failure: String) -> String:
 			return "距離太遠，攻擊不到"
 		_:
 			return "攻擊沒有成功"
+
+# persuade 任務的執行（#227）：目標跟 talk／give 一樣是會動的角色，走到範圍
+# 內才生效，不擲骰、恆送達——「送不送達」（有沒有走到、對方在不在）跟
+# 「被不被說動」是兩件事，這裡只管前者。後者交給目標角色自己下一輪決策時
+# 的 persuaded 欄位，見 _resolve_pending_persuade()。
+#
+# 跟 give／shout 不同：P-09 拍板 persuade 佔用固定 duration（模型填的
+# 建議值 10 分鐘），送達後不立刻退出任務池，改用 gather／hunt_small 那套
+# _reevaluate_once() 通用事件驅動機制在 duration 走完時收尾
+func _pursue_persuade_task() -> void:
+	# 已送達、正在佔用 duration 等 _reevaluate_once() 的通用機制收尾——
+	# 不用每個 tick 重跑 resolve()／找目標／追逐那一整套
+	if _persuade_delivered:
+		return
+
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		if not result["success"]:
+			_finish_task_and_request_next()
+			return
+
+	var params: Dictionary = _current_task.get("params", {})
+	var target_name: String = str(params.get("target", ""))
+	var target := _find_character_by_name(target_name)
+
+	if target == null:
+		last_action_result = "找不到這個人，可能已經離開了"
+		_finish_task_and_request_next()
+		return
+
+	# 玩家沒有 LLM 決策迴圈，persuaded 這條路徑走不通——見 issue #305。
+	# llm_decision_enabled 關著的 Agent 也一樣走不通：_ready() 一律
+	# add_to_group("agents")，不管這個旗標開不開（預設就是關），只檢查
+	# 有沒有在 agents 群組擋不住——若放行，_pending_persuade 寫上去之後
+	# 永遠沒有 _request_next_decision() 會被觸發去清掉它（見 llm_decision_enabled
+	# 關閉時「沒有任務做完就重新決策那條路徑」的既有說明），這筆待回應記錄會
+	# 卡死，之後任何人都說服不了這個目標（忙碌拒絕永遠擋著）
+	if not (target.is_in_group("agents") and (target as Agent).llm_decision_enabled):
+		last_action_result = "這個人好像沒辦法被說服"
+		_finish_task_and_request_next()
+		return
+
+	var distance := get_body_position().distance_to(target.get_body_position())
+	if distance > TALK_RANGE:
+		# 走不到跟 give 一樣只警告不放棄——但沒有「對方暫時忙碌」這種值得
+		# 下個遊戲分鐘重試的情境，走不到就是走不到，直接結束這筆任務
+		if not move_to(target.get_body_position()):
+			push_warning("Agent %s: 走不到說服對象 %s" % [character_name, target.character_name])
+			last_action_result = "靠近不了對方，話說不出口"
+			_finish_task_and_request_next()
+			return
+
+		var progress := _pursuit_stuck_progress(
+			distance, _persuade_pursuit_last_distance, _persuade_pursuit_stuck_ticks
+		)
+		_persuade_pursuit_stuck_ticks = progress["stuck_ticks"]
+		_persuade_pursuit_last_distance = distance
+
+		if progress["threshold_reached"]:
+			push_warning("Agent %s: 說服對象 %s 卡住走不到，放棄" % [character_name, target.character_name])
+			last_action_result = "靠近不了對方，話說不出口"
+			_finish_task_and_request_next()
+		return
+
+	stop_moving()
+	var reason: String = str(params.get("reason", ""))
+	var proposed_task: Dictionary = params.get("proposed_task", {})
+	var recorded: bool = (target as Agent).try_record_pending_persuade(character_name, character_id, reason, proposed_task)
+	if recorded:
+		last_action_result = "你試著說服 %s，等他自己想清楚" % target.character_name
+	else:
+		last_action_result = "%s 好像還在想別人剛才說的話，你的話插不進去" % target.character_name
+	_persuade_delivered = true
+	# 不在這裡呼叫 _finish_task_and_request_next()：P-09 拍板 persuade 佔用
+	# 固定時長（模型填的建議值 10 分鐘），跟 gather／hunt_small 同一套用法——
+	# _reevaluate_once() 的通用事件驅動迴圈會在 duration 走完時自動移除
+	# 這筆任務、觸發下一次決策，不是 give／shout 那種送達就立刻結束的
+	# 一次性動作（CodeRabbit review 抓到：原本送達當下就呼叫
+	# _finish_task_and_request_next()，等於忽略了 duration，任務在抵達的
+	# 那一分鐘就結束）。_persuade_delivered 擋掉 duration 還沒走完前，
+	# 後續每個 tick 重複呼叫 try_record_pending_persuade()
+
+# 給發起者呼叫，把說服嘗試寫進自己的待回應記錄（#227）。已有待回應記錄時
+# 直接拒絕（忙碌拒絕，比照 talk_to() 的 TALK_TARGET_BUSY），不覆蓋、不排隊
+# ——避免舊記錄被靜默蓋掉，讓第一個說服者的嘗試無聲消失、自己完全不知道
+func try_record_pending_persuade(persuader: String, persuader_id: String, reason: String, proposed_task: Dictionary) -> bool:
+	if not _pending_persuade.is_empty():
+		return false
+
+	var pending := {"persuader": persuader, "persuader_id": persuader_id, "reason": reason}
+	if not proposed_task.is_empty():
+		pending["proposed_task"] = proposed_task
+	_pending_persuade = pending
+	return true
+
+# 待回應事實句摘要（#227，《01-3》§3）。目前唯一來源是 persuade——其他
+# 《01-3》§3 列的觸發條件（多久沒說話、地點首次造訪等）還沒接進來，不在
+# 這次範圍內
+func _fact_lines_summary() -> Array[String]:
+	var lines: Array[String] = []
+	if _pending_persuade.is_empty():
+		return lines
+
+	var persuader: String = str(_pending_persuade.get("persuader", ""))
+	var reason: String = str(_pending_persuade.get("reason", ""))
+	var proposed_task: Dictionary = _pending_persuade.get("proposed_task", {})
+
+	if proposed_task.is_empty():
+		lines.append("剛才 %s 試著說服你：%s，你被說動了嗎？" % [persuader, reason])
+	else:
+		lines.append("剛才 %s 試著說服你（%s），希望你能去做「%s」，你被說動了嗎？" % [
+			persuader, reason, _describe_task_intent(proposed_task)
+		])
+	return lines
+
+# 把 proposed_task 的 action／params 組成一句人看得懂的意圖描述，給
+# _fact_lines_summary() 用（#227，CodeRabbit review 抓到只給英文 action
+# 代號資訊不足——模型判斷要不要被說動時看不到具體內容）。沒有現成的
+# action→中文對照表可用，這裡只補目標／地點，不翻譯動作本身——跟
+# debug_console.gd 的 tasks 指令顯示一致，動作代號本來就是直接秀出來，
+# 不是這個機制特有的取捨
+func _describe_task_intent(task: Dictionary) -> String:
+	var action: String = str(task.get("action", ""))
+	var params: Dictionary = task.get("params", {})
+	var target: String = str(params.get("target", ""))
+	var place: String = str(params.get("place", ""))
+	if not target.is_empty():
+		return "%s（對象：%s）" % [action, target]
+	if not place.is_empty():
+		return "%s（地點：%s）" % [action, place]
+	return action
+
+# 消化這輪待回應的說服結果（#227）。只在 _request_next_decision() 確認這輪
+# envelope 真的問過模型（見那邊 had_pending_persuade 的說明）才會被呼叫——
+# 不驗證、不二次判定 persuaded 本身，只決定「接受了要做什麼」：行動說服
+# （帶 proposed_task）機械式推進任務池，跟一般 LLM 任務同一套驗證與仲裁；
+# 純思想說服（沒有 proposed_task）寫進記憶。不接受什麼都不做。不論結果都
+# 清掉待回應記錄，不重複注入同一句事實句
+func _resolve_pending_persuade(data: Dictionary) -> void:
+	var pending := _pending_persuade
+	_pending_persuade = {}
+
+	if not data.get("persuaded", false):
+		return
+
+	var proposed_task: Dictionary = pending.get("proposed_task", {})
+	if not proposed_task.is_empty():
+		# proposed_task 的 expires_at 是發起者「決策當下」給的絕對遊戲分鐘，
+		# 不是「被接受這一刻」的——中間隔著發起者追上目標、等目標下一輪自然
+		# 決策這兩段可能耗掉數十遊戲分鐘的過程，原始 expires_at 這時很可能
+		# 已經過期。照原樣推進的話，_is_expired() 會把它濾掉，說服判定成功
+		# 卻什麼都不會發生、也不會有任何訊息。
+		#
+		# 不能清成 0：_is_expired()（見下方說明）把 expires_at <= 0 當「永不
+		# 過期」，這筆任務選不上時會永久佔住 LLM_TASK_POOL_CAP 一格，直到
+		# 角色重開機（CodeRabbit review 抓到，跟一般 LLM 任務的處理方式不
+		# 一致——_validate_task_shape() 一律填 now_minutes + MAX_EXPIRES_IN_MINUTES，
+		# 沒有無限期的路徑）。改成以接受當下重新換算存續時間，跟一般 LLM
+		# 任務省略 expires_in_minutes 時的預設值同一套
+		var accepted := proposed_task.duplicate()
+		accepted["expires_at"] = _now_minutes() + AISchema.MAX_EXPIRES_IN_MINUTES
+
+		# _push_llm_tasks() 池滿時只 push_warning 就靜默丟棄新任務（見它自己
+		# 的說明）——對一般 LLM 任務來說「模型這輪的意圖沒排進去，下一輪再問
+		# 一次」還好；但這裡是已經答應目標「你被說動了」之後的承諾，answer
+		# 已經定案、_pending_persuade 也已經在上面清空，沒有「下一輪再問」
+		# 這條路，池滿會讓這個承諾憑空消失、無聲無息（CodeRabbit review 抓
+		# 到）。用先騰出一格再推進的方式保證塞得進去，代價是犧牲池子裡分數
+		# 最低的既有 llm 任務——跟仲裁器本來就會用分數決定誰該留下是同一套
+		# 邏輯，只是這裡改成事後、非比較式地騰位置
+		if _llm_task_count() >= LLM_TASK_POOL_CAP:
+			_evict_lowest_priority_llm_task()
+		_push_llm_tasks([accepted], {})
+		return
+
+	if memory == null:
+		return
+
+	var reason: String = str(pending.get("reason", ""))
+	var importance: int = int(data.get("importance", 50))
+	var valence: String = str(data.get("valence", "neutral"))
+	# related_npcs 存的是 character_id，不是顯示名——跟 memory.gd 的欄位定義
+	# 一致，才能靠這個欄位正確連結到發起說服的那個角色（CodeRabbit review 抓到
+	# 這裡原本傳的是 persuader 顯示名，會讓記憶連不回角色）
+	var persuader_id: String = str(pending.get("persuader_id", ""))
+	memory.add_candidate(reason, importance, valence, [persuader_id] as Array[String])
 
 # shout 任務的執行（#158）：不像 give／talk 有會動的目標要追，原地喊一聲當下
 # 就結束，不需要追逐或等待抵達——resolve() 一過就廣播，立刻退出任務池
