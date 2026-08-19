@@ -49,40 +49,46 @@ const MIGRATIONS: Array[Dictionary] = [
 	{
 		"version": 2,
 		"name": "Backfill water.is_perishable and ale.decay_rate",
-		"apply": func(db) -> bool:
-			# 修正先前 seed 遺漏的平衡數值：
-			# - water.is_perishable 應為 0（不腐壞）
-			# - ale.decay_rate 應為 0.3
-			# 只更新這兩個 item_id，不影響其他資料。
-			var water_sql := """
-			UPDATE item
-			SET is_perishable = 0
-			WHERE item_id = 'water';
-			"""
-
-			var ale_sql := """
-			UPDATE item
-			SET decay_rate = 0.3
-			WHERE item_id = 'ale';
-			"""
-
-			if not db.query(water_sql):
-				push_error(
-					"[DatabaseSchema] Migration 2: Failed to update water.is_perishable: "
-					+ db.error_message
-				)
-				return false
-
-			if not db.query(ale_sql):
-				push_error(
-					"[DatabaseSchema] Migration 2: Failed to update ale.decay_rate: "
-					+ db.error_message
-				)
-				return false
-
-			return true
+		"apply": Callable(DatabaseSchema, "_migrate_v2_backfill_decay")
 	}
 ]
+
+
+## Migration 2：修正先前 seed 遺漏的平衡數值——
+## water.is_perishable 應為 0（不腐壞）、ale.decay_rate 應為 0.3。
+## 只更新這兩個 item_id，不影響其他資料。獨立成具名函式而不是內嵌
+## lambda：多陳述式的 block lambda 直接當 const 陣列/字典的值寫，
+## GDScript parser 會在陣列結尾的 unindent 認錯縮排層級（實測 Parse Error），
+## 獨立成函式沒有這個問題，也跟 _apply_migrations／_get_user_version 等既有
+## static func 同一套寫法。
+static func _migrate_v2_backfill_decay(db) -> bool:
+	var water_sql := """
+	UPDATE item
+	SET is_perishable = 0
+	WHERE item_id = 'water';
+	"""
+
+	var ale_sql := """
+	UPDATE item
+	SET decay_rate = 0.3
+	WHERE item_id = 'ale';
+	"""
+
+	if not db.query(water_sql):
+		push_error(
+			"[DatabaseSchema] Migration 2: Failed to update water.is_perishable: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query(ale_sql):
+		push_error(
+			"[DatabaseSchema] Migration 2: Failed to update ale.decay_rate: "
+			+ db.error_message
+		)
+		return false
+
+	return true
 
 
 static func initialize(db) -> bool:
