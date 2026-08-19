@@ -1974,10 +1974,16 @@ func _resolve_pending_persuade(data: Dictionary) -> void:
 		# 不是「被接受這一刻」的——中間隔著發起者追上目標、等目標下一輪自然
 		# 決策這兩段可能耗掉數十遊戲分鐘的過程，原始 expires_at 這時很可能
 		# 已經過期。照原樣推進的話，_is_expired() 會把它濾掉，說服判定成功
-		# 卻什麼都不會發生、也不會有任何訊息。清成 0（不過期），接受當下
-		# 重新起算存續時間，不沿用一個時間基準已經不對的舊值
+		# 卻什麼都不會發生、也不會有任何訊息。
+		#
+		# 不能清成 0：_is_expired()（見下方說明）把 expires_at <= 0 當「永不
+		# 過期」，這筆任務選不上時會永久佔住 LLM_TASK_POOL_CAP 一格，直到
+		# 角色重開機（CodeRabbit review 抓到，跟一般 LLM 任務的處理方式不
+		# 一致——_validate_task_shape() 一律填 now_minutes + MAX_EXPIRES_IN_MINUTES，
+		# 沒有無限期的路徑）。改成以接受當下重新換算存續時間，跟一般 LLM
+		# 任務省略 expires_in_minutes 時的預設值同一套
 		var accepted := proposed_task.duplicate()
-		accepted["expires_at"] = 0
+		accepted["expires_at"] = _now_minutes() + AISchema.MAX_EXPIRES_IN_MINUTES
 		_push_llm_tasks([accepted], {})
 		return
 
