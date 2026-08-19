@@ -182,6 +182,11 @@ var _reacting := false
 # _consider_switch() 靠它決定要用 MIN_COMMIT 還是 LLM_WAIT_MIN_COMMIT
 var _awaiting_decision := false
 
+# 同一套道理用在 request_sleep_reflection()：睡眠事件觸發跟 debug_console.gd
+# 的 `reflect` 指令都可能呼叫它，這通吃 await，沒有這個旗標擋，重疊呼叫會
+# 讓兩個請求同時讀寫同一份 _daily_events（CodeRabbit review 抓到）
+var _sleep_reflection_in_flight := false
+
 ## 給 debug_console.gd 判斷要不要印「正在問地端模型...」用——open 呼叫
 ## debug_set_llm_decision(true) 前先問一次，才不會在請求根本沒送出（已經有
 ## 一份在飛）的情況下印出誤導的等待訊息
@@ -678,8 +683,16 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 ## 觸發時機目前只有 debug_console.gd 的 `reflect` 指令手動呼叫——真正的睡眠
 ## 動作（#112）落地後，在角色進入睡眠那個時間點呼叫這個函式，這裡不用改
 func request_sleep_reflection() -> Dictionary:
+	# 同一時間只能有一個反思請求在飛（CodeRabbit review 抓到）：睡眠事件跟
+	# debug_console.gd 的 `reflect` 指令都會呼叫這裡，這通吃 await，重疊呼叫
+	# 會讓兩個請求同時讀寫同一份 _daily_events——後回來的那個 filter() 會用
+	# 自己那批 scored_ids 蓋掉先回來那個已經處理過的結果，兩邊都可能重複計分
+	# 或漏算
+	if _sleep_reflection_in_flight:
+		return {"ok": false}
 	if memory == null or _daily_events.is_empty():
 		return {"ok": false}
+	_sleep_reflection_in_flight = true
 
 	var events_sent := _daily_events.duplicate(true)
 
@@ -705,6 +718,7 @@ func request_sleep_reflection() -> Dictionary:
 	var envelope := PromptBuilder.build_reflection_envelope(self, events_sent)
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	if not result["ok"]:
+		_sleep_reflection_in_flight = false
 		return {"ok": false}
 
 	var data: Dictionary = result["data"]
@@ -733,6 +747,7 @@ func request_sleep_reflection() -> Dictionary:
 
 	# L1 清空（流程圖⑤）已經在呼叫端（_reevaluate_once() 偵測到入睡轉換時）
 	# 統一做過了，不管反思成不成功都會清——這裡不再重複清一次，見那邊的註解
+	_sleep_reflection_in_flight = false
 	return {"ok": true}
 
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
