@@ -41,3 +41,7 @@ position = Vector2(185, 50)
 
 [node name="VendingMachineHerbShop" parent="." instance=ExtResource("13_yc10j")]
 position = Vector2(-120, 88)
+catalog = {
+"herb_soup": 15.0,
+"medicine": 45.0
+}
