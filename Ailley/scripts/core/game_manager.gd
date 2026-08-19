@@ -10,6 +10,13 @@ const DEFAULT_WORLD_ID := "world_001"
 ## 後者是角色層的事，不在這裡算
 var allow_player_join := true
 
+## 主選單按下「繼續遊戲」時設為 true，main.tscn 的 MainScene._ready() 讀到
+## true 才會套用世界／角色存檔，讀完立刻重設回 false（見 scripts/core/main_scene.gd）。
+## GameManager 是 autoload，換場景不會重置，這個旗標是唯一分辨「這次進
+## main.tscn 是繼續遊戲還是開新遊戲」的方式——兩條路徑進場景後場景本身
+## 完全一樣，差別只在要不要套用存檔
+var continue_requested := false
+
 var npc_data = {}
 
 # 節點名 -> schedule_template。行程模板是「用哪份資料」，而它跟角色的對應

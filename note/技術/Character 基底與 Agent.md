@@ -75,7 +75,9 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 而不是印完錯誤讓兩隻共用。共用 id 等於共用一份關係與記憶
 （`relationships.gd` 拿 id 當 key）。生成的 id 不會撞，會走到這條的是場景裡手寫重複。
 
-id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存檔]]。
+走第 2 層（`npc_schedule.json` identities）的固定 NPC 已經跨場次穩定；
+Player 沒有對應的 identities 項目，id 目前每次開遊戲都重新生成，追蹤在
+[issue #399](https://github.com/adez360/Ailley/issues/399)，細節見 [[存檔]]。
 
 > [!important] 為什麼 `schedule_template` 不共用 `character_id`
 > 它是「用哪份資料」不是「我是誰」。id 既然是全遊戲唯一身分，

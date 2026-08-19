@@ -19,6 +19,15 @@ extends Node
 ## 判斷目前是哪一個。粒度是整包讀寫（見《14》§2.2），不支援局部欄位更新。
 
 
+## 這個角色有沒有存檔紀錄——只判斷存不存在，不管內容讀不讀得出來。
+## 用來跟 get_character() 回傳空 Dictionary 的兩種原因分開：從沒存過
+## （這裡回傳 false，呼叫端當成新角色）vs 存過但讀不出來、檔案損毀
+## （這裡回傳 true 但 get_character() 仍回傳空，呼叫端要當成讀檔失敗處理）
+func has_character(id: String) -> bool:
+	push_error("SaveService: has_character 未實作")
+	return false
+
+
 ## 讀一個角色的完整資料，找不到回傳空 Dictionary
 func get_character(id: String) -> Dictionary:
 	push_error("SaveService: get_character 未實作")
@@ -33,6 +42,12 @@ func get_character(id: String) -> Dictionary:
 ##   - 返回 true（成功）或 false（失敗，含版本衝突）
 func save_character(id: String, data: Dictionary) -> bool:
 	push_error("SaveService: save_character 未實作")
+	return false
+
+
+## 這個世界有沒有存檔紀錄——語意跟 has_character() 一致，見上方註解
+func has_world(id: String) -> bool:
+	push_error("SaveService: has_world 未實作")
 	return false
 
 
