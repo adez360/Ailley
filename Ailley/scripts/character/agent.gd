@@ -270,6 +270,57 @@ func _push_daily_event(content: String) -> void:
 	if _daily_events.size() > DAILY_EVENTS_CAP:
 		_daily_events.pop_front()
 
+## ---- 事實句機制（#338，《01-3》§3）----
+##
+## 1 tick = 10 遊戲分鐘（《02》§1-4／《01-3》§3 三處門檻互相驗證過），下面
+## 門檻常數統一換算成遊戲分鐘，跟 _now_minutes() 同一個時間基準
+
+const FACT_SOCIAL_SILENCE_3H_MIN := 180		# 18 tick
+const FACT_SOCIAL_SILENCE_HALF_DAY_MIN := 360	# 36 tick
+const FACT_SOCIAL_SILENCE_1_DAY_MIN := 1440	# 144 tick
+const FACT_GOAL_STALE_MIN := 360				# 36 tick
+const FACT_CONSECUTIVE_FAILURE_THRESHOLD := 3
+
+## 上次「跟人講完話」的時間點，_ready() 時初始化成出生那一刻，不是 0——
+## 不然剛出生的角色會立刻背著「已經一整天沒說話」的事實句
+var _last_social_minute := 0
+
+## current_goal 最後一次被模型「改成新內容」的時間點（不是每次原樣重申都
+## 更新）。-1 代表還沒設過，事實句判斷時用這個排除掉「模型從沒填過
+## current_goal」跟「填了但很久」這兩種狀況
+var _goal_set_minute := -1
+
+## 去過的地點，只記有沒有去過，不記次數——判斷「首次造訪」用
+var _visited_places := {}
+
+## 一次性事實句佇列。跟「距上次社交」那種可持續重算的條件不同，「第一次
+## 來這裡」是事件觸發的瞬間才成立，_fact_lines_summary() 讀過一次就清空，
+## 不會每輪決策都重複講「你以前沒有來過這裡」
+var _pending_fact_lines: Array[String] = []
+
+## 連續同一動作失敗的追蹤。resolve() 是 LLM 來源任務唯一的成敗判定入口
+## （見該函式），在這裡包一層記錄，不用去每個 _pursue_*_task() 呼叫端各自
+## 記一次——那些呼叫端全部殊途同歸打同一個 resolve()
+var _consecutive_failure_action := ""
+var _consecutive_failure_count := 0
+
+func _note_place_visited(place: String) -> void:
+	if place.is_empty() or _visited_places.has(place):
+		return
+	_visited_places[place] = true
+	_pending_fact_lines.append("你以前沒有來過這裡。")
+
+func _track_action_result_for_facts(action: String, success: bool) -> void:
+	if success:
+		_consecutive_failure_count = 0
+		_consecutive_failure_action = ""
+		return
+	if action == _consecutive_failure_action:
+		_consecutive_failure_count += 1
+	else:
+		_consecutive_failure_action = action
+		_consecutive_failure_count = 1
+
 ## #164：天神之石的話傳到範圍內的角色（world/god_stone_input.gd 逐一呼叫）。
 ## 記一筆事實句（跟 _on_spotted() 的 "你第一次注意到 %s" 同一種寫法，不經
 ## L10n——這是餵給 LLM 反思的內部事實句，不是玩家會看到的 UI 文字），
@@ -342,6 +393,9 @@ func _ready() -> void:
 	_provider = _make_provider()
 	_load_schedule()
 	_generate_words_to_creator()
+	# 出生那一刻起算，不是 0——不然剛出生的角色會立刻背著「一整天沒說話」
+	# 的事實句（#338）
+	_last_social_minute = _now_minutes()
 
 ## 公開版的「重建 provider」（#122，CodeRabbit review 抓到的時序 bug）。
 ## GameManager.deploy_from_library() 會在 add_child()（進而觸發這個節點的
@@ -563,6 +617,8 @@ func exit_conversation() -> void:
 		var other: Character = _conversation.target if _conversation.initiator == self else _conversation.initiator
 		if other != null:
 			_push_daily_event("你跟 %s 講完話了" % other.character_name)
+			# 「多久沒說話」事實句的計時基準（#338）
+			_last_social_minute = _now_minutes()
 
 	super()
 
@@ -799,8 +855,11 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	# 的「整份取代」不同，這是「有變化才更新」的單一標籤，空字串代表這輪
 	# 沒有要更新，不是要清空
 	var new_goal: String = data.get("current_goal", "")
-	if not new_goal.is_empty():
+	if not new_goal.is_empty() and new_goal != current_goal:
 		current_goal = new_goal
+		# 目標拖延事實句的計時基準（#338）：只在目標真的換了內容才重新起算，
+		# 模型原樣重申同一個目標不算「重新設定」，不然這句事實句永遠不會累積
+		_goal_set_minute = _now_minutes()
 
 	# 不管這輪有沒有拿到 update_plan 許可，模型都可能問「下次讓我改」——記
 	# 下來，下一次不管是哪個理由觸發 _request_next_decision() 都會兌現
@@ -1343,8 +1402,17 @@ func _environment_risk(_action: String, _params: Dictionary) -> float:
 
 ## 決策執行前的檢查層（#120，《00》原則一：LLM 決定想做什麼，引擎決定做不做得到）。
 ## 只管兩件事：目標/前提是不是真的存在（硬規則），以及擲不擲得過成功率——語意
-## 驗證/白名單那些是 AISchema 的事，這裡假設 action/params 已經過白名單
+## 驗證/白名單那些是 AISchema 的事，這裡假設 action/params 已經過白名單。
+##
+## 薄包裝：真正的判定邏輯在 _resolve_raw()，這裡只是為了在唯一一個進出口
+## 記錄「連續同一動作失敗」（#338）——所有 _pursue_*_task() 都打同一個
+## resolve()，不用去每個呼叫端各自記一次
 func resolve(action: String, params: Dictionary) -> Dictionary:
+	var result := _resolve_raw(action, params)
+	_track_action_result_for_facts(action, result.get("success", false))
+	return result
+
+func _resolve_raw(action: String, params: Dictionary) -> Dictionary:
 	match action:
 		"talk":
 			var target_name: String = str(params.get("target", ""))
@@ -1537,6 +1605,11 @@ func _pursue_current_task() -> void:
 		stop_moving()
 		_pursued_place = current_place
 		_pursuit_done = true
+		# 首次造訪事實句（#338）。_note_place_visited() 自己用 _visited_places
+		# 判斷是不是真的第一次，這裡不用管——之後每輪重算都會重進這個分支
+		# （已到達的地點沒換，仍然會命中 _has_arrived_at），呼叫端沒有節流
+		# 責任
+		_note_place_visited(current_place)
 		return
 
 	# 地點沒換的話，這一趟只起步一次：還在走就繼續走（重下指令會重設
@@ -2045,24 +2118,48 @@ func try_record_pending_persuade(persuader: String, persuader_id: String, reason
 	_pending_persuade = pending
 	return true
 
-# 待回應事實句摘要（#227，《01-3》§3）。目前唯一來源是 persuade——其他
-# 《01-3》§3 列的觸發條件（多久沒說話、地點首次造訪等）還沒接進來，不在
-# 這次範圍內
+# 事實句摘要（《01-3》§3）。九條裡本則（#227＋#338）接了七條：persuade
+# 待回應（#227）、社交沉默三級距、目標拖延、首次造訪、連續同一動作失敗。
+# 剩下兩條是搬運相關（正被搬運中／醒來發現位置變了），依賴 haul 執行層，
+# 見 #338 範圍界線
 func _fact_lines_summary() -> Array[String]:
 	var lines: Array[String] = []
-	if _pending_persuade.is_empty():
-		return lines
 
-	var persuader: String = str(_pending_persuade.get("persuader", ""))
-	var reason: String = str(_pending_persuade.get("reason", ""))
-	var proposed_task: Dictionary = _pending_persuade.get("proposed_task", {})
+	# 一次性事件（首次造訪等），讀過就清空——跟下面「可持續重算」的條件
+	# 不同，這些是事件觸發當下才成立，不該每輪決策都重複講
+	lines.append_array(_pending_fact_lines)
+	_pending_fact_lines.clear()
 
-	if proposed_task.is_empty():
-		lines.append("剛才 %s 試著說服你：%s，你被說動了嗎？" % [persuader, reason])
-	else:
-		lines.append("剛才 %s 試著說服你（%s），希望你能去做「%s」，你被說動了嗎？" % [
-			persuader, reason, _describe_task_intent(proposed_task)
-		])
+	if not _pending_persuade.is_empty():
+		var persuader: String = str(_pending_persuade.get("persuader", ""))
+		var reason: String = str(_pending_persuade.get("reason", ""))
+		var proposed_task: Dictionary = _pending_persuade.get("proposed_task", {})
+
+		if proposed_task.is_empty():
+			lines.append("剛才 %s 試著說服你：%s，你被說動了嗎？" % [persuader, reason])
+		else:
+			lines.append("剛才 %s 試著說服你（%s），希望你能去做「%s」，你被說動了嗎？" % [
+				persuader, reason, _describe_task_intent(proposed_task)
+			])
+
+	# 社交沉默：三級距取最長那條符合的，不三句一起塞（#338 建議做法）
+	var since_social := _now_minutes() - _last_social_minute
+	if since_social >= FACT_SOCIAL_SILENCE_1_DAY_MIN:
+		lines.append("你整整一天沒有和任何人說過話。")
+	elif since_social >= FACT_SOCIAL_SILENCE_HALF_DAY_MIN:
+		lines.append("你已經半天沒和任何人說過話了。")
+	elif since_social >= FACT_SOCIAL_SILENCE_3H_MIN:
+		lines.append("你已經三個小時沒和任何人說過話了。")
+
+	# 目標拖延：只有真的設過 current_goal（_goal_set_minute >= 0）才判斷，
+	# 沒設過目標不該無中生有講「你想做的那件事拖很久」
+	if _goal_set_minute >= 0 and _now_minutes() - _goal_set_minute >= FACT_GOAL_STALE_MIN:
+		lines.append("你想做的那件事已經拖了很久還沒完成。")
+
+	# 連續同一動作失敗
+	if _consecutive_failure_count >= FACT_CONSECUTIVE_FAILURE_THRESHOLD:
+		lines.append("這件事你已經連續搞砸三次了。")
+
 	return lines
 
 # 把 proposed_task 的 action／params 組成一句人看得懂的意圖描述，給
