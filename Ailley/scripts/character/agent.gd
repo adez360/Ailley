@@ -716,12 +716,18 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	var effective_allow_update_plan := allow_update_plan or _plan_update_requested
 	_plan_update_requested = false
 
+	# #268／#290：捕一次 now_minutes，給 validator 把模型填的 expires_in_minutes
+	# （相對時長）換算成任務池實際用的絕對 expires_at。envelope 的 schema
+	# 邊界（#290 拍板後）是固定常數，不再依賴這個時間點，但 validator 這裡
+	# 還是要——這通吃 await，重試之間可能過了不少遊戲時間，用重新取得的
+	# 「現在」換算的話，同一份回應在不同時間點驗證會算出不同的絕對值
+	var now_minutes := _now_minutes()
 	var visible: Array[Character] = vision.get_visible_characters() if vision != null else []
 	var envelope := PromptBuilder.build_plan_envelope(
 		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan
 	)
 	var validator := func(data: Dictionary) -> Dictionary:
-		return AISchema.validate_tasks(data, effective_allow_update_plan)
+		return AISchema.validate_tasks(data, effective_allow_update_plan, now_minutes)
 
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	_awaiting_decision = false
@@ -1064,15 +1070,32 @@ func _reevaluate_once() -> void:
 
 	var now := "%02d:%02d" % [GameClock.hour, GameClock.minute]
 
+	# CodeRabbit review（#269）：過期任務先前只在下面的候選迴圈裡被 continue
+	# 跳過，從沒真的從 _tasks 移除——沒被選中又過期的 llm 任務會永久卡在池子
+	# 裡，持續佔用 LLM_TASK_POOL_CAP，直到角色重開機都清不掉；連 _current_task
+	# 過期時那條「清掉，不要留著」的路徑（見下面 elif 分支）也只清空了
+	# _current_task 這個變數本身，沒有把同一個 Dictionary 從 _tasks 裡拿掉。
+	# 在候選評分之前先單獨掃一次、真的 remove_at()，不論該任務是不是目前
+	# 正被 _current_task 指向。
+	#
+	# 被移除的剛好是 _current_task 本人時，這裡直接同步清空 _current_task／
+	# current_place／current_state——不依賴下面 elif 分支（那個分支只在
+	# best 沒找到候選、或 _consider_switch() 選中別的候選時才會處理到過期
+	# 的 _current_task）補做，讓「這個 Dictionary 一旦被拿出池子，_current_task
+	# 就同一時間點跟著清空」直接在移除的當下發生，不留給後續分支的邊界情況去對
+	for i in range(_tasks.size() - 1, -1, -1):
+		if _is_expired(_tasks[i], now_minutes):
+			var expired_task := _tasks[i]
+			_tasks.remove_at(i)
+			if expired_task.get("id", "") == _current_task.get("id", ""):
+				_current_task = {}
+				current_place = ""
+				current_state = "idle"
+
 	var best: Dictionary = {}
 	var best_score := -INF
 
 	for task in _tasks:
-		# 過期任務不進入候選——expires_at 是「這件事的機會已經徹底過了」，
-		# 跟 window（「現在不是做這件事的時間，但之後還會再輪到」）是不同語意，
-		# 過期的候選不該被選中，也不該影響分數比較
-		if _is_expired(task, now_minutes):
-			continue
 		if not _in_window_or_unwindowed(task, now):
 			continue
 

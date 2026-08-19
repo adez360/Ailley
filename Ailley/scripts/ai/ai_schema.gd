@@ -120,6 +120,27 @@ const MAX_TASK_PRIORITY := 125.0
 const MIN_TASK_DURATION := 0.0
 const MAX_TASK_DURATION := 1440.0
 
+# #268／#290：expires_at 沒有量級上限的問題（is_finite() 放行 1e300 這種
+# 有限但離譜的值，int() 轉型後行為不可靠，見 agent.gd::_is_expired() 的
+# 說明）。#290 拍板：模型填的是**相對時長**（expires_in_minutes，多久後
+# 過期），不是絕對遊戲分鐘數——理由是不想要求模型做「day×1440 + hour×60 +
+# minute + 偏移」這種複合算術，本地小模型算錯的機率明顯比回答一個相對量級
+# 高，算錯也不會被 GBNF 擋住（只要落在合法區間內），只有出區間才會被
+# validate_tasks() 擋下，白白增加失敗率。相對時長的邊界因此是固定常數，
+# 不用像先前設計那樣把 now_minutes 動態穿進 schema——跟 agent.gd 的
+# schedule／debug 任務用同一套「引擎自己把相對值換算成絕對值」模式
+# （_now_minutes() + duration），LLM 任務不是例外
+#
+# 上限抓一週（10080 分鐘）：目前預想會出現的約定行程（例如「明天中午一起
+# 打獵」）都在這個量級內；下限原本設 0，但 CodeRabbit review 抓到：
+# agent.gd::_is_expired() 判斷過期用的是 `expires_at <= now_minutes`，一筆
+# 相對時長剛好是 0 的任務，換算成絕對值後等於建立當下的 now_minutes，
+# 推進任務池後下一次仲裁就會被判定為已過期，等於一筆驗證通過、卻永遠
+# 執行不到的任務。下限改成 1，保證換算後的 expires_at 一定嚴格大於建立
+# 當下的 now_minutes，不會踩進「剛驗證完就過期」的窗口
+const MIN_EXPIRES_IN_MINUTES := 1
+const MAX_EXPIRES_IN_MINUTES := 10080
+
 const ERROR_NOT_JSON := "not_json"
 const ERROR_NOT_OBJECT := "not_object"
 const ERROR_NO_CONTENT := "no_content"
@@ -235,7 +256,19 @@ static func validate_dialogue(data: Dictionary) -> Dictionary:
 # allow_update_plan 跟呼叫端組信封時傳給 PromptBuilder.build_plan_envelope()
 # 的是同一個值——不是這裡自己重新判斷「現在該不該開放」，那是 agent.gd 的
 # 職責，這裡只負責「如果不開放，多出來的 update_plan 要不要理」
-static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) -> Dictionary:
+#
+# now_minutes（#268／#290）：模型填的 expires_in_minutes 是相對時長，這裡
+# 驗證完範圍後直接換算成任務池實際使用的絕對 expires_at（now_minutes +
+# expires_in_minutes），跟 agent.gd 的 schedule／debug 任務用同一套換算，
+# 呼叫端只要繼續讀 task["expires_at"] 就好，不需要知道模型當初填的是相對值。
+# 這個函式是 static 的、本來不吃時間，呼叫端（agent.gd::_request_next_decision()）
+# 要把 _now_minutes() 傳進來——跟組 envelope 時是同一次呼叫、同一個時間點，
+# 不會因為這通吃 await 而在重試之間用不同的「現在」換算出不一致的絕對值。
+# 兩個參數都不給預設值：漏傳 now_minutes 會讓 expires_at 以 0 為基準算出來，
+# 正是這個 PR 要擋的「實質永不過期」退化情況，寧可漏傳時直接編譯期報錯，
+# 也不要靜默吃一個看似合法、實際上錯誤的預設值（GDScript 規則：有預設值
+# 的參數後面不能接沒預設值的，allow_update_plan 只好跟著一起拿掉預設值）
+static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minutes: int) -> Dictionary:
 	if not data.has("tasks") or not data["tasks"] is Array:
 		return _fail(ERROR_BAD_SHAPE)
 
@@ -285,29 +318,59 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) ->
 				if count_value is float and count_value != floor(count_value):
 					return _fail(ERROR_BAD_SHAPE)
 
-		# #224：is int/float 放行 INF／NAN——實測過模型真的會回 priority: Infinity
-		# （改完量級指引那次驗到的），INF 一旦被當成合法分數，仲裁器
-		# `best_score < current_score + HYSTERESIS` 永遠算不出「贏過它」，
-		# 那個任務就再也換不掉。expires_at 沒有定義過合理範圍，只補 is_finite()；
-		# 同一種外來內容不能信任的問題，沒理由只擋 priority 一個欄位
-		if task.has("expires_at") and not ((task["expires_at"] is int or task["expires_at"] is float) and is_finite(float(task["expires_at"]))):
-			return _fail(ERROR_BAD_SHAPE)
+		# #268／#290：expires_in_minutes（模型填的相對時長）現在有跟
+		# priority/duration 同一套量級上限，不再只有 is_finite()——
+		# is_finite(1e300) 一樣是 true，擋不住一個實質上永遠不會過期的任務
+		# （int() 轉型後行為不可靠，見 agent.gd::_is_expired() 的說明）。
+		# 範圍是 [MIN_EXPIRES_IN_MINUTES, MAX_EXPIRES_IN_MINUTES]，固定常數，
+		# 不用像絕對值設計那樣動態依賴 now_minutes。schema 宣告的型別是
+		# integer（跟 priority/duration 同一個理由），這裡也要擋小數——
+		# CodeRabbit review 對前一版（絕對值）抓到的問題一樣適用：沒擋的話
+		# 100.9 能通過範圍檢查，換算成絕對值時被截斷成 100，變成一個沒被
+		# 驗證過的值。驗證通過後直接換算成 expires_at（絕對值）存進
+		# 下面的 tasks.append()，呼叫端不需要知道模型填的是相對時長
+		#
+		# 欄位維持選填（#290 本文明講「要決定 required 與否」留待之後，不是
+		# 這個 PR 的範圍），但 CodeRabbit 抓到一個真的漏洞：沒填的話原本退回
+		# expires_at = 0，等於「永不過期」，跟這整個 PR 要擋的「任務永遠不過
+		# 期」目標矛盾。改成沒填時退回 MAX_EXPIRES_IN_MINUTES（一週）當預設
+		# 相對時長——不強制模型每次都要填，但省略時仍有個合理上限的存續時間，
+		# 不會退化成永久卡在池子裡
+		var expires_at := now_minutes + MAX_EXPIRES_IN_MINUTES
+		if task.has("expires_in_minutes"):
+			var expires_value: Variant = task["expires_in_minutes"]
+			if not (expires_value is int or expires_value is float):
+				return _fail(ERROR_BAD_SHAPE)
+			var expires_float := float(expires_value)
+			if not is_finite(expires_float) or expires_float != floor(expires_float) \
+					or expires_float < MIN_EXPIRES_IN_MINUTES or expires_float > MAX_EXPIRES_IN_MINUTES:
+				return _fail(ERROR_BAD_SHAPE)
+			expires_at = now_minutes + int(expires_float)
 
 		# duration／priority 現在是必填（見上面 plan_response_schema() 的
 		# required 清單同步改過）：兩者都要落在 MIN_TASK_*／MAX_TASK_* 範圍內，
 		# 缺欄位一律當失敗處理——不能只在「欄位存在」時才檢查範圍，模型乾脆
 		# 不給這兩個欄位就會繞過檢查，退回 .get(..., 0.0) 的預設值，
 		# 正好是想擋的那個退化情況（實測踩過這個漏洞）。這是三層保證裡
-		# 「真的保證」的那一層，json_schema 的 minimum/maximum／required
+		# 「真的保證」的那一層，json_schema 的 type/minimum/maximum／required
 		# （層 1）與 prompt 文字說明（層 2）都可能沒生效（provider 不支援
 		# schema、或模型沒照文字指示），這裡不能只信任前兩層
+		#
+		# #267：schema 層把型別從 number 收緊成 integer 之後（GBNF 只對
+		# integer 型別真的擋邊界，number 型別下 minimum/maximum 實測沒作用），
+		# 這裡也要求「數值上是整數」，維持三層同一組數字、同一種型別的原則，
+		# 不要 schema 層要求整數、驗證層卻繼續放行小數。用 float == floor(float)
+		# 判斷，不用 GDScript 的 `is int`——JSON 解析器看到 "10.0" 這種字面量
+		# 會回傳 float，那是純 prompt（沒有 schema 強制）路徑下模型完全可能
+		# 寫出的合法整數表示法，不該因為多了個小數點就整包拒絕
 		if not task.has("duration"):
 			return _fail(ERROR_BAD_SHAPE)
 		var duration_value: Variant = task["duration"]
 		if not (duration_value is int or duration_value is float):
 			return _fail(ERROR_BAD_SHAPE)
 		var duration_float := float(duration_value)
-		if not is_finite(duration_float) or duration_float <= MIN_TASK_DURATION or duration_float > MAX_TASK_DURATION:
+		if not is_finite(duration_float) or duration_float != floor(duration_float) \
+				or duration_float <= MIN_TASK_DURATION or duration_float > MAX_TASK_DURATION:
 			return _fail(ERROR_BAD_SHAPE)
 
 		if not task.has("priority"):
@@ -316,7 +379,8 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) ->
 		if not (priority_value is int or priority_value is float):
 			return _fail(ERROR_BAD_SHAPE)
 		var priority_float := float(priority_value)
-		if not is_finite(priority_float) or priority_float < MIN_TASK_PRIORITY or priority_float > MAX_TASK_PRIORITY:
+		if not is_finite(priority_float) or priority_float != floor(priority_float) \
+				or priority_float < MIN_TASK_PRIORITY or priority_float > MAX_TASK_PRIORITY:
 			return _fail(ERROR_BAD_SHAPE)
 
 		# 只複製驗證過的欄位，不是原封不動放行 task。plan_response_schema() 沒有
@@ -330,7 +394,7 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool = false) ->
 			"params": task.get("params", {}),
 			"priority": float(task.get("priority", 0.0)),
 			"duration": float(task.get("duration", 0.0)),
-			"expires_at": int(task.get("expires_at", 0)),
+			"expires_at": expires_at,
 		})
 
 	# reasoning／inner_monologue：跟 validate_dialogue() 的 line 同一種處理
@@ -557,6 +621,18 @@ static func _validated_optional_line(data: Dictionary, key: String) -> Variant:
 # properties 裡完全沒有這個 key——不是「有欄位但要求不要填」，是模型的
 # response_format 契約裡文法上就不存在這個選項，跟 validate_tasks() 收到
 # 誤填也整包忽略是一致的立場，只是一個在輸出端擋、一個在輸入端擋
+#
+# #267：priority/duration 的型別從 number 改 integer——llama.cpp 的 GBNF
+# 實測過對 "number" 型別完全不擋 minimum/maximum/exclusiveMinimum（要求
+# 模型給範圍外的值，模型照給不誤），換成 "integer" 才會真的被文法層擋住。
+# 這不是 llama.cpp 專屬的限制：type: integer 是 JSON Schema 標準型別，
+# 支援 structured output 的雲端 provider（supports_json_schema=true）一樣
+# 會用它自己的機制強制輸出整數，跟 GBNF 無關，換型別不影響雲端相容性。
+#
+# #268／#290：expires_in_minutes 的邊界是固定常數（MIN/MAX_EXPIRES_IN_MINUTES），
+# 模型填的是相對時長，不需要像先前的絕對值設計那樣依賴呼叫當下的
+# now_minutes 動態算 schema 範圍——validate_tasks() 才需要 now_minutes
+# 把驗證過的相對值換算成絕對 expires_at，這個函式不用
 static func plan_response_schema(allow_update_plan: bool = false) -> Dictionary:
 	var properties := {
 		"reasoning": {"type": "string"},
@@ -570,9 +646,13 @@ static func plan_response_schema(allow_update_plan: bool = false) -> Dictionary:
 				"properties": {
 					"action": {"type": "string", "enum": ALLOWED_ACTIONS},
 					"params": {"type": "object"},
-					"priority": {"type": "number", "minimum": MIN_TASK_PRIORITY, "maximum": MAX_TASK_PRIORITY},
-					"duration": {"type": "number", "exclusiveMinimum": MIN_TASK_DURATION, "maximum": MAX_TASK_DURATION},
-					"expires_at": {"type": "number"},
+					"priority": {"type": "integer", "minimum": MIN_TASK_PRIORITY, "maximum": MAX_TASK_PRIORITY},
+					"duration": {"type": "integer", "exclusiveMinimum": MIN_TASK_DURATION, "maximum": MAX_TASK_DURATION},
+					"expires_in_minutes": {
+						"type": "integer",
+						"minimum": MIN_EXPIRES_IN_MINUTES,
+						"maximum": MAX_EXPIRES_IN_MINUTES,
+					},
 				},
 				"required": ["action", "priority", "duration"],
 			},
