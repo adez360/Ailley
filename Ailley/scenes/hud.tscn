@@ -41,6 +41,27 @@ anchors_preset = 0
 offset_right = 40.0
 offset_bottom = 40.0
 
+[node name="Pause" type="CanvasLayer" parent="."]
+process_mode = 3
+layer = 10
+visible = false
+script = ExtResource("10_iypfu")
+
+[node name="Dim" type="ColorRect" parent="Pause"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0.10196, 0.08235, 0.07059, 0.6)
+
+[node name="Text" type="Label" parent="Pause"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme_type_variation = &"HUDLabel"
+text = "UI_PAUSED"
+horizontal_alignment = 1
+vertical_alignment = 1
+
 [node name="DebugConsole" parent="." instance=ExtResource("1_mphia")]
 
 [node name="ChatInput" parent="." instance=ExtResource("2_0m4u7")]
@@ -221,26 +242,5 @@ columns = 9
 [node name="CharacterCreate" parent="." instance=ExtResource("8_uxdf7")]
 
 [node name="CharacterLibrary" parent="." instance=ExtResource("9_5357l")]
-
-[node name="Pause" type="CanvasLayer" parent="."]
-process_mode = 3
-layer = 10
-visible = false
-script = ExtResource("10_iypfu")
-
-[node name="Dim" type="ColorRect" parent="Pause"]
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-color = Color(0.10196, 0.08235, 0.07059, 0.6)
-
-[node name="Text" type="Label" parent="Pause"]
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-theme_type_variation = &"HUDLabel"
-text = "UI_PAUSED"
-horizontal_alignment = 1
-vertical_alignment = 1
 
 [node name="GodStoneInput" parent="." instance=ExtResource("11_0m4u7")]
