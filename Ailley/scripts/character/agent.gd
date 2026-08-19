@@ -2168,6 +2168,11 @@ func _pursue_eat_task() -> void:
 	_clear_current_task(last_action_result == Character.EAT_OK, food_item)
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
+	# CodeRabbit review：_request_next_decision() 只有在非同步回應回來後才會
+	# 重新仲裁，不立刻補一次 _reevaluate() 的話，等回應期間排程或 fallback
+	# 任務不會被馬上接手，得空等到下一次 GameClock time_changed（跟 drink／
+	# murmur 同一個問題）
+	_reevaluate()
 
 # drink 任務的執行（#163）：跟 _pursue_eat_task() 完全同一種形狀，只是換
 # 呼叫 drink() 而不是 eat()。沒有共用一份程式碼是因為兩者要各自轉傳不同的
