@@ -1010,8 +1010,15 @@ func _connect_inventory_changed(
 # Character Removed：清理追蹤字典
 #
 # 角色節點釋放後，_inventory_connected 裡的 inventory
-# 參照會變成失效 instance；_inventory_loaded／_loading／
-# _sync_pending 也會殘留無用的 npc_id 項目。統一在這裡清掉。
+# 參照會變成失效 instance；_inventory_loaded／_loading
+# 也會殘留無用的 npc_id 項目。統一在這裡清掉。
+#
+# 注意：不清 _inventory_sync_pending。tree_exited 觸發時
+# 節點通常還沒真的被釋放（queue_free 要等到下一個 idle
+# frame），這裡若有還沒 flush 的 inventory 異動，直接清掉
+# 會讓最後一次改動遺失存檔；_flush_pending_inventory_sync()
+# 本來就會用 is_instance_valid() 檢查，node 真的釋放後自然
+# 跳過，不需要在這裡搶先清。
 # =====================================================
 
 func _on_character_tree_exited(
@@ -1027,10 +1034,6 @@ func _on_character_tree_exited(
 	)
 
 	_inventory_loading.erase(
-		npc_id
-	)
-
-	_inventory_sync_pending.erase(
 		npc_id
 	)
 
