@@ -1511,7 +1511,24 @@ func _pursue_talk_task() -> void:
 		_pursued_place = current_place
 		_pursuit_done = true
 
-	var target := _find_character_by_name(target_name)
+	# #281：排程觸發的 talk（target_name 為空）沒有指定對象——查證過
+	# npc_schedule.json，這類排程本來就沒有 target 欄位，涼亭這類地點的
+	# 定位是「聚集」，不是排定好的一對一見面點；《技術/talk 動作設計》
+	# 也只列了 debug 主控台／agent.gd 的 LLM 決策會明確指名對象，排程不在
+	# 這份清單裡。原本直接拿空字串去 _find_character_by_name() 找，保證
+	# 找不到、每次都報 TARGET_NOT_FOUND，等於這類排程永遠講不了話。改成
+	# 在抵達地點後，找同地點內離自己最近的人——沒有指定對象時退回「找人
+	# 聊」而不是「找某個人聊」，跟涼亭的地點設計語意一致
+	var target: Character
+	if target_name.is_empty():
+		target = _find_nearest_character_within(TALK_RANGE)
+		if target == null:
+			# 還沒人到齊，不算錯誤——地點本來就會有人先到、人後到的時間差，
+			# 跟找不到指名對象（那是設定錯誤）性質不同，不用 push_error 洗
+			# log，安靜等下一個遊戲分鐘再找
+			return
+	else:
+		target = _find_character_by_name(target_name)
 
 	if target == null:
 		# 找不到人只報一次，理由跟「地點打錯只報一次」一樣——這個函式每個
@@ -1822,6 +1839,22 @@ func _find_character_by_name(target_name: String) -> Character:
 		if node != self and node.character_name == target_name:
 			return node as Character
 	return null
+
+# 找範圍內離自己最近的角色，不指定名字（#281，排程觸發的 talk 沒有指定
+# 對象時用）。跟 _find_character_by_name() 用同一個 "characters" 群組，
+# 不分玩家／Agent——涼亭這類聚集地點誰都可能在場
+func _find_nearest_character_within(range_px: float) -> Character:
+	var nearest: Character = null
+	var nearest_distance := INF
+	for node in get_tree().get_nodes_in_group("characters"):
+		if node == self:
+			continue
+		var candidate := node as Character
+		var distance := get_body_position().distance_to(candidate.get_body_position())
+		if distance <= range_px and distance < nearest_distance:
+			nearest_distance = distance
+			nearest = candidate
+	return nearest
 
 # 站得夠近，或者已經站在目標所在的那一格。
 #
