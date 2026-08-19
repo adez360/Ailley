@@ -236,8 +236,9 @@ StatsBox 底下的 Label 是 `_ready()` 動態長出來的（見 stats.gd 同款
 keycode：`hotbar_1`–`hotbar_9`（數字鍵 1–9）、滑鼠滾輪（`wrapi()` 繞圈，
 兩端會 wrap）。打字時（聊天框、主控台輸入框持有焦點）不切選格，判斷方式
 跟 `chat_input.gd` 的 `_ui_is_busy()` 一樣——`get_viewport().gui_get_focus_owner()
-!= null`。點兩下同一格（快捷欄鍵盤／滾輪／滑鼠都算）會呼叫
-`Inventory.set_selected_index(-1)` 取消選擇，見 [[物品欄]]。
+!= null`。數字鍵或滑鼠點擊目前已選取的那一格會呼叫
+`Inventory.set_selected_index(-1)` 取消選擇，見 [[物品欄]]；滾輪不會踩到這條——
+`_select_relative()` 的 `delta` 固定 ±1，不可能繞回目前這格。
 
 `inventory_toggle`（`Tab`）取代原本的 `P` 鍵，沒有保留 fallback。
 
