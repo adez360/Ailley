@@ -35,10 +35,10 @@ var identity_assignments = {}
 # 重開遊戲不會消失，不需要真的存檔
 var character_templates = {}
 
-# 玩家自建角色（#122）：靈魂庫，已建立但尚未投放的完整角色紀錄。先用記憶體
-# 清單，不等存檔系統（#21/#22）——理由跟 character_templates 同一條，這則的
-# 重點是把「建角→存檔驗證→角色生成→角色庫→投放」這條管線走通，真正的跨場次
-# 持久化留給存檔系統落地時接上，不是這個容量上限本身依賴存不存得住
+# 玩家自建角色（#122）：靈魂庫，已建立但尚未投放的完整角色紀錄。跟著世界存檔
+# 一起存讀（#342，見 get_world_save_data()/apply_world_save_data()）——這份清單
+# 不屬於任何一個場上節點，沒有 Character.get_save_data() 可以掛，只能收在
+# 世界層這一包裡
 const CHARACTER_LIBRARY_CAP := 15
 
 # 世界內同時投放上限（《10》B21，預設 5、房主可下修，這次先固定預設值）
@@ -388,14 +388,31 @@ func get_world_save_data() -> Dictionary:
 		"day": GameClock.day,
 		"allow_player_join": allow_player_join,
 		"characters": characters,
+		# deep duplicate：character_library 裡的巢狀 hexaco/personality 字典
+		# 不能跟目前記憶體裡那份共用參照，否則存檔之後繼續玩，字典被原地改到
+		# 會連已經寫出去的這包也跟著變
+		"character_library": character_library.duplicate(true),
 	}
 
 # data 缺欄位一律用預設值補，不當成錯誤（跟 character.gd 同一條規則）。
 # 只套用場景裡目前找得到的角色——重新生成存檔裡有記載但場景沒有的角色
-# 不在這則骨架範圍內（見 issue #21「不包含 player 加入世界的實際流程」）
+# 不在這則骨架範圍內（見 issue #21「不包含 player 加入世界的實際流程」）。
+# character_library 同理：只還原清單本身，"deployed" 為 true 的紀錄不會在這裡
+# 重新生成場上節點——那是另一件事，見 issue #342 範圍界線
 func apply_world_save_data(data: Dictionary) -> void:
 	GameClock.day = int(data.get("day", GameClock.day))
 	allow_player_join = bool(data.get("allow_player_join", allow_player_join))
+
+	var library_data = data.get("character_library", [])
+	if library_data is Array:
+		character_library.clear()
+		for entry in library_data:
+			if entry is Dictionary and not str(entry.get("id", "")).is_empty():
+				character_library.append(entry)
+			else:
+				push_error("apply_world_save_data: character_library 有一筆紀錄不是 Dictionary 或缺少 id，跳過")
+	else:
+		push_error("apply_world_save_data: character_library 不是 Array，跳過角色庫載入")
 
 	var characters = data.get("characters", {})
 	# 驗證 characters 必須是 Dictionary，不是就跳過整個角色載入流程
