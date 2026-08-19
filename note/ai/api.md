@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-17
+updated: 2026-08-19
 ---
 
 # api
@@ -23,7 +23,7 @@ env  Godot 4.5.1-stable · gl_compatibility · default_texture_filter=0
 GameManager   scripts/core/game_manager.gd
 GameClock     scripts/core/GameClock.gd
 AIService     scripts/ai/ai_service.gd
-DatabaseManager  database/DatabaseManager.gd
+DatabaseManager   database/DatabaseManager.gd
 _mcp_game_helper  addons/godot_ai/runtime/game_helper.gd   † 勿移除
 ```
 
@@ -1180,32 +1180,43 @@ var hour := 8 · var minute := 0 · var day := 1
 const DATABASE_PATH := "user://game.db"
 
 var db: SQLite
-var is_ready: bool
+var is_ready := false                        # false 時所有公開方法早退
 
 func query(sql: String, bindings: Array = []) -> bool
-func get_last_result() -> Array            # db.query_result；db==null 回 []
+func get_last_result() -> Array              # db.query_result；db==null 回 []
 func select(table: String, conditions: String = "", columns: Array = ["*"]) -> Array
 func select_where(table: String, where_sql: String, bindings: Array = [], columns: Array = ["*"]) -> Array
 func insert(table: String, data: Dictionary) -> bool
 func update(table: String, data: Dictionary, conditions: String) -> bool
 func delete(table: String, conditions: String) -> bool
-func begin_transaction() -> bool           # query("BEGIN TRANSACTION;")
-func commit_transaction() -> bool          # query("COMMIT;")
-func rollback_transaction() -> bool        # query("ROLLBACK;")
+func begin_transaction() -> bool             # BEGIN IMMEDIATE，拿不到寫鎖立刻失敗
+func commit_transaction() -> bool            # query("COMMIT;")
+func rollback_transaction() -> bool          # query("ROLLBACK;")
 func escape_sql_string(value: String) -> String   # 只給 update()/delete() 的 conditions 字串用
 ```
 
 ```text
+conditions 是原始 SQL WHERE 子句（不含 WHERE），只能由程式碼組，不可放模型/玩家輸入字串；
+  帶使用者可控值時要自己呼叫 escape_sql_string() 轉義
 select_where() 的 where_sql 帶 "?" 佔位符，值走 bindings，不必自己轉義 —— 查詢條件帶使用者
   可控或需要轉義的值時一律走這個，不要自己 escape_sql_string() 轉義後拼進 select()
-update()/delete() 的 conditions 是呼叫端自己組出的 SQL WHERE 字串，不接受 bindings；
-  帶使用者可控值時要自己呼叫 escape_sql_string() 轉義
+data 的值一律走 bindings 綁定，不拼進 SQL 字串
+select() 找不到列回傳 []，不是 error；update()/delete() 空 conditions 直接擋掉
+  （避免整表更新/清空），is_ready=false 時除 get_last_result() 外都回 false/[]
+  （db 在 _ready() 一開頭就指派，早於 is_ready 判定，get_last_result() 只查
+  db != null，不查 is_ready）
 † update() 對有 updated_at 欄位的 table 自動補寫入時間，呼叫端不用自己塞
 † insert()/update()/delete() 失敗會 push_error 印 db.error_message；寫入後的資料驗證
   （例如 npc_inventory 的 INSERT 後 SELECT 確認）不在這裡做，通用 CRUD 不知道特定 table
   的欄位形狀，留給呼叫端（CharacterStatePersistence）自己驗
+⚠ insert() 走 addon 的 insert_row()，update()/delete() 不走 update_rows()/delete_rows()
+  ——這兩個 addon 方法會把外層 begin_transaction() 開的交易提早 COMMIT 掉，改自己
+  拼 query_with_bindings() 的 UPDATE/DELETE，值仍是綁定參數
 ⚠ _table_has_column() 內部查 PRAGMA table_info() 會覆寫 db.query_result，查完會還原成呼叫端
   原本的結果，get_last_result() 不會拿到 PRAGMA 的資料
+沒有重試／backoff：MVP 單一 process 對應單一連線，多 process 搶同一份 game.db
+  目前沒有呼叫端會製造這個情境（無多人連線）
+→ 技術/存檔
 ```
 
 ## CharacterStatePersistence — database/CharacterStatePersistence.gd · Node · DatabaseManager 的子節點
