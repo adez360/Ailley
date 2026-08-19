@@ -491,10 +491,11 @@ func _send_to_herb_shop_for_treatment() -> void:
 	# 這一刻 stop_moving() 沒有必要——_is_movement_locked() 已經把
 	# CONDITION_INCAPACITATED 期間鎖死，不會有殘留路徑在同一 tick 跟瞬移搶位置
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
-	if anchors != null and anchors.has("herb_shop"):
-		global_position = anchors.resolve("herb_shop")
-	else:
+	if anchors == null or not anchors.has("herb_shop"):
 		push_error("Character %s: 找不到 herb_shop 地點，無法傳送治療" % character_name)
+		return
+
+	global_position = anchors.resolve("herb_shop")
 
 	# 記錄治療開始時間，_update_treatment() 會處理倒計時
 	_treatment_start_minute = GameClock.hour * 60 + GameClock.minute
