@@ -299,10 +299,15 @@ func _esc(value: String) -> String:
 ##                      round-trip 之後這個數字會遺失，重開後從 0 起算）
 ## npc_state            少了 mood/social/fun 三項（Stats.SPEC 有這三項，
 ##                      npc_state 只對到《01》§4-1 的 8 項生理狀態）
+## memory                Character.get_save_data() 現在會產生 memory 欄位
+##                      （#170，只有 L2/L4），但 get_character()/save_character()
+##                      沒有讀寫它——round-trip 之後整段記憶遺失。schema 已有
+##                      MemorySchema.gd（memories／memory_related_npcs 兩張表），
+##                      要接上是把既有表接進這裡的四個函式，不是新增 schema
 ##
 ## 下列是《06》定義、但目前 Character/GameManager 根本沒有在存的欄位——
 ## 不是這裡的 schema 缺口，是上游還沒做，SqliteSaveService 目前故意不接：
 ## identity 的 age/gender/village_id/home_location_id/decision_source/
 ## model_name、hexaco_input、personality、economy、
-## state.emotion/conditions/current_goal/today_plan/appointment、memory
+## state.emotion/conditions/current_goal/today_plan/appointment
 ## ===================================================================

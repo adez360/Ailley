@@ -170,3 +170,48 @@ func get_by_levels(levels: Array[int]) -> Dictionary[int, Array]:
 
 func _on_day_changed(_day: int) -> void:
 	decay_all()
+
+
+# ---- 存檔 ----
+
+## 只存 L2／L4，見 note/技術/存檔.md「記憶怎麼存」：L1 每局可重建、不用存；
+## L3（長期記憶庫）MVP 不做向量檢索，沒有檢索就沒有東西會再讀到它，存了也
+## 用不上。跟 Relationships.get_save_data() 同一套規則——直接吐內部資料，
+## 不另外包裝
+func get_save_data() -> Dictionary:
+	var saved: Array[Dictionary] = []
+	for entry in entries:
+		if entry["level"] == 2 or entry["level"] == 4:
+			saved.append(entry.duplicate(true))
+	return {"entries": saved}
+
+
+## 呼叫端（Character.load_save_data()）永遠會呼叫這個函式，缺 memory 欄位時
+## 傳空 Dictionary 進來——讀存檔要能把角色重設成「跟檔案內容一致」，不是
+## 「保留呼叫前的狀態」，套到已經在場上跑過的角色（debug console `load`）才
+## 不會讓存檔沒有的記憶繼續留著。l1 沒有存檔（每局可重建），同一個理由也要
+## 清掉，否則場上角色的舊 L1 會在讀檔後跟新載入的 L2/L4 混在一起。
+##
+## entries 陣列本身或裡面任一筆不是預期形狀（不是 Array／不是 Dictionary／
+## level 不是 2 或 4）時整筆跳過，不中途 push_error 中斷——存檔是外部檔案，
+## 不假設它沒被手改過，但也不用像 Stats.SPEC 那樣逐欄位補值，因為這裡的欄位
+## 全部由引擎自己的 add_candidate() 產生，不是模型輸出。驗證完才一次替換
+## entries／_next_id，中途不動本體，避免格式錯誤只套用到一半
+func load_save_data(data: Dictionary) -> void:
+	l1.clear()
+
+	var raw_entries: Variant = data.get("entries", [])
+	var parsed: Array[Dictionary] = []
+	var next_id := 0
+	if raw_entries is Array:
+		for raw_entry in raw_entries:
+			if not (raw_entry is Dictionary):
+				continue
+			var entry: Dictionary = (raw_entry as Dictionary).duplicate(true)
+			if entry.get("level") != 2 and entry.get("level") != 4:
+				continue
+			parsed.append(entry)
+			next_id = maxi(next_id, int(entry.get("id", 0)))
+
+	entries = parsed
+	_next_id = next_id
