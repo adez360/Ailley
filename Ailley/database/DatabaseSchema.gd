@@ -32,7 +32,7 @@ extends RefCounted
 ## 導致既有 user://game.db 建出來的 table 跟新版 CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
-const CURRENT_VERSION := 1
+const CURRENT_VERSION := 2
 
 
 ## 版本落後時依序套用的變更，每個 entry：
@@ -43,10 +43,46 @@ const CURRENT_VERSION := 1
 ## 不要重複 CREATE TABLE——新表由 initialize() 裡的 schemas 陣列建立，
 ## 兩者跑在同一個 transaction 裡。
 ##
-## 版本必須遞增排列。目前沒有版本落後的既有安裝要處理，所以是空的——
-## 下次 schema 出現不相容變更時，在這裡按版本加一項，同時把
-## CURRENT_VERSION 加一。
-const MIGRATIONS: Array[Dictionary] = []
+## 版本必須遞增排列。下次 schema 出現不相容變更時，在這裡按版本
+## 加一項，同時把 CURRENT_VERSION 加一。
+const MIGRATIONS: Array[Dictionary] = [
+	{
+		"version": 2,
+		"name": "Backfill water.is_perishable and ale.decay_rate",
+		"apply": func(db) -> bool:
+			# 修正先前 seed 遺漏的平衡數值：
+			# - water.is_perishable 應為 0（不腐壞）
+			# - ale.decay_rate 應為 0.3
+			# 只更新這兩個 item_id，不影響其他資料。
+			var water_sql := """
+			UPDATE item
+			SET is_perishable = 0
+			WHERE item_id = 'water';
+			"""
+
+			var ale_sql := """
+			UPDATE item
+			SET decay_rate = 0.3
+			WHERE item_id = 'ale';
+			"""
+
+			if not db.query(water_sql):
+				push_error(
+					"[DatabaseSchema] Migration 2: Failed to update water.is_perishable: "
+					+ db.error_message
+				)
+				return false
+
+			if not db.query(ale_sql):
+				push_error(
+					"[DatabaseSchema] Migration 2: Failed to update ale.decay_rate: "
+					+ db.error_message
+				)
+				return false
+
+			return true
+	}
+]
 
 
 static func initialize(db) -> bool:
