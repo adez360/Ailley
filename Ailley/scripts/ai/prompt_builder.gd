@@ -376,7 +376,11 @@ static func _self_block(character: Character) -> Dictionary:
 	return {
 		"id": snapshot["id"],
 		"name": snapshot["name"],
-		"stats": _physical_summary(snapshot.get("stats", {})),
+		# 沒有 stats 元件（罕見，理論上每個 Character 都掛了）時給空字典，
+		# 不是硬生出一份全是預設中性值的假形容詞——那會讓模型以為角色真的有
+		# 這些生理數值，只是剛好都是中性，跟「這個角色根本沒有生理狀態可讀」
+		# 是兩件不同的事（CodeRabbit review 抓到）
+		"stats": _physical_summary(snapshot["stats"]) if snapshot.has("stats") else {},
 		"time": {"hour": GameClock.hour, "minute": GameClock.minute},
 		"place": schedule.get("place", ""),
 		"current_action": schedule.get("state", ""),

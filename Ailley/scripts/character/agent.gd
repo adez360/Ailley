@@ -847,9 +847,15 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 
 	# emotion（#351）：每次決策都必填，validate_tasks() 已經驗證過 type／
 	# intensity 合法，這裡直接套用，不再二次判斷——AI 自己宣告的內在狀態，
-	# 引擎不覆寫、不打折扣
+	# 引擎不覆寫、不打折扣。stability／grudge 帶這隻角色自己的人格值——不帶
+	# 的話 set_emotion() 會退回中性值 50.0，讓《02》§1-4 的持續時間公式對
+	# 每個角色都算出同一個結果，人格再怎麼極端也不影響情緒撐多久
+	# （CodeRabbit review 抓到）
 	var emotion_data: Dictionary = data.get("emotion", {})
-	set_emotion(emotion_data.get("type", "neutral"), emotion_data.get("intensity", 0))
+	set_emotion(
+		emotion_data.get("type", "neutral"), emotion_data.get("intensity", 0), "",
+		personality.get("stability", 50.0), personality.get("grudge", 50.0)
+	)
 
 	# current_goal（#352）：選填，模型沒填就維持原樣不動——跟 update_plan
 	# 的「整份取代」不同，這是「有變化才更新」的單一標籤，空字串代表這輪
@@ -1699,6 +1705,10 @@ func _pursue_talk_task() -> void:
 		stop_moving()
 		_pursued_place = current_place
 		_pursuit_done = true
+		# 首次造訪事實句（#338）：排程觸發的 talk 也是一種「移動到地點」的
+		# 抵達分支，跟 _pursue_current_task() 的一般移動分支同樣要記
+		# （CodeRabbit review 抓到：這裡原本漏了）
+		_note_place_visited(current_place)
 
 	# #281：排程觸發的 talk（target_name 為空）沒有指定對象——查證過
 	# npc_schedule.json，這類排程本來就沒有 target 欄位，涼亭這類地點的
