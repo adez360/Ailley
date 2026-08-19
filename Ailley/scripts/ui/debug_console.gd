@@ -63,6 +63,10 @@ func _ready() -> void:
 		# 真正的存讀時機（睡前自動存檔等）是後續 issue 才接
 		"save": {"run": _cmd_save, "usage": "save", "help": ""},
 		"load": {"run": _cmd_load, "usage": "load", "help": ""},
+		# 同上，help 留空：#282 驗證 LLM 決策迴圈用的 debug 入口，讓沒接觸過
+		# 程式碼的組員能直接切換某隻角色的 llm_decision_enabled，不用進編輯器
+		# 改場景。之後有正式的角色資訊面板接上這個開關再收進正式指令表
+		"ai_decision": {"run": _cmd_ai_decision, "usage": "ai_decision <name> [on|off]", "help": ""},
 		"help": {"run": _cmd_help, "usage": "help", "help": ""},
 		"clear": {"run": _cmd_clear, "usage": "clear", "help": "HELP_CLEAR"},
 	}
@@ -515,6 +519,74 @@ func _cmd_act(args: PackedStringArray) -> void:
 	_print("[color=888888]%s 收到任務 %s params=%s，%d 遊戲分鐘後自動退場[/color]" % [
 		character.character_name, action, JSON.stringify(params), int(ACT_DURATION)
 	])
+
+# ai_decision <name> [on|off]：切換某隻角色的 llm_decision_enabled（#282）。
+# 給沒接觸過程式碼的組員用的入口——不用進編輯器改場景，一行指令就能讓
+# NPC 開始／停止自己問地端模型該做什麼。
+#
+# 開啟時 await 一次真正的決策、印出 reasoning／inner_monologue——這兩項是
+# 模型當次回應的自由文字，不是任何固定文案，印得出來就是「這隻角色真的問過
+# 地端模型」的可視覺驗證，不用另外去看 Godot 編輯器的 Output 面板（
+# _request_next_decision() 那行 print() 只印在那裡，debug 主控台看不到）。
+# 完整任務池（含 priority/score）另外用既有的 tasks 指令看，這裡不重複印。
+func _cmd_ai_decision(args: PackedStringArray) -> void:
+	if args.size() < 1 or args.size() > 2:
+		_error("ai_decision <name> [on|off]")
+		return
+
+	var character := _get_character(args[0])
+	if character == null:
+		return
+
+	if not character.is_in_group("agents"):
+		_error("%s 不是 Agent，沒有決策迴圈" % character.character_name)
+		return
+
+	var turn_on := true
+	if args.size() == 2:
+		match args[1].to_lower():
+			"on":
+				turn_on = true
+			"off":
+				turn_on = false
+			_:
+				_error("ai_decision <name> [on|off]")
+				return
+
+	# is_in_group("agents") 不會幫 GDScript 縮窄靜態型別，顯式轉型才能讓
+	# debug_set_llm_decision()（Agent-only）這個呼叫真的是型別安全的
+	var agent := character as Agent
+
+	if not turn_on:
+		await agent.debug_set_llm_decision(false)
+		_print("[color=888888]%s 的 llm_decision_enabled 關閉[/color]" % character.character_name)
+		return
+
+	# 呼叫前先問一次是不是已經有一份請求在飛——只有真的要送出新請求時才印
+	# 「正在問...」，不然舊 config／額度／逾時的等待訊息會蓋到一個其實沒有
+	# 真的送出請求的情況上
+	if not agent.is_decision_in_flight():
+		_print("[color=888888]%s 正在問地端模型...[/color]" % character.character_name)
+
+	var result: Dictionary = await agent.debug_set_llm_decision(true)
+
+	# triggered=false 代表根本沒送出新請求（已經有一份在飛，見
+	# Agent._awaiting_decision），不是模型端出了什麼問題——跟下面驗證/逾時
+	# 失敗的訊息要分開講，不然會誤導人去查 config 或重試一個其實沒壞的東西
+	if not result.get("triggered", false):
+		_error("%s 已經有一次決策請求在進行中，稍後再試" % character.character_name)
+		return
+
+	if not result.get("ok", false):
+		_error("這次沒問到——可能是 AI 停用／逾時／驗證失敗，走了 fallback。可以再打一次 ai_decision %s on 重試，或先用 ai 指令確認 config 有沒有生效" % character.character_name)
+		return
+
+	_print("[color=88ccff]%s[/color][color=888888] 這次新增了 %d 筆任務[/color]" % [
+		character.character_name, result["tasks_added"]
+	])
+	_print("[color=888888]  reasoning: %s[/color]" % _escape_bbcode(str(result.get("reasoning", ""))))
+	_print("[color=888888]  inner_monologue: %s[/color]" % _escape_bbcode(str(result.get("inner_monologue", ""))))
+	_print("[color=888888]  完整任務池：tasks %s[/color]" % character.character_name)
 
 # memory <name>：印出 L1 短期工作記憶 + L2/L3/L4 分級記憶。#167 驗證用，
 # 形狀比照 _cmd_tasks()——一律 .get()，記憶欄位不該因為指令本身崩掉

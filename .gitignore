@@ -7,3 +7,8 @@ note/.obsidian/cache
 # Editor settings — machine-local absolute paths (Ailley/.gitignore only covers
 # the Godot project subdir, not the repo root)
 .vscode/
+
+# note/本機/ — 內部基礎設施細節（連線位址、主機名稱等），repo 是 public
+# 的，這類資訊一旦進 commit history 就洗不掉。這個資料夾整個不進版控，
+# 團隊內部要分享這類筆記走各自的加密管道，不要移出這個資料夾
+note/本機/

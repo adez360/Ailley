@@ -162,6 +162,19 @@ var _reacting := false
 # _consider_switch() 靠它決定要用 MIN_COMMIT 還是 LLM_WAIT_MIN_COMMIT
 var _awaiting_decision := false
 
+## 給 debug_console.gd 判斷要不要印「正在問地端模型...」用——open 呼叫
+## debug_set_llm_decision(true) 前先問一次，才不會在請求根本沒送出（已經有
+## 一份在飛）的情況下印出誤導的等待訊息
+func is_decision_in_flight() -> bool:
+	return _awaiting_decision
+
+# 決策請求的世代編號。debug_set_llm_decision() 每次改變 llm_decision_enabled
+# 就遞增一次——單純檢查「回應抵達當下的旗標值」不夠：等待期間若先關閉、
+# 回應抵達前又重新開啟，旗標值會跟請求剛送出時一樣是 true，但那份回應早就
+# 過期了。_request_next_decision() 在送出請求前記下當時的世代，await 後比對
+# 世代是否還一樣，不一樣就代表中途被停用過，這份回應要整包丟棄
+var _decision_generation := 0
+
 # LLM 任務 id 的流水號。不能拿 Time.get_ticks_msec() 當唯一值——一次回應最多
 # 五筆是在同一個同步迴圈裡建的，同毫秒是常態不是例外，撞 id 之後
 # _consider_switch() 的 best.id == _current_task.id 會把不同任務當成同一筆，
@@ -690,11 +703,16 @@ func request_sleep_reflection() -> Dictionary:
 ## 之一」（呼叫端各自的理由見各呼叫處的註解）。這裡另外 or 上
 ## _plan_update_requested：上一輪模型如果申請過，這裡兌現、用完就消費掉——
 ## 不管呼叫端這次是為了什麼理由觸發，欠的那次都在這裡還
-func _request_next_decision(allow_update_plan: bool = false) -> void:
+func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	if _awaiting_decision:
-		return
+		return {"ok": false, "triggered": false}
 	_awaiting_decision = true
+	var my_generation := _decision_generation
 
+	# 記下消費前的值，等這次回應因世代不符被丟棄時原封不動還回去——
+	# 「跟從沒問過模型一樣」不能只是不套用任務，連這個已經兌現掉的許可
+	# 也要還原，不然角色會憑空少一次原本已經賺到的 update_plan 機會
+	var had_plan_update_requested := _plan_update_requested
 	var effective_allow_update_plan := allow_update_plan or _plan_update_requested
 	_plan_update_requested = false
 
@@ -708,8 +726,15 @@ func _request_next_decision(allow_update_plan: bool = false) -> void:
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	_awaiting_decision = false
 
+	# 世代編號在 await 期間變了，代表 debug_set_llm_decision() 至少關過一次
+	# 決策開關——不管回應抵達當下旗標是什麼值（就算又被重新打開），這份回應
+	# 都屬於已經作廢的世代，整包淘汰，不套用任何任務或計畫更新
+	if my_generation != _decision_generation:
+		_plan_update_requested = had_plan_update_requested
+		return {"ok": false, "triggered": true}
+
 	if not result["ok"]:
-		return
+		return {"ok": false, "triggered": true}
 
 	var data: Dictionary = result["data"]
 
@@ -719,7 +744,7 @@ func _request_next_decision(allow_update_plan: bool = false) -> void:
 	print("[llm_decision] %s reasoning: %s" % [character_name, data.get("reasoning", "")])
 	print("[llm_decision] %s inner_monologue: %s" % [character_name, data.get("inner_monologue", "")])
 
-	_push_llm_tasks(data["tasks"], data)
+	var tasks_added := _push_llm_tasks(data["tasks"], data)
 
 	# 不管這輪有沒有拿到 update_plan 許可，模型都可能問「下次讓我改」——記
 	# 下來，下一次不管是哪個理由觸發 _request_next_decision() 都會兌現
@@ -734,6 +759,14 @@ func _request_next_decision(allow_update_plan: bool = false) -> void:
 		_apply_today_plan(update_plan)
 
 	_reevaluate()
+
+	return {
+		"ok": true,
+		"triggered": true,
+		"reasoning": data.get("reasoning", ""),
+		"inner_monologue": data.get("inner_monologue", ""),
+		"tasks_added": tasks_added,
+	}
 
 ## update_plan 回應整份取代 _today_plan，不是逐筆增刪改——四個開放時機語意上
 ## 都是「重寫」，不需要模型追蹤既有項目的 id 才能局部編輯，形狀跟驗證都簡單
@@ -773,8 +806,9 @@ func _today_plan_summary() -> Array[Dictionary]:
 ## response 帶的是同一次決策回應的 reasoning／inner_monologue，複製一份到
 ## 這批裡的每一筆 Task，讓「這個任務是為什麼被排進來的」跟任務本身綁在一起，
 ## 供之後《12》規格書的記憶系統直接從 Task 讀，不用另外對照決策回應的歷史記錄
-func _push_llm_tasks(tasks: Array[Dictionary], response: Dictionary) -> void:
+func _push_llm_tasks(tasks: Array[Dictionary], response: Dictionary) -> int:
 	var now_minutes := _now_minutes()
+	var accepted := 0
 
 	for task in tasks:
 		var params: Dictionary = task.get("params", {})
@@ -807,6 +841,9 @@ func _push_llm_tasks(tasks: Array[Dictionary], response: Dictionary) -> void:
 		task["reasoning"] = response.get("reasoning", "")
 		task["inner_monologue"] = response.get("inner_monologue", "")
 		_tasks.append(task)
+		accepted += 1
+
+	return accepted
 
 func _llm_task_count() -> int:
 	var count := 0
@@ -1857,6 +1894,35 @@ func debug_push_task(action: String, params: Dictionary, duration: float) -> voi
 	}]
 	_push_llm_tasks(tasks, {})
 	_reevaluate()
+
+## Debug 用：切換 llm_decision_enabled（issue #282，debug_console.gd 的
+## ai_decision 指令）。開啟時立刻等待一次真正的 _request_next_decision()，
+## 不等自然觸發條件（任務做完、剛睡醒）——組員下指令當下就要看得到效果。
+## 走跟正式路徑完全一樣的 _request_next_decision()，不另開捷徑，理由跟
+## debug_push_task() 一樣：驗到的才是真正會跑的那條。
+##
+## 回傳值給 debug_console.gd 印出來當「這次真的問過模型」的可視覺驗證：
+## reasoning／inner_monologue 是模型當次回應的自由文字，不是寫死的字串，
+## 印得出這兩項就代表這趟真的打了地端模型，不是接了個假資料
+func debug_set_llm_decision(enabled: bool) -> Dictionary:
+	var state_changed := llm_decision_enabled != enabled
+	llm_decision_enabled = enabled
+
+	# 只有旗標真的翻轉時才跳世代——不然重複下 ai_decision X on（旗標本來就
+	# 是 true）會白白作廢掉一份可能正由自然觸發路徑（非這個 debug 指令）
+	# 送出、無關的在途請求。真的翻轉時，讓任何一份還在飛的舊回應——不管它
+	# 抵達時旗標又被切回什麼值——一律被 _request_next_decision() 認成過期
+	# 世代淘汰掉，見它自己的註解
+	if state_changed:
+		_decision_generation += 1
+
+	if not enabled or _awaiting_decision:
+		return {"triggered": false}
+
+	# _request_next_decision() 回傳這次請求實際的驗證結果，不是靠任務池
+	# 前後淨變動去猜——_push_llm_tasks() 會先淘汰同 key 的舊任務再新增，
+	# 換舊為新時池子淨變動是 0，但這次請求其實成功了
+	return await _request_next_decision(_today_plan_needs_new_goal())
 
 ## Debug 用：今天累積了哪些事件，給 reflect 指令在呼叫 request_sleep_reflection()
 ## 前先印出來看。只回 content——debug 顯示不需要知道內部的 id
