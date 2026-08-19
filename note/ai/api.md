@@ -971,7 +971,9 @@ const ALLOWED_ACTIONS := [                   # 《07》《11》拍板的動作�
     "hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink",
     "move_to", "sleep", "nap", "rest", "wash", "idle",
     "steal", "attack",
-]                                             # murmur 是 #162 補上的，#88 population 時漏列
+    "haul", "struggle",
+]                                             # murmur 是 #162 補上的，#88 population 時漏列；
+                                              # haul/struggle 是 #161 補上的（《99》P-27）
 const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade"]
 # 後四個（nap/rest/wash/idle）是 #112 接上的，murmur 是 #162 接上的；eat 是 #114、
 # drink 是 #163、give/shout 是 #158、haul/struggle 是 #161、attack 是 #159、
