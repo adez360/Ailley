@@ -54,6 +54,10 @@ const WORK_PAYMENT := 50
 
 const BUY_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE 一樣的距離門檻，2 格
 
+## 力竭恢復門檻（#364）。stamina ≤ 0 觸發 exhausted，stamina > 此值時自動解除。
+## 待 #361 調校 ACTION_RECOVERY 的實際值後重新調整
+const EXHAUSTION_RECOVERY_THRESHOLD := 50.0
+
 ## buy_from() 的失敗原因碼，形狀比照 TALK_*／WORK_*。除了這五個，buy_from()
 ## 還會**原樣轉傳** Inventory 自己的原因碼（`NOT_ENOUGH`、`NO_SPACE`），
 ## 不在這裡重新取名——沒有必要跟 Inventory 的字典再對一次照
@@ -508,7 +512,7 @@ func _update_conditions() -> void:
 	_set_condition(CONDITION_DRUNK, stats.get_value("alcohol") > 30.0)
 	_set_condition(CONDITION_STARVING, stats.get_value("satiety") < 10.0)
 	_set_condition(CONDITION_DEHYDRATED, stats.get_value("hydration") < 10.0)
-	_set_condition(CONDITION_EXHAUSTED, stats.get_value("stamina") <= 0.0)
+	_update_exhausted_condition()
 	_set_condition(CONDITION_SLEEPY, stats.get_value("wakefulness") < 15.0)
 	_set_condition(CONDITION_FILTHY, stats.get_value("hygiene") < 20.0)
 
@@ -525,6 +529,19 @@ func _update_conditions() -> void:
 	if has_condition(CONDITION_DEHYDRATED):
 		stats.add("health", -1.0)
 	stats.injury_decay_paused = has_condition(CONDITION_BLEEDING)
+
+## exhausted 的觸發與解除邏輯（#364）。不同於其他生理衍生狀態的簡單門檻，
+## exhausted 需要一個恢復門檻（stamina <= 0 時觸發，stamina > 門檻時解除）。
+## 門檻值待 #361 調校後調整
+func _update_exhausted_condition() -> void:
+	var stamina := stats.get_value("stamina")
+
+	# 觸發：stamina 歸零且尚未 exhausted
+	if stamina <= 0.0 and not has_condition(CONDITION_EXHAUSTED):
+		_set_condition(CONDITION_EXHAUSTED, true)
+	# 解除：stamina 恢復到門檻且已經 exhausted
+	elif stamina > EXHAUSTION_RECOVERY_THRESHOLD and has_condition(CONDITION_EXHAUSTED):
+		_set_condition(CONDITION_EXHAUSTED, false)
 
 ## 開始昏迷（health ≤ 0 觸發）。記錄開始時間，30 分鐘內若無人搬走則自動傳送藥草鋪
 ## （《99》P-27，搬走邏輯依賴 #161 haul/struggle）
