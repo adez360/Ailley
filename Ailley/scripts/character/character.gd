@@ -199,6 +199,12 @@ var emotion := {
 ## LLM 不可宣告；目前只實作 8 種生理衍生 condition，見 _update_conditions()
 var conditions: Array[Dictionary] = []
 
+## AI 自由填寫、自己更新的短期目標（《06》，≤40 字）。跟 today_plan 不同層級：
+## today_plan 是一串今天想做的事，current_goal 是模型自己選的「現在最想達成
+## 的那一件」，沒有更細的結構。引擎只負責存跟注入，不驗證內容合不合理、
+## 不強制跟 today_plan 對齊（#352）
+var current_goal := ""
+
 ## 搬運相關狀態（#161，《99》P-27）
 var _hauling_target: Character = null		# 目前正在搬運誰
 var _hauled_by: Array[Character] = []		# 目前正被誰搬運
@@ -1112,6 +1118,7 @@ func get_state_snapshot() -> Dictionary:
 		# 快照會連帶改到 Character 內部狀態，繞過 set_emotion() 的驗證
 		"emotion": emotion.duplicate(true),
 		"conditions": conditions.duplicate(true),
+		"current_goal": current_goal,
 	}
 
 	if stats != null:

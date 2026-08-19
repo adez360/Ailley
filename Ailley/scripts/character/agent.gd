@@ -789,6 +789,19 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 
 	var tasks_added := _push_llm_tasks(data["tasks"], data)
 
+	# emotion（#351）：每次決策都必填，validate_tasks() 已經驗證過 type／
+	# intensity 合法，這裡直接套用，不再二次判斷——AI 自己宣告的內在狀態，
+	# 引擎不覆寫、不打折扣
+	var emotion_data: Dictionary = data.get("emotion", {})
+	set_emotion(emotion_data.get("type", "neutral"), emotion_data.get("intensity", 0))
+
+	# current_goal（#352）：選填，模型沒填就維持原樣不動——跟 update_plan
+	# 的「整份取代」不同，這是「有變化才更新」的單一標籤，空字串代表這輪
+	# 沒有要更新，不是要清空
+	var new_goal: String = data.get("current_goal", "")
+	if not new_goal.is_empty():
+		current_goal = new_goal
+
 	# 不管這輪有沒有拿到 update_plan 許可，模型都可能問「下次讓我改」——記
 	# 下來，下一次不管是哪個理由觸發 _request_next_decision() 都會兌現
 	if data.get("request_plan_update", false):

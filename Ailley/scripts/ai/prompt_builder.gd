@@ -83,14 +83,26 @@ const PLAN_SYSTEM_PERSUADE := """
 ## priority／duration 同一套「上下限用 AISchema 常數格式化帶入，不寫死」，
 ## 選填而非必填：#290 本文只承諾「想清楚以後」才收進 required，這裡沒有
 ## 一併拍板改成必填
+## emotion 是必填欄位（#351，《02》§1-3 規則 1「AI 每次決策都必須回傳
+## emotion，沒有特別感受就填 neutral」），跟 priority/duration 一樣要講清楚
+## 型別跟取值範圍——schema 只保證結構對，措辭要告訴模型「這欄不能亂填」跟
+## 「為什麼有這欄」。規則 2（不能自己填 duration_left）也在這裡講清楚，
+## 不然模型會想在 emotion 物件裡多塞一個欄位
+##
+## current_goal 是選填（#352，《06》），不強迫每次都更新——沒有變化就不用
+## 重寫，跟 today_plan 的「整份取代」語意不同，這是單一簡短標籤
 const PLAN_SYSTEM_TAIL_TEMPLATE := """
 "priority" must be an integer between %d and %d, on the same scale your schedule already uses. 10-110 is for ordinary preferences — a task already in its scheduled time window is worth 110, so an everyday preference at that level still won't outrank it. Only use %d-%d, and only for a genuine emergency happening right now (someone in danger, an attack) that would justify abandoning a meal or work already in progress — never for ordinary preferences.
 "duration" is your own estimate, in game minutes, of how long this action will take. It must be a positive integer, up to %d (one full day) — never 0. Most actions take somewhere between 10 and 60 minutes; sleeping through the night can reasonably take several hundred.
 "expires_in_minutes" is optional: how many game minutes from now this task should still be worth doing before it's no longer relevant (e.g. an appointment you're setting up for later today). It must be an integer between %d and %d. Omit it for tasks you intend to act on right away.
+"emotion" is required every time — it's the only inner state you get to declare yourself. Set "type" to whichever of these fits best right now: %s (use "neutral" if nothing stands out), and "intensity" (0-100) to how strong it is. Base it on your personality and what just happened to you, not on some neutral default. Do not include a duration — how long it lasts is not yours to decide.
+"current_goal" is optional: a short label (a few words, not a sentence) for the one thing you most want to accomplish right now. Only include it when you're setting or changing this goal — omit it if nothing's changed since last time.
 Reply with JSON only, no prose, no code fence:
 {"reasoning": "<why you decided this, brief>",
  "inner_monologue": "<what this character is thinking right now, first person>",
  "request_plan_update": <true if you want the chance to rewrite today_plan next time, else false>,
+ "emotion": {"type": "<one of the 8 listed emotions>", "intensity": 50},
+ "current_goal": "<short label, omit if unchanged>",
  "tasks": [{"action": "<one of the allowed actions>", "params": {}, "priority": 10, "duration": 15}]}
 An empty "tasks" array means don't change anything."""
 
@@ -117,6 +129,7 @@ static func _plan_system_tail() -> String:
 		_emergency_priority_threshold(), int(AISchema.MAX_TASK_PRIORITY),
 		int(AISchema.MAX_TASK_DURATION),
 		AISchema.MIN_EXPIRES_IN_MINUTES, AISchema.MAX_EXPIRES_IN_MINUTES,
+		", ".join(Character.EMOTION_TYPES),
 	]
 
 ## 動作清單用 AISchema.ALLOWED_ACTIONS 動態組，不在這裡另外抄一份字串——
@@ -284,6 +297,76 @@ static func build_plan_envelope(
 		"response_format": AISchema.plan_response_schema(allow_update_plan, has_pending_persuade),
 	}
 
+## 生理 8 項注入用的中文形容詞對照表（《99》P-07 拍板定案），5 級距。
+## key 是**顯示概念**不是內部儲存名——hunger/thirst/sleepiness 是換算＋反向後的
+## 顯示欄位，跟 Stats.SPEC 的 satiety/hydration/wakefulness 不同名也不同方向；
+## stamina/hygiene/alcohol/health/injury 內部與顯示同名同方向，直接查表。
+## 這代表「SPEC 加一列，送給 LLM 的欄位自動跟著多一項」那個既有的直通轉發
+## 規則，對這 8 項不成立了——它們現在要走這張表跟 _physical_summary()，不是
+## 原始浮點數直接倒出去
+const PHYSICAL_LABELS := {
+	"hunger": ["很飽", "不太餓", "有點餓", "很餓", "極度飢餓"],
+	"thirst": ["不渴", "有點渴", "渴", "很渴", "脫水"],
+	"stamina": ["力竭", "疲憊", "有點累", "精神不錯", "精力充沛"],
+	"sleepiness": ["清醒", "有點想睡", "睏", "很睏", "睏到撐不住"],
+	"hygiene": ["髒兮兮", "有點髒", "還算乾淨", "乾淨", "清爽"],
+	"alcohol": ["清醒", "微醺", "有點醉", "醉了", "爛醉如泥"],
+	"health": ["命懸一線", "身體極度虛弱", "身體虛弱", "略有不適", "健康強壯"],
+	"injury": ["輕微擦傷", "有些傷", "傷勢不輕", "傷勢嚴重", "傷重瀕危"],
+}
+
+## 5 級距的門檻（0–20／21–40／41–60／61–80／81–100），跟 PHYSICAL_LABELS
+## 每個陣列的 5 個位置對齊
+const PHYSICAL_LABEL_THRESHOLDS := [20.0, 40.0, 60.0, 80.0]
+
+static func _physical_label(value: float, labels: Array) -> String:
+	for i in PHYSICAL_LABEL_THRESHOLDS.size():
+		if value <= PHYSICAL_LABEL_THRESHOLDS[i]:
+			return labels[i]
+	return labels[4]
+
+static func _physical_entry(value: float, key: String) -> Dictionary:
+	return {"value": roundi(value), "label": _physical_label(value, PHYSICAL_LABELS[key])}
+
+## 生理 8 項換算成「數值＋中文形容詞」（《99》P-07，《01-3》§1「數值一定要附
+## 中文形容詞」）。hunger/thirst/sleepiness 是反向換算（100−原始值），
+## 其餘 5 項內部與顯示同方向，直接查表，見上面 PHYSICAL_LABELS 的說明
+static func _physical_summary(stats: Dictionary) -> Dictionary:
+	return {
+		"hunger": _physical_entry(100.0 - float(stats.get("satiety", 100.0)), "hunger"),
+		"thirst": _physical_entry(100.0 - float(stats.get("hydration", 100.0)), "thirst"),
+		"stamina": _physical_entry(float(stats.get("stamina", 0.0)), "stamina"),
+		"sleepiness": _physical_entry(100.0 - float(stats.get("wakefulness", 100.0)), "sleepiness"),
+		"hygiene": _physical_entry(float(stats.get("hygiene", 0.0)), "hygiene"),
+		"alcohol": _physical_entry(float(stats.get("alcohol", 0.0)), "alcohol"),
+		"health": _physical_entry(float(stats.get("health", 0.0)), "health"),
+		"injury": _physical_entry(float(stats.get("injury", 0.0)), "injury"),
+	}
+
+## 背包內容摘要：{item_id: 總數量}，不是 36 格原始 slots 陣列（#339，character.gd
+## 的既有註解已經指出「塞進每一次快照太貴」）。也不帶 decay／durability——模型
+## 只需要「有什麼、有多少」就能判斷宣稱吃了/送了背包裡沒有的東西合不合理，
+## 引擎內部的腐壞/耐久追蹤不是決策要看的資料，跟 _memory_block() 不帶
+## decay_value 同一個理由
+static func _inventory_summary(character: Character) -> Dictionary:
+	if character.inventory == null:
+		return {}
+
+	var totals := {}
+	for slot in character.inventory.get_summary():
+		var item_id: String = slot["item_id"]
+		totals[item_id] = int(totals.get(item_id, 0)) + int(slot["count"])
+	return totals
+
+## conditions 只帶 type，不帶 turns_left——跟 _memory_block() 不帶 decay_value
+## 同一個理由：模型只需要知道自己現在有哪些異常狀態，不需要知道引擎內部的
+## 倒數細節（#352）
+static func _conditions_summary(conditions: Array) -> Array[String]:
+	var types: Array[String] = []
+	for condition in conditions:
+		types.append(str(condition.get("type", "")))
+	return types
+
 ## dialogue 與 plan 共用的角色自身區塊。直接沿用 get_state_snapshot()——
 ## 兩邊都不該重新蒐集一次同一批資料，見 character.gd 的說明
 static func _self_block(character: Character) -> Dictionary:
@@ -293,7 +376,7 @@ static func _self_block(character: Character) -> Dictionary:
 	return {
 		"id": snapshot["id"],
 		"name": snapshot["name"],
-		"stats": snapshot.get("stats", {}),
+		"stats": _physical_summary(snapshot.get("stats", {})),
 		"time": {"hour": GameClock.hour, "minute": GameClock.minute},
 		"place": schedule.get("place", ""),
 		"current_action": schedule.get("state", ""),
@@ -301,6 +384,20 @@ static func _self_block(character: Character) -> Dictionary:
 		# last_action_result 寫回 Character 就只是存著沒人看，違背《01-2》§1
 		# 「寫回失敗原因讓 AI 能調整策略」的設計目的（QA review 抓到）
 		"last_action_result": snapshot.get("last_action_result", ""),
+		# money／inventory（#339）：模型看不到自己有什麼、有多少錢就只能用猜的，
+		# resolve() 對 eat/give 都有「背包裡有沒有東西」的硬規則檢查
+		"money": snapshot.get("money", 0),
+		"inventory": _inventory_summary(character),
+		# emotion（#351，《02》§1）：只帶 type／intensity，不帶 duration_left／
+		# cause_event_id——模型只需要知道自己現在是什麼情緒、多強烈，不需要
+		# 知道還剩幾個 tick 才會恢復中性，那是引擎自己的倒數細節
+		"emotion": {
+			"type": snapshot.get("emotion", {}).get("type", "neutral"),
+			"intensity": snapshot.get("emotion", {}).get("intensity", 0),
+		},
+		# conditions／current_goal（#352）
+		"conditions": _conditions_summary(snapshot.get("conditions", [])),
+		"current_goal": snapshot.get("current_goal", ""),
 	}
 
 ## L2（近期）＋ L4（核心）記憶固定全量帶入，不做情境篩選（#169，《99》P-03
