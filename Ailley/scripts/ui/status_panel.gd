@@ -146,13 +146,31 @@ func _pick_character(screen_pos: Vector2) -> Character:
 func open(character: Character) -> void:
 	if not panel.visible:
 		_set_tab(0)
+	_disconnect_inventory_changed()
 	_character = character
+	_connect_inventory_changed()
 	title_label.text = character.character_name
 	panel.show()
 
 func close() -> void:
 	panel.hide()
+	_disconnect_inventory_changed()
 	_character = null
+
+## 物品頁開著時角色吃東西／被送禮／換手持，格子要跟著動，不能只在開頁/切頁那瞬間
+## 拍照（《15》§2-6：「掛 Inventory.changed 訊號，不逐幀輪詢」）
+func _connect_inventory_changed() -> void:
+	if _character != null and _character.inventory != null:
+		_character.inventory.changed.connect(_on_inventory_changed)
+
+func _disconnect_inventory_changed() -> void:
+	if _character != null and _character.inventory != null \
+			and _character.inventory.changed.is_connected(_on_inventory_changed):
+		_character.inventory.changed.disconnect(_on_inventory_changed)
+
+func _on_inventory_changed() -> void:
+	if panel.visible and _current_tab == 2:
+		_refresh_items_tab()
 
 func _set_tab(tab: int) -> void:
 	_current_tab = tab

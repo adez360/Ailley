@@ -321,9 +321,15 @@ func _clear_current_task(ok: bool, target_override: String = "") -> void:
 ## _select() 用在「換成另一筆」——後者不會經過 _clear_current_task()（它
 ## 直接把 _current_task 覆寫成新任務，不會先變成 {}），但舊任務一樣算
 ## 「做過的事」，不能因為換任務的路徑不同就漏記（#172）
+##
+## 靠 task 自己身上的 "_logged" 記一次就夠：_reevaluate_once() 的 duration
+## 到期分支現在會搶先在完成的當下記一筆（見那裡的註解），同一個 task 之後
+## 若又流到 _select()／_clear_current_task()（例如決策遲遲不回，_current_task
+## 撐到自己過期才被 _clear_current_task() 收尾），不能再記第二次
 func _log_task_ended(task: Dictionary, ok: bool, target_override: String = "") -> void:
-	if task.is_empty():
+	if task.is_empty() or task.get("_logged", false):
 		return
+	task["_logged"] = true
 	var params: Dictionary = task.get("params", {})
 	var target := target_override if not target_override.is_empty() \
 			else str(params.get("target", params.get("place", "")))
@@ -1184,6 +1190,13 @@ func _reevaluate_once() -> void:
 		# 真正該做的事打架（見那裡的註解）——talk 任務的完成訊號是對話結束，
 		# 不是這個給沒有天然結束訊號的動作用的 duration 下限
 		_remove_task(_current_task.get("id", ""))
+		# CodeRabbit review（#366）：today_log 要記「動作執行結束」那一刻
+		# （《15》§2-5），不是之後某次 _select() 換下一筆任務的時候才補記——
+		# 中間那段等待決策回應的空檔可能拖很久，甚至決策失敗或沒有候選、
+		# _current_task 從頭到尾沒被換掉，那樣 _select() 永遠不會跑到、這筆
+		# 就漏記。這裡就地記錄，_log_task_ended() 靠 task 自己的 _logged
+		# 旗標擋掉之後 _select()／_clear_current_task() 對同一筆再記一次
+		_log_task_ended(_current_task, true)
 		# 允許附帶 update_plan：today_plan 沒事可做時，這正是「意圖全數完成」
 		# 那個開放時機（#89 觸發 2）——這個事件驅動迴圈本來就是每個 llm 任務
 		# 做完就重問一次，剛好是檢查這件事最自然的時間點
