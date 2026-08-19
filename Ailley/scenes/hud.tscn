@@ -64,10 +64,10 @@ anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
-offset_left = -75.0
-offset_top = -87.0
-offset_right = 75.0
-offset_bottom = 88.0
+offset_left = -140.0
+offset_top = -104.0
+offset_right = 140.0
+offset_bottom = 104.0
 mouse_filter = 2
 theme_override_styles/panel = SubResource("StyleBoxTexture_jbj1t")
 
@@ -93,33 +93,96 @@ horizontal_alignment = 1
 vertical_alignment = 1
 clip_text = true
 
-[node name="VBox" type="VBoxContainer" parent="StatusPanel/Panel"]
+[node name="StatusTab" type="VBoxContainer" parent="StatusPanel/Panel"]
 layout_mode = 0
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = 10.0
-offset_top = 32.0
+offset_top = 58.0
 offset_right = -10.0
-offset_bottom = -8.0
+offset_bottom = -29.0
 mouse_filter = 2
 theme_override_constants/separation = 4
 
-[node name="AgeLabel" type="Label" parent="StatusPanel/Panel/VBox"]
+[node name="AgeLabel" type="Label" parent="StatusPanel/Panel/StatusTab"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
 
-[node name="MoneyLabel" type="Label" parent="StatusPanel/Panel/VBox"]
+[node name="MoneyLabel" type="Label" parent="StatusPanel/Panel/StatusTab"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
 
-[node name="StatsBox" type="VBoxContainer" parent="StatusPanel/Panel/VBox"]
+[node name="StatsBox" type="VBoxContainer" parent="StatusPanel/Panel/StatusTab"]
 layout_mode = 2
 theme_override_constants/separation = 2
 
-[node name="HintLabel" type="Label" parent="StatusPanel/Panel/VBox"]
-layout_mode = 2
+[node name="HintLabel" type="Label" parent="StatusPanel/Panel"]
+layout_mode = 0
+offset_left = 10.0
+offset_top = 185.0
+offset_right = 270.0
+offset_bottom = 201.0
 theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
 autowrap_mode = 3
+
+[node name="TabBar" type="HBoxContainer" parent="StatusPanel/Panel"]
+layout_mode = 0
+offset_left = 10.0
+offset_top = 32.0
+offset_right = 270.0
+offset_bottom = 52.0
+
+[node name="StatusTabButton" type="Button" parent="StatusPanel/Panel/TabBar"]
+layout_mode = 2
+size_flags_horizontal = 3
+focus_mode = 0
+text = "UI_CHAR_TAB_STATUS"
+
+[node name="TodayTabButton" type="Button" parent="StatusPanel/Panel/TabBar"]
+layout_mode = 2
+size_flags_horizontal = 3
+focus_mode = 0
+text = "UI_CHAR_TAB_TODAY"
+
+[node name="ItemsTabButton" type="Button" parent="StatusPanel/Panel/TabBar"]
+layout_mode = 2
+size_flags_horizontal = 3
+focus_mode = 0
+text = "UI_CHAR_TAB_ITEMS"
+
+[node name="TodayTab" type="ScrollContainer" parent="StatusPanel/Panel"]
+layout_mode = 0
+offset_left = 10.0
+offset_top = 58.0
+offset_right = 270.0
+offset_bottom = 179.0
+horizontal_scroll_mode = 0
+
+[node name="TodayVBox" type="VBoxContainer" parent="StatusPanel/Panel/TodayTab"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="PlanHeader" type="Label" parent="StatusPanel/Panel/TodayTab/TodayVBox"]
+layout_mode = 2
+text = "UI_CHAR_TODAY_PLAN_HEADER"
+
+[node name="PlanList" type="VBoxContainer" parent="StatusPanel/Panel/TodayTab/TodayVBox"]
+layout_mode = 2
+
+[node name="LogHeader" type="Label" parent="StatusPanel/Panel/TodayTab/TodayVBox"]
+layout_mode = 2
+text = "UI_CHAR_TODAY_LOG_HEADER"
+
+[node name="LogList" type="VBoxContainer" parent="StatusPanel/Panel/TodayTab/TodayVBox"]
+layout_mode = 2
+
+[node name="ItemsTab" type="GridContainer" parent="StatusPanel/Panel"]
+layout_mode = 0
+offset_left = 10.0
+offset_top = 58.0
+offset_right = 270.0
+offset_bottom = 179.0
+columns = 9
 
 [node name="InventoryPanel" type="CanvasLayer" parent="."]
 script = ExtResource("6_3swnk")
