@@ -710,7 +710,7 @@ func _start_character_state_persistence() -> void:
 
 
 	var script: Script = load(
-		"res://database/CharacterStatePersistence.gd"
+		"res://scripts/database/CharacterStatePersistence.gd"
 	)
 
 

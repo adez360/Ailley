@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-18
+updated: 2026-08-19
 ---
 
 # LLM 串接與 AI 服務層
@@ -364,7 +364,7 @@ context 用，跟 `agent.gd` 的 `_tasks`（引擎真的會執行的排程單位
 語意的東西。
 
 **資料形狀**：`Agent._today_plan`，`Array[Dictionary]`，每筆
-`{id, text, is_done}`。欄位對齊 `database/schemas/NPCDailyPlanSchema.gd`
+`{id, text, is_done}`。欄位對齊 `scripts/database/schemas/NPCDailyPlanSchema.gd`
 的 `npc_daily_plan` 表（`plan_id`/`text`/`is_done`）——存檔（#21～#23）
 還沒接上這張表，先用同樣的形狀存在記憶體，之後接上不用改欄位名。`id` 是
 `agent.gd` 自己配發的本機序號，跟資料庫的 `plan_id`（真的落地才有意義）

@@ -9,7 +9,7 @@ extends Node
 ##
 ## 使用方式：
 ## 1. 將本檔放到：
-##      res://database/DatabaseCRUDTest.gd
+##      res://scripts/database/DatabaseCRUDTest.gd
 ## 2. 建立一個暫時測試場景：
 ##      Node
 ##        └── DatabaseCRUDTest
