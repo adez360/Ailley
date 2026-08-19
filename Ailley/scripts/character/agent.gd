@@ -143,28 +143,9 @@ var _attack_pursuit_stuck_ticks := 0
 var _attack_pursuit_last_distance := INF
 
 # persuade 任務用的卡住偵測（#227），跟 _give_pursuit_* 同一套理由與收尾方式
-# （卡住就真的放棄，不是只警告）——見 _pursuit_stuck_progress() 共用邏輯
+# （卡住就真的放棄，不是只警告）——共用邏輯見 _pursuit_stuck_progress()（#266）
 var _persuade_pursuit_stuck_ticks := 0
 var _persuade_pursuit_last_distance := INF
-
-# persuade 追逐移動目標時的卡住判定門檻。設計抽自 #266（PR #301，尚未併入
-# main）：那個 PR 把 give／talk 既有的重複卡住偵測邏輯抽成共用函式，這裡
-# 先補一份給 persuade 用，give／talk 目前還是各自的內嵌版本（沒有跟著改，
-# 不在這次範圍內）。等 #266 併入時，這裡跟那邊的定義會撞名，需要 rebase
-# 時合併成一份，不是各自維護——連續幾次「距離沒有明顯縮短」才算真的卡住，
-# 不是量測誤差
-const PURSUIT_STUCK_THRESHOLD := 3
-
-# persuade 任務追逐移動目標時的卡住偵測邏輯（設計來源見上方常數註解）：
-# 距離沒有明顯縮短（容許 1.0 量測誤差）就算一次沒進展，回傳新的卡住計數
-# 跟「這一次是不是剛好達到門檻」。用「剛好等於門檻」而不是「大於等於」，
-# 是要保留「只在跨過門檻那一次通知一次」的行為，不會每個 tick 都重複觸發
-static func _pursuit_stuck_progress(distance: float, last_distance: float, stuck_ticks: int) -> Dictionary:
-	var new_ticks := stuck_ticks + 1 if distance >= last_distance - 1.0 else 0
-	return {
-		"stuck_ticks": new_ticks,
-		"threshold_reached": new_ticks == PURSUIT_STUCK_THRESHOLD,
-	}
 
 # 自己成功發起、目前正在進行中的 talk 任務 id／來源。只在 talk_to() 真的成功
 # 那一刻設值，exit_conversation() 靠這個而不是「當下的 _current_task」判斷對話
