@@ -298,9 +298,11 @@ var _visited_places := {}
 ## 不會每輪決策都重複講「你以前沒有來過這裡」
 var _pending_fact_lines: Array[String] = []
 
-## 連續同一動作失敗的追蹤。resolve() 是 LLM 來源任務唯一的成敗判定入口
-## （見該函式），在這裡包一層記錄，不用去每個 _pursue_*_task() 呼叫端各自
-## 記一次——那些呼叫端全部殊途同歸打同一個 resolve()
+## 連續同一動作失敗的追蹤。由各 _pursue_*_task() 在真正的終局結果（前置檢查
+## 沒過、或 talk_to()／give_to()／attack()／eat()／drink() 等實際執行完成）
+## 呼叫 _track_action_result_for_facts() 記錄——不能包在 resolve() 裡自動記，
+## 那樣追逐目標時每個遊戲分鐘的前置檢查通過都會被當一次「成功」洗掉真正的
+## 連續失敗（CodeRabbit review 抓到，見 resolve() 的說明）
 var _consecutive_failure_action := ""
 var _consecutive_failure_count := 0
 
@@ -814,6 +816,14 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	# 所以下面只在 had_pending_persuade 為真時才碰 _pending_persuade
 	var had_pending_persuade := not _pending_persuade.is_empty()
 
+	# 同一輪快照一次性事實句要送出的數量（CodeRabbit review 抓到）：這通吃
+	# await，等待期間可能有新的一次性事實句進來（例如剛好走到沒去過的地點）。
+	# 舊寫法在組信封當下就把 _pending_fact_lines 清空，回應失敗或被世代淘汰時
+	# 這些事實句就這樣不見了，下一輪決策問不到；也可能把等待期間新加入、
+	# 這次根本沒送出去的事實句一起清掉。改成只記「送出了幾筆」，等這次回應
+	# 真的被套用時，才從佇列前面移掉對應筆數——等待期間新增的一律留在後面
+	var fact_lines_sent_count := _pending_fact_lines.size()
+
 	var visible: Array[Character] = vision.get_visible_characters() if vision != null else []
 	var envelope := PromptBuilder.build_plan_envelope(
 		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan,
@@ -836,6 +846,12 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 		return {"ok": false, "triggered": true}
 
 	var data: Dictionary = result["data"]
+
+	# 這輪回應真的通過驗證、確定會被套用，才消費快照下來的一次性事實句數量——
+	# 只砍前面 fact_lines_sent_count 筆，等待期間新增的（在陣列後段）留著給
+	# 下一輪
+	if fact_lines_sent_count > 0:
+		_pending_fact_lines = _pending_fact_lines.slice(fact_lines_sent_count)
 
 	# reasoning／inner_monologue 印出來給人排查，跟 _trigger_village_ai() 的
 	# print() 除錯模式一致；不進遊戲內 UI。決策準不準沒有系統性驗證，
@@ -1410,15 +1426,14 @@ func _environment_risk(_action: String, _params: Dictionary) -> float:
 ## 只管兩件事：目標/前提是不是真的存在（硬規則），以及擲不擲得過成功率——語意
 ## 驗證/白名單那些是 AISchema 的事，這裡假設 action/params 已經過白名單。
 ##
-## 薄包裝：真正的判定邏輯在 _resolve_raw()，這裡只是為了在唯一一個進出口
-## 記錄「連續同一動作失敗」（#338）——所有 _pursue_*_task() 都打同一個
-## resolve()，不用去每個呼叫端各自記一次
+## 「連續同一動作失敗」（#338）不在這裡記——talk／give／attack／persuade 追逐
+## 目標時，這個函式每個遊戲分鐘都會被呼叫一次做前置檢查，追逐中途每次通過都
+## 算「成功」的話，連續失敗計數會被追逐過程本身洗掉，也量不到 talk_to()／
+## give_to()／attack()／eat()／drink() 真正執行後才會出現的失敗（CodeRabbit
+## review 抓到）。改成由各 _pursue_*_task() 自己在真正的終局結果（前置檢查
+## 沒過、或實際執行完成）呼叫 _track_action_result_for_facts()，只在任務真的
+## 結束的那一刻記一次
 func resolve(action: String, params: Dictionary) -> Dictionary:
-	var result := _resolve_raw(action, params)
-	_track_action_result_for_facts(action, result.get("success", false))
-	return result
-
-func _resolve_raw(action: String, params: Dictionary) -> Dictionary:
 	match action:
 		"talk":
 			var target_name: String = str(params.get("target", ""))
@@ -1673,7 +1688,10 @@ func _pursue_talk_task() -> void:
 		if not result["success"]:
 			# resolve() 判定失敗的任務不留在池子裡繼續佔位——不移除的話
 			# 下次重算分數不變，會馬上又選到同一筆，變成每分鐘重試一次
-			# 同樣失敗的無限迴圈。跟 give／shout「做一次就結束」共用同一套收尾
+			# 同樣失敗的無限迴圈。跟 give／shout「做一次就結束」共用同一套收尾。
+			# 任務在這裡就終結，不會有下一個 tick 重算，記一次不會被追逐過程
+			# 本身重複洗掉（見 resolve() 的說明）
+			_track_action_result_for_facts("talk", false)
 			_finish_task_and_request_next()
 			return
 
@@ -1750,12 +1768,16 @@ func _pursue_talk_task() -> void:
 			# 照樣可能把 _current_task 換成別的（見 exit_conversation() 的註解）
 			_active_talk_task_id = _current_task.get("id", "")
 			_active_talk_task_source = _current_task.get("source", "")
+			_track_action_result_for_facts("talk", true)
 		else:
 			# 失敗不放棄任務，下個遊戲分鐘再試——對方可能只是暫時忙碌（TARGET_BUSY
-			# 等），跟 move_to() 走不到只 push_warning 不整筆放棄是同一種態度
+			# 等），跟 move_to() 走不到只 push_warning 不整筆放棄是同一種態度。
+			# 這裡是 talk_to() 真正執行後的結果，不是追逐中的前置檢查，每次
+			# 重試都是一次真實的失敗，該算進連續失敗計數
 			push_warning("Agent %s: 搭話 %s 失敗（%s）" % [
 				character_name, target.character_name, failure
 			])
+			_track_action_result_for_facts("talk", false)
 		return
 
 	# 找不到路徑要講出來——跟地點式任務一樣，不然「永遠追不到人」在 log 裡
@@ -1783,16 +1805,21 @@ func _pursue_talk_task() -> void:
 func _pursue_eat_task() -> void:
 	stop_moving()
 	var proceed := true
-	if _current_task.get("source", "") == "llm":
+	var is_llm: bool = _current_task.get("source", "") == "llm"
+	if is_llm:
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
 		proceed = result["success"]
+		if not proceed:
+			_track_action_result_for_facts("eat", false)
 
 	if proceed:
 		var reason := eat()
 		last_action_result = reason
 		if reason != Character.EAT_OK:
 			push_warning("Agent %s: eat 失敗（%s）" % [character_name, reason])
+		if is_llm:
+			_track_action_result_for_facts("eat", reason == Character.EAT_OK)
 
 	# 不管成功失敗都收尾：跟 _pursue_talk_task() 的 resolve() 失敗分支一樣，
 	# 這筆任務不留在池子裡繼續佔位（吃不到就是吃不到，不會下一分鐘自己變出食物），
@@ -1815,16 +1842,21 @@ func _pursue_eat_task() -> void:
 func _pursue_drink_task() -> void:
 	stop_moving()
 	var proceed := true
-	if _current_task.get("source", "") == "llm":
+	var is_llm: bool = _current_task.get("source", "") == "llm"
+	if is_llm:
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
 		proceed = result["success"]
+		if not proceed:
+			_track_action_result_for_facts("drink", false)
 
 	if proceed:
 		var reason := drink()
 		last_action_result = reason
 		if reason != Character.DRINK_OK:
 			push_warning("Agent %s: drink 失敗（%s）" % [character_name, reason])
+		if is_llm:
+			_track_action_result_for_facts("drink", reason == Character.DRINK_OK)
 
 	if _current_task.get("source", "") == "llm":
 		_remove_task(_current_task.get("id", ""))
@@ -1853,6 +1885,9 @@ func _pursue_murmur_task() -> void:
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
 		should_speak = result["success"]
+		# murmur 沒有追逐、每筆任務只跑這裡一次，resolve() 的結果就是終局結果
+		# （不像 talk／give／attack 之後還有一次真正執行可能失敗）
+		_track_action_result_for_facts("murmur", should_speak)
 
 	# 內容層跟 talk 同一套「模板先頂著，LLM 版之後再換」的分工（見
 	# note/技術/talk 動作設計.md）：murmur 沒有聽者，講的是給自己聽的話，
@@ -1911,6 +1946,7 @@ func _pursue_give_task() -> void:
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
 		if not result["success"]:
+			_track_action_result_for_facts("give", false)
 			_finish_task_and_request_next()
 			return
 
@@ -1949,7 +1985,10 @@ func _pursue_give_task() -> void:
 	stop_moving()
 	var item_id: String = str(params.get("item_id", ""))
 	var count: int = int(params.get("count", 1))
-	last_action_result = _give_failure_message(give_to(target, item_id, count))
+	var give_failure := give_to(target, item_id, count)
+	last_action_result = _give_failure_message(give_failure)
+	if _current_task.get("source", "") == "llm":
+		_track_action_result_for_facts("give", give_failure == Character.GIVE_OK)
 	_finish_task_and_request_next()
 
 # give_to() 失敗原因碼轉中文，格式跟 _failure_reason() 一致——《01-2》§5
@@ -1983,6 +2022,7 @@ func _pursue_attack_task() -> void:
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
 		if not result["success"]:
+			_track_action_result_for_facts("attack", false)
 			_finish_task_and_request_next()
 			return
 
@@ -2016,7 +2056,10 @@ func _pursue_attack_task() -> void:
 		return
 
 	stop_moving()
-	last_action_result = _attack_failure_message(attack(target))
+	var attack_failure := attack(target)
+	last_action_result = _attack_failure_message(attack_failure)
+	if _current_task.get("source", "") == "llm":
+		_track_action_result_for_facts("attack", attack_failure == Character.ATTACK_OK)
 	_finish_task_and_request_next()
 
 # attack() 失敗原因碼轉中文，格式跟 _give_failure_message() 一致
@@ -2051,6 +2094,7 @@ func _pursue_persuade_task() -> void:
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
 		if not result["success"]:
+			_track_action_result_for_facts("persuade", false)
 			_finish_task_and_request_next()
 			return
 
@@ -2105,6 +2149,8 @@ func _pursue_persuade_task() -> void:
 		last_action_result = "你試著說服 %s，等他自己想清楚" % target.character_name
 	else:
 		last_action_result = "%s 好像還在想別人剛才說的話，你的話插不進去" % target.character_name
+	if _current_task.get("source", "") == "llm":
+		_track_action_result_for_facts("persuade", recorded)
 	_persuade_delivered = true
 	# 不在這裡呼叫 _finish_task_and_request_next()：P-09 拍板 persuade 佔用
 	# 固定時長（模型填的建議值 10 分鐘），跟 gather／hunt_small 同一套用法——
@@ -2135,10 +2181,11 @@ func try_record_pending_persuade(persuader: String, persuader_id: String, reason
 func _fact_lines_summary() -> Array[String]:
 	var lines: Array[String] = []
 
-	# 一次性事件（首次造訪等），讀過就清空——跟下面「可持續重算」的條件
-	# 不同，這些是事件觸發當下才成立，不該每輪決策都重複講
+	# 一次性事件（首次造訪等）。這裡只讀不清——真的被這輪回應消費掉才清，
+	# 由 _request_next_decision() 在回應通過驗證後處理（見那邊
+	# fact_lines_sent_count 的說明），這裡單純組信封用的內容，不能假設
+	# 這次一定會送成功
 	lines.append_array(_pending_fact_lines)
-	_pending_fact_lines.clear()
 
 	if not _pending_persuade.is_empty():
 		var persuader: String = str(_pending_persuade.get("persuader", ""))
@@ -2251,8 +2298,12 @@ func _pursue_shout_task() -> void:
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
 		if not result["success"]:
+			_track_action_result_for_facts("shout", false)
 			_finish_task_and_request_next()
 			return
+		# shout 沒有追逐、每筆任務只跑這裡一次，resolve() 通過後 make_noise()
+		# 不會再失敗，這裡就是終局結果
+		_track_action_result_for_facts("shout", true)
 
 	# 半徑沿用 make_noise() 的預設值 NOISE_RADIUS——《07》§3 已定案「聽覺
 	# （shout）8 格」，跟 make_noise() 原本給玩家按鍵用的廣播半徑是同一個數字，
