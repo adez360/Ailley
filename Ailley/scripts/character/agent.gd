@@ -363,8 +363,10 @@ func rebuild_provider() -> void:
 ## 但寫一行 push_warning 帶原因——跟 _load_schedule() 找不到 assignment 時的處理是同一種
 ## 「資料異常先警告、遊戲照跑」的慣例，不讓一個資料錯字讓角色整個決策啞掉
 func _make_provider() -> DecisionProvider:
-	# 三種資料異常（來源打錯字、cloud 沒填 model_name、model_name 指到不可用的
-	# provider）處理方式完全一樣，所以只收集原因，警告與 fallback 各寫一次
+	# 兩種資料異常（cloud 沒填 model_name、model_name 指到不可用的 provider）
+	# 跟未知的 decision_source 打錯字，處理方式完全一樣，所以只收集原因，
+	# 警告與 fallback 各寫一次。"local" 是獨立分支直接 return——它不算異常，
+	# 不需要走下面收集 reason 那條路
 	var reason := ""
 	if decision_source == "cloud":
 		if model_name.is_empty():
@@ -381,11 +383,16 @@ func _make_provider() -> DecisionProvider:
 				reason = "decision_source 'cloud' 但 model_name '%s' 沒有對應的可用 AIConfig provider（不存在或設定不全）" % model_name
 			else:
 				return RemoteLLMProvider.new(provider.name)
-	elif decision_source != "local":
+	elif decision_source == "local":
+		# #288：local 來源比照 cloud 讀 model_name——建角面板 local 分頁的下拉
+		# 選單選的型號要真正生效，不能無條件打字面值 "local"。model_name 是
+		# 空字串（MVP 5 個排程 NPC 沒走建角面板）時，LocalLLMProvider 自己
+		# 退回既有的字面值行為，這裡不用另外分支
+		return LocalLLMProvider.new(model_name)
+	else:
 		reason = "decision_source '%s' 不是已知值" % decision_source
 
-	if not reason.is_empty():
-		push_warning("Agent %s: %s，退回 local" % [character_name, reason])
+	push_warning("Agent %s: %s，退回 local" % [character_name, reason])
 	return LocalLLMProvider.new()
 
 # 一趟移動有結論了：走到了，或 _check_stuck() 判定走不動而放棄。
