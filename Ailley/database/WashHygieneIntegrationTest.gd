@@ -56,8 +56,9 @@ func _run() -> void:
 
 	var original_hygiene := agent.stats.get_value("hygiene")
 	var original_state := agent.current_state
+	var was_moving := agent.is_moving()
 
-	if agent.is_moving():
+	if was_moving:
 		agent.stop_moving()
 
 	# -------------------------------------------------
@@ -110,6 +111,12 @@ func _run() -> void:
 
 	agent.stats.set_value("hygiene", original_hygiene)
 	agent.current_state = original_state
+
+	# stop_moving() 會清空 _path，不是單純暫停——原本正在走的 Agent
+	# 測試前後要「狀態已還原」，得靠 move_to(last_move_target) 重新
+	# 算一條路徑走過去，不能只是把旗標翻回去，也沒有原始路徑可以恢復
+	if was_moving:
+		agent.move_to(agent.last_move_target)
 
 	print("[WashHygieneIntegrationTest] 狀態已還原。")
 
