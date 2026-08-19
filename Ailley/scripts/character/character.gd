@@ -265,7 +265,7 @@ func _ready() -> void:
 	if character_id.is_empty():
 		character_id = str(identity.get("character_id", ""))
 	if character_id.is_empty():
-		character_id = generate_id()
+		character_id = _resolve_generated_id()
 
 	if character_name.is_empty():
 		character_name = str(identity.get("character_name", ""))
@@ -302,6 +302,14 @@ static func generate_id() -> String:
 		hex.substr(0, 8), hex.substr(8, 4), hex.substr(12, 4),
 		hex.substr(16, 4), hex.substr(20, 12),
 	]
+
+# 走到第三層（沒有 @export 手擺值、npc_schedule.json 也查不到）時要用哪個 id，
+# 預設就是普通生成，即用即棄。Player 覆寫這個函式讓生成的 id 額外持久化，
+# 下次開遊戲沿用同一組——動態生成的角色（spawn_character()）不需要這件事：
+# 它們要嘛已經帶著角色庫存好的 character_id（不會走到這裡），要嘛本來就是
+# 一次性測試用途，沒有「跨場次是同一隻」的需求
+func _resolve_generated_id() -> String:
+	return generate_id()
 
 # 撞 id 的兩隻會共用同一份關係與記憶（relationships.gd 拿 id 當 key），
 # 所以這裡換掉一個，而不是印完錯誤照樣讓兩隻共用。

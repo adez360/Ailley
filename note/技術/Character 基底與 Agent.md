@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-17
+updated: 2026-08-20
 ---
 
 # Character 基底與 Agent
@@ -53,8 +53,10 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 「玩家可改」不等於「這一場不會變」：`character_id` 玩家碰不到，但撞號時
 `_ensure_unique_id()` 會就地換掉一個，別把它快取在 `_ready()` 之外。
 
-**跨場次是否穩定要看走到第幾層**：走第 2 層的固定 NPC 每次開遊戲都拿到同一個 id
-（`identities` 是靜態資料），走第 3 層的角色每次重開都是新 UUID。
+**跨場次是否穩定要看走到第幾層，第 3 層本身又分兩種**：走第 2 層的固定 NPC
+每次開遊戲都拿到同一個 id（`identities` 是靜態資料）；走第 3 層的 Player
+一樣穩定，但穩定的方式不同——見下面「Player 的 id 額外持久化」；走第 3 層的
+其他動態角色（非角色庫投放、沒有事先帶 `character_id` 的）才是每次重開都新 UUID。
 
 ## `character_id` 是生成的 UUID，不帶任何語意
 
@@ -75,7 +77,23 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 而不是印完錯誤讓兩隻共用。共用 id 等於共用一份關係與記憶
 （`relationships.gd` 拿 id 當 key）。生成的 id 不會撞，會走到這條的是場景裡手寫重複。
 
-id 目前每次開遊戲都重新生成 —— 寫下來要等存檔，見 [[存檔]]。
+### Player 的 id 額外持久化（issue #399）
+
+固定 NPC 靠 `identities` 表天生穩定，但 Player 沒有節點名可查的身分資料——
+`main.tscn` 不能直接 `@export` 填一個固定字串（那個欄位是給場景裡手擺的
+**測試角色**用，填死字串也違反「id 不帶語意」的原則）。
+
+做法是讓 `_ready()` 走到第三層時，改呼叫一個可被子類別覆寫的 hook
+（`_resolve_generated_id()`，預設就是 `generate_id()`）。`player.gd` 覆寫它：
+第一次生成後，把這組 UUID 額外寫進 `user://saves/player_id.txt`——
+跟 `user://saves/characters/`／`user://saves/worlds/`（見 [[存檔]]）分開放，
+因為它不屬於 `SaveService` 那套整包讀寫／版本／鎖的機制，從頭到尾只有一個值，
+寫一次之後只會被讀取。下次 `_ready()` 先讀這個檔案，讀得到就沿用，不必再過一次
+存檔那套重量級流程。
+
+動態生成的角色（`spawn_character()`）不用這個 hook：它們要嘛已經帶著角色庫
+存好的 `character_id`（走第一層就結束，不會落到這裡），要嘛是一次性測試用途，
+沒有「跨場次是同一隻」的需求。
 
 > [!important] 為什麼 `schedule_template` 不共用 `character_id`
 > 它是「用哪份資料」不是「我是誰」。id 既然是全遊戲唯一身分，
