@@ -65,9 +65,17 @@ You cannot rewrite today_plan this turn. If you want the chance to on your next 
 ## 贏不過在窗任務，等於承諾了一件仲裁器做不到的事。改成從
 ## Agent.SCHEDULE_BASE_PRIORITY／TIME_BONUS／HYSTERESIS 算出來，不是另一個
 ## 手寫的數字——這三個常數改了，這裡的門檻會自動跟著動，不會再一次漂移
+##
+## #290：expires_in_minutes 的三層防禦原本只做了第一層（schema）跟第三層
+## （驗證），這裡的 prompt 文字（第二層）一直沒補——不支援 json_schema 的
+## provider 完全不會被告知這個欄位存在，等於三層防禦少了一層。措辭跟
+## priority／duration 同一套「上下限用 AISchema 常數格式化帶入，不寫死」，
+## 選填而非必填：#290 本文只承諾「想清楚以後」才收進 required，這裡沒有
+## 一併拍板改成必填
 const PLAN_SYSTEM_TAIL_TEMPLATE := """
 "priority" must be an integer between %d and %d, on the same scale your schedule already uses. 10-110 is for ordinary preferences — a task already in its scheduled time window is worth 110, so an everyday preference at that level still won't outrank it. Only use %d-%d, and only for a genuine emergency happening right now (someone in danger, an attack) that would justify abandoning a meal or work already in progress — never for ordinary preferences.
 "duration" is your own estimate, in game minutes, of how long this action will take. It must be a positive integer, up to %d (one full day) — never 0. Most actions take somewhere between 10 and 60 minutes; sleeping through the night can reasonably take several hundred.
+"expires_in_minutes" is optional: how many game minutes from now this task should still be worth doing before it's no longer relevant (e.g. an appointment you're setting up for later today). It must be an integer between %d and %d. Omit it for tasks you intend to act on right away.
 Reply with JSON only, no prose, no code fence:
 {"reasoning": "<why you decided this, brief>",
  "inner_monologue": "<what this character is thinking right now, first person>",
@@ -97,6 +105,7 @@ static func _plan_system_tail() -> String:
 		int(AISchema.MIN_TASK_PRIORITY), int(AISchema.MAX_TASK_PRIORITY),
 		_emergency_priority_threshold(), int(AISchema.MAX_TASK_PRIORITY),
 		int(AISchema.MAX_TASK_DURATION),
+		AISchema.MIN_EXPIRES_IN_MINUTES, AISchema.MAX_EXPIRES_IN_MINUTES,
 	]
 
 ## 動作清單用 AISchema.ALLOWED_ACTIONS 動態組，不在這裡另外抄一份字串——
