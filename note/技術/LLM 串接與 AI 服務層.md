@@ -429,13 +429,15 @@ autoload 已註冊，主控台加了 `ai` 指令。
 ### Step 4 — DecisionProvider 介面與雲端驗證失敗重試 ✅ 完成（issue #155／#152）
 
 `agent.gd` 不再直接呼叫 `AIService`，改透過 `DecisionProvider`（`scripts/ai/
-decision_provider.gd`）：`LocalLLMProvider` 打 AIConfig 的 `"local"`
-provider，`RemoteLLMProvider` 建構時帶入要打哪個 provider 名字（對應《06》
-`model_name`），兩者都是 `AIService.request()` 的薄包裝，行為不變。
+decision_provider.gd`）：`LocalLLMProvider`／`RemoteLLMProvider` 建構時都帶入
+`model_name`（對應《06》，建角面板 local／cloud 兩個分頁下拉選單選的型號），
+兩者都是 `AIService.request()` 的薄包裝，行為不變。
 
+`model_name` 是空字串（MVP 5 個排程 NPC 沒走建角面板，這個欄位維持預設空值）
+時，`LocalLLMProvider` 退回打 AIConfig 裡字面值叫 `"local"` 的 provider——
 玩家的 `ai_config.json` 不保證真的有一個可用的 `"local"`——可能只設了
 `default_provider`、取了別的名字，或有這個項目但 `base_url`／`model` 沒填齊。
-`LocalLLMProvider._init()` 因此先用 `AIConfig.has_valid_provider("local")`
+`LocalLLMProvider._init()` 因此再用 `AIConfig.has_valid_provider("local")`
 解析一次：不成立就 `push_warning` 並改傳空字串，交給 `default_provider`。
 硬傳 `"local"` 的話這些情況一律是 `ERROR_NO_PROVIDER`，角色決策整個安靜啞掉。
 解析放在 `_init()` 而不是 `decide()`：設定在一場遊戲內不會變，放 `decide()`
@@ -468,13 +470,12 @@ provider.valid`，只查存在會放行設定不全的項目、然後每次請�
 > [!warning] `model_name` 存的是型號字串，不是 provider 名字——查表方向要反過來
 > 《06》規格與範例（`"model_name": "qwen2.5-7b-instruct"`）明講這欄是給玩家看
 > 的型號，不是 `AIConfig.providers` 字典的 key（如 `"openrouter"`，那只是玩家
-> 自己取的代號）。所以 `_make_provider()` 的 `cloud` 分支不能拿 `model_name`
-> 直接當 key 查 `AIConfig.get_provider()`（那是 #155 一開始的寫法，找不到會
-> 誤判成「provider 不存在」），要用 `AIConfig.get_provider_by_model(model_name)`
-> 反查——掃所有 provider 找 `.model` 相符的那一個，再用那個 provider 真正的
-> `.name` 建構 `RemoteLLMProvider`。`decision_source == "local"` 不受影響：
-> `LocalLLMProvider` 本來就無條件打字面值叫 `"local"` 的 provider，完全不讀
-> `model_name`，那一欄純粹是給角色面板顯示用的。
+> 自己取的代號）。所以 `_make_provider()` 的 `cloud`／`local` 兩個分支都不能拿
+> `model_name` 直接當 key 查 `AIConfig.get_provider()`（那是 #155 一開始 `cloud`
+> 分支的寫法，找不到會誤判成「provider 不存在」），要用
+> `AIConfig.get_provider_by_model(model_name)` 反查——掃所有 provider 找
+> `.model` 相符的那一個，再用那個 provider 真正的 `.name` 建構
+> `RemoteLLMProvider`／`LocalLLMProvider`（#288，兩者現在共用同一套查表邏輯）。
 
 `agent.gd::_decide_with_retry()` 集中處理「decide → parse_completion →
 validate」，內容驗證失敗（`parse_completion()` 或 `AISchema.validate_*()`
