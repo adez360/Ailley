@@ -213,22 +213,31 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 2. prompt 內明寫 schema —— 機率問題
 3. **`ai_schema.gd` 硬驗證** —— 這層不可省，是「外來文字一律視為資料」防注入規則的實作
 
-`action` 白名單（`ai_schema.gd` 的 `ALLOWED_ACTIONS`，14 個）：
-`move_to` / `interact` / `pick_up` / `drop` / `use_item` / `equip` / `talk` /
-`attack` / `farm` / `chop` / `mine` / `sleep` / `buy` / `sell`
+`action` 白名單（`ai_schema.gd` 的 `ALLOWED_ACTIONS`，25 個）與規格書逐項對齊：
+《07 地點與行動》§2 B/C/D 類（工作消費 8 ＋動作移動 6 ＋敵對 4 ＝ 18 個）
+＋《11 人際互動與社交行為》§1 溝通類 A（7 個），合計 25 個，一個不多一個不少
+（issue #396 核對，2026-08-19）。唯一差異是命名：規格書寫 `move`，程式碼沿用
+既有命名 `move_to`——語意相同，改名要動 `agent.gd`／`debug_console.gd`／`api.md`
+好幾處引用，不值得為了對齊用詞冒風險（見 `ai_schema.gd` 註解）。
 
-`IMPLEMENTED_ACTIONS`（3 個：`move_to` / `talk` / `sleep`）目前**沒有任何地方呼叫**
-`is_implemented_action()`——這是給未來 Step 3 執行層用的標記，還沒有執行邏輯接上它。
+`IMPLEMENTED_ACTIONS`（16 個）是 `ALLOWED_ACTIONS` 裡真的接了執行層的子集。
+其餘 9 個「允許但還沒做」的現況：
 
-> [!warning] 三份動作清單彼此不一致，而且沒有一份是拍板結果
-> `ai_schema.gd` 的 14 個、`poc_village_sim/enums.py` 的 38 個、規格書《07 地點與行動》
-> §2 的 B/C/D 類 16 個 ＋《11 人際互動與社交行為》溝通類（A）6 個（07/11 拆分後合計約
-> 22 個，原「23」已過時），三份互相都對不齊（唯一三者皆有的只有 `attack`／`sleep`／
-> `buy`／`sell`，連 `move` 的寫法都不一樣：規格書是 `move`，其餘兩份是 `move_to`）。
-> 根本原因不是誰漏做——《07》整份被規格書自己的 `99_待規劃項目清單.md` 標記「含推測
-> 內容，實作前必須先確認」（**P-17**，行動清單完整與否明列「推測待確認」，決定欄
-> 空白），根本沒有一份「確定版」可以照抄，三邊都是各自基於草稿湊出一份能動的版本。
-> 要對齊，得先讓《07》本身拍板，不是三份互相校對。
+| 動作 | 現況 |
+| --- | --- |
+| `hunt_small`／`hunt_large`／`gather`／`fish`／`steal`／`perform` | `_roll_success()` 的 `SUCCESS_PARAMS` 已定義但無可達呼叫端，見 #216 |
+| `buy` | 缺「買哪個 item_id」的來源，見 #340 |
+| `sell` | 已拍板不做——商店不回收物品，見 #141 |
+| `report` | 規格《11》§1 綁定《洗心革面所》，明文延後到 MVP 之後，見《13》§三 |
+
+`poc_village_sim/enums.py` 的 38 個不在這個核對範圍——它是本機獨立 Python 專案
+（見下方「poc_village_sim 驗證留下來的結論」），不出貨、不受這裡的白名單約束，
+只拿來對驗證過的門檻邏輯／人格影響做參考，不是第三份要跟著對齊的清單。
+
+> [!success] P-17 已於 2026-08-16 拍板定案（《99》待規劃項目清單）
+> 本節上一版描述的「三份清單互相對不齊、沒有一份是拍板結果」已經過時。
+> `ai_schema.gd` 現在的白名單是 issue #88 對齊《07》《11》拍板結果後寫入的，
+> 不是舊版占位清單。
 
 ## 對話生成粒度：一律逐輪
 
