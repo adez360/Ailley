@@ -1807,8 +1807,7 @@ func _pursue_talk_task() -> void:
 func _pursue_eat_task() -> void:
 	stop_moving()
 	var proceed := true
-	var is_llm: bool = _current_task.get("source", "") == "llm"
-	if is_llm:
+	if _current_task.get("source", "") == "llm":
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
 		proceed = result["success"]
@@ -1820,8 +1819,10 @@ func _pursue_eat_task() -> void:
 		last_action_result = reason
 		if reason != Character.EAT_OK:
 			push_warning("Agent %s: eat 失敗（%s）" % [character_name, reason])
-		if is_llm:
-			_track_action_result_for_facts("eat", reason == Character.EAT_OK)
+		# 連續失敗事實句涵蓋所有實際執行的動作，不分來源——跟 talk 的既有規則
+		# 一致（CodeRabbit review 抓到：原本只計 llm 來源，talk 卻不分來源，
+		# 兩套契約不一致，schedule／llm 交錯時計數會被錯誤重設或漏算）
+		_track_action_result_for_facts("eat", reason == Character.EAT_OK)
 
 	# 不管成功失敗都收尾：跟 _pursue_talk_task() 的 resolve() 失敗分支一樣，
 	# 這筆任務不留在池子裡繼續佔位（吃不到就是吃不到，不會下一分鐘自己變出食物），
@@ -1844,8 +1845,7 @@ func _pursue_eat_task() -> void:
 func _pursue_drink_task() -> void:
 	stop_moving()
 	var proceed := true
-	var is_llm: bool = _current_task.get("source", "") == "llm"
-	if is_llm:
+	if _current_task.get("source", "") == "llm":
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
 		proceed = result["success"]
@@ -1857,8 +1857,8 @@ func _pursue_drink_task() -> void:
 		last_action_result = reason
 		if reason != Character.DRINK_OK:
 			push_warning("Agent %s: drink 失敗（%s）" % [character_name, reason])
-		if is_llm:
-			_track_action_result_for_facts("drink", reason == Character.DRINK_OK)
+		# 不分來源都記——理由同 _pursue_eat_task()
+		_track_action_result_for_facts("drink", reason == Character.DRINK_OK)
 
 	if _current_task.get("source", "") == "llm":
 		_remove_task(_current_task.get("id", ""))
@@ -1955,12 +1955,13 @@ func _pursue_give_task() -> void:
 	var params: Dictionary = _current_task.get("params", {})
 	var target_name: String = str(params.get("target", ""))
 	var target := _find_character_by_name(target_name)
-	var is_llm_give: bool = _current_task.get("source", "") == "llm"
 
 	if target == null:
 		last_action_result = "找不到這個人，可能已經離開了"
-		if is_llm_give:
-			_track_action_result_for_facts("give", false)
+		# 連續失敗事實句涵蓋所有實際執行的動作，不分來源（CodeRabbit review
+		# 抓到：原本只計 llm 來源，talk 卻不分來源，兩套契約不一致，統一成
+		# 都不分來源）
+		_track_action_result_for_facts("give", false)
 		_finish_task_and_request_next()
 		return
 
@@ -1971,8 +1972,7 @@ func _pursue_give_task() -> void:
 		if not move_to(target.get_body_position()):
 			push_warning("Agent %s: 走不到送禮對象 %s" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，禮物送不出去"
-			if is_llm_give:
-				_track_action_result_for_facts("give", false)
+			_track_action_result_for_facts("give", false)
 			_finish_task_and_request_next()
 			return
 
@@ -1986,8 +1986,7 @@ func _pursue_give_task() -> void:
 		if progress["threshold_reached"]:
 			push_warning("Agent %s: 送禮對象 %s 卡住走不到，放棄" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，禮物送不出去"
-			if is_llm_give:
-				_track_action_result_for_facts("give", false)
+			_track_action_result_for_facts("give", false)
 			_finish_task_and_request_next()
 		return
 
@@ -1996,8 +1995,7 @@ func _pursue_give_task() -> void:
 	var count: int = int(params.get("count", 1))
 	var give_failure := give_to(target, item_id, count)
 	last_action_result = _give_failure_message(give_failure)
-	if _current_task.get("source", "") == "llm":
-		_track_action_result_for_facts("give", give_failure == Character.GIVE_OK)
+	_track_action_result_for_facts("give", give_failure == Character.GIVE_OK)
 	_finish_task_and_request_next()
 
 # give_to() 失敗原因碼轉中文，格式跟 _failure_reason() 一致——《01-2》§5
@@ -2038,12 +2036,10 @@ func _pursue_attack_task() -> void:
 	var params: Dictionary = _current_task.get("params", {})
 	var target_name: String = str(params.get("target", ""))
 	var target := _find_character_by_name(target_name)
-	var is_llm_attack: bool = _current_task.get("source", "") == "llm"
 
 	if target == null:
 		last_action_result = "找不到這個人，可能已經離開了"
-		if is_llm_attack:
-			_track_action_result_for_facts("attack", false)
+		_track_action_result_for_facts("attack", false)
 		_finish_task_and_request_next()
 		return
 
@@ -2052,8 +2048,7 @@ func _pursue_attack_task() -> void:
 		if not move_to(target.get_body_position()):
 			push_warning("Agent %s: 走不到攻擊對象 %s" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，攻擊不到"
-			if is_llm_attack:
-				_track_action_result_for_facts("attack", false)
+			_track_action_result_for_facts("attack", false)
 			_finish_task_and_request_next()
 			return
 
@@ -2066,16 +2061,14 @@ func _pursue_attack_task() -> void:
 		if _attack_pursuit_stuck_ticks >= 3:
 			push_warning("Agent %s: 攻擊對象 %s 卡住走不到，放棄" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，攻擊不到"
-			if is_llm_attack:
-				_track_action_result_for_facts("attack", false)
+			_track_action_result_for_facts("attack", false)
 			_finish_task_and_request_next()
 		return
 
 	stop_moving()
 	var attack_failure := attack(target)
 	last_action_result = _attack_failure_message(attack_failure)
-	if _current_task.get("source", "") == "llm":
-		_track_action_result_for_facts("attack", attack_failure == Character.ATTACK_OK)
+	_track_action_result_for_facts("attack", attack_failure == Character.ATTACK_OK)
 	_finish_task_and_request_next()
 
 # attack() 失敗原因碼轉中文，格式跟 _give_failure_message() 一致
@@ -2117,12 +2110,10 @@ func _pursue_persuade_task() -> void:
 	var params: Dictionary = _current_task.get("params", {})
 	var target_name: String = str(params.get("target", ""))
 	var target := _find_character_by_name(target_name)
-	var is_llm_persuade: bool = _current_task.get("source", "") == "llm"
 
 	if target == null:
 		last_action_result = "找不到這個人，可能已經離開了"
-		if is_llm_persuade:
-			_track_action_result_for_facts("persuade", false)
+		_track_action_result_for_facts("persuade", false)
 		_finish_task_and_request_next()
 		return
 
@@ -2135,8 +2126,7 @@ func _pursue_persuade_task() -> void:
 	# 卡死，之後任何人都說服不了這個目標（忙碌拒絕永遠擋著）
 	if not (target.is_in_group("agents") and (target as Agent).llm_decision_enabled):
 		last_action_result = "這個人好像沒辦法被說服"
-		if is_llm_persuade:
-			_track_action_result_for_facts("persuade", false)
+		_track_action_result_for_facts("persuade", false)
 		_finish_task_and_request_next()
 		return
 
@@ -2147,8 +2137,7 @@ func _pursue_persuade_task() -> void:
 		if not move_to(target.get_body_position()):
 			push_warning("Agent %s: 走不到說服對象 %s" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，話說不出口"
-			if is_llm_persuade:
-				_track_action_result_for_facts("persuade", false)
+			_track_action_result_for_facts("persuade", false)
 			_finish_task_and_request_next()
 			return
 
@@ -2161,8 +2150,7 @@ func _pursue_persuade_task() -> void:
 		if progress["threshold_reached"]:
 			push_warning("Agent %s: 說服對象 %s 卡住走不到，放棄" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，話說不出口"
-			if is_llm_persuade:
-				_track_action_result_for_facts("persuade", false)
+			_track_action_result_for_facts("persuade", false)
 			_finish_task_and_request_next()
 		return
 
@@ -2174,8 +2162,7 @@ func _pursue_persuade_task() -> void:
 		last_action_result = "你試著說服 %s，等他自己想清楚" % target.character_name
 	else:
 		last_action_result = "%s 好像還在想別人剛才說的話，你的話插不進去" % target.character_name
-	if _current_task.get("source", "") == "llm":
-		_track_action_result_for_facts("persuade", recorded)
+	_track_action_result_for_facts("persuade", recorded)
 	_persuade_delivered = true
 	# 不在這裡呼叫 _finish_task_and_request_next()：P-09 拍板 persuade 佔用
 	# 固定時長（模型填的建議值 10 分鐘），跟 gather／hunt_small 同一套用法——
