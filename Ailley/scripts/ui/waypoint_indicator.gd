@@ -21,6 +21,16 @@ const ABANDON_WINDOW_SEC := 4.0
 ## 或只是微調站位）就會被誤判成「變遠」，拉長取樣間隔可以把這種雜訊平滑掉
 const CHECK_INTERVAL_SEC := 0.5
 
+## 兩次距離量測的容許誤差。浮點與物理解算會有次像素級的抖動，玩家站著不動
+## 時距離不會剛好逐位元相等——沒有這個容差，原地不動也會被判定成「變遠」
+const DISTANCE_TOLERANCE := 0.5
+
+## 抵達／放棄判定要用角色的碰撞中心，不能用這個節點自己的 global_position——
+## 這個節點掛在角色頭上方（見場景裡的 position 偏移），拿它自己的位置算距離，
+## 目標在角色上方時會提早判定抵達、目標在下方時會延後，兩邊都不準。
+## 方向指標的旋轉角度不受影響，那個仍然要用這個節點自己的位置（見 _process()）
+@onready var _character: Character = get_parent()
+
 var _target_position := Vector2.ZERO
 var _on_arrived := Callable()
 var _on_abandoned := Callable()
@@ -44,7 +54,7 @@ func show_waypoint(world_position: Vector2, on_arrived: Callable, on_abandoned: 
 	_on_abandoned = on_abandoned
 	_active = true
 	_worse_streak_sec = 0.0
-	_last_distance = global_position.distance_to(_target_position)
+	_last_distance = _character.get_body_position().distance_to(_target_position)
 	_check_timer = 0.0
 	visible = true
 	set_process(true)
@@ -68,8 +78,8 @@ func _process(delta: float) -> void:
 	if not _active:
 		return
 
-	var offset := _target_position - global_position
-	var distance := offset.length()
+	var body_position := _character.get_body_position()
+	var distance := body_position.distance_to(_target_position)
 
 	if distance <= ARRIVE_DISTANCE:
 		_finish(_on_arrived)
@@ -77,15 +87,19 @@ func _process(delta: float) -> void:
 
 	# 指標本身不隨父節點（角色）縮放翻轉——facing 只動 sprite.flip_h，
 	# 不動角色根節點的 scale/rotation（見 character.gd），所以這裡設的
-	# rotation 就是箭頭真正指向的方向，不會被翻轉打亂
-	rotation = offset.angle()
+	# rotation 就是箭頭真正指向的方向，不會被翻轉打亂。這裡刻意用自己的
+	# global_position（不是 body_position）算方向——箭頭畫在自己的位置上，
+	# 方向要跟畫的地方對齊，抵達／放棄判定才是身體位置的事
+	rotation = (_target_position - global_position).angle()
 
 	_check_timer += delta
 	if _check_timer < CHECK_INTERVAL_SEC:
 		return
 	_check_timer = 0.0
 
-	if distance >= _last_distance:
+	# 容差內視為「沒有變遠」，不然玩家站著不動也會被物理解算的次像素抖動
+	# 判定成持續遠離
+	if distance > _last_distance + DISTANCE_TOLERANCE:
 		_worse_streak_sec += CHECK_INTERVAL_SEC
 		if _worse_streak_sec >= ABANDON_WINDOW_SEC:
 			_finish(_on_abandoned)
