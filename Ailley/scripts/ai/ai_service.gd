@@ -115,9 +115,9 @@ func _ready() -> void:
 
 	GameClock.day_changed.connect(_on_day_changed)
 
-	# 不 await：就緒檢查跑在背景，開場流程不等它。#357 靠這份資料決定要不要
-	# 自動開啟決策迴圈，在那之前 Agent 一律先用排程模式，不會卡在這裡
-	_check_readiness_all()
+	# reload_config() 上面已經呼叫過，裡面自己會觸發 _check_readiness_all()
+	# （見該函式），這裡不用再呼叫一次——CodeRabbit review 抓到：原本這裡
+	# 多打一次，開機時會送出兩批重複的 /models 請求
 
 
 # 玩家寫好 user://ai_config.json 之後不必重開遊戲，debug 主控台的 ai 指令會先叫這個。
@@ -168,6 +168,12 @@ func _check_provider_readiness(provider_name: String, generation: int) -> void:
 		# 也不會變好，白等一次 provider.timeout。跟 _interpret() 判斷
 		# retryable 的邏輯同一套標準，不要各自一套
 		await get_tree().create_timer(READINESS_RETRY_DELAY_SEC).timeout
+
+		# 等待期間可能有新一輪 reload_config() 把這批檢查整批作廢——世代
+		# 對不上就不用再打第二次網路請求了，反正 _apply_readiness() 最後也會
+		# 丟棄結果，這裡提前退出純粹是不浪費一次已知會被丟掉的探測
+		if generation != _readiness_generation:
+			return
 		outcome = await _probe_models(provider)
 
 	_apply_readiness(provider_name, generation, outcome)
