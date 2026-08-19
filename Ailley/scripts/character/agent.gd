@@ -211,6 +211,14 @@ var _next_llm_task_id := 0
 var _today_plan: Array[Dictionary] = []		# [{id, text, is_done}]
 var _next_plan_id := 0
 
+## 今天做過什麼（#172，《15》§2-5「新增機制」）：給玩家看的今日摘要面板下半段，
+## 跟 _today_plan（自我回報的意圖）是兩回事——這裡是引擎寫的客觀執行紀錄。
+## 也跟 _daily_events（agent.gd 另一處，睡前送給 LLM 評分用）不是同一份：
+## 那份會被清空／評分消耗，這份只給 UI 顯示，不進 prompt（《15》§1-2）、
+## 不進存檔（重開遊戲後「今天」這個概念本身就重新開始，見《15》§2-5 末）
+const TODAY_LOG_CAP := 30
+var _today_log: Array[Dictionary] = []		# 由新到舊 push 到陣列尾端，UI 端自己反轉顯示
+
 ## 上一輪決策回應有沒有問「下次能不能讓我改 today_plan」——見
 ## _request_next_decision() 開頭怎麼消費它。這是四個開放時機裡的「AI 主動
 ## 申請」：不是每次決策都能改，得先問過、下一輪才真的給
@@ -269,6 +277,57 @@ func _push_daily_event(content: String) -> void:
 	_next_daily_event_id += 1
 	if _daily_events.size() > DAILY_EVENTS_CAP:
 		_daily_events.pop_front()
+
+## 加一筆今天做過的事（#172）。minute 取 GameClock，target 沒有對象的動作
+## 傳空字串——UI 端顯示時整個省略，不印「無」（《15》§2-5）
+func _push_today_log(action: String, target: String, ok: bool) -> void:
+	_today_log.append({
+		"minute": GameClock.hour * 60 + GameClock.minute,
+		"action": action,
+		"target": target,
+		"ok": ok,
+	})
+	if _today_log.size() > TODAY_LOG_CAP:
+		_today_log.pop_front()
+
+## 給今日摘要面板讀（#172）。內部陣列是舊到新（append 順序），這裡反轉成
+## 《15》§2-5 要求的「由新到舊」——最上面那筆就是這個角色現在／剛剛在做的事
+func get_today_log() -> Array[Dictionary]:
+	var reversed := _today_log.duplicate(true)
+	reversed.reverse()
+	return reversed
+
+func _on_day_changed(_day: int) -> void:
+	_today_log.clear()
+
+## 收尾清空 _current_task 前先記一筆 today_log（#172）。集中在這一個 helper
+## 而不是在每個呼叫端各自 push，是因為 _current_task 被清空的地方分散在
+## 至少 8 處（exit_conversation／_finish_task_and_request_next／
+## _pursue_eat_task／_pursue_murmur_task／_reevaluate_once 兩條過期路徑／
+## _evict_lowest_priority_llm_task／_on_action_interrupted），把「清空」跟
+## 「記一筆做過的事」黏在同一個函式，才不會有路徑漏記。
+##
+## target_override 給沒辦法從 params 推出對象的呼叫端用（例如 eat 吃的是哪個
+## item_id，任務本身的 params 沒有記這個）；預設從 params.target／params.place
+## 推，涵蓋大多數動作（talk/give/attack/persuade 用 target，schedule 類地點式
+## 任務用 place）
+func _clear_current_task(ok: bool, target_override: String = "") -> void:
+	_log_task_ended(_current_task, ok, target_override)
+	_current_task = {}
+	current_place = ""
+	current_state = "idle"
+
+## 實際寫 today_log 的地方。_clear_current_task() 用在「換成空」的收尾，
+## _select() 用在「換成另一筆」——後者不會經過 _clear_current_task()（它
+## 直接把 _current_task 覆寫成新任務，不會先變成 {}），但舊任務一樣算
+## 「做過的事」，不能因為換任務的路徑不同就漏記（#172）
+func _log_task_ended(task: Dictionary, ok: bool, target_override: String = "") -> void:
+	if task.is_empty():
+		return
+	var params: Dictionary = task.get("params", {})
+	var target := target_override if not target_override.is_empty() \
+			else str(params.get("target", params.get("place", "")))
+	_push_today_log(str(task.get("action", "")), target, ok)
 
 ## #164：天神之石的話傳到範圍內的角色（world/god_stone_input.gd 逐一呼叫）。
 ## 記一筆事實句（跟 _on_spotted() 的 "你第一次注意到 %s" 同一種寫法，不經
@@ -342,6 +401,7 @@ func _ready() -> void:
 	_provider = _make_provider()
 	_load_schedule()
 	_generate_words_to_creator()
+	GameClock.day_changed.connect(_on_day_changed)
 
 ## 公開版的「重建 provider」（#122，CodeRabbit review 抓到的時序 bug）。
 ## GameManager.deploy_from_library() 會在 add_child()（進而觸發這個節點的
@@ -571,9 +631,7 @@ func exit_conversation() -> void:
 
 		_remove_task(_active_talk_task_id)
 		if _current_task.get("id", "") == _active_talk_task_id:
-			_current_task = {}
-			current_place = ""
-			current_state = "idle"
+			_clear_current_task(true)
 		_active_talk_task_id = ""
 		_active_talk_task_source = ""
 
@@ -924,9 +982,7 @@ func _evict_lowest_priority_llm_task() -> void:
 		stop_moving()
 		_pursued_place = ""
 		_pursuit_done = false
-		_current_task = {}
-		current_place = ""
-		current_state = "idle"
+		_clear_current_task(false)
 
 func _remove_task(id: String) -> void:
 	if id.is_empty():
@@ -970,9 +1026,7 @@ func _on_work_finished() -> void:
 func _on_action_interrupted() -> void:
 	_pursued_place = ""
 	_pursuit_done = false
-	_current_task = {}
-	current_place = ""
-	current_state = "idle"
+	_clear_current_task(false)
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
@@ -1158,9 +1212,7 @@ func _reevaluate_once() -> void:
 			var expired_task := _tasks[i]
 			_tasks.remove_at(i)
 			if expired_task.get("id", "") == _current_task.get("id", ""):
-				_current_task = {}
-				current_place = ""
-				current_state = "idle"
+				_clear_current_task(true)
 
 	var best: Dictionary = {}
 	var best_score := -INF
@@ -1184,9 +1236,7 @@ func _reevaluate_once() -> void:
 		# ——跟「窗口過期還被 interruptible 擋住」是同一個坑，只是從 best 為空
 		# 這條路徑進來，走不到 _consider_switch() 那關。schedule 任務的窗口由
 		# 建構方式保證連續，碰不到；有間隔的任務才會
-		_current_task = {}
-		current_place = ""
-		current_state = "idle"
+		_clear_current_task(true)
 
 	# 剛睡醒（#89 觸發時機之一，重寫整份 today_plan）：這次重算進來的時候
 	# 在睡，選完任務之後不再是了，就是這個轉換瞬間。只在真正換出 sleep 的
@@ -1405,6 +1455,14 @@ func _select(task: Dictionary, now_minutes: int) -> void:
 			last_action_result = "這個動作還沒有實作，暫時做不了"
 			_remove_task(task.get("id", ""))
 			return
+
+	# 換成別筆任務時舊任務不會經過 _clear_current_task()（下面直接覆寫，不會
+	# 先變成 {}），但一樣算「做過的事」，這裡補記一筆（#172）。ok=true：
+	# 走到這裡代表舊任務本身沒有失敗，只是被換掉（窗口到了換下一筆排程、
+	# 或被更高分的任務搶走），跟 resolve() 失敗／找不到目標那類真正的失敗
+	# 是不同語意，那些已經在各自的 _finish_task_and_request_next() 等路徑
+	# 明確傳 false
+	_log_task_ended(_current_task, true)
 
 	_current_task = task
 	_current_task_started_at = now_minutes
@@ -1663,7 +1721,11 @@ func _pursue_eat_task() -> void:
 		last_action_result = result["reason"]
 		proceed = result["success"]
 
+	# today_log 要記「吃了哪個 item_id」，但 eat() 本身只回傳成功/失敗原因碼，
+	# 不回傳吃的是哪個——得在它把東西吃掉、格子清空之前先偷看一眼（#172）
+	var food_item := ""
 	if proceed:
+		food_item = str(_find_food_slot().get("item_id", ""))
 		var reason := eat()
 		last_action_result = reason
 		if reason != Character.EAT_OK:
@@ -1677,9 +1739,7 @@ func _pursue_eat_task() -> void:
 	# 不會再被選中
 	if _current_task.get("source", "") == "llm":
 		_remove_task(_current_task.get("id", ""))
-	_current_task = {}
-	current_place = ""
-	current_state = "idle"
+	_clear_current_task(last_action_result == Character.EAT_OK, food_item)
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
 
@@ -1705,9 +1765,7 @@ func _pursue_murmur_task() -> void:
 		say(DialogueLines.murmur(stats))
 
 	_remove_task(_current_task.get("id", ""))
-	_current_task = {}
-	current_place = ""
-	current_state = "idle"
+	_clear_current_task(last_action_result.is_empty())
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
 	# CodeRabbit review：_request_next_decision() 只有在非同步回應回來後才會
@@ -1734,9 +1792,7 @@ func _finish_task_and_request_next() -> void:
 	_pursued_place = ""
 	_pursuit_done = false
 	_remove_task(_current_task.get("id", ""))
-	_current_task = {}
-	current_place = ""
-	current_state = "idle"
+	_clear_current_task(last_action_result.is_empty())
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
 	# _request_next_decision() 只有在非同步回應回來後才會重新仲裁，不立刻補
