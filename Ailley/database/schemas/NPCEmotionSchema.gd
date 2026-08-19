@@ -26,7 +26,7 @@ static func create(db) -> bool:
 		intensity INTEGER NOT NULL DEFAULT 0
 			CHECK (intensity BETWEEN 0 AND 100),
 
-		-- 規格目前沒有 event_memory 資料表，因此保留為純 TEXT。
+		-- 起因事件；專案目前沒有 event 這層資料模型，不做參照完整性
 		cause_event_id TEXT,
 
 		duration_left INTEGER NOT NULL DEFAULT 0
