@@ -147,6 +147,13 @@ var _attack_pursuit_last_distance := INF
 var _persuade_pursuit_stuck_ticks := 0
 var _persuade_pursuit_last_distance := INF
 
+# 送達（已對目標開口，不論對方是否忙碌拒絕）後設 true，擋掉 _pursue_persuade_task()
+# 後續每個 tick 重複呼叫 try_record_pending_persuade()／move_to()（P-09，
+# CodeRabbit review 抓到：persuade 原本送達當下就 _finish_task_and_request_next()，
+# 沒有真正佔滿 duration）。跟 give／shout「送達就結束」不同，persuade 佔滿
+# duration 走 gather／hunt_small 那套 _reevaluate_once() 通用收尾機制
+var _persuade_delivered := false
+
 # 自己成功發起、目前正在進行中的 talk 任務 id／來源。只在 talk_to() 真的成功
 # 那一刻設值，exit_conversation() 靠這個而不是「當下的 _current_task」判斷對話
 # 結束時該清掉哪一筆——理由見 exit_conversation() 自己的註解。
@@ -891,6 +898,33 @@ func _llm_task_count() -> int:
 			count += 1
 	return count
 
+# 找出目前池子裡分數最低的 llm 來源任務並移除，讓一筆「一定要塞進去」的
+# 任務有位置——目前唯一呼叫端是 _resolve_pending_persuade()（見那邊的
+# 說明）。只挑 llm 來源，不動 schedule／debug 任務，跟 _push_llm_tasks()
+# dedup 邏輯篩選的範圍一致；用跟 _reevaluate_once() 選 best 候選同一套
+# _score()，被擠掉的一定是仲裁器接下來本來就最不會選中的那筆
+func _evict_lowest_priority_llm_task() -> void:
+	var now := "%02d:%02d" % [GameClock.hour, GameClock.minute]
+	var worst_id := ""
+	var worst_score := INF
+	for task in _tasks:
+		if task.get("source", "") != "llm":
+			continue
+		var score := _score(task, now)
+		if score < worst_score:
+			worst_score = score
+			worst_id = task.get("id", "")
+	if worst_id.is_empty():
+		return
+	_remove_task(worst_id)
+	# 被擠掉的剛好是目前正在做的那筆——照 _reevaluate_once() 過期清除那條
+	# 路徑同一套處理，不留著一個已經不在 _tasks 裡、卻還被 _current_task
+	# 指著的殘影
+	if _current_task.get("id", "") == worst_id:
+		_current_task = {}
+		current_place = ""
+		current_state = "idle"
+
 func _remove_task(id: String) -> void:
 	if id.is_empty():
 		return
@@ -1388,6 +1422,7 @@ func _select(task: Dictionary, now_minutes: int) -> void:
 	_attack_pursuit_last_distance = INF
 	_persuade_pursuit_stuck_ticks = 0
 	_persuade_pursuit_last_distance = INF
+	_persuade_delivered = false
 
 # 往 _current_task 的方向前進。無條件每次重算都跑一次，不管這次有沒有
 # 剛選定新任務——對話中會在這裡先返回、不移動，等下一次重算（對話結束後
@@ -1840,11 +1875,19 @@ func _attack_failure_message(failure: String) -> String:
 			return "攻擊沒有成功"
 
 # persuade 任務的執行（#227）：目標跟 talk／give 一樣是會動的角色，走到範圍
-# 內才生效。跟 give 一樣一次執行完就退出任務池，不擲骰、恆送達——「送不送
-# 達」（有沒有走到、對方在不在）跟「被不被說動」是兩件事，這裡只管前者。
-# 後者交給目標角色自己下一輪決策時的 persuaded 欄位，見
-# _resolve_pending_persuade()
+# 內才生效，不擲骰、恆送達——「送不送達」（有沒有走到、對方在不在）跟
+# 「被不被說動」是兩件事，這裡只管前者。後者交給目標角色自己下一輪決策時
+# 的 persuaded 欄位，見 _resolve_pending_persuade()。
+#
+# 跟 give／shout 不同：P-09 拍板 persuade 佔用固定 duration（模型填的
+# 建議值 10 分鐘），送達後不立刻退出任務池，改用 gather／hunt_small 那套
+# _reevaluate_once() 通用事件驅動機制在 duration 走完時收尾
 func _pursue_persuade_task() -> void:
+	# 已送達、正在佔用 duration 等 _reevaluate_once() 的通用機制收尾——
+	# 不用每個 tick 重跑 resolve()／找目標／追逐那一整套
+	if _persuade_delivered:
+		return
+
 	if _current_task.get("source", "") == "llm":
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
@@ -1903,7 +1946,15 @@ func _pursue_persuade_task() -> void:
 		last_action_result = "你試著說服 %s，等他自己想清楚" % target.character_name
 	else:
 		last_action_result = "%s 好像還在想別人剛才說的話，你的話插不進去" % target.character_name
-	_finish_task_and_request_next()
+	_persuade_delivered = true
+	# 不在這裡呼叫 _finish_task_and_request_next()：P-09 拍板 persuade 佔用
+	# 固定時長（模型填的建議值 10 分鐘），跟 gather／hunt_small 同一套用法——
+	# _reevaluate_once() 的通用事件驅動迴圈會在 duration 走完時自動移除
+	# 這筆任務、觸發下一次決策，不是 give／shout 那種送達就立刻結束的
+	# 一次性動作（CodeRabbit review 抓到：原本送達當下就呼叫
+	# _finish_task_and_request_next()，等於忽略了 duration，任務在抵達的
+	# 那一分鐘就結束）。_persuade_delivered 擋掉 duration 還沒走完前，
+	# 後續每個 tick 重複呼叫 try_record_pending_persuade()
 
 # 給發起者呼叫，把說服嘗試寫進自己的待回應記錄（#227）。已有待回應記錄時
 # 直接拒絕（忙碌拒絕，比照 talk_to() 的 TALK_TARGET_BUSY），不覆蓋、不排隊
@@ -1984,6 +2035,17 @@ func _resolve_pending_persuade(data: Dictionary) -> void:
 		# 任務省略 expires_in_minutes 時的預設值同一套
 		var accepted := proposed_task.duplicate()
 		accepted["expires_at"] = _now_minutes() + AISchema.MAX_EXPIRES_IN_MINUTES
+
+		# _push_llm_tasks() 池滿時只 push_warning 就靜默丟棄新任務（見它自己
+		# 的說明）——對一般 LLM 任務來說「模型這輪的意圖沒排進去，下一輪再問
+		# 一次」還好；但這裡是已經答應目標「你被說動了」之後的承諾，answer
+		# 已經定案、_pending_persuade 也已經在上面清空，沒有「下一輪再問」
+		# 這條路，池滿會讓這個承諾憑空消失、無聲無息（CodeRabbit review 抓
+		# 到）。用先騰出一格再推進的方式保證塞得進去，代價是犧牲池子裡分數
+		# 最低的既有 llm 任務——跟仲裁器本來就會用分數決定誰該留下是同一套
+		# 邏輯，只是這裡改成事後、非比較式地騰位置
+		if _llm_task_count() >= LLM_TASK_POOL_CAP:
+			_evict_lowest_priority_llm_task()
 		_push_llm_tasks([accepted], {})
 		return
 
