@@ -1339,6 +1339,9 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 		"eat":
 			if inventory == null or _find_food_slot().is_empty():
 				return {"success": false, "reason": "背包裡沒有食物可以吃"}
+		"drink":
+			if inventory == null or _find_drink_slot().is_empty():
+				return {"success": false, "reason": "背包裡沒有飲品可以喝"}
 		"give":
 			# 《01-2》§1 流程圖①前置檢查點名的例子就是「物品在身上？」——give
 			# 不進②③擲骰（不在 SUCCESS_PARAMS 上），只有這一關硬規則
@@ -1489,6 +1492,11 @@ func _pursue_current_task() -> void:
 	# persuade（#227）跟 talk／give 同理：目標是會動的角色，不是固定地點
 	if current_state == "persuade":
 		_pursue_persuade_task()
+		return
+
+	# drink 跟 eat 同一種「呼叫一次就完成」（#163）
+	if current_state == "drink":
+		_pursue_drink_task()
 		return
 
 	if current_place.is_empty():
@@ -1675,6 +1683,32 @@ func _pursue_eat_task() -> void:
 	# 靠 window 自然退場，跟 _reevaluate() 事件驅動觸發那段的收尾邏輯同一套規則
 	# （見 [[行程佇列與任務仲裁]]「中斷之後怎麼辦」），移掉的話明天同一個 window
 	# 不會再被選中
+	if _current_task.get("source", "") == "llm":
+		_remove_task(_current_task.get("id", ""))
+	_current_task = {}
+	current_place = ""
+	current_state = "idle"
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
+
+# drink 任務的執行（#163）：跟 _pursue_eat_task() 完全同一種形狀，只是換
+# 呼叫 drink() 而不是 eat()。沒有共用一份程式碼是因為兩者要各自轉傳不同的
+# reason 常數（Character.DRINK_OK vs Character.EAT_OK）與不同的收尾文字，
+# 硬抽共用反而要傳一堆函式參數進去換兩行判斷式，不划算
+func _pursue_drink_task() -> void:
+	stop_moving()
+	var proceed := true
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		proceed = result["success"]
+
+	if proceed:
+		var reason := drink()
+		last_action_result = reason
+		if reason != Character.DRINK_OK:
+			push_warning("Agent %s: drink 失敗（%s）" % [character_name, reason])
+
 	if _current_task.get("source", "") == "llm":
 		_remove_task(_current_task.get("id", ""))
 	_current_task = {}

@@ -85,7 +85,10 @@ const ALLOWED_ACTIONS := [
 # 原則四）。發起者走 _pursue_persuade_task()，跟 give 一樣一次執行完就退出
 # 任務池；「送達」跟「被不被說動」是兩件事，這裡只管前者，後者是被說服者
 # 下一輪決策時的 persuaded 欄位，見 agent.gd::_resolve_pending_persuade()
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade"]
+#
+# drink 是 #163 接上的：跟 eat 同一套「呼叫一次就完成」模式，寫法照抄
+# _pursue_eat_task()（見 agent.gd::_pursue_drink_task()）
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
