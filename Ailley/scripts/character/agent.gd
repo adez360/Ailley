@@ -1589,20 +1589,33 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 
 # 力竭時強制進入休息，直到 stamina 恢復
 func _force_rest_until_recovered(now_minutes: int) -> void:
-	# 只有 reflex rest 已存在時才直接沿用
-	if _current_task.get("source", "") == "reflex" and current_state == "rest":
-		stop_moving()
+	# 如果已經在執行 exhaustion_rest synthetic task，繼續就好
+	if not _current_task.is_empty() \
+			and _current_task.get("id", "") == "exhaustion_rest" \
+			and _current_task.get("source", "") == "reflex":
 		return
 
+	# 不是 exhaustion_rest 的話，強制切換成 rest。選中新任務前先停止移動與
+	# 工作中狀態，避免舊動作在強制休息期間繼續執行
 	stop_moving()
+	if is_working():
+		_end_work(_current_workstation)
+
 	var rest_task: Dictionary = {
-		"id": "reflex_rest_" + str(randi()),
+		"id": "exhaustion_rest",
 		"action": "rest",
-		"source": "reflex",
-		"duration": 999999,
 		"params": {},
+		"priority": 999,  # 最高優先級
+		"window": null,  # 沒有時間窗限制
+		"duration": 0.0,  # 由引擎決定何時結束（stamina 恢復時）
 		"interruptible": false,  # 力竭期間不可被打斷
+		"preconditions": [],
+		"source": "reflex",  # 引擎強制執行，不是 LLM 決定
+		"created_at": now_minutes,
+		"expires_at": 0,
+		"retries": 0,
 	}
+
 	_select(rest_task, now_minutes)
 
 # 睡醒自動存檔（#427），失敗時記錄角色識別資訊並排一次下個遊戲分鐘的
@@ -1661,11 +1674,20 @@ func _reevaluate_once() -> void:
 		_pursue_current_task()
 		return
 
-	# exhausted 清除時，移除 reflex rest 並恢復一般仲裁
-	if _current_task.get("source", "") == "reflex":
+	# 力竭解除後清理：角色不再具有 CONDITION_EXHAUSTED 且 _current_task 仍指向
+	# exhaustion_rest synthetic task 時，清除 _current_task、current_place、
+	# current_state 及相關追逐狀態，再繼續正常仲裁。這個 synthetic task 不在
+	# _tasks 池子裡，不會被正常的過期掃描清掉，必須在這裡主動處理——條件比對
+	# id 而不只是 source，避免以後其他 reflex 來源的任務被誤判成這個 synthetic
+	# task 清掉
+	if not _current_task.is_empty() \
+			and _current_task.get("id", "") == "exhaustion_rest" \
+			and _current_task.get("source", "") == "reflex":
 		_current_task = {}
-		current_state = "idle"
 		current_place = ""
+		current_state = "idle"
+		_pursued_place = ""
+		_pursuit_done = false
 		# 重置各追逐狀態，以便正常仲裁能清楚地選擇下一個任務
 		_talk_pursuit_stuck_ticks = 0
 		_talk_pursuit_last_distance = INF
