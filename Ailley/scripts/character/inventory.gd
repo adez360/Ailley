@@ -335,8 +335,11 @@ func swap_slot(a: int, b: int) -> bool:
 func get_selected_index() -> int:
 	return _selected_index
 
+# -1 是「沒有選取任何格」的哨兵值（#304：點兩下同一格取消選擇），
+# 其餘值夾限在快捷欄範圍內。跟一格的 durability=-1 是同一種寫法：
+# 落在合法範圍之外，用來跟「真的選到第 0 格」區分開來
 func set_selected_index(index: int) -> void:
-	_selected_index = clampi(index, 0, HOTBAR_SIZE - 1)
+	_selected_index = -1 if index < 0 else clampi(index, 0, HOTBAR_SIZE - 1)
 
 
 # ---- 金錢 ----

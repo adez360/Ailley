@@ -12,7 +12,11 @@ extends TextureButton
 ## 只有 changed 的連線是綁在開場那一個 Inventory 上的：目前沒有任何角色重生
 ## 或 despawn 的路徑，真的做出來時這裡要跟著重連。
 ##
-## 只做顯示，沒有拖放——那是 #35 的範圍，這裡不需要
+## 拖放搬移物品（#304）：放到空格呼叫 Inventory.move_slot()，放到已佔用的格
+## 呼叫 swap_slot()，格子本身不算堆疊、不判斷能不能放——那是資料層的事。
+## Godot 的拖放是 viewport 層級判定，不是各自 CanvasLayer 自己的，所以快捷欄
+## 常駐列跟背包面板裡的格子（不管是主背包 27 格還是面板內嵌的快捷欄 9 格）
+## 天生就能互拖，不需要額外接線。
 
 var slot_index := -1
 
@@ -20,6 +24,11 @@ var _label: Label
 
 
 func _ready() -> void:
+	# 預設 MOUSE_FILTER_STOP 會把滑鼠滾輪事件吃在這裡，輪不到 Hotbar 的
+	# _unhandled_input 去切選格——PASS 讓按鈕照樣收得到點擊／拖放，
+	# 沒人處理的滾輪事件則繼續往上傳
+	mouse_filter = Control.MOUSE_FILTER_PASS
+
 	_label = Label.new()
 	_label.mouse_filter = Control.MOUSE_FILTER_IGNORE	# 不擋底下按鈕的點擊
 	_label.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -65,3 +74,32 @@ func _get_inventory() -> Inventory:
 	if player == null:
 		return null
 	return player.inventory
+
+
+# ---- 拖放 ----
+
+# 空格沒東西可拖，回傳 null 讓 Godot 判定這格不能發起拖放
+func _get_drag_data(_at_position: Vector2) -> Variant:
+	var inventory := _get_inventory()
+	if inventory == null or inventory.get_slot(slot_index).is_empty():
+		return null
+
+	var preview := Label.new()
+	preview.text = _label.text
+	set_drag_preview(preview)
+
+	return {"slot_index": slot_index}
+
+func _can_drop_data(_at_position: Vector2, data: Variant) -> bool:
+	return data is Dictionary and data.has("slot_index") and data["slot_index"] != slot_index
+
+func _drop_data(_at_position: Vector2, data: Variant) -> void:
+	var inventory := _get_inventory()
+	if inventory == null:
+		return
+
+	var from: int = data["slot_index"]
+	if inventory.get_slot(slot_index).is_empty():
+		inventory.move_slot(from, slot_index)
+	else:
+		inventory.swap_slot(from, slot_index)

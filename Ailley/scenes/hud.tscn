@@ -130,10 +130,10 @@ anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
-offset_left = -140.0
-offset_top = -80.0
-offset_right = 140.0
-offset_bottom = 80.0
+offset_left = -190.0
+offset_top = -90.0
+offset_right = 190.0
+offset_bottom = 90.0
 mouse_filter = 2
 theme_override_styles/panel = SubResource("StyleBoxTexture_0ld40")
 
@@ -154,12 +154,31 @@ layout_mode = 2
 theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
 horizontal_alignment = 1
 
-[node name="MainGrid" type="GridContainer" parent="InventoryPanel/Panel/VBox"]
+[node name="Row" type="HBoxContainer" parent="InventoryPanel/Panel/VBox"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 8
+
+[node name="MainGrid" type="GridContainer" parent="InventoryPanel/Panel/VBox/Row"]
 layout_mode = 2
 size_flags_horizontal = 4
 theme_override_constants/h_separation = 3
 theme_override_constants/v_separation = 3
 columns = 9
+
+[node name="HotbarColumn" type="VBoxContainer" parent="InventoryPanel/Panel/VBox/Row"]
+layout_mode = 2
+mouse_filter = 2
+
+[node name="HotbarLabel" type="Label" parent="InventoryPanel/Panel/VBox/Row/HotbarColumn"]
+layout_mode = 2
+horizontal_alignment = 1
+
+[node name="HotbarGrid" type="GridContainer" parent="InventoryPanel/Panel/VBox/Row/HotbarColumn"]
+layout_mode = 2
+theme_override_constants/h_separation = 3
+theme_override_constants/v_separation = 3
+columns = 3
 
 [node name="HintLabel" type="Label" parent="InventoryPanel/Panel/VBox"]
 layout_mode = 2

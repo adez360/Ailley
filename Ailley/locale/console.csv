@@ -52,6 +52,7 @@ CON_OVERLAY_USAGE,"debug <項目> [on|off]   debug off 全關","debug <layer> [o
 CON_NAV_REBUILT,"NavGrid 已重建：region = {region}，障礙格 {solid}","NavGrid rebuilt: region = {region}, blocked cells {solid}"
 CON_NO_INVENTORY,"{name} 沒有背包","{name} has no inventory"
 CON_INV_SELECTED,"目前選取快捷欄第 {index} 格","hotbar slot {index} selected"
+CON_INV_NONE_SELECTED,"快捷欄目前沒有選取任何格","no hotbar slot selected"
 CON_INV_EMPTY,"背包是空的","Inventory is empty"
 CON_INV_DECAY,"腐壞 {decay}","decay {decay}"
 CON_INV_DURABILITY,"耐久 {durability}","durability {durability}"
