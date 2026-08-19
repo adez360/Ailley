@@ -731,10 +731,8 @@ func request_sleep_reflection() -> Dictionary:
 	if new_plan != null:
 		_apply_today_plan(new_plan)
 
-	# 清空 L1 短期工作記憶（流程圖 ⑤）：跟這次反思同一個生命週期事件——
-	# 一天的「剛剛發生的事」窗口該在這裡重置，不是等 L1_CAP 自然擠掉
-	memory.l1.clear()
-
+	# L1 清空（流程圖⑤）已經在呼叫端（_reevaluate_once() 偵測到入睡轉換時）
+	# 統一做過了，不管反思成不成功都會清——這裡不再重複清一次，見那邊的註解
 	return {"ok": true}
 
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
@@ -1224,6 +1222,13 @@ func _reevaluate_once() -> void:
 	# 同一個道理，排程模式的角色一樣要能睡前反思。不 await：fire-and-forget，
 	# _reevaluate_once() 是同步函式，不該卡在一次網路往返上
 	if not _was_sleeping and current_state == "sleep":
+		# 清空 L1（流程圖⑤）在這裡做，不是等 request_sleep_reflection() 成功
+		# 才清——不然沒有事件可反思（該函式一開頭就 return）或反思失敗
+		# （LLM 逾時／驗證不過）時 L1 永遠不會清空。入睡本身就是「今天的
+		# 短期記憶窗口該重置」的事件，跟反思成不成功是兩件事（CodeRabbit
+		# review 抓到）
+		if memory != null:
+			memory.l1.clear()
 		request_sleep_reflection()
 
 	_pursue_current_task()
