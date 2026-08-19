@@ -1433,6 +1433,24 @@ func _pursue_current_task() -> void:
 		push_warning("Agent %s: 走不到 %s" % [character_name, current_place])
 		_pursuit_done = true
 
+# give／talk 追逐移動目標時共用的卡住判定門檻（#266）：連續幾次「距離沒有
+# 明顯縮短」才算真的卡住，不是量測誤差。兩邊原本各自寫死 3，抽成常數，
+# 改一次兩邊一起改，不會漂移
+const PURSUIT_STUCK_THRESHOLD := 3
+
+# give／talk 任務追逐移動目標時的卡住偵測共用邏輯（#266，取代原本兩份幾乎
+# 一樣的重複實作，同樣的 -1.0 誤差容許值、同樣連續 3 次判定卡住）。
+# 只回傳「卡住幾次了」跟「這一次是不是剛好達到門檻」，達到門檻之後要做
+# 什麼由呼叫端自己決定——talk 只警告不放棄、give 真的放棄，兩邊反應不同，
+# 不該塞進這個共用函式。用「剛好等於門檻」而不是「大於等於」，是要保留
+# 原本「只在跨過門檻那一次通知一次」的行為，不會每個 tick 都重複觸發
+static func _pursuit_stuck_progress(distance: float, last_distance: float, stuck_ticks: int) -> Dictionary:
+	var new_ticks := stuck_ticks + 1 if distance >= last_distance - 1.0 else 0
+	return {
+		"stuck_ticks": new_ticks,
+		"threshold_reached": new_ticks == PURSUIT_STUCK_THRESHOLD,
+	}
+
 # talk 任務的執行（#90）：目標是會動的角色，不是靜止的地點錨點，所以不能沿用
 # 上面那套「走一次、_pursued_place／_pursuit_done 收斂」的節流——每次重算都
 # 要重新問一次「他現在在哪」，距離內就直接搭話，不是只起步一次
@@ -1524,15 +1542,13 @@ func _pursue_talk_task() -> void:
 		_talk_pursuit_stuck_ticks = 0
 		return
 
-	# 距離沒有明顯縮短（容許一點量測誤差）就算一次沒進展；連續幾次才報一次，
-	# 不是每次都報——偶爾一次量測誤差不該洗警告
-	if distance >= _talk_pursuit_last_distance - 1.0:
-		_talk_pursuit_stuck_ticks += 1
-	else:
-		_talk_pursuit_stuck_ticks = 0
+	# 距離沒有明顯縮短就算一次沒進展；連續幾次才報一次，不是每次都報——
+	# 偶爾一次量測誤差不該洗警告（#266：共用邏輯見 _pursuit_stuck_progress()）
+	var progress := _pursuit_stuck_progress(distance, _talk_pursuit_last_distance, _talk_pursuit_stuck_ticks)
+	_talk_pursuit_stuck_ticks = progress["stuck_ticks"]
 	_talk_pursuit_last_distance = distance
 
-	if _talk_pursuit_stuck_ticks == 3:
+	if progress["threshold_reached"]:
 		push_warning("Agent %s: 追不上搭話對象 %s，可能被卡住" % [character_name, target.character_name])
 
 # eat 任務的執行（#114）：跟 talk 一樣是「呼叫一次就完成」，不是靠 duration
@@ -1664,15 +1680,13 @@ func _pursue_give_task() -> void:
 			return
 
 		# 找得到路徑但卡住（障礙物、對方站在走不進去的位置）：距離沒有明顯
-		# 縮短就算一次沒進展，連續卡住才真的放棄，跟 _give_pursuit_* 的宣告
-		# 理由一致
-		if distance >= _give_pursuit_last_distance - 1.0:
-			_give_pursuit_stuck_ticks += 1
-		else:
-			_give_pursuit_stuck_ticks = 0
+		# 縮短就算一次沒進展，連續卡住才真的放棄（#266：共用邏輯見
+		# _pursuit_stuck_progress()）
+		var progress := _pursuit_stuck_progress(distance, _give_pursuit_last_distance, _give_pursuit_stuck_ticks)
+		_give_pursuit_stuck_ticks = progress["stuck_ticks"]
 		_give_pursuit_last_distance = distance
 
-		if _give_pursuit_stuck_ticks >= 3:
+		if progress["threshold_reached"]:
 			push_warning("Agent %s: 送禮對象 %s 卡住走不到，放棄" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，禮物送不出去"
 			_finish_task_and_request_next()
