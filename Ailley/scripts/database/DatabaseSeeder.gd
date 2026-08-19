@@ -309,7 +309,7 @@ const ITEM_BALANCE := {
 ## Entry Point
 ## =====================================================
 
-static func seed_all() -> void:
+static func seed_all() -> bool:
 
 	if not DatabaseManager.is_ready:
 
@@ -318,7 +318,7 @@ static func seed_all() -> void:
 			+ "DatabaseManager 尚未準備完成。"
 		)
 
-		return
+		return false
 
 
 	print(
@@ -326,19 +326,33 @@ static func seed_all() -> void:
 	)
 
 
-	seed_items()
+	var ok := seed_items()
 
 
-	print(
-		"[DatabaseSeeder] 基礎資料建立完成。"
-	)
+	if ok:
+
+		print(
+			"[DatabaseSeeder] 基礎資料建立完成。"
+		)
+
+	else:
+
+		push_error(
+			"[DatabaseSeeder] "
+			+ "基礎資料建立失敗，略過完成訊息。"
+		)
+
+
+	return ok
 
 
 ## =====================================================
 ## Item Seed
 ## =====================================================
 
-static func seed_items() -> void:
+static func seed_items() -> bool:
+
+	var ok := true
 
 	for item_id in ITEM_BALANCE:
 
@@ -350,6 +364,7 @@ static func seed_items() -> void:
 				% item_id
 			)
 
+			ok = false
 			continue
 
 
@@ -360,15 +375,18 @@ static func seed_items() -> void:
 		item_data["item_id"] = item_id
 		item_data["is_active"] = 1
 
-		_insert_item_if_missing(
+		if not _insert_item_if_missing(
 			item_id,
 			item_data
-		)
+		):
+			ok = false
 
 
 	print(
 		"[DatabaseSeeder] Item seed 完成。"
 	)
+
+	return ok
 
 
 ## =====================================================

@@ -982,6 +982,20 @@ func _connect_inventory_changed(
 	}
 
 
+	var exit_callback := Callable(
+		self,
+		"_on_character_tree_exited"
+	).bind(npc_id)
+
+	if not character.tree_exited.is_connected(
+		exit_callback
+	):
+
+		character.tree_exited.connect(
+			exit_callback
+		)
+
+
 	print(
 		"[CharacterStatePersistence] "
 		+ "Inventory.changed 已連線：%s | instance=%d"
@@ -989,6 +1003,35 @@ func _connect_inventory_changed(
 			npc_id,
 			inventory_id
 		]
+	)
+
+
+# =====================================================
+# Character Removed：清理追蹤字典
+#
+# 角色節點釋放後，_inventory_connected 裡的 inventory
+# 參照會變成失效 instance；_inventory_loaded／_loading／
+# _sync_pending 也會殘留無用的 npc_id 項目。統一在這裡清掉。
+# =====================================================
+
+func _on_character_tree_exited(
+	npc_id: String
+) -> void:
+
+	_disconnect_inventory_changed(
+		npc_id
+	)
+
+	_inventory_loaded.erase(
+		npc_id
+	)
+
+	_inventory_loading.erase(
+		npc_id
+	)
+
+	_inventory_sync_pending.erase(
+		npc_id
 	)
 
 
@@ -1566,6 +1609,7 @@ func _save_inventory(
 			% npc_id
 		)
 
+		DatabaseManager.rollback_transaction()
 		return false
 
 

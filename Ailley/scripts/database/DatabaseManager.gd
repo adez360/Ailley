@@ -113,7 +113,12 @@ func _ready() -> void:
 	# Seed
 	# -------------------------------------------------
 
-	DatabaseSeeder.seed_all()
+	if not DatabaseSeeder.seed_all():
+
+		push_error(
+			"[Database] DatabaseSeeder.seed_all() 未完全成功，"
+			+ "部分基礎資料可能缺失。"
+		)
 
 
 	# -------------------------------------------------
