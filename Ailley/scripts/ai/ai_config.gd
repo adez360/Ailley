@@ -100,6 +100,13 @@ class Provider extends RefCounted:
 	func completions_url() -> String:
 		return base_url + "/chat/completions"
 
+	# 就緒檢查用（issue #345）。刻意不用《04》§4-1 想像的 `/health`——那是
+	# 假設一個自架後端才成立的端點，本機 llama-server 有但雲端 OpenRouter
+	# 沒有。`/models` 是 OpenAI 相容 API 的標準端點，跟 completions_url() 一樣
+	# 每個 provider 走同一條路徑，不用為本機/雲端分岔，還能順便驗證金鑰有效
+	func models_url() -> String:
+		return base_url + "/models"
+
 	# 給 debug 主控台印一行摘要。冷卻／每日配額／對話豁免是全域設定，不屬於
 	# 這個 provider 自己，由呼叫端（AIConfig）傳進來，不是這個類別自己存的——
 	# 這樣同一份全域設定印在每個 provider 底下時保證一致，不會各自維護一份

@@ -74,6 +74,11 @@ const ERROR_NETWORK := "network"
 const ERROR_HTTP := "http"
 const ERROR_BAD_JSON := "bad_json"
 
+# 就緒檢查（issue #345）失敗後，隔幾秒重試一次的等待時間。只救「開場那一刻
+# 剛好卡一下」的瞬斷，不是背景輪詢——兩次都失敗就定型成未就緒，之後要
+# 重測得靠 reload_config()（debug 主控台的 ai 指令會叫它），不會自己一直重試
+const READINESS_RETRY_DELAY_SEC := 3.0
+
 var config: AIConfig
 
 var _pool: Array[HTTPRequest] = []
@@ -83,6 +88,8 @@ var _queue: Array = []			# 等節點的 _Job，先進先出
 var _last_call_msec := {}			# requester_id -> Time.get_ticks_msec()，只記受限的呼叫
 var _calls_today := {}				# requester_id -> 今天已用的「受限」次數，吃配額
 var _dialogue_calls_today := {}		# requester_id -> 今天的對話輪次，只計帳不設限
+
+var _readiness := {}				# provider 名字 -> {"ready": bool, "reason": String}
 
 
 func _ready() -> void:
@@ -102,10 +109,104 @@ func _ready() -> void:
 
 	GameClock.day_changed.connect(_on_day_changed)
 
+	# 不 await：就緒檢查跑在背景，開場流程不等它。#357 靠這份資料決定要不要
+	# 自動開啟決策迴圈，在那之前 Agent 一律先用排程模式，不會卡在這裡
+	_check_readiness_all()
 
-# 玩家寫好 user://ai_config.json 之後不必重開遊戲，debug 主控台的 ai 指令會先叫這個
+
+# 玩家寫好 user://ai_config.json 之後不必重開遊戲，debug 主控台的 ai 指令會先叫這個。
+# 就緒表也一併重算——這是唯一的手動重測入口，開場瞬斷之外的網路狀態變化
+# （例如玩到一半才把 llama-server 開起來）都靠這裡救回來，不做背景輪詢
 func reload_config() -> void:
 	config = AIConfig.load_from_user()
+	_check_readiness_all()
+
+
+# 給 #357／debug 主控台查某個 provider 就不就緒。**只有空字串會退回
+# default_provider**，跟 AIConfig.get_provider() 同一個規則——名字打錯要讓
+# 呼叫端看見「查無此 provider」，不是靜默給錯的狀態
+func get_readiness(provider_name: String = "") -> Dictionary:
+	var resolved := provider_name if not provider_name.is_empty() else config.default_provider
+	return _readiness.get(resolved, _readiness_result(false, L10n.t("AI_READY_NOT_CHECKED")))
+
+
+func _check_readiness_all() -> void:
+	_readiness.clear()
+
+	# config 沒啟用就不用打網路——AIConfig.status_reason 已經講清楚原因，
+	# 打了也只會全部落在「設定層失敗」，多一輪網路等待沒有意義
+	if not config.enabled:
+		return
+
+	for provider_name in config.providers.keys():
+		_check_provider_readiness(provider_name)
+
+
+# 逐 provider 各自跑，互不等待——local 連不上不該拖累 openrouter 的檢查結果
+func _check_provider_readiness(provider_name: String) -> void:
+	var provider: AIConfig.Provider = config.providers[provider_name]
+
+	if not provider.valid:
+		# 設定層失敗（base_url／model 空白）不用打網路就知道，也不用重試——
+		# 重試網路請求救不了一個本來就沒填齊的設定
+		_readiness[provider_name] = _readiness_result(
+			false, L10n.tf("AI_READY_CONFIG_INVALID", {"reason": provider.status_reason})
+		)
+		return
+
+	var outcome := await _probe_models(provider)
+	if not outcome["ready"]:
+		await get_tree().create_timer(READINESS_RETRY_DELAY_SEC).timeout
+		outcome = await _probe_models(provider)
+
+	_readiness[provider_name] = outcome
+
+
+# 連線層探針：打 GET {base_url}/models。不用《04》§4-1 想像的 /health——
+# 那是假設一個自架後端才有的端點，OpenRouter 這類雲端 provider 根本沒有；
+# /models 是 OpenAI 相容 API 的標準端點，本機／雲端同一條路徑，還能順便
+# 驗證金鑰有效（/health 不驗證 Authorization）
+func _probe_models(provider: AIConfig.Provider) -> Dictionary:
+	var http := HTTPRequest.new()
+	http.timeout = provider.timeout
+	http.use_threads = true
+	add_child(http)
+
+	var headers := PackedStringArray()
+	if not provider.api_key.is_empty():
+		headers.append("Authorization: Bearer %s" % provider.api_key)
+
+	var err := http.request(provider.models_url(), headers, HTTPClient.METHOD_GET)
+	if err != OK:
+		http.queue_free()
+		return _readiness_result(
+			false, L10n.tf("AI_READY_NETWORK", {"url": provider.models_url(), "detail": "request()=%d" % err})
+		)
+
+	# HTTPRequest.request_completed 是引擎自己在真正的網路 I/O 完成後才發，
+	# 不會在 request() 呼叫的當下同步觸發，所以這裡可以直接 await，不需要
+	# _Job.finished 那種 call_deferred 的防呆——那個防呆解的是另一個問題
+	# （我們自己手動 emit 的訊號有可能在呼叫端 await 之前就先發生）
+	var response: Array = await http.request_completed
+	http.queue_free()
+
+	var result: int = response[0]
+	var response_code: int = response[1]
+
+	if result == HTTPRequest.RESULT_TIMEOUT:
+		return _readiness_result(false, L10n.tf("AI_READY_TIMEOUT", {"url": provider.models_url()}))
+	if result != HTTPRequest.RESULT_SUCCESS:
+		return _readiness_result(
+			false, L10n.tf("AI_READY_NETWORK", {"url": provider.models_url(), "detail": "result=%d" % result})
+		)
+	if response_code >= 400:
+		return _readiness_result(false, L10n.tf("AI_READY_HTTP", {"url": provider.models_url(), "code": response_code}))
+
+	return _readiness_result(true, L10n.t("AI_READY_OK"))
+
+
+func _readiness_result(ready: bool, reason: String) -> Dictionary:
+	return {"ready": ready, "reason": reason}
 
 
 # 唯一的對外入口。呼叫端：var result := await AIService.request(envelope, "agent")
