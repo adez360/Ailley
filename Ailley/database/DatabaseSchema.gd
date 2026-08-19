@@ -12,10 +12,19 @@ extends RefCounted
 ## 4. 用 PRAGMA user_version 追蹤 schema 版本，套用落後的 migration
 ## 5. 不直接撰寫資料表 SQL
 ##
-## 每張資料表一支 .gd，各自提供：
+## 注意：
+## SQLite 的 CREATE TABLE 本身不要求父表先存在；
+## 啟用 FK 後，真正要求父表存在的是 INSERT / UPDATE。
+## 因此這裡仍依賴順序建立父表，但不把它描述成 SQLite
+## 的 CREATE TABLE 強制規則。
 ##
-##     static func create(db) -> bool
-##
+## 版本控管：
+## 全部 table 都用 CREATE TABLE IF NOT EXISTS，schema 改了
+## 也不會補進已存在的舊資料庫。用 PRAGMA user_version 記錄
+## 目前的 schema 版本；偵測到既有資料庫版本落後時，依序套用
+## MIGRATIONS 補齊結構差異，全部套用成功才把版本寫成
+## CURRENT_VERSION。版本比目前程式碼還新（例如切回舊分支、
+## 但 user:// 被新分支開過）則直接拒絕啟動，不嘗試往下相容。
 ## =====================================================
 
 
@@ -45,17 +54,6 @@ static func initialize(db) -> bool:
 		push_error("[DatabaseSchema] Database object is null.")
 		return false
 
-
-	# =================================================
-	# 所有 Schema
-	#
-	# 注意：
-	# 這裡的順序非常重要。
-	#
-	# 有 Foreign Key 的資料表，
-	# 必須在被參照的資料表建立之後建立。
-	# =================================================
-
 	var schemas := [
 
 		# -------------------------------------------------
@@ -65,80 +63,44 @@ static func initialize(db) -> bool:
 		WorldSchema,
 		LocationSchema,
 
-
-		# -------------------------------------------------
-		# 02. NPC Core
-		# -------------------------------------------------
-
+		# NPC Core
 		NPCSchema,
 		NPCStateSchema,
 		NPCScheduleSchema,
 
-
-		# -------------------------------------------------
-		# 03. NPC Profile
-		# -------------------------------------------------
-
+		# NPC Profile
 		NPCPersonalitySchema,
 		NPCAppearanceSchema,
 		NPCOccupationSchema,
 		NPCTabooSchema,
 
-
-		# -------------------------------------------------
-		# 04. NPC AI
-		# -------------------------------------------------
-
+		# NPC AI
 		NPCEmotionSchema,
 		NPCConditionSchema,
 		NPCGoalSchema,
 		NPCDailyPlanSchema,
 		NPCLastActionSchema,
 
-
-		# -------------------------------------------------
-		# 05. NPC Memory
-		# -------------------------------------------------
-
+		# NPC Memory
 		MemorySchema,
 
-
-		# -------------------------------------------------
-		# 06. NPC Death
-		# -------------------------------------------------
-
+		# NPC Death
 		NPCDeathSchema,
 		GraveSchema,
 		GraveHighlightSchema,
 		GraveEpitaphSchema,
 
-
-		# -------------------------------------------------
-		# 07. Item
-		# -------------------------------------------------
-
+		# Item
 		ItemSchema,
 
-
-		# -------------------------------------------------
-		# 08. Inventory / Storage
-		# -------------------------------------------------
-
+		# Inventory / Storage
 		NPCInventorySchema,
 		NPCHomeStorageSchema,
 
-
-		# -------------------------------------------------
-		# 09. Relations
-		# -------------------------------------------------
-
+		# Relations
 		NPCRelationsSchema,
 
-
-		# -------------------------------------------------
-		# 10. Economy
-		# -------------------------------------------------
-
+		# Economy
 		NPCWalletSchema,
 		MoneyTransactionSchema,
 		ItemTransactionSchema,
@@ -150,7 +112,6 @@ static func initialize(db) -> bool:
 
 		WorldCharacterStateSchema
 	]
-
 
 	var stored_version := _get_user_version(db)
 
@@ -194,7 +155,6 @@ static func initialize(db) -> bool:
 		)
 		return false
 
-
 	for schema in schemas:
 		if schema.create(db):
 			continue
@@ -206,7 +166,6 @@ static func initialize(db) -> bool:
 
 		db.query("ROLLBACK;")
 		return false
-
 
 	if not is_fresh_database and not _apply_migrations(db, stored_version, MIGRATIONS):
 		db.query("ROLLBACK;")
@@ -231,7 +190,6 @@ static func initialize(db) -> bool:
 
 		db.query("ROLLBACK;")
 		return false
-
 
 	print(
 		"[DatabaseSchema] %d schemas created, schema version %d."

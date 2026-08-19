@@ -23,6 +23,7 @@ env  Godot 4.5.1-stable · gl_compatibility · default_texture_filter=0
 GameManager   scripts/core/game_manager.gd
 GameClock     scripts/core/GameClock.gd
 AIService     scripts/ai/ai_service.gd
+DatabaseManager  database/DatabaseManager.gd
 _mcp_game_helper  addons/godot_ai/runtime/game_helper.gd   † 勿移除
 ```
 
@@ -234,7 +235,7 @@ const MIN_COMMIT := 2.0                      # 遊戲分鐘；做不滿就不讓
 const LLM_WAIT_MIN_COMMIT := 5.0             # 等待決策回覆期間蓋掉 MIN_COMMIT
 const MIN_ACTION_DURATION := 10.0            # llm 任務 duration 引擎端下限（遊戲分鐘）
 const LLM_TASK_POOL_CAP := 20                # 只算 source=="llm" 的筆數
-const ENERGY_RECOVERY := {sleep: 6.0, nap: 4.0, rest: 2.0}   # 每遊戲分鐘回多少 energy（#112），暫定值
+const ACTION_RECOVERY := {sleep: {stat: stamina, amount: 6.0}, nap: {stat: stamina, amount: 4.0}, rest: {stat: stamina, amount: 2.0}}   # 動作->{stat,amount}（#112／#214），暫定值
 const DEBUG_TASK_PRIORITY := 999.0           # act 指令推進來的任務分數，壓過任何 schedule 任務
 const SUCCESS_PARAMS := {                    # 《01-2》§3 成功率表照抄，含尚未接執行邏輯的動作（#120）
     hunt_small/hunt_large/gather/fish/steal/persuade/perform/attack
@@ -262,10 +263,10 @@ func debug_push_task(action, params, duration) -> void     # act 指令用；走
 回復類動作（#112）
 † nap/rest/wash/idle 沒有各自的執行函式——四個都走仲裁器既有的
   「移動到 params.place（沒給就原地）、佔用 duration」路徑
-† energy 回復在 _on_time_changed() 每遊戲分鐘結算一次（_apply_action_recovery()），
+† 回復在 _on_time_changed() 每遊戲分鐘結算一次（_apply_action_recovery()），
   先結算再 _reevaluate()：反過來的話最後一分鐘會用新任務的 current_state 算
 † is_moving() 為真時不回復——還在走去床邊的路上不算在睡覺
-† wash 不在 ENERGY_RECOVERY 表上：它回復的是 hygiene，Stats.SPEC 還沒有這一項；
+† wash 不在 ACTION_RECOVERY 表上：它該回復 hygiene，接上是另一則任務（#241）；
   idle 也不在，發呆本來就不回復任何東西
 † 主場景沒有湖泊／深井錨點（只有 home_001/farm/restaurant/square），
   《07》§2-3 要求的 wash 地點限制等地點補齊後才有得檢查
@@ -1173,6 +1174,86 @@ var hour := 8 · var minute := 0 · var day := 1
 ⚠ day 還沒持久化，重開仍從 1 開始 —— 要等世界存檔（#21）
 ```
 
+## DatabaseManager — database/DatabaseManager.gd · autoload · Node
+
+```gdscript
+const DATABASE_PATH := "user://game.db"
+
+var db: SQLite
+var is_ready: bool
+
+func query(sql: String, bindings: Array = []) -> bool
+func get_last_result() -> Array            # db.query_result；db==null 回 []
+func select(table: String, conditions: String = "", columns: Array = ["*"]) -> Array
+func select_where(table: String, where_sql: String, bindings: Array = [], columns: Array = ["*"]) -> Array
+func insert(table: String, data: Dictionary) -> bool
+func update(table: String, data: Dictionary, conditions: String) -> bool
+func delete(table: String, conditions: String) -> bool
+func begin_transaction() -> bool           # query("BEGIN TRANSACTION;")
+func commit_transaction() -> bool          # query("COMMIT;")
+func rollback_transaction() -> bool        # query("ROLLBACK;")
+func escape_sql_string(value: String) -> String   # 只給 update()/delete() 的 conditions 字串用
+```
+
+```text
+select_where() 的 where_sql 帶 "?" 佔位符，值走 bindings，不必自己轉義 —— 查詢條件帶使用者
+  可控或需要轉義的值時一律走這個，不要自己 escape_sql_string() 轉義後拼進 select()
+update()/delete() 的 conditions 是呼叫端自己組出的 SQL WHERE 字串，不接受 bindings；
+  帶使用者可控值時要自己呼叫 escape_sql_string() 轉義
+† update() 對有 updated_at 欄位的 table 自動補寫入時間，呼叫端不用自己塞
+† insert()/update()/delete() 失敗會 push_error 印 db.error_message；寫入後的資料驗證
+  （例如 npc_inventory 的 INSERT 後 SELECT 確認）不在這裡做，通用 CRUD 不知道特定 table
+  的欄位形狀，留給呼叫端（CharacterStatePersistence）自己驗
+⚠ _table_has_column() 內部查 PRAGMA table_info() 會覆寫 db.query_result，查完會還原成呼叫端
+  原本的結果，get_last_result() 不會拿到 PRAGMA 的資料
+```
+
+## CharacterStatePersistence — database/CharacterStatePersistence.gd · Node · DatabaseManager 的子節點
+
+```gdscript
+func sync_now() -> void                          # 手動觸發全體同步（等同 _ready() 首次跑的那次）
+func sync_character(character: Character) -> bool
+func get_all_states() -> Array                    # SELECT npc_id/各項數值/location_id FROM npc_state
+```
+
+```text
+不是 autoload，由 DatabaseManager._ready()（call_deferred）動態 load()+add_child() 掛進樹，
+  節點名固定 "CharacterStatePersistence"；要拿 instance 走
+  DatabaseManager.get_node("CharacterStatePersistence")
+⚠ DatabaseManager.is_ready 在 _ready() 裡同步設為 true，之後才 call_deferred() 建立這個節點——
+  is_ready==true 那一刻不保證這個子節點已存在，DatabaseManager.get_node() 在極早期可能撲空；
+  等下一個 idle frame（或直接訂閱 DatabaseManager 的樹狀態變化）再拿節點比較保險
+† 同步對象是 npc / npc_state / npc_inventory / npc_wallet 四張表，relations／memory／
+  personality 等其他欄位不在這裡
+† GameClock.time_changed 每遊戲分鐘觸發一次「僅 state/wallet」定期同步（不含 inventory）；
+  完整同步（含 inventory）只在 _ready() 首次全體跑一次，之後靠 Inventory.changed 觸發或
+  呼叫 sync_character()
+† Inventory 寫入走兩段式：changed signal 只標記 pending，真正的 SQLite 寫入在下一個
+  call_deferred() frame 才執行，避免在 Inventory.add_item() 尚未結束時就重入 Persistence
+⚠ Inventory SAVE 的 DELETE 0 筆（第一次存檔還沒有舊資料）視為正常狀態，不是錯誤
+⚠ character_id 本身未持久化（見下方「已知缺口」），重開遊戲會產生新 id，
+  SQLite 裡的舊 npc_id 列會變成孤兒資料，不會自動對應回同一個角色
+```
+
+## DatabaseSeeder — database/DatabaseSeeder.gd · class_name · RefCounted
+
+```gdscript
+const ITEM_BALANCE := {...}   # item_id -> {name, item_type, base_price, max_stack,
+                               # is_consumable, is_perishable, decay_rate?,
+                               # durability_cost?, effect_*}，涵蓋 data/items.json
+                               # 全部 18 個 item_id（食物/飲品/獵物水產/採集品/隨身用品）
+
+static func seed_all() -> void      # 呼叫端：DatabaseManager._ready()，schema 建立後跑一次
+static func seed_items() -> void
+```
+
+```text
+ITEM_BALANCE 的 key 必須存在於 res://data/items.json（ItemDatabase 為單一事實來源），
+  查不到就 push_error 並跳過該筆，避免兩份物品清單各自漂移出不存在的 item_id
+seed_items() 逐筆用 select_where(item_id) 檢查是否已存在才 INSERT，重複呼叫不出錯也不覆寫
+† Seeder 不建表、不改 schema、不做遊戲中的資料更新，只負責第一次啟動的基礎資料
+```
+
 ## data/
 
 ```
@@ -1193,7 +1274,10 @@ schedule 插槽現為 {time, place, state}，是計畫結構的子集
 Vision 圓形無朝向；lost 無呼叫端
 Agent 不對 Stats 反應（get_lowest_need_place() 可用但無呼叫端）
 noise_heard 對話中會被吞掉；睡覺中的 Agent 沒有排除，一樣會冒 !?
-無存檔機制（全專案無 user:// 存檔/ConfigFile）
+SaveService 兩條實作並存：JsonSaveService（MVP 採用中）與 SqliteSaveService/DatabaseManager
+  （非阻塞平行開發，見《99》P-26）；CharacterStatePersistence 已把 npc/npc_state/
+  npc_inventory/npc_wallet 同步進 user://game.db，但 character_id／GameClock.day 本身
+  仍未持久化，見下行
 character_id 與 GameClock.day 都未持久化，重開就重來
 AIService 已接對話（conversation.gd 非同步）與行程（agent.gd 任務池＋決策迴圈，
   llm_decision_enabled 開關）；決策內容有效性未實跑真實 provider 驗證過（見驗收清單）

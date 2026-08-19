@@ -33,7 +33,9 @@ signal player.move_finished(reached: bool)
 
 ## 指令（按 `` ` `` 開關，Esc 關閉，上下鍵翻歷史）
 
-- `goto <name> <x> <y>`：指定角色走到世界座標——繞過 `agent.gd` 的仲裁器直接呼叫
+- `goto <name> <x> <y>`：指定角色走到**地圖格座標**——`debug_console.gd` 會先把
+  `x`、`y` 組成 `Vector2i cell`，再經 `nav.cell_to_world(cell)` 轉成世界座標後繞過
+  `agent.gd` 的仲裁器直接呼叫
   `character.move_to()`，完成時發的 `move_finished` 訊號跟仲裁器自己那份共用同一個
   訊號，靠 `last_move_target` 比對目標才不會互相誤判，見 [[行程佇列與任務仲裁]]
 - `stop`：停止移動
