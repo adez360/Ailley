@@ -187,6 +187,11 @@ var _awaiting_decision := false
 # 讓兩個請求同時讀寫同一份 _daily_events（CodeRabbit review 抓到）
 var _sleep_reflection_in_flight := false
 
+# 撞期時記「還有一次要補跑」，不能就這樣把那次請求默默丟掉——它很可能是想
+# 反思等待期間才新累積的事件（CodeRabbit review 抓到，見
+# _finish_sleep_reflection_request()）
+var _sleep_reflection_pending := false
+
 ## 給 debug_console.gd 判斷要不要印「正在問地端模型...」用——open 呼叫
 ## debug_set_llm_decision(true) 前先問一次，才不會在請求根本沒送出（已經有
 ## 一份在飛）的情況下印出誤導的等待訊息
@@ -687,8 +692,12 @@ func request_sleep_reflection() -> Dictionary:
 	# debug_console.gd 的 `reflect` 指令都會呼叫這裡，這通吃 await，重疊呼叫
 	# 會讓兩個請求同時讀寫同一份 _daily_events——後回來的那個 filter() 會用
 	# 自己那批 scored_ids 蓋掉先回來那個已經處理過的結果，兩邊都可能重複計分
-	# 或漏算
+	# 或漏算。撞期的這次不能就這樣丟掉不管：疊加的那次很可能是想反思等待期間
+	# 新累積的事件，直接吞掉會讓那批事件在 _daily_events 裡卡到下次才補評——
+	# 記一個「還有一次補跑」的旗標，等目前這次真的做完（不管成敗）才補跑一次
+	# （CodeRabbit review 抓到，見 _finish_sleep_reflection_request()）
 	if _sleep_reflection_in_flight:
+		_sleep_reflection_pending = true
 		return {"ok": false}
 	if memory == null or _daily_events.is_empty():
 		return {"ok": false}
@@ -718,7 +727,7 @@ func request_sleep_reflection() -> Dictionary:
 	var envelope := PromptBuilder.build_reflection_envelope(self, events_sent)
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	if not result["ok"]:
-		_sleep_reflection_in_flight = false
+		_finish_sleep_reflection_request()
 		return {"ok": false}
 
 	var data: Dictionary = result["data"]
@@ -747,8 +756,20 @@ func request_sleep_reflection() -> Dictionary:
 
 	# L1 清空（流程圖⑤）已經在呼叫端（_reevaluate_once() 偵測到入睡轉換時）
 	# 統一做過了，不管反思成不成功都會清——這裡不再重複清一次，見那邊的註解
-	_sleep_reflection_in_flight = false
+	_finish_sleep_reflection_request()
 	return {"ok": true}
+
+# 收尾這次反思請求：解除在飛旗標，如果有撞期被記下的補跑需求就立刻補一次
+# （CodeRabbit review 抓到）。不用 await 這次補跑的結果——呼叫端只在意自己
+# 那次請求的成敗，撞期的那次本來就沒有呼叫端在等結果（原本被靜默丟棄，見
+# request_sleep_reflection() 頂端的說明），讓它自己跑完就好。如果補跑當下
+# _daily_events 已經被這次清空／filter() 到空了，request_sleep_reflection()
+# 開頭的 is_empty() 檢查會自然讓它變成無事可做的空跑，不用另外判斷
+func _finish_sleep_reflection_request() -> void:
+	_sleep_reflection_in_flight = false
+	if _sleep_reflection_pending:
+		_sleep_reflection_pending = false
+		request_sleep_reflection()
 
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
 ## AIService、parse_completion、validate_*，任何一關失敗都靜默放棄，任務池
