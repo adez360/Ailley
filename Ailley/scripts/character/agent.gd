@@ -1212,7 +1212,7 @@ func _reevaluate_once() -> void:
 			var expired_task := _tasks[i]
 			_tasks.remove_at(i)
 			if expired_task.get("id", "") == _current_task.get("id", ""):
-				_clear_current_task(true)
+				_clear_current_task(false)
 
 	var best: Dictionary = {}
 	var best_score := -INF

@@ -120,6 +120,12 @@ func _input(event: InputEvent) -> void:
 	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
 		return
 
+	# CodeRabbit review：面板可見時，面板範圍內的點擊（例如分頁按鈕）留給
+	# GUI 的 _gui_input 處理，不能被下面的世界選取邏輯搶走——否則點分頁會
+	# 誤觸 close()，或選到分頁底下的世界角色
+	if panel.visible and panel.get_global_rect().has_point(event.position):
+		return
+
 	var character := _pick_character(event.position)
 	if character != null:
 		open(character)
@@ -135,12 +141,13 @@ func _pick_character(screen_pos: Vector2) -> Character:
 
 	return selection.character_at(world_pos)
 
-## 點角色本體開啟：一律切回狀態分頁。跟「面板開著時點另一個角色」是兩種
-## 不同操作，只有後者才維持分頁（《15》§2-3）
+## 面板先前隱藏時開啟：切回狀態分頁。面板開著時點另一個角色：只換資料，
+## 維持目前分頁——玩家連續點角色比對物品時不該每次被踢回狀態頁（《15》§2-3）
 func open(character: Character) -> void:
+	if not panel.visible:
+		_set_tab(0)
 	_character = character
 	title_label.text = character.character_name
-	_set_tab(0)
 	panel.show()
 
 func close() -> void:
