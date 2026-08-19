@@ -59,22 +59,34 @@ func _run() -> void:
 	print("[CharacterStateIntegrationTest] START")
 	print("=====================================================")
 
+	var ready_wait_frames := 0
+	const READY_WAIT_TIMEOUT_FRAMES := 300
+
 	while not DatabaseManager.is_ready:
+		ready_wait_frames += 1
+		if ready_wait_frames > READY_WAIT_TIMEOUT_FRAMES:
+			_fail(
+				"DatabaseManager.is_ready",
+				"等待逾時（%d frames），資料庫可能初始化失敗" % READY_WAIT_TIMEOUT_FRAMES
+			)
+			_finish()
+			return
 		await get_tree().process_frame
 
 	var character := _find_test_character()
 
 	if character == null:
-		push_error(
-			"[CharacterStateIntegrationTest] 場景中找不到 Character。"
-			+ "請在正常遊戲場景執行本測試，不要在空白測試場景執行。"
+		_fail(
+			"Character",
+			"場景中找不到 Character。請在正常遊戲場景執行本測試，不要在空白測試場景執行。"
 		)
 		_finish()
 		return
 
 	if character.stats == null:
-		push_error(
-			"[CharacterStateIntegrationTest] Character 沒有 Stats。"
+		_fail(
+			"Character.stats",
+			"Character 沒有 Stats。"
 		)
 		_finish()
 		return
@@ -120,10 +132,12 @@ func _run() -> void:
 			"Persistence",
 			"找不到 DatabaseManager/CharacterStatePersistence"
 		)
+		_restore_stats(character, original_stats, null)
 		_finish()
 		return
 
 	if not _sync_now(persistence):
+		_restore_stats(character, original_stats, persistence)
 		_finish()
 		return
 
@@ -191,6 +205,7 @@ func _run() -> void:
 			"npc_state",
 			"找不到 CharacterStatePersistence 寫入的 npc_state"
 		)
+		_restore_stats(character, original_stats, persistence)
 		_finish()
 		return
 
@@ -277,11 +292,7 @@ func _run() -> void:
 	# 8. 還原 Stats 並同步
 	# -------------------------------------------------
 
-	for key in original_stats:
-		character.stats.set_value(key, original_stats[key])
-
-	if persistence != null:
-		_sync_now(persistence)
+	_restore_stats(character, original_stats, persistence)
 
 	print("[CharacterStateIntegrationTest] Stats 已還原並同步。")
 
@@ -290,6 +301,19 @@ func _run() -> void:
 	# -------------------------------------------------
 
 	_finish()
+
+
+func _restore_stats(
+	character: Character,
+	original_stats: Dictionary,
+	persistence: Node
+) -> void:
+
+	for key in original_stats:
+		character.stats.set_value(key, original_stats[key])
+
+	if persistence != null:
+		_sync_now(persistence)
 
 
 func _sync_now(persistence: Node) -> bool:
