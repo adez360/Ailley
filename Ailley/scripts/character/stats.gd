@@ -7,7 +7,7 @@ extends Node
 ## 要加一項數值只要在 SPEC 加一列，其餘程式都不用動（連 debug 主控台的顯示也是）：
 ##   label    顯示名稱的翻譯 key（res://locale/game.csv 的 STAT_*）。
 ##            這裡刻意存 key 不存字：SPEC 是純資料，翻譯留給顯示端做
-##   drift    每現實秒往 toward 靠近多少，0 表示不會自然變化
+##   drift    每 tick 往 toward 靠近多少，0 表示不會自然變化
 ##   toward   數值自然漂向哪裡。需求類漂向 0（會餓、會累），心情漂回平常值
 ##   is_need  是不是「低了就該去解決」的東西。心情不是，所以不會被
 ##            get_lowest_need() 選中，也不算進 needs_attention()
@@ -25,10 +25,14 @@ extends Node
 ## 不參與 get_lowest_need()/needs_attention()（見《99》P-32 追加決策）；
 ## hygiene/health 雖然也是「越高越好」，但目前沒有對應的 place 可去，
 ## 同樣不參與這兩個函式，只靠 drift 自然變化或由外部事件寫入
+##
+## ★ 漂移機制：由 GameClock.time_changed（每遊戲分鐘）驅動
+## 規格書 tick 定義：1 tick = 10 遊戲分鐘（《02》§1-4）
 
 const MIN := 0.0
 const MAX := 100.0
 const CRITICAL := 30.0		# 低於這個值算「該處理了」
+const GAME_MINUTES_PER_TICK := 10.0
 
 const SPEC := {
 	"satiety": {"label": "STAT_SATIETY", "drift": 3.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "tavern"},
@@ -55,15 +59,16 @@ var injury_decay_paused := false
 func _ready() -> void:
 	for key in SPEC:
 		values[key] = SPEC[key]["start"]
+	GameClock.time_changed.connect(_on_time_changed)
 
-func _process(delta: float) -> void:
+func _on_time_changed(_hour: int, _minute: int) -> void:
 	for key in SPEC:
 		var spec: Dictionary = SPEC[key]
 		if spec["drift"] == 0.0:
 			continue
 		if key == "injury" and injury_decay_paused:
 			continue
-		values[key] = move_toward(values[key], spec["toward"], spec["drift"] * delta)
+		values[key] = move_toward(values[key], spec["toward"], spec["drift"])
 
 func get_value(key: String) -> float:
 	return values.get(key, 0.0)

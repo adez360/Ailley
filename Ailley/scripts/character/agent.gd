@@ -1049,14 +1049,14 @@ func _on_noise_heard(_source: Character) -> void:
 ## 發呆本來就不回復任何東西，它的用途是「合法地什麼都不做」，讓 AI 逾時或
 ## 沒事可做時有一個不必假裝在忙的選項
 ##
-## wash 的 3.0 跟 sleep/nap/rest 三個數字同一種狀態：《07》§2-3 只給
-## 「wash 提升 hygiene」，沒給相對關係也沒給數字，待實跑校準的暫定值，
-## 不是規格定案（#241）
+## ACTION_RECOVERY 的數值原是針對舊的「漂移快 10 倍」情況設的（#361 修正前）。
+## #361 修正後漂移改成每 tick（而非每現實秒），ACTION_RECOVERY 同步除以 10
+## 以維持相對平衡（#361）。
 const ACTION_RECOVERY := {
-	"sleep": {"stat": "stamina", "amount": 6.0},
-	"nap": {"stat": "stamina", "amount": 4.0},
-	"rest": {"stat": "stamina", "amount": 2.0},
-	"wash": {"stat": "hygiene", "amount": 3.0},
+	"sleep": {"stat": "stamina", "amount": 0.6},
+	"nap": {"stat": "stamina", "amount": 0.4},
+	"rest": {"stat": "stamina", "amount": 0.2},
+	"wash": {"stat": "hygiene", "amount": 0.3},
 }
 
 # 到了定點才開始回復——還在走去床邊的路上不算在睡覺。沒有指定地點的任務
@@ -1433,6 +1433,31 @@ func _select(task: Dictionary, now_minutes: int) -> void:
 	_persuade_pursuit_stuck_ticks = 0
 	_persuade_pursuit_last_distance = INF
 	_persuade_delivered = false
+
+# 力竭狀態下強制休息（#364）。exhausted 激活時選不了別的動作，只能 rest
+# 直到 stamina 恢復到門檻為止。_reevaluate_once() 檢查到 exhausted 時呼叫
+func _force_rest_until_recovered(now_minutes: int) -> void:
+	# 如果已經在 rest，繼續就好
+	if current_state == "rest":
+		return
+
+	# 不是 rest 的話，強制切換成 rest（原地進行，不需要移動）
+	var rest_task: Dictionary = {
+		"id": "exhaustion_rest",
+		"action": "rest",
+		"params": {},
+		"priority": 999,  # 最高優先級
+		"window": null,  # 沒有時間窗限制
+		"duration": 0.0,  # 由引擎決定何時結束（stamina 恢復時）
+		"interruptible": false,  # 力竭期間不可被打斷
+		"preconditions": [],
+		"source": "reflex",  # 引擎強制執行，不是 LLM 決定
+		"created_at": now_minutes,
+		"expires_at": 0,
+		"retries": 0,
+	}
+
+	_select(rest_task, now_minutes)
 
 # 往 _current_task 的方向前進。無條件每次重算都跑一次，不管這次有沒有
 # 剛選定新任務——對話中會在這裡先返回、不移動，等下一次重算（對話結束後
