@@ -5,7 +5,12 @@ extends RefCounted
 ## =====================================================
 ## DatabaseSchema
 ##
-## 統一建立所有 SQLite tables。
+## 職責：
+## 1. 統一管理所有資料表 Schema
+## 2. 決定資料表建立順序
+## 3. 將 SQLite db 傳給各個 Schema
+## 4. 用 PRAGMA user_version 追蹤 schema 版本，套用落後的 migration
+## 5. 不直接撰寫資料表 SQL
 ##
 ## 注意：
 ## SQLite 的 CREATE TABLE 本身不要求父表先存在；
@@ -16,32 +21,37 @@ extends RefCounted
 ## 版本控管：
 ## 全部 table 都用 CREATE TABLE IF NOT EXISTS，schema 改了
 ## 也不會補進已存在的舊資料庫。用 PRAGMA user_version 記錄
-## 目前的 schema 版本；偵測到既有資料庫的版本對不上，代表
-## 那個 user://game.db 是用舊 schema 建的，直接拒絕啟動，
-## 不要靜默帶著不完整的欄位跑下去。目前沒有 migration 機制，
-## 版本不符時只能刪掉 user://game.db 重來。
+## 目前的 schema 版本；偵測到既有資料庫版本落後時，依序套用
+## MIGRATIONS 補齊結構差異，全部套用成功才把版本寫成
+## CURRENT_VERSION。版本比目前程式碼還新（例如切回舊分支、
+## 但 user:// 被新分支開過）則直接拒絕啟動，不嘗試往下相容。
 ## =====================================================
 
 
-## schema 有不相容變動（新增/刪除欄位、table）時要遞增。
-const SCHEMA_VERSION := 1
+## schema 目前的版本。哪一支 *Schema.gd 的欄位／CHECK／FK／索引改了，
+## 導致既有 user://game.db 建出來的 table 跟新版 CREATE TABLE 對不上時，
+## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
+## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
+const CURRENT_VERSION := 1
+
+
+## 版本落後時依序套用的變更，每個 entry：
+##
+##     { "version": <int>, "name": <String>, "apply": <Callable(db)->bool> }
+##
+## apply 只處理「既有 table 的結構變更」（ALTER TABLE／重建搬資料），
+## 不要重複 CREATE TABLE——新表由 initialize() 裡的 schemas 陣列建立，
+## 兩者跑在同一個 transaction 裡。
+##
+## 版本必須遞增排列。目前沒有版本落後的既有安裝要處理，所以是空的——
+## 下次 schema 出現不相容變更時，在這裡按版本加一項，同時把
+## CURRENT_VERSION 加一。
+const MIGRATIONS: Array[Dictionary] = []
 
 
 static func initialize(db) -> bool:
 	if db == null:
 		push_error("[DatabaseSchema] Database object is null.")
-		return false
-
-	var existing_table_count := _count_tables(db)
-	var stored_version := _get_user_version(db)
-
-	if existing_table_count > 0 and stored_version != SCHEMA_VERSION:
-		push_error(
-			"[DatabaseSchema] 偵測到舊版資料庫（user_version=%d，目前程式需要 %d），"
-			% [stored_version, SCHEMA_VERSION]
-			+ "沒有 migration 機制可以補齊欄位，拒絕啟動。"
-			+ "請刪除 user://game.db 後重新啟動（會遺失既有存檔）。"
-		)
 		return false
 
 	var schemas := [
@@ -103,6 +113,41 @@ static func initialize(db) -> bool:
 		WorldCharacterStateSchema
 	]
 
+	var stored_version := _get_user_version(db)
+
+	# 資料庫版本比目前程式碼認得的還新——大概是切回舊分支、
+	# 但 user:// 資料夾（依專案名稱，不分 worktree）被新分支開過。
+	# 不能往下走：schemas 陣列建的是舊分支自己認得的欄位，MIGRATIONS
+	# 也不含新分支已經套用過的項目，繼續執行會把 user_version 誤降回
+	# CURRENT_VERSION、讓新分支的 migration 之後被重複套用。
+	if stored_version > CURRENT_VERSION:
+		push_error(
+			"[DatabaseSchema] Database version %d is newer than this build supports (%d). Refusing to open."
+			% [stored_version, CURRENT_VERSION]
+		)
+		return false
+
+
+	# 全新資料庫（sqlite_master 裡一張 table 都沒有）跟「已經有 table、
+	# 只是從沒記錄過版本」的既有資料庫（同樣 stored_version == 0）要分開
+	# 處理：下面 schemas 陣列的 CREATE TABLE 建的一律是目前最新欄位，
+	# 全新資料庫建完就已經是 CURRENT_VERSION 的形狀，不該再套用歷史
+	# MIGRATIONS 的 ALTER TABLE——那是為了把舊表結構補到新形狀，
+	# 套在剛用最新定義建出來的表上只會撞欄位已存在而失敗。
+	var is_fresh_database := stored_version == 0 and not _has_existing_tables(db)
+
+
+	# =================================================
+	# 整批包在一個 transaction 裡。
+	#
+	# SQLite 的 DDL 可以進 transaction，所以中間任何一張表失敗
+	# 就整個回滾。否則會留下一個建到一半的資料庫，而且因為用的是
+	# CREATE TABLE IF NOT EXISTS，下次開機也不會自己修好。
+	#
+	# PRAGMA user_version 的寫入也在同一個 transaction 裡——
+	# migration 沒套完就不該讓版本號提前跳到新的。
+	# =================================================
+
 	if not db.query("BEGIN TRANSACTION;"):
 		push_error(
 			"[DatabaseSchema] BEGIN failed: "
@@ -122,69 +167,110 @@ static func initialize(db) -> bool:
 		db.query("ROLLBACK;")
 		return false
 
+	if not is_fresh_database and not _apply_migrations(db, stored_version, MIGRATIONS):
+		db.query("ROLLBACK;")
+		return false
+
+
+	if not _set_user_version(db, CURRENT_VERSION):
+		push_error(
+			"[DatabaseSchema] Failed to set user_version to %d: %s"
+			% [CURRENT_VERSION, db.error_message]
+		)
+
+		db.query("ROLLBACK;")
+		return false
+
+
 	if not db.query("COMMIT;"):
 		push_error(
 			"[DatabaseSchema] COMMIT failed: "
 			+ db.error_message
 		)
+
 		db.query("ROLLBACK;")
 		return false
 
-	if not _set_user_version(db, SCHEMA_VERSION):
-		push_error(
-			"[DatabaseSchema] 寫入 PRAGMA user_version 失敗：%s"
-			% db.error_message
-		)
-		return false
-
-	var table_count := _count_tables(db)
-
 	print(
-		"[DatabaseSchema] Schema classes: %d | SQLite tables: %d"
-		% [
-			schemas.size(),
-			table_count
-		]
+		"[DatabaseSchema] %d schemas created, schema version %d."
+		% [schemas.size(), CURRENT_VERSION]
 	)
 
 	return true
 
 
-static func _schema_name(schema) -> String:
-	return str(schema.resource_path).get_file().get_basename()
+## 依序套用版本 > from_version 的 migration，任何一個失敗就中止
+## （呼叫端負責 ROLLBACK）。migrations 走參數傳入而不是直接讀
+## MIGRATIONS 常數，是為了讓測試可以餵一份假清單進來驗證套用順序／
+## 失敗中止的邏輯，不需要真的改動 schema。
+static func _apply_migrations(
+	db,
+	from_version: int,
+	migrations: Array[Dictionary]
+) -> bool:
+	var pending := migrations.filter(
+		func(m): return m["version"] > from_version
+	)
+
+	pending.sort_custom(func(a, b): return a["version"] < b["version"])
+
+	for migration in pending:
+		if migration["apply"].call(db):
+			print(
+				"[DatabaseSchema] Migration %d (%s) applied."
+				% [migration["version"], migration["name"]]
+			)
+			continue
+
+		push_error(
+			"[DatabaseSchema] Migration %d (%s) failed: %s"
+			% [migration["version"], migration["name"], db.error_message]
+		)
+		return false
+
+	return true
 
 
-## 實際算出目前建立了幾張 table，不用手動維護的數字——
-## schema class 數量跟 table 數量本來就不是一對一
-## （例如 MemorySchema 額外建立 memory_related_npcs）。
-static func _count_tables(db) -> int:
+## 查 sqlite_master 有沒有任何應用程式 table，用來分辨「全新資料庫」跟
+## 「已經有 table、只是沒記錄過版本」的既有資料庫（兩者 user_version
+## 都是 0）。查詢本身失敗時保守回傳 true（當作有既有 table）——
+## 誤判成既有資料庫頂多多套用不需要的 migration，誤判成全新資料庫則會
+## 漏掉真正需要的 migration，後者的後果更嚴重。
+static func _has_existing_tables(db) -> bool:
 	if not db.query(
-		"SELECT COUNT(*) AS table_count FROM sqlite_master "
-		+ "WHERE type = 'table' AND name NOT LIKE 'sqlite_%';"
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1;"
 	):
-		return -1
+		push_error(
+			"[DatabaseSchema] Failed to query sqlite_master: "
+			+ db.error_message
+		)
+		return true
 
-	if db.query_result.is_empty():
-		return -1
-
-	return int(db.query_result[0].get("table_count", -1))
+	return not db.query_result.is_empty()
 
 
-## SQLite 檔案沒設過 PRAGMA user_version 時預設是 0，
-## 全新建立的資料庫檔案也是 0 —— 呼叫端要自己配合
-## existing_table_count 判斷是「全新」還是「舊版沒記錄版本」。
+## PRAGMA user_version 是存在資料庫檔頭的整數，新資料庫預設是 0。
 static func _get_user_version(db) -> int:
 	if not db.query("PRAGMA user_version;"):
-		return -1
+		push_error(
+			"[DatabaseSchema] Failed to read user_version: "
+			+ db.error_message
+		)
+		return 0
 
-	if db.query_result.is_empty():
-		return -1
+	var result: Array = db.query_result
 
-	return int(db.query_result[0].get("user_version", -1))
+	if result.is_empty():
+		return 0
+
+	return int(result[0].values()[0])
 
 
 static func _set_user_version(db, version: int) -> bool:
-	return db.query(
-		"PRAGMA user_version = %d;"
-		% version
-	)
+	return db.query("PRAGMA user_version = %d;" % version)
+
+
+## schema 是 GDScript class，直接 str() 出來會是 <GDScript#...>，
+## 看不出是哪張表。
+static func _schema_name(schema) -> String:
+	return str(schema.resource_path).get_file().get_basename()
