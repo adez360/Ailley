@@ -294,8 +294,10 @@ var _goal_set_minute := -1
 var _visited_places := {}
 
 ## 一次性事實句佇列。跟「距上次社交」那種可持續重算的條件不同，「第一次
-## 來這裡」是事件觸發的瞬間才成立，_fact_lines_summary() 讀過一次就清空，
-## 不會每輪決策都重複講「你以前沒有來過這裡」
+## 來這裡」是事件觸發的瞬間才成立，只在真的被送出且回應成功套用後才消費
+## （見 _request_next_decision() 的 fact_lines_sent_count 說明），不是
+## _fact_lines_summary() 組信封當下就清掉——回應失敗或被世代淘汰的話，
+## 這句事實句要留著下一輪再問，不能就這樣不見
 var _pending_fact_lines: Array[String] = []
 
 ## 連續同一動作失敗的追蹤。由各 _pursue_*_task() 在真正的終局結果（前置檢查
@@ -1953,9 +1955,12 @@ func _pursue_give_task() -> void:
 	var params: Dictionary = _current_task.get("params", {})
 	var target_name: String = str(params.get("target", ""))
 	var target := _find_character_by_name(target_name)
+	var is_llm_give: bool = _current_task.get("source", "") == "llm"
 
 	if target == null:
 		last_action_result = "找不到這個人，可能已經離開了"
+		if is_llm_give:
+			_track_action_result_for_facts("give", false)
 		_finish_task_and_request_next()
 		return
 
@@ -1966,6 +1971,8 @@ func _pursue_give_task() -> void:
 		if not move_to(target.get_body_position()):
 			push_warning("Agent %s: 走不到送禮對象 %s" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，禮物送不出去"
+			if is_llm_give:
+				_track_action_result_for_facts("give", false)
 			_finish_task_and_request_next()
 			return
 
@@ -1979,6 +1986,8 @@ func _pursue_give_task() -> void:
 		if progress["threshold_reached"]:
 			push_warning("Agent %s: 送禮對象 %s 卡住走不到，放棄" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，禮物送不出去"
+			if is_llm_give:
+				_track_action_result_for_facts("give", false)
 			_finish_task_and_request_next()
 		return
 
@@ -2029,9 +2038,12 @@ func _pursue_attack_task() -> void:
 	var params: Dictionary = _current_task.get("params", {})
 	var target_name: String = str(params.get("target", ""))
 	var target := _find_character_by_name(target_name)
+	var is_llm_attack: bool = _current_task.get("source", "") == "llm"
 
 	if target == null:
 		last_action_result = "找不到這個人，可能已經離開了"
+		if is_llm_attack:
+			_track_action_result_for_facts("attack", false)
 		_finish_task_and_request_next()
 		return
 
@@ -2040,6 +2052,8 @@ func _pursue_attack_task() -> void:
 		if not move_to(target.get_body_position()):
 			push_warning("Agent %s: 走不到攻擊對象 %s" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，攻擊不到"
+			if is_llm_attack:
+				_track_action_result_for_facts("attack", false)
 			_finish_task_and_request_next()
 			return
 
@@ -2052,6 +2066,8 @@ func _pursue_attack_task() -> void:
 		if _attack_pursuit_stuck_ticks >= 3:
 			push_warning("Agent %s: 攻擊對象 %s 卡住走不到，放棄" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，攻擊不到"
+			if is_llm_attack:
+				_track_action_result_for_facts("attack", false)
 			_finish_task_and_request_next()
 		return
 
@@ -2101,9 +2117,12 @@ func _pursue_persuade_task() -> void:
 	var params: Dictionary = _current_task.get("params", {})
 	var target_name: String = str(params.get("target", ""))
 	var target := _find_character_by_name(target_name)
+	var is_llm_persuade: bool = _current_task.get("source", "") == "llm"
 
 	if target == null:
 		last_action_result = "找不到這個人，可能已經離開了"
+		if is_llm_persuade:
+			_track_action_result_for_facts("persuade", false)
 		_finish_task_and_request_next()
 		return
 
@@ -2116,6 +2135,8 @@ func _pursue_persuade_task() -> void:
 	# 卡死，之後任何人都說服不了這個目標（忙碌拒絕永遠擋著）
 	if not (target.is_in_group("agents") and (target as Agent).llm_decision_enabled):
 		last_action_result = "這個人好像沒辦法被說服"
+		if is_llm_persuade:
+			_track_action_result_for_facts("persuade", false)
 		_finish_task_and_request_next()
 		return
 
@@ -2126,6 +2147,8 @@ func _pursue_persuade_task() -> void:
 		if not move_to(target.get_body_position()):
 			push_warning("Agent %s: 走不到說服對象 %s" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，話說不出口"
+			if is_llm_persuade:
+				_track_action_result_for_facts("persuade", false)
 			_finish_task_and_request_next()
 			return
 
@@ -2138,6 +2161,8 @@ func _pursue_persuade_task() -> void:
 		if progress["threshold_reached"]:
 			push_warning("Agent %s: 說服對象 %s 卡住走不到，放棄" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，話說不出口"
+			if is_llm_persuade:
+				_track_action_result_for_facts("persuade", false)
 			_finish_task_and_request_next()
 		return
 
