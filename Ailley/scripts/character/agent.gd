@@ -921,6 +921,9 @@ func _evict_lowest_priority_llm_task() -> void:
 	# 路徑同一套處理，不留著一個已經不在 _tasks 裡、卻還被 _current_task
 	# 指著的殘影
 	if _current_task.get("id", "") == worst_id:
+		stop_moving()
+		_pursued_place = ""
+		_pursuit_done = false
 		_current_task = {}
 		current_place = ""
 		current_state = "idle"
@@ -1941,7 +1944,7 @@ func _pursue_persuade_task() -> void:
 	stop_moving()
 	var reason: String = str(params.get("reason", ""))
 	var proposed_task: Dictionary = params.get("proposed_task", {})
-	var recorded: bool = (target as Agent).try_record_pending_persuade(character_name, reason, proposed_task)
+	var recorded: bool = (target as Agent).try_record_pending_persuade(character_name, character_id, reason, proposed_task)
 	if recorded:
 		last_action_result = "你試著說服 %s，等他自己想清楚" % target.character_name
 	else:
@@ -1959,11 +1962,11 @@ func _pursue_persuade_task() -> void:
 # 給發起者呼叫，把說服嘗試寫進自己的待回應記錄（#227）。已有待回應記錄時
 # 直接拒絕（忙碌拒絕，比照 talk_to() 的 TALK_TARGET_BUSY），不覆蓋、不排隊
 # ——避免舊記錄被靜默蓋掉，讓第一個說服者的嘗試無聲消失、自己完全不知道
-func try_record_pending_persuade(persuader: String, reason: String, proposed_task: Dictionary) -> bool:
+func try_record_pending_persuade(persuader: String, persuader_id: String, reason: String, proposed_task: Dictionary) -> bool:
 	if not _pending_persuade.is_empty():
 		return false
 
-	var pending := {"persuader": persuader, "reason": reason}
+	var pending := {"persuader": persuader, "persuader_id": persuader_id, "reason": reason}
 	if not proposed_task.is_empty():
 		pending["proposed_task"] = proposed_task
 	_pending_persuade = pending
@@ -2055,8 +2058,11 @@ func _resolve_pending_persuade(data: Dictionary) -> void:
 	var reason: String = str(pending.get("reason", ""))
 	var importance: int = int(data.get("importance", 50))
 	var valence: String = str(data.get("valence", "neutral"))
-	var persuader: String = str(pending.get("persuader", ""))
-	memory.add_candidate(reason, importance, valence, [persuader] as Array[String])
+	# related_npcs 存的是 character_id，不是顯示名——跟 memory.gd 的欄位定義
+	# 一致，才能靠這個欄位正確連結到發起說服的那個角色（CodeRabbit review 抓到
+	# 這裡原本傳的是 persuader 顯示名，會讓記憶連不回角色）
+	var persuader_id: String = str(pending.get("persuader_id", ""))
+	memory.add_candidate(reason, importance, valence, [persuader_id] as Array[String])
 
 # shout 任務的執行（#158）：不像 give／talk 有會動的目標要追，原地喊一聲當下
 # 就結束，不需要追逐或等待抵達——resolve() 一過就廣播，立刻退出任務池

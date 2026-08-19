@@ -579,9 +579,11 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minute
 		if not (importance_value is int or importance_value is float):
 			return _fail(ERROR_BAD_SHAPE)
 		var importance_float := float(importance_value)
-		if not is_finite(importance_float) or importance_float < 0 or importance_float > 100:
+		if not is_finite(importance_float):
 			return _fail(ERROR_BAD_SHAPE)
-		importance = int(importance_float)
+		# 跟 validate_reflection() 同一個理由：importance 是「這件事對我多重要」
+		# 的主觀分數，越界不是安全問題，夾制就好，不用整包 tasks 一起判失敗
+		importance = clampi(int(importance_float), 0, 100)
 
 	var valence := "neutral"
 	if data.has("valence"):
