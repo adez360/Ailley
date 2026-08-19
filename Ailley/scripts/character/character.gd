@@ -241,6 +241,7 @@ var _incapacitation_start_minute := -1		# 昏迷開始的遊戲分鐘，-1 表�
 var _is_being_carried := false				# 標記正在被搬運（#161 會設置此項）
 var _treatment_start_minute := -1			# 藥草鋪治療開始的遊戲分鐘，-1 表示未治療
 var _treatment_location := ""				# 治療地點（暫定「藥草鋪」）
+var _herb_shop_lookup_error_reported := false	# 找不到 herb_shop 時只記一次錯誤，避免昏迷期間每遊戲分鐘洗版
 
 # 滑鼠 hover（selection.gd）跟 E 鍵目前的互動目標（player.gd）是兩個獨立的
 # 高亮來源，任一個成立就該顯示描邊。分開存，不是合用一個布林值——CodeRabbit
@@ -501,7 +502,21 @@ func _send_to_herb_shop_for_treatment() -> void:
 
 	print_debug("Character %s 昏迷 30 分鐘無人搬走，自動傳送藥草鋪治療" % character_name)
 
-	# TODO：實現自動傳送邏輯（awaiting #162 或專門的傳送 issue）
+	# 直接瞬移，不做「NPC 走過來救」的移動演出——《99》P-27 明講 MVP 簡化做法。
+	# 用 places.gd 的 PlaceAnchors 當單一事實來源，跟 _pursue_current_task() 解析
+	# 地點座標同一條路（見 places.gd 開頭註解：不要另開第二份寫死座標）。
+	# 這一刻 stop_moving() 沒有必要——_is_movement_locked() 已經把
+	# CONDITION_INCAPACITATED 期間鎖死，不會有殘留路徑在同一 tick 跟瞬移搶位置
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null or not anchors.has("herb_shop"):
+		if not _herb_shop_lookup_error_reported:
+			push_error("Character %s: 找不到 herb_shop 地點，無法傳送治療" % character_name)
+			_herb_shop_lookup_error_reported = true
+		return
+	_herb_shop_lookup_error_reported = false
+
+	global_position = anchors.resolve("herb_shop")
+
 	# 記錄治療開始時間，_update_treatment() 會處理倒計時
 	_treatment_start_minute = GameClock.hour * 60 + GameClock.minute
 	_treatment_location = "herb_shop"
