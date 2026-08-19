@@ -717,6 +717,24 @@ func request_sleep_reflection() -> Dictionary:
 
 	_daily_events = _daily_events.filter(func(e): return not scored_ids.has(e["id"]))
 
+	# personality_delta（#349，《03》§5 流程圖 ⑥）：validate_reflection() 已經
+	# 夾制過每一項到 ±MAX_PERSONALITY_DELTA，這裡直接加總套用，不再二次判斷——
+	# 「這個人今天該不該變得更記仇」是模型的判斷，引擎只做防止數值失控的夾制
+	var personality_delta: Dictionary = data.get("personality_delta", {})
+	for dim in personality_delta.keys():
+		var current: float = float(personality.get(dim, 50.0))
+		personality[dim] = clampf(current + float(personality_delta[dim]), 0.0, 100.0)
+
+	# today_plan（#350，流程圖 ②）：反思產出的是「明天的新計畫」，跟決策中途
+	# 的 update_plan 是同一個欄位、同一種整份取代語意，直接沿用 _apply_today_plan()
+	var new_plan: Variant = data.get("today_plan")
+	if new_plan != null:
+		_apply_today_plan(new_plan)
+
+	# 清空 L1 短期工作記憶（流程圖 ⑤）：跟這次反思同一個生命週期事件——
+	# 一天的「剛剛發生的事」窗口該在這裡重置，不是等 L1_CAP 自然擠掉
+	memory.l1.clear()
+
 	return {"ok": true}
 
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
@@ -1198,6 +1216,15 @@ func _reevaluate_once() -> void:
 	# 記的，只反映「這一次」的轉換，不是累積狀態
 	if _was_sleeping and current_state != "sleep" and llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(true)
+
+	# 剛入睡（#348，《03》§5 流程圖）：跟上面「剛睡醒」對稱的鏡像判斷——
+	# 這次重算進來的時候不在睡，選完任務後變成在睡，就是這個轉換瞬間，
+	# 只在真正換進 sleep 的那一次觸發。不掛 llm_decision_enabled——反思是
+	# 獨立的 LLM 呼叫，不是決策迴圈的一部分，跟 _generate_words_to_creator()
+	# 同一個道理，排程模式的角色一樣要能睡前反思。不 await：fire-and-forget，
+	# _reevaluate_once() 是同步函式，不該卡在一次網路往返上
+	if not _was_sleeping and current_state == "sleep":
+		request_sleep_reflection()
 
 	_pursue_current_task()
 

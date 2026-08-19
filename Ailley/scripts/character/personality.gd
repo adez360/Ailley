@@ -24,6 +24,15 @@ const HEX_FIELDS := [
 	"hex_agreeableness", "hex_conscientiousness", "hex_openness",
 ]
 
+## hexaco_to_personality() 輸出的 10 項引擎參數欄位名（《01-1》§3）。#349 的
+## personality_delta 驗證要用同一份名單判斷「這是不是合法的維度」，不在
+## ai_schema.gd 那邊另外抄一份——欄位改了這裡忘記跟著改，驗證層跟實際算出來
+## 的維度就會對不上
+const PERSONALITY_KEYS := [
+	"diligence", "courage", "sociability", "morality", "stability",
+	"romanticism", "curiosity", "grudge", "greed", "honesty",
+]
+
 ## 極端項的門檻（《01-1》§2-3）。26~74 一律不輸出任何字——不是輸出「普通」，
 ## 是整條略過，中間值就是留給 AI 的自主空間
 const EXTREME_LOW := 25
