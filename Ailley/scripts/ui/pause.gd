@@ -7,8 +7,9 @@ extends CanvasLayer
 ##
 ## 必須是 hud.tscn 裡 PersistentUI 的第一個子節點。_unhandled_input 依場景樹
 ## 反序傳遞（最後一個子節點先收到），排在最前面才是最後一個收到 ——
-## 面板開著時 ESC 該關面板，不是暫停。debug_console、chat_input 走 _input，
-## 順序無關（且真的比對 ui_cancel action）；其餘會攔 Esc 的面板
+## 面板開著時 ESC 該關面板，不是暫停。chat_input 走 _input，順序無關
+## （且真的比對 ui_cancel action）；debug_console 也走 _input，但直接比對
+## KEY_ESCAPE，不是 ui_cancel action；其餘會攔 Esc 的面板
 ## （status_panel、inventory_panel、character_create……）都走 _unhandled_input，
 ## 但直接比對 KEY_ESCAPE，不是 ui_cancel action——這裡只要它們是 PersistentUI
 ## 底下排在 Pause 之後的子節點、且自己 set_input_as_handled()，就會比 Pause 先
