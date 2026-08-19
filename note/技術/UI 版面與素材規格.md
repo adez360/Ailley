@@ -3,9 +3,9 @@ tags:
   - 技術
   - ui
 status: 已實作
-scene: scenes/bubble.tscn, scenes/chat_input.tscn, scenes/debug_console.tscn, scenes/main.tscn
-script: scripts/ui/bubble.gd, scripts/ui/status_panel.gd, scripts/ui/inventory_panel.gd, scripts/ui/hotbar.gd
-updated: 2026-08-12
+scene: scenes/bubble.tscn, scenes/chat_input.tscn, scenes/debug_console.tscn, scenes/hud.tscn
+script: scripts/ui/bubble.gd, scripts/ui/status_panel.gd, scripts/ui/inventory_panel.gd, scripts/ui/hotbar.gd, scripts/ui/inventory_slot_button.gd
+updated: 2026-08-19
 ---
 
 # UI 版面與素材規格
@@ -161,7 +161,7 @@ Ink/Amber 4.87:1、Cream/Moss 5.84:1、Cream/Ember 8.27:1。停用文字 3.79:1 
 | `debug_console.tscn` 的 `Root` | 頂部橫向貼邊，左右各留 4，高 128 |
 | `main.tscn` 的 `HUD/TimeLabel` | 左上 (4, 2) |
 | `main.tscn` 的 `StatusPanel/Panel` | 螢幕置中，150×175 |
-| `main.tscn` 的 `InventoryPanel/Panel` | 螢幕置中，280×160 |
+| `hud.tscn` 的 `InventoryPanel/Panel` | 螢幕置中，380×180（含 `HotbarColumn` 後加寬加高） |
 | `main.tscn` 的 `Hotbar/Backdrop` | 底部置中，270×40，離底 8 |
 | 氣泡折行寬度 | `bubble.gd` 的 `MAX_LINE_WIDTH = 132`，11px 下一行約 12 個中文字 |
 
@@ -204,16 +204,42 @@ StatsBox 底下的 Label 是 `_ready()` 動態長出來的（見 stats.gd 同款
 （icon 本體 26×28，其餘是留白），要切別的圖示時先假設同一個網格對。
 
 快捷欄（`hotbar.gd`，螢幕下方常駐 9 格）跟主背包（`inventory_panel.gd`，
-按 P 開關的 27 格）是**兩個獨立的 CanvasLayer**，不是同一個節點樹底下的
+按 `Tab` 開關的 27 格）是**兩個獨立的 CanvasLayer**，不是同一個節點樹底下的
 兩塊——快捷欄要在背包沒開的時候也看得到，硬塞進同一個面板做不到。
-兩邊各自 `_ready()` 用 `TextureButton` 動態生出格子（理由跟
-`status_panel.gd` 的 `StatsBox` 一樣：資料筆數變動時不用回頭改場景），
-選取狀態不換圖，用 `modulate` 疊 Amber `#C96C23` 色調表示，跟
-`ailley_theme.tres` 的 `TextEdit` focus 框同一個顏色語意。
+兩邊各自 `_ready()` 用 `TextureButton`（實際是共用類別 `InventorySlotButton`）
+動態生出格子（理由跟 `status_panel.gd` 的 `StatsBox` 一樣：資料筆數變動時
+不用回頭改場景），選取狀態不換圖，用 `modulate` 疊 Amber `#C96C23` 色調表示，
+跟 `ailley_theme.tres` 的 `TextEdit` focus 框同一個顏色語意。
+
+`InventoryPanel/Panel/VBox/Row` 底下除了主背包 27 格的 `MainGrid`，還有一個
+`HotbarColumn`（`HotbarLabel` + 3×3 的 `HotbarGrid`）純顯示快捷欄那 9 格——
+跟螢幕下方常駐的 `Hotbar` 是同一批 `Inventory.slots 0-8`，只是另一個畫面，
+不接點擊選取（選哪一格是 `hotbar.gd` 的事）。
 
 快捷欄的選取（`Inventory.set_selected_index()`）是角色自己的狀態，
 主背包格點擊只是 `InventoryPanel` 自己的視覺高亮——`Inventory` 沒有
 主背包格對應的資料欄位可以存，硬塞的話等於誤把主背包點擊當成換手持物品。
+
+## 拖放與滾輪（`InventorySlotButton`）
+
+格子之間（快捷欄、面板內嵌的快捷欄、主背包，不分 CanvasLayer）可以互相拖放
+搬移物品——Godot 的拖放判定是 viewport 層級，不是各自 CanvasLayer 自己的，
+所以天生就能跨層拖。放到空格呼叫 `Inventory.move_slot()`，放到已佔用的格呼叫
+`swap_slot()`，格子本身不判斷能不能放，那是資料層的事。
+
+`InventorySlotButton` 的 `mouse_filter` 從預設 `STOP` 改成 `PASS`：
+`TextureButton` 預設會把滑鼠滾輪事件吃在按鈕上，輪不到 `Hotbar` 的
+`_unhandled_input` 去切選格；`PASS` 讓按鈕照樣收得到點擊／拖放，沒人處理的
+滾輪事件則繼續往上傳。
+
+`hotbar.gd` 的選格輸入全部走 `input_map_manage` 建的 action，不是硬寫
+keycode：`hotbar_1`–`hotbar_9`（數字鍵 1–9）、滑鼠滾輪（`wrapi()` 繞圈，
+兩端會 wrap）。打字時（聊天框、主控台輸入框持有焦點）不切選格，判斷方式
+跟 `chat_input.gd` 的 `_ui_is_busy()` 一樣——`get_viewport().gui_get_focus_owner()
+!= null`。點兩下同一格（快捷欄鍵盤／滾輪／滑鼠都算）會呼叫
+`Inventory.set_selected_index(-1)` 取消選擇，見 [[物品欄]]。
+
+`inventory_toggle`（`Tab`）取代原本的 `P` 鍵，沒有保留 fallback。
 
 ## 還沒做的
 

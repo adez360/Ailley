@@ -830,9 +830,14 @@ func _cmd_inv(args: PackedStringArray) -> void:
 		_error(L10n.tf("CON_NO_INVENTORY", {"name": character.character_name}))
 		return
 
+	var selected := character.inventory.get_selected_index()
+	var selected_text := (
+		L10n.t("CON_INV_NONE_SELECTED") if selected < 0
+		else L10n.tf("CON_INV_SELECTED", {"index": selected})
+	)
 	_print("[color=88ccff]%s[/color][color=888888]  %s[/color]" % [
 		character.character_name,
-		L10n.tf("CON_INV_SELECTED", {"index": character.inventory.get_selected_index()}),
+		selected_text,
 	])
 
 	var entries := character.inventory.get_summary()
