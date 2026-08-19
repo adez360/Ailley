@@ -91,6 +91,12 @@ var _dialogue_calls_today := {}		# requester_id -> 今天的對話輪次，只�
 
 var _readiness := {}				# provider 名字 -> {"ready": bool, "reason": String}
 
+# 每呼叫一次 _check_readiness_all() 就 +1。reload_config() 可能在上一批探測
+# 還在飛的時候又觸發一批新的——舊那批探測回來得比新那批晚時，不能覆蓋新結果，
+# 所以每個 _check_provider_readiness() 記住自己出生時的世代，寫回 _readiness
+# 前先比對世代還新不新（跟 agent.gd 的決策世代編號同一個防呆手法）
+var _readiness_generation := 0
+
 
 func _ready() -> void:
 	reload_config()
@@ -127,10 +133,12 @@ func reload_config() -> void:
 # 呼叫端看見「查無此 provider」，不是靜默給錯的狀態
 func get_readiness(provider_name: String = "") -> Dictionary:
 	var resolved := provider_name if not provider_name.is_empty() else config.default_provider
-	return _readiness.get(resolved, _readiness_result(false, L10n.t("AI_READY_NOT_CHECKED")))
+	return _readiness.get(resolved, {"ready": false, "reason": L10n.t("AI_READY_NOT_CHECKED")})
 
 
 func _check_readiness_all() -> void:
+	_readiness_generation += 1
+	var generation := _readiness_generation
 	_readiness.clear()
 
 	# config 沒啟用就不用打網路——AIConfig.status_reason 已經講清楚原因，
@@ -139,27 +147,38 @@ func _check_readiness_all() -> void:
 		return
 
 	for provider_name in config.providers.keys():
-		_check_provider_readiness(provider_name)
+		_check_provider_readiness(provider_name, generation)
 
 
 # 逐 provider 各自跑，互不等待——local 連不上不該拖累 openrouter 的檢查結果
-func _check_provider_readiness(provider_name: String) -> void:
+func _check_provider_readiness(provider_name: String, generation: int) -> void:
 	var provider: AIConfig.Provider = config.providers[provider_name]
 
 	if not provider.valid:
 		# 設定層失敗（base_url／model 空白）不用打網路就知道，也不用重試——
 		# 重試網路請求救不了一個本來就沒填齊的設定
-		_readiness[provider_name] = _readiness_result(
+		_apply_readiness(provider_name, generation, _readiness_result(
 			false, L10n.tf("AI_READY_CONFIG_INVALID", {"reason": provider.status_reason})
-		)
+		))
 		return
 
 	var outcome := await _probe_models(provider)
-	if not outcome["ready"]:
+	if not outcome["ready"] and outcome.get("retryable", false):
+		# 只重試值得重試的失敗——4xx（金鑰錯／模型名打錯）跟逾時再打一次
+		# 也不會變好，白等一次 provider.timeout。跟 _interpret() 判斷
+		# retryable 的邏輯同一套標準，不要各自一套
 		await get_tree().create_timer(READINESS_RETRY_DELAY_SEC).timeout
 		outcome = await _probe_models(provider)
 
-	_readiness[provider_name] = outcome
+	_apply_readiness(provider_name, generation, outcome)
+
+
+# 舊世代的探測結果比新一輪 reload_config() 晚回來時直接丟棄，不寫入
+# _readiness——不然「玩到一半重新整理設定」會被更早、已經過期的探測結果蓋回去
+func _apply_readiness(provider_name: String, generation: int, outcome: Dictionary) -> void:
+	if generation != _readiness_generation:
+		return
+	_readiness[provider_name] = {"ready": outcome["ready"], "reason": outcome["reason"]}
 
 
 # 連線層探針：打 GET {base_url}/models。不用《04》§4-1 想像的 /health——
@@ -179,6 +198,8 @@ func _probe_models(provider: AIConfig.Provider) -> Dictionary:
 	var err := http.request(provider.models_url(), headers, HTTPClient.METHOD_GET)
 	if err != OK:
 		http.queue_free()
+		# 「連送都送不出去」（URL 格式錯、節點忙）不是網路往返失敗，跟
+		# _send() 的判斷一致：重試同樣送不出去，不值得重試
 		return _readiness_result(
 			false, L10n.tf("AI_READY_NETWORK", {"url": provider.models_url(), "detail": "request()=%d" % err})
 		)
@@ -194,19 +215,27 @@ func _probe_models(provider: AIConfig.Provider) -> Dictionary:
 	var response_code: int = response[1]
 
 	if result == HTTPRequest.RESULT_TIMEOUT:
+		# 跟 _interpret() 同一個理由：已經燒掉整個 timeout，重試只是再等一次
 		return _readiness_result(false, L10n.tf("AI_READY_TIMEOUT", {"url": provider.models_url()}))
 	if result != HTTPRequest.RESULT_SUCCESS:
+		# 連不上／握手失敗這種立刻就知道結果的錯，值得重試一次
 		return _readiness_result(
-			false, L10n.tf("AI_READY_NETWORK", {"url": provider.models_url(), "detail": "result=%d" % result})
+			false, L10n.tf("AI_READY_NETWORK", {"url": provider.models_url(), "detail": "result=%d" % result}), true
+		)
+	if response_code >= 500:
+		# 對面自己壞了，重試一次有機會落到健康的機器上
+		return _readiness_result(
+			false, L10n.tf("AI_READY_HTTP", {"url": provider.models_url(), "code": response_code}), true
 		)
 	if response_code >= 400:
+		# 請求本身錯了（金鑰無效、模型名打錯），重試只會再錯一次
 		return _readiness_result(false, L10n.tf("AI_READY_HTTP", {"url": provider.models_url(), "code": response_code}))
 
 	return _readiness_result(true, L10n.t("AI_READY_OK"))
 
 
-func _readiness_result(ready: bool, reason: String) -> Dictionary:
-	return {"ready": ready, "reason": reason}
+func _readiness_result(ready: bool, reason: String, retryable: bool = false) -> Dictionary:
+	return {"ready": ready, "reason": reason, "retryable": retryable}
 
 
 # 唯一的對外入口。呼叫端：var result := await AIService.request(envelope, "agent")
