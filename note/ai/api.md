@@ -23,7 +23,7 @@ env  Godot 4.5.1-stable · gl_compatibility · default_texture_filter=0
 GameManager   scripts/core/game_manager.gd
 GameClock     scripts/core/GameClock.gd
 AIService     scripts/ai/ai_service.gd
-DatabaseManager   database/DatabaseManager.gd
+DatabaseManager   scripts/database/DatabaseManager.gd
 _mcp_game_helper  addons/godot_ai/runtime/game_helper.gd   † 勿移除
 ```
 
@@ -1174,7 +1174,7 @@ var hour := 8 · var minute := 0 · var day := 1
 ⚠ day 還沒持久化，重開仍從 1 開始 —— 要等世界存檔（#21）
 ```
 
-## DatabaseManager — database/DatabaseManager.gd · autoload · Node
+## DatabaseManager — scripts/database/DatabaseManager.gd · autoload · Node
 
 ```gdscript
 const DATABASE_PATH := "user://game.db"
@@ -1219,7 +1219,7 @@ select() 找不到列回傳 []，不是 error；update()/delete() 空 conditions
 → 技術/存檔
 ```
 
-## CharacterStatePersistence — database/CharacterStatePersistence.gd · Node · DatabaseManager 的子節點
+## CharacterStatePersistence — scripts/database/CharacterStatePersistence.gd · Node · DatabaseManager 的子節點
 
 ```gdscript
 func sync_now() -> void                          # 手動觸發全體同步（等同 _ready() 首次跑的那次）
@@ -1246,7 +1246,7 @@ func get_all_states() -> Array                    # SELECT npc_id/各項數值/l
   SQLite 裡的舊 npc_id 列會變成孤兒資料，不會自動對應回同一個角色
 ```
 
-## DatabaseSeeder — database/DatabaseSeeder.gd · class_name · RefCounted
+## DatabaseSeeder — scripts/database/DatabaseSeeder.gd · class_name · RefCounted
 
 ```gdscript
 const ITEM_BALANCE := {...}   # item_id -> {name, item_type, base_price, max_stack,
