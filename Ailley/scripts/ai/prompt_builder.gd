@@ -119,11 +119,15 @@ static func _plan_system_tail() -> String:
 		AISchema.MIN_EXPIRES_IN_MINUTES, AISchema.MAX_EXPIRES_IN_MINUTES,
 	]
 
-## 動作清單用 AISchema.ALLOWED_ACTIONS 動態組，不在這裡另外抄一份字串——
-## 兩份清單各自維護遲早會漂移，白名單改了這裡忘記跟著改，模型看到的允許清單
-## 就會跟 AISchema 實際驗證的不一樣
+## 動作清單用 AISchema.IMPLEMENTED_ACTIONS 動態組（#341），不是 ALLOWED_ACTIONS——
+## 兩份清單語意不同：ALLOWED_ACTIONS 是驗證層白名單（區分「不被允許」跟「還沒做」
+## 兩種失敗），IMPLEMENTED_ACTIONS 才是引擎真的執行得了的子集。prompt 給模型選單
+## 卻用了前者，等於把 ALLOWED_ACTIONS 有但 IMPLEMENTED_ACTIONS 沒有的動作也端出來
+## 給模型選，選中後 agent.gd::_select() 會判定 NOT_IMPLEMENTED、整筆任務丟掉——
+## 一次完全空轉的決策輪次。不在這裡另外抄一份字串，兩份清單各自維護遲早會漂移，
+## 常數改了這裡忘記跟著改，模型看到的清單就會跟引擎實際做得到的不一樣
 static func _plan_system(allow_update_plan: bool, has_pending_persuade: bool = false) -> String:
-	var body := PLAN_SYSTEM_BASE % ", ".join(AISchema.ALLOWED_ACTIONS)
+	var body := PLAN_SYSTEM_BASE % ", ".join(AISchema.IMPLEMENTED_ACTIONS)
 	body += PLAN_SYSTEM_UPDATE_PLAN_ALLOWED if allow_update_plan else PLAN_SYSTEM_UPDATE_PLAN_LOCKED
 	if has_pending_persuade:
 		body += PLAN_SYSTEM_PERSUADE
