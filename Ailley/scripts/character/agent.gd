@@ -314,13 +314,20 @@ var _next_daily_event_id := 0
 ## 「現在在哪」
 ##
 ## location_override 給極少數 current_place 當下已經不可信的呼叫端用（目前
-## 只有 _on_attacked()——見那邊的說明）：非空時取代 current_place，其餘呼叫端
-## 不用管這個參數，維持原本「一律用 current_place」的行為（CodeRabbit review
-## 抓到 force_interrupt() 會搶先把 current_place 清空，直接讀會拿到空字串）
+## 只有 _on_attacked()——見那邊的說明）：非 null 時取代 current_place，其餘
+## 呼叫端不用管這個參數（省略即為 null），維持原本「一律用 current_place」的
+## 行為（CodeRabbit review 抓到 force_interrupt() 會搶先把 current_place 清空，
+## 直接讀會拿到空字串）。
+##
+## 一定要用 null 當「沒有指定」的哨兵，不能用空字串——`_place_before_interrupt`
+## 快照下來的值本來就可能合法地是空字串（角色被攻擊當下 current_place 本來就
+## 沒設過），空字串當「沒指定」處理的話，會誤用呼叫這裡當下已經被 _reevaluate()
+## 重新指派的 current_place（可能是完全不相關的新地點），而不是「這件事發生
+## 時真的沒有地點」這個事實（CodeRabbit review 抓到）
 func _push_daily_event(
-	content: String, related_npcs: Array[String] = [], location_override: String = ""
+	content: String, related_npcs: Array[String] = [], location_override: Variant = null
 ) -> void:
-	var location_id := location_override if not location_override.is_empty() else current_place
+	var location_id: String = current_place if location_override == null else str(location_override)
 	_daily_events.append({
 		"id": _next_daily_event_id,
 		"content": content,
