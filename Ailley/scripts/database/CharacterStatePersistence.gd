@@ -58,9 +58,6 @@ const NPC_TABLE := "npc"
 const INVENTORY_TABLE := "npc_inventory"
 const WALLET_TABLE := "npc_wallet"
 
-const INVENTORY_SIZE := 36
-const MAX_STACK := 30
-
 
 ## -----------------------------------------------------
 ## Inventory connection / loading state
@@ -778,11 +775,11 @@ func _load_inventory_once(
 	# -------------------------------------------------
 
 	character.inventory.slots.resize(
-		INVENTORY_SIZE
+		Inventory.SIZE
 	)
 
 
-	for i in INVENTORY_SIZE:
+	for i in Inventory.SIZE:
 		character.inventory.slots[i] = {}
 
 
@@ -795,7 +792,7 @@ func _load_inventory_once(
 			)
 		)
 
-		if slot < 0 or slot >= INVENTORY_SIZE:
+		if slot < 0 or slot >= Inventory.SIZE:
 
 			push_error(
 				"[CharacterStatePersistence] "
@@ -839,7 +836,7 @@ func _load_inventory_once(
 				)
 			),
 			0,
-			MAX_STACK
+			Inventory.MAX_STACK
 		)
 
 
@@ -1380,7 +1377,7 @@ func _save_inventory(
 	# 寫入 runtime snapshot。
 	# -------------------------------------------------
 
-	for slot_index in INVENTORY_SIZE:
+	for slot_index in Inventory.SIZE:
 
 		if slot_index >= character.inventory.slots.size():
 			break
@@ -1422,11 +1419,11 @@ func _save_inventory(
 
 
 		# -------------------------------------------------
-		# Persistence 不偷偷修正超過 MAX_STACK 的資料。
+		# Persistence 不偷偷修正超過 Inventory.MAX_STACK 的資料。
 		# Runtime Inventory 自己必須保證 <= 30。
 		# -------------------------------------------------
 
-		if count > MAX_STACK:
+		if count > Inventory.MAX_STACK:
 
 			push_error(
 				"[CharacterStatePersistence] "
@@ -1437,7 +1434,7 @@ func _save_inventory(
 					slot_index,
 					item_id,
 					count,
-					MAX_STACK
+					Inventory.MAX_STACK
 				]
 			)
 
@@ -1565,6 +1562,11 @@ func _save_inventory(
 			+ "Inventory COMMIT 失敗：%s"
 			% npc_id
 		)
+
+		# COMMIT 失敗時交易可能仍是 active 狀態，
+		# 若不清掉，下一次 begin_transaction() 會失敗，
+		# 之後所有 inventory 同步都會壞掉。
+		DatabaseManager.rollback_transaction()
 
 		return false
 
@@ -1942,6 +1944,17 @@ func _log_state(
 func sync_now() -> void:
 
 	_sync_all_characters()
+
+
+## Inventory.changed 觸發的 deferred SAVE 是否還沒真正寫進 SQLite。
+## 給測試用：call_deferred() 何時真正執行不保證落在固定幀數內，
+## 靠這個 poll 到「真的存完了」，不要用猜測的 await frame 次數。
+func has_pending_inventory_sync() -> bool:
+
+	return (
+		_inventory_sync_deferred
+		or not _inventory_sync_pending.is_empty()
+	)
 
 
 func sync_character(

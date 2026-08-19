@@ -38,6 +38,13 @@ extends Node
 ## =====================================================
 
 
+## 等待 DatabaseManager.is_ready 的逾時幀數（約 10 秒 @60fps）。
+## 資料庫初始化失敗時原本會無限等待，測試既不失敗也不結束。
+const READY_WAIT_TIMEOUT_FRAMES := 600
+
+## _wait_for_inventory_sync() 的逾時幀數，避免 persistence 卡住時無限等待。
+const INVENTORY_SYNC_TIMEOUT_FRAMES := 60
+
 var passed := 0
 var failed := 0
 var skipped := 0
@@ -53,8 +60,21 @@ func _run() -> void:
 	print("[InventoryPurchaseIntegrationTest] START")
 	print("=====================================================")
 
-	while not DatabaseManager.is_ready:
+	var ready_wait_frames := 0
+
+	while not (DatabaseManager.is_ready and DatabaseManager.is_seeded):
+
+		if ready_wait_frames >= READY_WAIT_TIMEOUT_FRAMES:
+			push_error(
+				"[InventoryPurchaseIntegrationTest] "
+				+ "等待 DatabaseManager.is_ready 逾時，"
+				+ "資料庫可能初始化失敗。"
+			)
+			_finish()
+			return
+
 		await get_tree().process_frame
+		ready_wait_frames += 1
 
 	var character := _find_player()
 
@@ -158,10 +178,14 @@ func _run() -> void:
 	_print_inventory(character)
 
 	# -------------------------------------------------
-	# 3. 等 changed / Persistence 完成一個 frame
+	# 3. 等 changed / Persistence 完成
+	#
+	# CharacterStatePersistence 用 call_deferred() 排程寫入，
+	# 不保證落在固定幀數內完成，所以用 poll 等到真的存完，
+	# 不要用猜測的 await frame 次數。
 	# -------------------------------------------------
 
-	await get_tree().process_frame
+	await _wait_for_inventory_sync()
 
 	# -------------------------------------------------
 	# 4. 直接讀 SQLite
@@ -298,7 +322,7 @@ func _run() -> void:
 
 		_print_inventory(character)
 
-		await get_tree().process_frame
+		await _wait_for_inventory_sync()
 
 		var purchase_rows := DatabaseManager.select(
 			"npc_inventory",
@@ -359,6 +383,30 @@ func _run() -> void:
 	# -------------------------------------------------
 
 	_finish()
+
+
+## 等到 CharacterStatePersistence 的 deferred inventory SAVE 真正跑完，
+## 而不是賭固定幀數——call_deferred() 何時真正執行不保證落在單一幀內，
+## 單次 await process_frame 可能在 SAVE 完成前就繼續，讓後面的 SELECT
+## 斷言間歇性失敗。逾時仍會返回，讓後面的 SELECT 斷言自然失敗並報錯。
+func _wait_for_inventory_sync() -> void:
+
+	var persistence := DatabaseManager.get_node_or_null(
+		"CharacterStatePersistence"
+	)
+
+	if persistence == null or not persistence.has_method("has_pending_inventory_sync"):
+		await get_tree().process_frame
+		return
+
+	var frames := 0
+
+	while (
+		persistence.has_pending_inventory_sync()
+		and frames < INVENTORY_SYNC_TIMEOUT_FRAMES
+	):
+		await get_tree().process_frame
+		frames += 1
 
 
 func _find_player() -> Character:

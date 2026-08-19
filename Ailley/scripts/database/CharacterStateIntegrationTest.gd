@@ -44,6 +44,10 @@ const TEST_VALUES := {
 	"injury": 7.0
 }
 
+## 等待 DatabaseManager.is_ready 的逾時幀數（約 10 秒 @60fps）。
+## 資料庫初始化失敗時原本會無限等待，測試既不失敗也不結束。
+const READY_WAIT_TIMEOUT_FRAMES := 600
+
 
 var passed := 0
 var failed := 0
@@ -59,8 +63,21 @@ func _run() -> void:
 	print("[CharacterStateIntegrationTest] START")
 	print("=====================================================")
 
-	while not DatabaseManager.is_ready:
+	var ready_wait_frames := 0
+
+	while not (DatabaseManager.is_ready and DatabaseManager.is_seeded):
+
+		if ready_wait_frames >= READY_WAIT_TIMEOUT_FRAMES:
+			push_error(
+				"[CharacterStateIntegrationTest] "
+				+ "等待 DatabaseManager.is_ready 逾時，"
+				+ "資料庫可能初始化失敗。"
+			)
+			_finish()
+			return
+
 		await get_tree().process_frame
+		ready_wait_frames += 1
 
 	var character := _find_test_character()
 
@@ -120,11 +137,11 @@ func _run() -> void:
 			"Persistence",
 			"找不到 DatabaseManager/CharacterStatePersistence"
 		)
-		_finish()
+		_restore_and_finish(character, original_stats, persistence)
 		return
 
 	if not _sync_now(persistence):
-		_finish()
+		_restore_and_finish(character, original_stats, persistence)
 		return
 
 	# -------------------------------------------------
@@ -191,7 +208,7 @@ func _run() -> void:
 			"npc_state",
 			"找不到 CharacterStatePersistence 寫入的 npc_state"
 		)
-		_finish()
+		_restore_and_finish(character, original_stats, persistence)
 		return
 
 	var row: Dictionary = state_rows[0]
@@ -288,6 +305,34 @@ func _run() -> void:
 	# -------------------------------------------------
 	# 9. 結果
 	# -------------------------------------------------
+
+	_finish()
+
+
+## 測試中途失敗時的共用收尾：把測試改過的 character.stats 還原成
+## original_stats，需要的話再同步一次，才 _finish()。
+##
+## 這個測試會把 character.stats 改成測試值再呼叫 persistence layer；
+## 中途失敗路徑如果直接回傳，world 存檔裡的真實角色狀態會被測試值污染，
+## 所以任何在寫入測試值之後才出現的失敗路徑都要走這裡，不能直接 _finish()。
+func _restore_and_finish(
+	character: Character,
+	original_stats: Dictionary,
+	persistence: Node
+) -> void:
+
+	if character != null and character.stats != null:
+
+		for key in original_stats:
+			character.stats.set_value(key, original_stats[key])
+
+		if persistence != null and persistence.has_method("sync_now"):
+			persistence.sync_now()
+
+		print(
+			"[CharacterStateIntegrationTest] "
+			+ "測試中途失敗，Stats 已還原並同步。"
+		)
 
 	_finish()
 
