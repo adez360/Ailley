@@ -147,17 +147,18 @@ var _attack_pursuit_last_distance := INF
 var _persuade_pursuit_stuck_ticks := 0
 var _persuade_pursuit_last_distance := INF
 
-# give／talk／persuade 追逐移動目標時共用的卡住判定門檻（#227，抽自 #266 的
-# 設計，這條分支上還沒有那次的共用重構，先在這裡補一份，等 #266 併進來時
-# 再合併成一份）：連續幾次「距離沒有明顯縮短」才算真的卡住，不是量測誤差
+# persuade 追逐移動目標時的卡住判定門檻。設計抽自 #266（PR #301，尚未併入
+# main）：那個 PR 把 give／talk 既有的重複卡住偵測邏輯抽成共用函式，這裡
+# 先补一份給 persuade 用，give／talk 目前還是各自的內嵌版本（沒有跟著改，
+# 不在這次範圍內）。等 #266 併入時，這裡跟那邊的定義會撞名，需要 rebase
+# 時合併成一份，不是各自維護——連續幾次「距離沒有明顯縮短」才算真的卡住，
+# 不是量測誤差
 const PURSUIT_STUCK_THRESHOLD := 3
 
-# give／talk／persuade 任務追逐移動目標時的卡住偵測共用邏輯：距離沒有明顯
-# 縮短（容許 1.0 量測誤差）就算一次沒進展，回傳新的卡住計數跟「這一次是不
-# 是剛好達到門檻」——達到門檻之後要做什麼由呼叫端自己決定（talk 只警告不
-# 放棄、give／persuade 真的放棄），這裡只負責算「卡住幾次了」。用「剛好
-# 等於門檻」而不是「大於等於」，是要保留「只在跨過門檻那一次通知一次」的
-# 行為，不會每個 tick 都重複觸發
+# persuade 任務追逐移動目標時的卡住偵測邏輯（設計來源見上方常數註解）：
+# 距離沒有明顯縮短（容許 1.0 量測誤差）就算一次沒進展，回傳新的卡住計數
+# 跟「這一次是不是剛好達到門檻」。用「剛好等於門檻」而不是「大於等於」，
+# 是要保留「只在跨過門檻那一次通知一次」的行為，不會每個 tick 都重複觸發
 static func _pursuit_stuck_progress(distance: float, last_distance: float, stuck_ticks: int) -> Dictionary:
 	var new_ticks := stuck_ticks + 1 if distance >= last_distance - 1.0 else 0
 	return {
@@ -1870,8 +1871,14 @@ func _pursue_persuade_task() -> void:
 		_finish_task_and_request_next()
 		return
 
-	# 玩家沒有 LLM 決策迴圈，persuaded 這條路徑走不通——見 issue #305
-	if not target.is_in_group("agents"):
+	# 玩家沒有 LLM 決策迴圈，persuaded 這條路徑走不通——見 issue #305。
+	# llm_decision_enabled 關著的 Agent 也一樣走不通：_ready() 一律
+	# add_to_group("agents")，不管這個旗標開不開（預設就是關），只檢查
+	# 有沒有在 agents 群組擋不住——若放行，_pending_persuade 寫上去之後
+	# 永遠沒有 _request_next_decision() 會被觸發去清掉它（見 llm_decision_enabled
+	# 關閉時「沒有任務做完就重新決策那條路徑」的既有說明），這筆待回應記錄會
+	# 卡死，之後任何人都說服不了這個目標（忙碌拒絕永遠擋著）
+	if not (target.is_in_group("agents") and (target as Agent).llm_decision_enabled):
 		last_action_result = "這個人好像沒辦法被說服"
 		_finish_task_and_request_next()
 		return
