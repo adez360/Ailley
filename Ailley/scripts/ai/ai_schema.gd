@@ -263,8 +263,12 @@ static func validate_dialogue(data: Dictionary) -> Dictionary:
 # 呼叫端只要繼續讀 task["expires_at"] 就好，不需要知道模型當初填的是相對值。
 # 這個函式是 static 的、本來不吃時間，呼叫端（agent.gd::_request_next_decision()）
 # 要把 _now_minutes() 傳進來——跟組 envelope 時是同一次呼叫、同一個時間點，
-# 不會因為這通吃 await 而在重試之間用不同的「現在」換算出不一致的絕對值
-static func validate_tasks(data: Dictionary, allow_update_plan: bool = false, now_minutes: int = 0) -> Dictionary:
+# 不會因為這通吃 await 而在重試之間用不同的「現在」換算出不一致的絕對值。
+# 兩個參數都不給預設值：漏傳 now_minutes 會讓 expires_at 以 0 為基準算出來，
+# 正是這個 PR 要擋的「實質永不過期」退化情況，寧可漏傳時直接編譯期報錯，
+# 也不要靜默吃一個看似合法、實際上錯誤的預設值（GDScript 規則：有預設值
+# 的參數後面不能接沒預設值的，allow_update_plan 只好跟著一起拿掉預設值）
+static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minutes: int) -> Dictionary:
 	if not data.has("tasks") or not data["tasks"] is Array:
 		return _fail(ERROR_BAD_SHAPE)
 
