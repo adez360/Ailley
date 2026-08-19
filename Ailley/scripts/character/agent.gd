@@ -149,7 +149,7 @@ var _persuade_pursuit_last_distance := INF
 
 # persuade 追逐移動目標時的卡住判定門檻。設計抽自 #266（PR #301，尚未併入
 # main）：那個 PR 把 give／talk 既有的重複卡住偵測邏輯抽成共用函式，這裡
-# 先补一份給 persuade 用，give／talk 目前還是各自的內嵌版本（沒有跟著改，
+# 先補一份給 persuade 用，give／talk 目前還是各自的內嵌版本（沒有跟著改，
 # 不在這次範圍內）。等 #266 併入時，這裡跟那邊的定義會撞名，需要 rebase
 # 時合併成一份，不是各自維護——連續幾次「距離沒有明顯縮短」才算真的卡住，
 # 不是量測誤差
@@ -1221,13 +1221,18 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 ##
 ## 刻意不含 attack：P-28 已拍板 MVP 必中、不做閃避／格擋，不是《01-2》§2
 ## 通用成功率公式的技能檢定，resolve() 的 "attack" 分支直接放行，不查這張表
+##
+## 刻意不含 persuade：《00》原則四拍板它是心智判斷類行為，成敗交給被說服者
+## 自己的模型判斷，不是這裡的技能檢定（見 #227，resolve() 的 "persuade"
+## 分支直接放行，不查這張表）——CodeRabbit review 抓到舊資料殘留在這張表
+## 裡、resolve() 的 persuade 分支又漏了 return，兩個湊在一起會讓 persuade
+## 真的落進 _roll_success() 擲骰，直接違反這條拍板
 const SUCCESS_PARAMS := {
 	"hunt_small": {"base": 0.60, "trait": "courage", "coef": 0.002},
 	"hunt_large": {"base": 0.30, "trait": "courage", "coef": 0.003},
 	"gather": {"base": 0.80, "trait": "diligence", "coef": 0.001},
 	"fish": {"base": 0.55, "trait": "diligence", "coef": 0.0015},
 	"steal": {"base": 0.35, "trait": "courage", "coef": 0.0025},
-	"persuade": {"base": 0.40, "trait": "sociability", "coef": 0.003},
 	"perform": {"base": 0.70, "trait": "romanticism", "coef": 0.003},
 }
 
@@ -1346,15 +1351,19 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
 			return {"success": true, "reason": ""}
 		"persuade":
-			# 跟 talk／give 同一套前置檢查——目標存在、不撞名。persuade 不進
-			# ②③擲骰（不在 SUCCESS_PARAMS 上，見《00》原則四），成敗交給被
-			# 說服者自己的模型判斷，不是這裡的硬規則
+			# 跟 attack 同一套「硬規則過了就直接放行，不落進下面的 _roll_success()」
+			# ——persuade 不擲骰（見《00》原則四），成敗交給被說服者自己的模型
+			# 判斷，不是這裡的硬規則。SUCCESS_PARAMS 本來就不該有 persuade 的
+			# 條目（那是這個機制定案前殘留的舊資料，已經一併清掉），這裡少了
+			# return 的話會直接落進 _roll_success()，變成真的在擲骰，跟整個
+			# 設計互相矛盾
 			var target_name: String = str(params.get("target", ""))
 			var matches := _find_all_characters_by_name(target_name)
 			if matches.is_empty():
 				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
 			if matches.size() > 1:
 				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
+			return {"success": true, "reason": ""}
 		# move_to/sleep/nap/rest/wash/idle/eat/shout 目前都沒有額外的硬規則要擋
 		# （eat 落地後要在這裡加「宣稱吃了背包裡沒有的食物」的檢查，見 #114；
 		# shout 沒有目標、沒有前提，天生沒有硬規則可擋）
@@ -1944,9 +1953,26 @@ func _fact_lines_summary() -> Array[String]:
 		lines.append("剛才 %s 試著說服你：%s，你被說動了嗎？" % [persuader, reason])
 	else:
 		lines.append("剛才 %s 試著說服你（%s），希望你能去做「%s」，你被說動了嗎？" % [
-			persuader, reason, str(proposed_task.get("action", ""))
+			persuader, reason, _describe_task_intent(proposed_task)
 		])
 	return lines
+
+# 把 proposed_task 的 action／params 組成一句人看得懂的意圖描述，給
+# _fact_lines_summary() 用（#227，CodeRabbit review 抓到只給英文 action
+# 代號資訊不足——模型判斷要不要被說動時看不到具體內容）。沒有現成的
+# action→中文對照表可用，這裡只補目標／地點，不翻譯動作本身——跟
+# debug_console.gd 的 tasks 指令顯示一致，動作代號本來就是直接秀出來，
+# 不是這個機制特有的取捨
+func _describe_task_intent(task: Dictionary) -> String:
+	var action: String = str(task.get("action", ""))
+	var params: Dictionary = task.get("params", {})
+	var target: String = str(params.get("target", ""))
+	var place: String = str(params.get("place", ""))
+	if not target.is_empty():
+		return "%s（對象：%s）" % [action, target]
+	if not place.is_empty():
+		return "%s（地點：%s）" % [action, place]
+	return action
 
 # 消化這輪待回應的說服結果（#227）。只在 _request_next_decision() 確認這輪
 # envelope 真的問過模型（見那邊 had_pending_persuade 的說明）才會被呼叫——
@@ -1963,10 +1989,12 @@ func _resolve_pending_persuade(data: Dictionary) -> void:
 
 	var proposed_task: Dictionary = pending.get("proposed_task", {})
 	if not proposed_task.is_empty():
-		# expires_at 是發起者「決策當下」給的絕對遊戲分鐘，是說服者提案那一刻
-		# 用當時的 now_minutes 換算出來的——但實際推進到這裡是「被接受這一刻」，
-		# 中間經過信使抵達、等待對方下一輪決策，遊戲時間已經往前走了，那個值
-		# 可能早就過期。用 0（不過期）取代，不信任提案當下換算出的舊值
+		# proposed_task 的 expires_at 是發起者「決策當下」給的絕對遊戲分鐘，
+		# 不是「被接受這一刻」的——中間隔著發起者追上目標、等目標下一輪自然
+		# 決策這兩段可能耗掉數十遊戲分鐘的過程，原始 expires_at 這時很可能
+		# 已經過期。照原樣推進的話，_is_expired() 會把它濾掉，說服判定成功
+		# 卻什麼都不會發生、也不會有任何訊息。清成 0（不過期），接受當下
+		# 重新起算存續時間，不沿用一個時間基準已經不對的舊值
 		var accepted := proposed_task.duplicate()
 		accepted["expires_at"] = 0
 		_push_llm_tasks([accepted], {})
