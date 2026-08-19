@@ -668,7 +668,7 @@ func _cmd_reflect(args: PackedStringArray) -> void:
 		if result.get("queued", false):
 			_print("[color=888888]這隻角色已經有一份反思在等回應，這次的請求已經排隊，會在那份做完後自動補跑[/color]")
 		else:
-			_error("反思失敗（可能撞到速率限制或驗證失敗），今天的事留著，下次再試")
+			_error("反思沒有成功（AI 未啟用／逾時／驗證失敗等），今天的事留著，下次再試")
 		return
 
 	_print("[color=888888]反思完成，當日摘要：%s[/color]" % _escape_bbcode(agent.last_reflection_summary))

@@ -669,9 +669,14 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 ## 交給 memory 分級寫入。importance/valence 完全由 LLM 決定（見 validate_reflection()
 ## 的註解），這裡不重算或覆寫這兩個值。
 ##
-## 回傳 {"ok": bool}：ok=false 代表這次沒有真的反思到（未啟用/逾時/驗證失敗/
-## 沒有事件可反思），last_reflection_summary 維持上一次成功的舊值不變——
-## 呼叫端不該把舊摘要誤當成「這次」的結果來顯示（max 等級 code review 抓到）
+## 回傳三種狀態：
+## - {"ok": true, ...}：這次真的反思到，並套用了結果
+## - {"ok": false}：真正沒反思到（未啟用/逾時/驗證失敗/沒有事件可反思），
+##   last_reflection_summary 維持上一次成功的舊值不變——呼叫端不該把舊摘要
+##   誤當成「這次」的結果來顯示（max 等級 code review 抓到）
+## - {"ok": false, "queued": true}：撞到已經有一份請求在飛，這次已經記進
+##   _sleep_reflection_pending，會在那份做完後自動補跑一次——不是失敗，呼叫端
+##   不該印成錯誤訊息（見 _cmd_reflect 的處理，CodeRabbit review 抓到）
 ##
 ## 失敗時不清空 _daily_events——今天的事還沒被評過分，清空等於直接遺失，
 ## 留著等下次睡眠反思重試，最壞情況是被 DAILY_EVENTS_CAP 的 FIFO 擠掉，
@@ -685,8 +690,8 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 ## 下次反思會再送一次（max 等級 code review 抓到：純用送出筆數 pop_front()
 ## 的近似法，在這兩種情況下都可能誤刪還沒被評到分的事件）
 ##
-## 觸發時機目前只有 debug_console.gd 的 `reflect` 指令手動呼叫——真正的睡眠
-## 動作（#112）落地後，在角色進入睡眠那個時間點呼叫這個函式，這裡不用改
+## 觸發時機有兩個：debug_console.gd 的 `reflect` 指令手動呼叫，以及
+## _reevaluate_once() 偵測到角色進入睡眠狀態時自動呼叫（#112 落地後接上）
 func request_sleep_reflection() -> Dictionary:
 	# 同一時間只能有一個反思請求在飛（CodeRabbit review 抓到）：睡眠事件跟
 	# debug_console.gd 的 `reflect` 指令都會呼叫這裡，這通吃 await，重疊呼叫
