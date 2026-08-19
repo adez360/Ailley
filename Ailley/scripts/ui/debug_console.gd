@@ -661,7 +661,14 @@ func _cmd_reflect(args: PackedStringArray) -> void:
 
 	var result := await agent.request_sleep_reflection()
 	if not result["ok"]:
-		_error("反思失敗（可能撞到速率限制或驗證失敗），今天的事留著，下次再試")
+		# queued=true 不是失敗——只是這隻角色剛好已經有一份反思請求在飛，這次
+		# 已經排進 _sleep_reflection_pending，等前一份做完會自動補跑一次，不用
+		# 使用者自己重打指令（CodeRabbit review 抓到：原本跟真正的失敗混在一起
+		# 印同一句錯誤訊息，會讓人誤以為今天的事白費了）
+		if result.get("queued", false):
+			_print("[color=888888]這隻角色已經有一份反思在等回應，這次的請求已經排隊，會在那份做完後自動補跑[/color]")
+		else:
+			_error("反思失敗（可能撞到速率限制或驗證失敗），今天的事留著，下次再試")
 		return
 
 	_print("[color=888888]反思完成，當日摘要：%s[/color]" % _escape_bbcode(agent.last_reflection_summary))

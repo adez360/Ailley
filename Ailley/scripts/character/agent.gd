@@ -698,7 +698,11 @@ func request_sleep_reflection() -> Dictionary:
 	# （CodeRabbit review 抓到，見 _finish_sleep_reflection_request()）
 	if _sleep_reflection_in_flight:
 		_sleep_reflection_pending = true
-		return {"ok": false}
+		# 帶 queued=true 跟真正的失敗（驗證失敗、逾時等）區分開——呼叫端
+		# （debug_console.gd 的 `reflect` 指令）不能把「已經排隊等補跑」當成
+		# 「反思失敗」印出來，那會誤導使用者以為今天的事沒了，其實只是排到
+		# 下一次補跑（CodeRabbit review 抓到）
+		return {"ok": false, "queued": true}
 	if memory == null or _daily_events.is_empty():
 		return {"ok": false}
 	_sleep_reflection_in_flight = true
