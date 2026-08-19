@@ -59,7 +59,7 @@ const ALLOWED_ACTIONS := [
 #
 # nap／rest／wash／idle 是 #112 接上的：四個都只動 Stats 跟角色 state，不需要新
 # 場景物件或新資源，所以走的是仲裁器既有的「移動到 params.place（沒給就原地）、
-# 佔用 duration」路徑，沒有各自的執行函式。回復量見 agent.gd 的 STAMINA_RECOVERY
+# 佔用 duration」路徑，沒有各自的執行函式。回復量見 agent.gd 的 ACTION_RECOVERY
 #
 # eat 是 #114 接上的：跟 talk 一樣是「呼叫一次就完成」的動作，不是靠 duration
 # 逐分鐘回復，所以沒有走 nap/rest 那條通用路徑——agent.gd 特化了一個
@@ -564,6 +564,31 @@ static func creation_response_schema() -> Dictionary:
 					"words_to_creator": {"type": "string", "maxLength": MAX_LINE_CHARS},
 				},
 				"required": ["words_to_creator"],
+			},
+		},
+	}
+
+
+# #164 天神之石觸發判定：AI 收到已經想好的那句話，決定現在要不要說出口。
+# 純布林是非題，跟 validate_creation() 不是同一種「內容要不要清洗」的驗證
+static func validate_words_to_creator_choice(data: Dictionary) -> Dictionary:
+	if not data.has("say_it") or not data["say_it"] is bool:
+		return _fail(ERROR_BAD_SHAPE)
+
+	return _ok({"say_it": data["say_it"]})
+
+
+static func words_to_creator_choice_schema() -> Dictionary:
+	return {
+		"type": "json_schema",
+		"json_schema": {
+			"name": "words_to_creator_choice",
+			"schema": {
+				"type": "object",
+				"properties": {
+					"say_it": {"type": "boolean"},
+				},
+				"required": ["say_it"],
 			},
 		},
 	}

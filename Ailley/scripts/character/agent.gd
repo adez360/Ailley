@@ -32,6 +32,19 @@ const NOTICE_PAUSE := 2.0
 @export var decision_source := "local"		# "local" / "cloud"
 @export var model_name := ""				# decision_source == "cloud" 時，AIConfig 的 provider 名字
 
+## #164：角色對「自己被設定成這種性格」想說的一句話，建角當下生成一次、之後唯讀
+## （《99》P-10）。角色庫（尚未投放）那條路徑已經有了（game_manager.gd 的
+## _generate_words_to_creator()）；場景固定 NPC 走的是 npc_schedule.json 這條，
+## 完全沒有這欄，所以在這裡的 _ready() 補打一次同一種一次性 AI 呼叫
+var words_to_creator := ""
+
+## 是否已經對玩家說出過 words_to_creator，一生只說一次。骰中但 AI 選擇不說
+## 不算數，機會不消耗，見 maybe_speak_to_creator()（《99》P-10 #3）
+var _words_to_creator_spoken := false
+
+## 判定是否要說出口的 AI 呼叫進行中（見 maybe_speak_to_creator() 的鎖）
+var _words_to_creator_pending := false
+
 ## schedule 任務給中間值，靠 time_bonus 拉開跟其他來源的差距，
 ## 不是靠 base priority 本身——見 [[行程佇列與任務仲裁]] 的「待決」那節
 const SCHEDULE_BASE_PRIORITY := 10.0
@@ -224,12 +237,78 @@ func _push_daily_event(content: String) -> void:
 	if _daily_events.size() > DAILY_EVENTS_CAP:
 		_daily_events.pop_front()
 
+## #164：天神之石的話傳到範圍內的角色（world/god_stone_input.gd 逐一呼叫）。
+## 記一筆事實句（跟 _on_spotted() 的 "你第一次注意到 %s" 同一種寫法，不經
+## L10n——這是餵給 LLM 反思的內部事實句，不是玩家會看到的 UI 文字），
+## 同時骰一次天神之石觸發判定
+func hear_god_stone(line: String) -> void:
+	_push_daily_event("你在天神之石附近聽到一個聲音，說：「%s」" % line)
+	maybe_speak_to_creator(line)
+
+## #164 + 《99》P-10：25% 機率觸發（情緒強度 ≥70 時 40%），中了才問 AI 要不要
+## 真的說出口——中了但 AI 選擇不說一樣不消耗機會，下次再被叫到還能再骰
+## （P-10 #3：「是否消耗機會？否」）。只有骰中且 AI 決定說，才會真的說一次、
+## 這輩子不會再說第二次。
+##
+## heard_line 是玩家在天神之石說的那句話，傳給 AI 當判斷依據（不傳的話 AI
+## 只知道「有人說話」，不知道說了什麼，沒什麼好「自然判斷」的——CodeRabbit
+## review 抓到）
+##
+## _words_to_creator_pending 鎖住判定期間：AI 回應可能超過天神之石的 5 秒
+## 冷卻，玩家能在同一個判定還沒回來時再說一次話，兩次呼叫若都只查
+## _words_to_creator_spoken 會一起通過早退檢查，兩個回應都成立時就會說兩次
+## ——CodeRabbit review 抓到的競態
+func maybe_speak_to_creator(heard_line: String) -> void:
+	if words_to_creator.is_empty() or _words_to_creator_spoken or _words_to_creator_pending:
+		return
+
+	var chance := 0.4 if int(emotion.get("intensity", 0)) >= 70 else 0.25
+	if randf() >= chance:
+		return
+
+	_words_to_creator_pending = true
+	var envelope := PromptBuilder.build_words_to_creator_envelope(self, heard_line)
+	var validator := func(data: Dictionary) -> Dictionary:
+		return AISchema.validate_words_to_creator_choice(data)
+	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
+	_words_to_creator_pending = false
+
+	if not result["ok"] or not result["data"]["say_it"]:
+		return
+
+	_words_to_creator_spoken = true
+	say(words_to_creator)
+
+## 場景固定 NPC 沒有預先生成好的 words_to_creator（見上方欄位註解），開機時
+## fire-and-forget 補打一次——跟 game_manager.gd::_generate_words_to_creator()
+## 同一種呼叫，慢到或失敗就是這輩子沒有這句話可觸發，不擋開機、不重試
+## （P-10 的重試/備用句庫決議是角色庫那條路徑的範圍，這裡先對齊現有實作深度）。
+## 請求前後都檢查空字串，避免非同步回應回來時蓋掉已經有內容的欄位——
+## 角色庫投放的角色會由 game_manager.gd::spawn_character() 在 add_child()
+## 觸發這裡的 _ready() 之前就先填好 words_to_creator，這裡的第一道檢查會
+## 直接跳過、不浪費一次多餘的 AI 呼叫；只有場景固定 NPC（沒有這條預填路徑）
+## 才會真的走到底（CodeRabbit review 抓到）
+func _generate_words_to_creator() -> void:
+	if not words_to_creator.is_empty():
+		return
+	var envelope := PromptBuilder.build_creation_envelope(system_prompt)
+	var result: Dictionary = await AIService.request(envelope, character_id, AIService.Policy.SCHEDULED)
+	if not result["ok"]:
+		return
+	var validated := AISchema.validate_creation(result["data"])
+	if not validated["ok"]:
+		return
+	if not words_to_creator.is_empty():
+		return
+	words_to_creator = validated["data"]["words_to_creator"]
+
 
 func _ready() -> void:
 	super()
 	add_to_group("agents")
 	_provider = _make_provider()
 	_load_schedule()
+	_generate_words_to_creator()
 
 ## 公開版的「重建 provider」（#122，CodeRabbit review 抓到的時序 bug）。
 ## GameManager.deploy_from_library() 會在 add_child()（進而觸發這個節點的
@@ -847,20 +926,27 @@ func _on_noise_heard(_source: Character) -> void:
 
 	say(L10n.t("DLG_NOISE_ALERT"))
 
-## 回復類動作每遊戲分鐘回多少 stamina（#112）。《07》§2-3 只給相對關係——sleep
-## 回復量最大、nap「與睡覺同模組但較低」、rest「小幅回復」——沒有給數字，所以
-## 這三個值是待實跑校準的暫定值，不是規格定案。#118 只校準了仲裁常數
-## （HYSTERESIS／MIN_COMMIT／LLM_WAIT_MIN_COMMIT／MIN_ACTION_DURATION／
+## 回復類動作每遊戲分鐘回多少（目標欄位＋數量，#214）。《07》§2-3 只給相對
+## 關係——sleep 回復量最大、nap「與睡覺同模組但較低」、rest「小幅回復」——
+## 沒有給數字，所以這三個值是待實跑校準的暫定值，不是規格定案。#118 只校準了
+## 仲裁常數（HYSTERESIS／MIN_COMMIT／LLM_WAIT_MIN_COMMIT／MIN_ACTION_DURATION／
 ## LLM_TASK_POOL_CAP，見上方各自的說明），沒有涵蓋這裡，這三個值還沒實測過。
 ##
 ## 對照基準：stamina 的自然衰減是每現實秒 1.0（Stats.SPEC 的 drift），而一個遊戲
 ## 分鐘正好是一現實秒，所以淨回復是這裡的值減 1
 ##
-## wash 不列在這裡：它該回復的是 `hygiene`（Stats.SPEC 已有這一項，見 #115），
-## 但要不要把 wash 接上是另一則任務，這裡先不擴大範圍硬接。idle 也不列——
-## 發呆本來就不回復任何東西，它的用途是「合法地什麼都不做」，讓 AI 逾時或
-## 沒事可做時有一個不必假裝在忙的選項
-const STAMINA_RECOVERY := {"sleep": 6.0, "nap": 4.0, "rest": 2.0}
+## 表的形狀是「動作 -> {stat, amount}」而不是單純「動作 -> 數字」：不同動作
+## 要回復的欄位不見得相同（wash 該回復的是 `hygiene` 不是 `stamina`），單純
+## 數字表沒辦法表達這件事，加一個目標欄位不同的動作就得連表的形狀一起改。
+## wash 不列在這裡——要不要把它接上是另一則任務（#241）,這裡先不擴大範圍硬接，
+## 但表的形狀已經能直接多加一行，不必再重寫。idle 也不列——發呆本來就不回復
+## 任何東西，它的用途是「合法地什麼都不做」，讓 AI 逾時或沒事可做時有一個
+## 不必假裝在忙的選項
+const ACTION_RECOVERY := {
+	"sleep": {"stat": "stamina", "amount": 6.0},
+	"nap": {"stat": "stamina", "amount": 4.0},
+	"rest": {"stat": "stamina", "amount": 2.0},
+}
 
 # 到了定點才開始回復——還在走去床邊的路上不算在睡覺。沒有指定地點的任務
 # （LLM 完全可以只回 {"action": "rest"}）本來就原地做，is_moving() 一樣是 false，
@@ -868,9 +954,10 @@ const STAMINA_RECOVERY := {"sleep": 6.0, "nap": 4.0, "rest": 2.0}
 func _apply_action_recovery() -> void:
 	if stats == null or is_moving():
 		return
-	var recovery: float = STAMINA_RECOVERY.get(current_state, 0.0)
-	if recovery > 0.0:
-		stats.add("stamina", recovery)
+	var recovery: Dictionary = ACTION_RECOVERY.get(current_state, {})
+	if recovery.is_empty():
+		return
+	stats.add(recovery["stat"], recovery["amount"])
 
 func _on_time_changed(_hour: int, _minute: int) -> void:
 	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務
