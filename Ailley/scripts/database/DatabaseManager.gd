@@ -35,7 +35,12 @@ extends Node
 ## =====================================================
 
 
-const DATABASE_PATH := "user://game.db"
+## user:// 只依 project.godot 的 project name 解析實體路徑，同一台機器上
+## 所有 worktree／checkout 的 project name 都相同，寫死檔名會讓全機所有
+## 平行 Godot process 共用同一個實體 SQLite 檔案、互相覆寫或撞 schema
+## （issue #334）。用 res:// 的絕對路徑（等於這個 checkout 的實體位置）算一段
+## 短 hash 接在檔名後，讓不同 worktree 各自落地成不同檔案。
+var DATABASE_PATH := _compute_database_path()
 
 # CRUD 診斷用的逐筆 print()。單一角色同步一輪就會觸發數十次 CRUD，
 # 正常遊玩預設關閉；除錯時改成 true。錯誤路徑一律用 push_error()，
@@ -49,6 +54,14 @@ var is_ready := false
 # table -> Array[String]，_table_has_column() 的欄位快取，
 # schema 建立後不會再變，查一次記住即可，不必每次 UPDATE 都跑 PRAGMA
 var _table_columns_cache := {}
+
+
+## 用這個 checkout 的 res:// 絕對路徑算 hash，不用 project name——後者是
+## project.godot 裡的固定字串，所有 worktree 都一樣，沒有區分度。
+static func _compute_database_path() -> String:
+	var project_root := ProjectSettings.globalize_path("res://")
+	var checkout_hash := project_root.sha256_text().substr(0, 8)
+	return "user://game_%s.db" % checkout_hash
 
 
 # =====================================================
