@@ -214,6 +214,9 @@ var _speed_multiplier := 1.0				# 速度倍率（搬運時為 50%）
 @onready var work_progress: WorkProgress = get_node_or_null("WorkProgress")
 @onready var money_popup: MoneyPopup = get_node_or_null("MoneyPopup")
 @onready var memory: Memory = get_node_or_null("Memory")
+# 只有 Player 掛這個節點——NPC 不需要被引導去任何地方。get_node_or_null()
+# 在沒有這個節點的 Agent 實例上安靜回 null，呼叫端（#305）自己判斷要不要用
+@onready var waypoint_indicator: WaypointIndicator = get_node_or_null("WaypointIndicator")
 
 # 最後一次的面向：front / back / right，停下時用來挑 idle 動畫
 var facing := "front"
