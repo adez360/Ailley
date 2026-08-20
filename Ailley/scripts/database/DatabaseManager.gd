@@ -6,7 +6,7 @@ extends Node
 ##
 ## 負責：
 ##
-## 1. 開啟 user://game.db
+## 1. 開啟 DATABASE_PATH（依 checkout 算 hash，見下方）
 ## 2. 建立 DatabaseSchema
 ## 3. 統一管理 SQLite CRUD
 ## 4. 啟動 CharacterStatePersistence
