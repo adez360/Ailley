@@ -8,12 +8,15 @@ class_name SqliteSaveService
 ## 對齊的是 JsonSaveService 實際存的內容（Character.get_save_data() /
 ## GameManager.get_world_save_data() 現在真正吐出來的東西），不是《06 資料
 ## 欄位對應表》§1 那份完整形狀——後者描述的 identity/hexaco/economy/
-## state.emotion/memory 現在還沒有任何 Character 欄位在產生，接了也沒有
-## 呼叫端能餵資料進來。**`personality`／`today_plan` 是例外**：#429 起
-## `Character.get_save_data()`／`Agent.get_save_data()` 已經真的產生這兩項，
-## 但這裡（SQLite 這條路線）還沒有對應欄位可以存，是已知落後的缺口，不是
-## 「上游還沒做」——見下方「schema 缺口」與《99》P-52。目前正式線走的是
-## `project.godot` 設定的 `JsonSaveService`，這個缺口不影響現在真的在跑的存檔。
+## state.emotion 現在還沒有任何 Character 欄位在產生，接了也沒有呼叫端能
+## 餵資料進來。
+##
+## `memory`／`personality`／`today_plan` 是另一種情況：**已經由上游產生，
+## 只是這裡（SQLite 這條路線）還沒接**，不是「上游還沒做」。`memory` 是
+## #170 就有的既有缺口，`personality`／`today_plan` 是 #429 起才新增的——
+## 三項都見下方「schema 缺口」，`personality`／`today_plan` 另登記在
+## 《99》P-52。目前正式線走的是 `project.godot` 設定的 `JsonSaveService`，
+## 這幾個缺口都不影響現在真的在跑的存檔。
 ##
 ## 缺值一律補預設值，不回傳 null 也不省略 key——少一個 key 跟值是預設值，
 ## 對呼叫端是兩種不同的東西。整包讀寫，不做局部欄位更新（《14》§2.2）。
