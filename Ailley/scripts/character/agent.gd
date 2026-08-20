@@ -271,6 +271,15 @@ var _pending_save_retry := false
 var _reevaluating := false
 var _reevaluate_pending := false
 
+## 同一次最外層 _reevaluate() 呼叫內，已經被挑過又收尾的任務 id（#456
+## CodeRabbit review 抓到）：schedule 來源的任務收尾後不移出 _tasks（見
+## _pursue_eat_task() 等處註解），若收尾當下立刻呼叫的 _reevaluate() 在
+## window 還沒結束時把同一筆分數最高的任務原地重選回來，會在這次呼叫的
+## while 迴圈裡卡成同步無窮迴圈（例如沒食物時 eat 一直失敗、一直被選回來）。
+## 只在最外層呼叫開頭清空（見 _reevaluate()），下一次真正的 tick 觸發時
+## 自然重置，不影響「下個 tick 再試一次」的正常重試節奏
+var _reevaluate_excluded_ids: Dictionary = {}
+
 ## 這隻角色的決策來源，出生時決定一次，之後所有決策/對話呼叫都透過它——
 ## 跟《06》「decision_source／model_name 投放後不可改」的規則一致，不做成每次呼叫
 ## 才判斷（#155）
@@ -342,6 +351,8 @@ func _on_day_changed(_day: int) -> void:
 ## 任務用 place）
 func _clear_current_task(ok: bool, target_override: String = "") -> void:
 	_log_task_ended(_current_task, ok, target_override)
+	if not _current_task.is_empty():
+		_reevaluate_excluded_ids[_current_task.get("id", "")] = true
 	_current_task = {}
 	current_place = ""
 	current_state = "idle"
@@ -1457,6 +1468,7 @@ func _reevaluate() -> void:
 		_reevaluate_pending = true
 		return
 
+	_reevaluate_excluded_ids.clear()
 	_reevaluating = true
 	_reevaluate_pending = true
 	while _reevaluate_pending:
@@ -1555,6 +1567,8 @@ func _reevaluate_once() -> void:
 
 	for task in _tasks:
 		if not _in_window_or_unwindowed(task, now):
+			continue
+		if _reevaluate_excluded_ids.has(task.get("id", "")):
 			continue
 
 		var score := _score(task, now)
@@ -2198,6 +2212,10 @@ func _pursue_drink_task() -> void:
 
 	if _current_task.get("source", "") == "llm":
 		_remove_task(_current_task.get("id", ""))
+	# #456 CodeRabbit review：schedule 來源不移出池子，收尾當下立刻補一次
+	# _reevaluate() 若不排除剛做完的這筆，window 還沒結束時分數最高的候選
+	# 還是它自己，會同步無窮迴圈重選回來——見 _reevaluate_excluded_ids 宣告註解
+	_reevaluate_excluded_ids[_current_task.get("id", "")] = true
 	_current_task = {}
 	current_place = ""
 	current_state = "idle"
