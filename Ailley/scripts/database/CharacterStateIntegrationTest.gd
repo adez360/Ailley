@@ -137,6 +137,10 @@ func _run() -> void:
 		return
 
 	if not _sync_now(persistence):
+		_fail(
+			"initial_sync",
+			"寫入測試 Stats 時同步失敗"
+		)
 		_restore_stats(character, original_stats, persistence)
 		_finish()
 		return
