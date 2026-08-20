@@ -7,9 +7,16 @@ class_name SqliteSaveService
 ## 《14》§5 要求兩個實作的資料形狀必須一致——這裡讀寫的 Dictionary 形狀
 ## 對齊的是 JsonSaveService 實際存的內容（Character.get_save_data() /
 ## GameManager.get_world_save_data() 現在真正吐出來的東西），不是《06 資料
-## 欄位對應表》§1 那份完整形狀——後者描述的 identity/hexaco/personality/
-## economy/state.emotion/memory 現在還沒有任何 Character 欄位在產生，接了
-## 也沒有呼叫端能餵資料進來，見 note/技術/存檔.md「現況」與下方「schema 缺口」。
+## 欄位對應表》§1 那份完整形狀——後者描述的 identity/hexaco/economy/
+## state.emotion 現在還沒有任何 Character 欄位在產生，接了也沒有呼叫端能
+## 餵資料進來。
+##
+## `memory` 是另一種情況：**已經由上游產生（#170），只是這裡（SQLite 這條
+## 路線）還沒接**，不是「上游還沒做」，見下方「schema 缺口」。`personality`／
+## `today_plan`（#429 起由 Character/Agent.get_save_data() 產生）原本也是
+## 同一種缺口（《99》P-52），`npc_personality`／`npc_daily_plan` 兩張表其實
+## 早就存在（`DatabaseCRUDTest.gd` 有測，只是沒被 get_character()/
+## save_character() 用過），已經接上，見下方 get_character()/save_character()。
 ##
 ## 缺值一律補預設值，不回傳 null 也不省略 key——少一個 key 跟值是預設值，
 ## 對呼叫端是兩種不同的東西。整包讀寫，不做局部欄位更新（《14》§2.2）。
@@ -29,6 +36,15 @@ const STATE_COLUMNS := [
 	"hygiene", "alcohol", "health", "injury",
 ]
 
+## npc_personality 跟 Character.personality（Personality.hexaco_to_personality()
+## 實際產出）同名的 10 個欄位。npc_personality 表另外還有 6 個 hex_* 欄位
+## （HEXACO 原始輸入），Character.personality 沒有這 6 項，這裡不讀不寫它們——
+## HEXACO 輸入不是這個表的職責範圍，見 Personality.from_identity()
+const PERSONALITY_COLUMNS := [
+	"diligence", "courage", "sociability", "morality", "stability",
+	"romanticism", "curiosity", "grudge", "greed", "honesty",
+]
+
 ## npc_state 撈不到那一列時（例如 npc 存在但還沒存過狀態）用這份補齊
 ## STATE_COLUMNS，不要回傳空 stats——跟檔頭「缺值補預設值，不省略 key」
 ## 一致。數值抄自 NPCStateSchema.gd 的 DEFAULT，兩邊要一起改
@@ -41,7 +57,15 @@ const STATE_DEFAULTS := {
 ## 讀一個角色的完整資料，找不到回傳空 Dictionary
 ##
 ## 回傳形狀跟 Character.get_save_data() 一致：
-##     { character_id, character_name, stats{8 項}, relationships{ <target_id>: {trust, appearance_cache} } }
+##     { character_id, character_name, stats{8 項}, relationships{ <target_id>: {trust, appearance_cache} },
+##       personality?{ 10 項 }, today_plan?[ {text, is_done} ] }
+##
+## personality／today_plan 是選填欄位（跟 get_save_data() 只在有資料時才給
+## 這兩個 key 同一個道理）：`npc_personality`／`npc_daily_plan` 沒有這個角色
+## 的資料時完全不加這兩個 key，不是補一份預設值——沒存過人格漂移／今日計畫
+## 的角色，讓 Character.load_save_data()／Agent.load_save_data() 維持它們
+## 自己 `_ready()` 算出來的值，跟 JsonSaveService／stats 的「省略 key 就是
+## 不覆寫」語意一致
 func get_character(id: String) -> Dictionary:
 	var npc_rows := DatabaseManager.select("npc", "npc_id = '%s'" % _esc(id))
 	if npc_rows.is_empty():
@@ -67,6 +91,31 @@ func get_character(id: String) -> Dictionary:
 		}
 	data["relationships"] = relationships
 
+	var personality_rows := DatabaseManager.select("npc_personality", "npc_id = '%s'" % _esc(id))
+	if not personality_rows.is_empty():
+		var personality_row: Dictionary = personality_rows[0]
+		var personality := {}
+		for key in PERSONALITY_COLUMNS:
+			personality[key] = float(personality_row[key])
+		data["personality"] = personality
+
+	# ORDER BY plan_id：SQLite 不保證沒下 ORDER BY 的查詢結果順序，
+	# today_plan 是有序清單（顯示順序、模型讀到的順序都看它），少排序的話
+	# 每次讀出來的順序可能不一樣，等於每次讀檔都悄悄打亂計畫清單
+	# （CodeRabbit review 抓到）。plan_id 是 AUTOINCREMENT，插入順序＝
+	# 遞增順序，直接排它就對齊寫入時的原始順序
+	var plan_rows := DatabaseManager.select(
+		"npc_daily_plan", "npc_id = '%s' ORDER BY plan_id" % _esc(id)
+	)
+	if not plan_rows.is_empty():
+		var today_plan: Array[Dictionary] = []
+		for row in plan_rows:
+			today_plan.append({
+				"text": String(row.get("text", "")),
+				"is_done": bool(int(row.get("is_done", 0))),
+			})
+		data["today_plan"] = today_plan
+
 	return data
 
 
@@ -78,6 +127,11 @@ func get_character(id: String) -> Dictionary:
 ## 存過（例如場上另一個角色在同一輪 debug console `save` 迴圈裡還沒輪到），
 ## 那一筆關係先跳過、記警告，不讓整包寫入失敗——下次雙方都存過之後這筆
 ## 關係就補得回來，見 PR 討論。
+##
+## personality／today_plan 沒有給（`data` 沒有這個 key）時完全不動既有
+## 資料——跟 `_upsert_npc_state()` 用 `stats.has(key)` 逐欄位判斷不同，這兩項
+## 是整包才有意義（10 項人格數值、一整份計畫清單），沒收到就是這次呼叫端
+## 沒有這份資料可存，不是「清空」的意思
 func save_character(id: String, data: Dictionary) -> bool:
 	if not DatabaseManager.begin_transaction():
 		return false
@@ -92,6 +146,14 @@ func save_character(id: String, data: Dictionary) -> bool:
 
 	if ok:
 		ok = _replace_relationships(id, data.get("relationships", {}))
+
+	if ok and data.has("personality"):
+		ok = _upsert_npc_personality(id, data["personality"])
+
+	if ok and data.has("today_plan"):
+		ok = DatabaseManager.delete("npc_daily_plan", "npc_id = '%s'" % _esc(id))
+		if ok:
+			ok = _replace_daily_plan(id, data["today_plan"])
 
 	if not ok:
 		DatabaseManager.rollback_transaction()
@@ -226,6 +288,54 @@ func _replace_relationships(id: String, relationships: Dictionary) -> bool:
 	return true
 
 
+## npc_id UNIQUE，跟 _upsert_npc_state() 同一種先查後決定 insert/update 的寫法。
+##
+## 這裡不驗證 personality 的結構，直接信任呼叫端——不是因為存檔路徑一定會
+## 先經過 Character.load_save_data() 的驗證（正常自動存檔路徑，例如睡醒
+## 觸發的存檔、debug console 的 save 指令，都是直接把 get_save_data() 的
+## 結果餵給 save_character()，不會經過 load_save_data()），而是因為
+## Character.personality 這個欄位本身在記憶體裡永遠保持結構完整：只有三個
+## 地方會寫它——Personality.from_identity()（建構時，10 項齊全）、
+## load_save_data()（已驗證過才覆寫）、睡前反思的 personality_delta 套用
+## （對既有的合法 10 項加總後 clampf，不改變鍵集合）。上一版註解誤把「存檔
+## 路徑會先驗證」當成信任的理由，實際上不成立（CodeRabbit review 抓到）
+func _upsert_npc_personality(id: String, personality: Dictionary) -> bool:
+	var row := {}
+	for key in PERSONALITY_COLUMNS:
+		if personality.has(key):
+			row[key] = personality[key]
+
+	if row.is_empty():
+		return true
+
+	if DatabaseManager.select("npc_personality", "npc_id = '%s'" % _esc(id)).is_empty():
+		row["npc_id"] = id
+		return DatabaseManager.insert("npc_personality", row)
+
+	return DatabaseManager.update("npc_personality", row, "npc_id = '%s'" % _esc(id))
+
+
+## 呼叫端（save_character()）已經先 delete 過這個 npc 的舊列——這裡只管
+## insert，跟 _replace_relationships() 同一種「整批覆蓋」模式（見 header）。
+## game_day 用現在的 GameClock.day：npc_daily_plan 設計上允許同一 npc/day
+## 有多列（今日計畫本來就有好幾項），不是拿它當唯一性鍵
+func _replace_daily_plan(id: String, today_plan: Array) -> bool:
+	for item in today_plan:
+		if not item is Dictionary:
+			continue
+		var entry: Dictionary = item
+		var row := {
+			"npc_id": id,
+			"game_day": GameClock.day,
+			"text": String(entry.get("text", "")),
+			"is_done": 1 if entry.get("is_done", false) else 0,
+		}
+		if not DatabaseManager.insert("npc_daily_plan", row):
+			return false
+
+	return true
+
+
 ## ===================================================================
 ## 內部：世界
 ## ===================================================================
@@ -312,6 +422,6 @@ func _esc(value: String) -> String:
 ## 下列是《06》定義、但目前 Character/GameManager 根本沒有在存的欄位——
 ## 不是這裡的 schema 缺口，是上游還沒做，SqliteSaveService 目前故意不接：
 ## identity 的 age/gender/village_id/home_location_id/decision_source/
-## model_name、hexaco_input、personality、economy、
-## state.emotion/conditions/current_goal/today_plan/appointment
+## model_name、hexaco_input、economy、
+## state.emotion/conditions/current_goal/appointment
 ## ===================================================================

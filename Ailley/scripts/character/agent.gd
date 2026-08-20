@@ -226,9 +226,19 @@ var _next_plan_id := 0
 ## 申請」：不是每次決策都能改，得先問過、下一輪才真的給
 var _plan_update_requested := false
 
+## load_save_data() 清除 _plan_update_requested 時遞增的 epoch，用於保護
+## 載入流程不被過期的決策請求覆寫——見 _request_next_decision() 的 epoch 檢查
+var _plan_update_epoch := 0
+
 ## 這次重算「進來的時候」current_state 是不是 sleep——用來偵測「剛睡醒」
 ## 那個轉換瞬間，見 _reevaluate() 怎麼用它
 var _was_sleeping := false
+
+## 睡醒自動存檔失敗時設 true，下一個遊戲分鐘的 _on_time_changed() 會補
+## 重試一次——不額外養計時器，本來就有的每分鐘 tick 天然就是節流過的重試
+## 間隔，同一次失敗不會被密集重試到成功為止（#427／CodeRabbit review 抓到：
+## 原本 save_character() 回傳值被直接丟掉，失敗就整批資料悄悄遺失）
+var _pending_save_retry := false
 
 ## #265：_reevaluate() 的重入保護（trampoline）。_pursue_current_task()
 ## 選中 give/shout、或 talk 判定失敗時會呼叫 _finish_task_and_request_next()，
@@ -859,8 +869,11 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 
 	# 記下消費前的值，等這次回應因世代不符被丟棄時原封不動還回去——
 	# 「跟從沒問過模型一樣」不能只是不套用任務，連這個已經兌現掉的許可
-	# 也要還原，不然角色會憑空少一次原本已經賺到的 update_plan 機會
+	# 也要還原，不然角色會憑空少一次原本已經賺到的 update_plan 機會。
+	# 但若是載入造成的世代不符，則不該還原：load_save_data() 清除許可的同時
+	# 也遞增了 _plan_update_epoch，下面只在 epoch 不變時才還原
 	var had_plan_update_requested := _plan_update_requested
+	var my_plan_update_epoch := _plan_update_epoch
 	var effective_allow_update_plan := allow_update_plan or _plan_update_requested
 	_plan_update_requested = false
 
@@ -900,9 +913,12 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 
 	# 世代編號在 await 期間變了，代表 debug_set_llm_decision() 至少關過一次
 	# 決策開關——不管回應抵達當下旗標是什麼值（就算又被重新打開），這份回應
-	# 都屬於已經作廢的世代，整包淘汰，不套用任何任務或計畫更新
+	# 都屬於已經作廢的世代，整包淘汰，不套用任何任務或計畫更新。
+	# 還原 had_plan_update_requested 時同時檢查 epoch：若 load_save_data() 發生過
+	# （epoch 已遞增），則保持清除狀態，不讓過期請求重新授予 update_plan 許可
 	if my_generation != _decision_generation:
-		_plan_update_requested = had_plan_update_requested
+		if my_plan_update_epoch == _plan_update_epoch:
+			_plan_update_requested = had_plan_update_requested
 		return {"ok": false, "triggered": true}
 
 	if not result["ok"]:
@@ -1157,6 +1173,44 @@ func get_state_snapshot() -> Dictionary:
 	}
 	return snapshot
 
+# today_plan（#350）是跨天的承諾——「今天打算做這幾件事」——跟 current_goal
+# 那種瞬時念頭不同，重開遊戲不該讓它憑空消失（見 note/技術/存檔.md 的既有
+# 拍板；current_goal 刻意不存，這裡不要一起加進去）。id 是本機重新配發的
+# 序號（見 _apply_today_plan() 的說明），跟存檔格式無關，原樣存回沒有問題——
+# 下一次 _apply_today_plan() 呼叫本來就會整份取代並重新配發
+func get_save_data() -> Dictionary:
+	var data := super()
+	data["today_plan"] = _today_plan.duplicate(true)
+	return data
+
+func load_save_data(data: Dictionary) -> void:
+	super(data)
+
+	# 讀檔當下若有一份決策請求還在飛（debug 主控台 load 指令對執行中的角色
+	# 呼叫這裡），那份回應是問著載入前的舊狀態，不能讓它晚到之後用
+	# _apply_today_plan() 蓋掉剛載入的 today_plan——跳世代讓
+	# _request_next_decision() 收到回應時自己認出這是過期世代整包丟棄，
+	# 跟 debug_set_llm_decision() 的翻轉世代同一招。_plan_update_requested
+	# 也一併清掉：那是舊決策留下的「下次讓我改」許可，不該帶進載入後的狀態。
+	# 遞增 _plan_update_epoch 確保過期請求不會在還原 had_plan_update_requested 時
+	# 重新授予已經被載入清除的許可
+	_decision_generation += 1
+	_plan_update_requested = false
+	_plan_update_epoch += 1
+
+	# 只在資料裡真的有 today_plan 這個 key 時才覆寫——跟 character.gd 的
+	# personality 同一個「省略 key＝不動」語意。沒有這條防呆的話，讀一份
+	# 沒有 today_plan 欄位的存檔（例如舊格式、或只想局部更新其他欄位的
+	# 呼叫端）會把角色現有的今日計畫整包清空，不是「維持原樣」
+	# （CodeRabbit review 抓到）
+	if data.has("today_plan"):
+		_today_plan.clear()
+		var raw_plan: Variant = data.get("today_plan", [])
+		if raw_plan is Array:
+			for item in raw_plan:
+				if item is Dictionary:
+					_today_plan.append((item as Dictionary).duplicate(true))
+
 # 第一次看到某個陌生人就停下來愣一下。
 #
 # 認識的人不算 —— 每天上班都會遇到的同事不會讓人「！」。
@@ -1239,6 +1293,8 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務
 	# 會用新任務的 current_state 結算最後一分鐘
 	_apply_action_recovery()
+	if _pending_save_retry:
+		_autosave_on_wake()
 	_reevaluate()
 
 # 力竭時強制進入休息，直到 stamina 恢復
@@ -1258,6 +1314,20 @@ func _force_rest_until_recovered(now_minutes: int) -> void:
 		"interruptible": false,  # 力竭期間不可被打斷
 	}
 	_select(rest_task, now_minutes)
+
+# 睡醒自動存檔（#427），失敗時記錄角色識別資訊並排一次下個遊戲分鐘的
+# 補重試——原本 save_character() 的回傳值被直接丟掉，失敗就整批資料悄悄
+# 遺失，跟 #427 本來要解決的問題是同一種事故（CodeRabbit review 抓到）
+func _autosave_on_wake() -> void:
+	if SaveService == null:
+		return
+	if SaveService.save_character(character_id, get_save_data()):
+		_pending_save_retry = false
+		return
+	push_error("Agent %s（%s）睡醒自動存檔失敗，下個遊戲分鐘會補重試一次" % [
+		character_name, character_id
+	])
+	_pending_save_retry = true
 
 # 仲裁器的核心：每次重算，不維護「目前是第幾筆」。
 #
@@ -1401,8 +1471,16 @@ func _reevaluate_once() -> void:
 	# 在睡，選完任務之後不再是了，就是這個轉換瞬間。只在真正換出 sleep 的
 	# 那一次觸發，不會每個遊戲分鐘都重問——_was_sleeping 是這次呼叫一開頭
 	# 記的，只反映「這一次」的轉換，不是累積狀態
-	if _was_sleeping and current_state != "sleep" and llm_decision_enabled and not _awaiting_decision:
-		_request_next_decision(true)
+	if _was_sleeping and current_state != "sleep":
+		# 自動存檔（issue #427）：睡醒是「一天告一段落」的自然檢查點，大約
+		# 一天一次，I/O 成本可以忽略。跟下面的決策請求分開判斷——存檔不該被
+		# llm_decision_enabled／_awaiting_decision 這兩個只跟決策迴圈有關的
+		# 旗標擋住，AI 決策關掉時角色一樣會睡醒，一樣該存。之前沒有任何自動
+		# 存檔機制，長時間無人值守的驗證只要沒人記得手動下 `save` 指令，
+		# 執行期資料在 stop 的當下就整批消失，這是實際發生過的事故
+		_autosave_on_wake()
+		if llm_decision_enabled and not _awaiting_decision:
+			_request_next_decision(true)
 
 	# 剛入睡（#348，《03》§5 流程圖）：跟上面「剛睡醒」對稱的鏡像判斷——
 	# 這次重算進來的時候不在睡，選完任務後變成在睡，就是這個轉換瞬間，
