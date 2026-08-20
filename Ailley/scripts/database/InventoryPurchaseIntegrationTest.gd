@@ -42,6 +42,8 @@ var passed := 0
 var failed := 0
 var skipped := 0
 
+const INVENTORY_SYNC_TIMEOUT_FRAMES := 60
+
 
 func _ready() -> void:
 	call_deferred("_run")
@@ -169,10 +171,14 @@ func _run() -> void:
 	_print_inventory(character)
 
 	# -------------------------------------------------
-	# 3. 等 changed / Persistence 完成一個 frame
+	# 3. 等 changed / Persistence 完成
+	#
+	# CharacterStatePersistence 用 call_deferred() 排程寫入，
+	# 不保證落在固定幀數內完成，所以用 poll 等到真的存完，
+	# 不要用猜測的 await frame 次數。
 	# -------------------------------------------------
 
-	await get_tree().process_frame
+	await _wait_for_inventory_sync()
 
 	# -------------------------------------------------
 	# 4. 直接讀 SQLite
@@ -310,7 +316,7 @@ func _run() -> void:
 		var runtime_bread_after_purchase := character.inventory.count_item("bread")
 		var runtime_water_after_purchase := character.inventory.count_item("water")
 
-		await get_tree().process_frame
+		await _wait_for_inventory_sync()
 
 		var purchase_rows := DatabaseManager.select(
 			"npc_inventory",
@@ -496,6 +502,44 @@ func _skip(
 	print("[SKIP] %s: %s" % [label, message])
 
 
+## 等到 CharacterStatePersistence 的 deferred inventory SAVE 真正跑完，
+## 而不是賭固定幀數——call_deferred() 何時真正執行不保證落在單一幀內，
+## 單次 await process_frame 可能在 SAVE 完成前就繼續，讓後面的 SELECT
+## 斷言間歇性失敗。逾時時明確呼叫 _fail()——原本想讓後面的 SELECT 斷言
+## 自然失敗，但 _cleanup_test_data() 這條路徑逾時後不會再做任何斷言，
+## 且 _run() 的購買後斷言只檢查「至少一筆」，逾時後可能被同一張表裡
+## 舊資料矇混過去，兩者都不保證逾時會被觀察到。
+func _wait_for_inventory_sync() -> void:
+
+	var persistence := DatabaseManager.get_node_or_null(
+		"CharacterStatePersistence"
+	)
+
+	if persistence == null or not persistence.has_method("has_pending_inventory_sync"):
+		_fail(
+			"CharacterStatePersistence 不存在",
+			"找不到 CharacterStatePersistence node 或缺少 "
+			+ "has_pending_inventory_sync()，無法確認 inventory 是否已同步"
+		)
+		return
+
+	var frames := 0
+
+	while (
+		persistence.has_pending_inventory_sync()
+		and frames < INVENTORY_SYNC_TIMEOUT_FRAMES
+	):
+		await get_tree().process_frame
+		frames += 1
+
+	if persistence.has_pending_inventory_sync():
+		_fail(
+			"庫存同步逾時",
+			"等待 %d frame 後 CharacterStatePersistence 仍有未完成的 inventory sync"
+			% INVENTORY_SYNC_TIMEOUT_FRAMES
+		)
+
+
 func _finish() -> void:
 	print("")
 	print("=====================================================")
@@ -555,7 +599,7 @@ func _cleanup_test_data(
 		character.inventory.spend(money_current - money_before)
 
 	# 等待 persistence 完成
-	await get_tree().process_frame
+	await _wait_for_inventory_sync()
 
 	print(
 		"[TEST] 測試資料已清理：bread=%d->%d water=%d->%d money=%d->%d"
