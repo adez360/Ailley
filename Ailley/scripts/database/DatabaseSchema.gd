@@ -106,15 +106,26 @@ static func _migrate_v2_backfill_decay(db) -> bool:
 ##
 ## 用「RENAME 舊表 → CREATE 新表 → 搬資料 → DROP 舊表」而不是直接
 ## `DROP TABLE memories` 再重建：RENAME／INSERT 都不是 DELETE，不會觸發
-## `memory_related_npcs.memory_id` 的 `ON DELETE CASCADE`；等資料搬進新表、
-## 新表已經叫回 `memories` 之後才 DROP 暫存的舊表，此時
-## `memory_related_npcs` 的外鍵已經指向新表，不受影響。索引隨舊表一併被
-## RENAME/DROP，最後重新建立。
+## `memory_related_npcs.memory_id` 的 `ON DELETE CASCADE`。
+##
+## 但 `memory_related_npcs` 本身也要跟著重建，不能只搬 `memories`：
+## SQLite 在 `foreign_keys` 開啟（這個專案在 `DatabaseManager._ready()`
+## 固定開啟）時，`ALTER TABLE ... RENAME TO` 會自動把「引用被重新命名的表」
+## 的其他 table 定義同步改寫成新表名——`ALTER TABLE memories RENAME TO
+## memories_v2` 這一步會把 `memory_related_npcs` 的
+## `FOREIGN KEY (memory_id) REFERENCES memories(...)` 悄悄改成
+## `REFERENCES memories_v2(...)`。新的 `memories` 表建好、資料搬完後就
+## `DROP TABLE memories_v2`，`memory_related_npcs` 這時仍指著已經被砍掉
+## 的 `memories_v2`，關聯斷在半空中，不會自動跟著轉回新表。要接回新表，
+## 得比照 `memories` 的手法，把 `memory_related_npcs` 也 RENAME → CREATE
+## （FK 這次直接宣告 `REFERENCES memories`，因為新的 `memories` 表這時
+## 已經存在）→ 搬資料 → DROP，讓它的 FK 定義重新指向新表。
 ##
 ## `WHERE memory_id IS NOT NULL` 會把既有的 NULL memory_id 列擋在遷移之外
 ## （否則 INSERT 違反新的 NOT NULL，整個 migration 失敗回滾）——這類列本來
 ## 就是 issue #393 說的「破壞識別與關聯」的壞資料，`memory_related_npcs`
-## 也不可能有指向 NULL memory_id 的合法關聯，捨棄它們不影響其他有效資料。
+## 也不可能有指向 NULL memory_id 的合法關聯（FK 比對不會拿 NULL 當作
+## 相符值），捨棄它們不影響其他有效資料。
 static func _migrate_v3_memories_id_not_null(db) -> bool:
 	if not db.query("ALTER TABLE memories RENAME TO memories_v2;"):
 		push_error(
@@ -123,7 +134,16 @@ static func _migrate_v3_memories_id_not_null(db) -> bool:
 		)
 		return false
 
-	var create_sql := """
+	if not db.query(
+		"ALTER TABLE memory_related_npcs RENAME TO memory_related_npcs_v2;"
+	):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to rename memory_related_npcs: "
+			+ db.error_message
+		)
+		return false
+
+	var memories_create_sql := """
 	CREATE TABLE memories (
 
 		memory_id TEXT PRIMARY KEY NOT NULL,
@@ -166,18 +186,80 @@ static func _migrate_v3_memories_id_not_null(db) -> bool:
 	);
 	"""
 
-	if not db.query(create_sql):
+	if not db.query(memories_create_sql):
 		push_error(
 			"[DatabaseSchema] Migration 3: Failed to create new memories table: "
 			+ db.error_message
 		)
 		return false
 
+	# 捨棄前先數一次、印出來——這些列本來就已經是壞資料（NULL memory_id
+	# 查不到、也不可能被 memory_related_npcs 合法引用），刪掉不是「弄丟
+	# 有效資料」，但數量不尋常時值得留紀錄讓人回頭查。
+	if db.query("SELECT COUNT(*) AS n FROM memories_v2 WHERE memory_id IS NULL;"):
+		var null_count: int = int(db.query_result[0]["n"])
+		if null_count > 0:
+			push_warning(
+				"[DatabaseSchema] Migration 3: 捨棄 %d 筆 memory_id 為 NULL 的既有壞資料。"
+				% null_count
+			)
+
 	if not db.query(
 		"INSERT INTO memories SELECT * FROM memories_v2 WHERE memory_id IS NOT NULL;"
 	):
 		push_error(
 			"[DatabaseSchema] Migration 3: Failed to copy memories data: "
+			+ db.error_message
+		)
+		return false
+
+	# memory_related_npcs 重建：FK 直接宣告指向 memories（上面已經建好），
+	# 不會再被之後任何一次 RENAME 波及。
+	var related_npcs_create_sql := """
+	CREATE TABLE memory_related_npcs (
+
+		memory_id TEXT NOT NULL,
+
+		npc_id TEXT NOT NULL,
+
+		PRIMARY KEY (memory_id, npc_id),
+
+		FOREIGN KEY (memory_id)
+			REFERENCES memories(memory_id)
+			ON DELETE CASCADE,
+
+		FOREIGN KEY (npc_id)
+			REFERENCES npc(npc_id)
+			ON DELETE CASCADE,
+
+		CHECK(memory_id IS NOT NULL),
+		CHECK(npc_id IS NOT NULL)
+	);
+	"""
+
+	if not db.query(related_npcs_create_sql):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to create new memory_related_npcs table: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query(
+		"""
+		INSERT INTO memory_related_npcs
+		SELECT * FROM memory_related_npcs_v2
+		WHERE memory_id IN (SELECT memory_id FROM memories);
+		"""
+	):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to copy memory_related_npcs data: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query("DROP TABLE memory_related_npcs_v2;"):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to drop old memory_related_npcs table: "
 			+ db.error_message
 		)
 		return false
@@ -192,7 +274,8 @@ static func _migrate_v3_memories_id_not_null(db) -> bool:
 	var index_sql := [
 		"CREATE INDEX IF NOT EXISTS idx_memories_npc_level ON memories(npc_id, level);",
 		"CREATE INDEX IF NOT EXISTS idx_memories_decay ON memories(decay_value);",
-		"CREATE INDEX IF NOT EXISTS idx_memories_npc_day ON memories(npc_id, created_day);"
+		"CREATE INDEX IF NOT EXISTS idx_memories_npc_day ON memories(npc_id, created_day);",
+		"CREATE INDEX IF NOT EXISTS idx_memory_related_npcs_npc ON memory_related_npcs(npc_id);"
 	]
 
 	for sql in index_sql:

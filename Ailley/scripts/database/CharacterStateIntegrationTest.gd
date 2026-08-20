@@ -68,9 +68,9 @@ func _run() -> void:
 	while not (DatabaseManager.is_ready and DatabaseManager.is_seeded):
 
 		if ready_wait_frames >= READY_WAIT_TIMEOUT_FRAMES:
-			push_error(
-				"[CharacterStateIntegrationTest] "
-				+ "等待 DatabaseManager.is_ready 逾時，"
+			_fail(
+				"Database initialization",
+				"等待 DatabaseManager.is_ready/is_seeded 逾時，"
 				+ "資料庫可能初始化失敗。"
 			)
 			_finish()

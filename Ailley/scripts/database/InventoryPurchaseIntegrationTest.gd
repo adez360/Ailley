@@ -65,9 +65,9 @@ func _run() -> void:
 	while not (DatabaseManager.is_ready and DatabaseManager.is_seeded):
 
 		if ready_wait_frames >= READY_WAIT_TIMEOUT_FRAMES:
-			push_error(
-				"[InventoryPurchaseIntegrationTest] "
-				+ "等待 DatabaseManager.is_ready 逾時，"
+			_fail(
+				"Database initialization",
+				"等待 DatabaseManager.is_ready/is_seeded 逾時，"
 				+ "資料庫可能初始化失敗。"
 			)
 			_finish()
@@ -399,7 +399,11 @@ func _wait_for_inventory_sync() -> void:
 	)
 
 	if persistence == null or not persistence.has_method("has_pending_inventory_sync"):
-		await get_tree().process_frame
+		_fail(
+			"CharacterStatePersistence 不存在",
+			"找不到 CharacterStatePersistence node 或缺少 "
+			+ "has_pending_inventory_sync()，無法確認 inventory 是否已同步"
+		)
 		return
 
 	var frames := 0

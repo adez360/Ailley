@@ -1185,6 +1185,10 @@ const DATABASE_PATH := "user://game.db"
 
 var db: SQLite
 var is_ready := false                        # false 時所有公開方法早退
+var is_seeded := false                       # is_ready 只代表 schema 開好，
+                                              # is_seeded 才代表 DatabaseSeeder.seed_all()
+                                              # 真的成功——CharacterStatePersistence
+                                              # 只在 is_seeded 為 true 時才啟動
 
 func query(sql: String, bindings: Array = []) -> bool
 func get_last_result() -> Array              # db.query_result；db==null 回 []
@@ -1238,6 +1242,9 @@ func get_all_states() -> Array                    # SELECT npc_id/各項數值/l
 ⚠ DatabaseManager.is_ready 在 _ready() 裡同步設為 true，之後才 call_deferred() 建立這個節點——
   is_ready==true 那一刻不保證這個子節點已存在，DatabaseManager.get_node() 在極早期可能撲空；
   等下一個 idle frame（或直接訂閱 DatabaseManager 的樹狀態變化）再拿節點比較保險
+⚠ 只在 DatabaseManager.is_seeded 為 true 時才會被建立——DatabaseSeeder.seed_all() 失敗時
+  is_seeded 停在 false，這個節點不會啟動，DatabaseManager.get_node("CharacterStatePersistence")
+  永遠拿不到（避免對缺料的 item 表做 CRUD）
 † 同步對象是 npc / npc_state / npc_inventory / npc_wallet 四張表，relations／memory／
   personality 等其他欄位不在這裡
 † GameClock.time_changed 每遊戲分鐘觸發一次「僅 state/wallet」定期同步（不含 inventory）；
@@ -1258,15 +1265,18 @@ const ITEM_BALANCE := {...}   # item_id -> {name, item_type, base_price, max_sta
                                # durability_cost?, effect_*}，涵蓋 data/items.json
                                # 全部 18 個 item_id（食物/飲品/獵物水產/採集品/隨身用品）
 
-static func seed_all() -> void      # 呼叫端：DatabaseManager._ready()，schema 建立後跑一次
-static func seed_items() -> void
+static func seed_all() -> bool      # 呼叫端：DatabaseManager._ready()，schema 建立後跑一次；
+                                     # 回傳 false 時 DatabaseManager 不把 is_seeded 設為 true
+static func seed_items() -> bool
 ```
 
 ```text
 ITEM_BALANCE 的 key 必須存在於 res://data/items.json（ItemDatabase 為單一事實來源），
-  查不到就 push_error 並跳過該筆，避免兩份物品清單各自漂移出不存在的 item_id
-seed_items() 逐筆用 select_where(item_id) 檢查是否已存在才 INSERT，重複呼叫不出錯也不覆寫
-† Seeder 不建表、不改 schema、不做遊戲中的資料更新，只負責第一次啟動的基礎資料
+  查不到就 push_error、seed_items() 回傳 false，避免兩份物品清單各自漂移出不存在的 item_id
+seed_items() 逐筆呼叫 _upsert_item()：item_id 不存在就 INSERT；已存在就用目前的
+  ITEM_BALANCE／ItemDatabase 定義 UPDATE 覆寫（item 是全域目錄表，執行期不會有其他地方
+  改動它）——重複呼叫不出錯，但也不是「不覆寫」，兩份清單改了欄位會同步到既有存檔
+† Seeder 不建表、不改 schema、不做遊戲中的資料更新，只負責第一次啟動與每次開機的基礎資料同步
 ```
 
 ## data/

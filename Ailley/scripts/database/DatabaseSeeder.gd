@@ -35,6 +35,20 @@ extends RefCounted
 ## =====================================================
 
 
+## ITEM_BALANCE 裡不是每個 item 都寫 decay_rate／durability_cost——
+## 沒寫不代表「保留資料庫現有值」，是「這個 item 目前不需要偏離 schema
+## 預設值」。_upsert_item() 對已存在的 row 走 UPDATE，SQL 只會覆寫
+## item_data 裡實際出現的欄位；缺席的欄位不會被觸碰，導致「這個欄位曾經
+## 設過值、後來從 ITEM_BALANCE 拿掉」時既有存檔仍停在舊值，永遠同步不到
+## 目前的定義。seed_items() 用這份預設值墊底、讓 ITEM_BALANCE 的值覆蓋，
+## 確保每個 item_data 一定完整列出這兩欄，跟 ItemSchema.gd 的
+## DEFAULT 對齊。
+const OPTIONAL_ITEM_FIELD_DEFAULTS := {
+	"decay_rate": 0.0,
+	"durability_cost": 0
+}
+
+
 ## item_id -> 平衡數值。key 必須存在於 res://data/items.json，
 ## 否則 seed_items() 會擋下並回報錯誤。
 const ITEM_BALANCE := {
@@ -365,8 +379,13 @@ static func seed_items() -> bool:
 
 
 		var item_data: Dictionary = (
-			ITEM_BALANCE[item_id]
+			OPTIONAL_ITEM_FIELD_DEFAULTS
 		).duplicate()
+
+		item_data.merge(
+			ITEM_BALANCE[item_id],
+			true
+		)
 
 		item_data["item_id"] = item_id
 		item_data["is_active"] = 1
