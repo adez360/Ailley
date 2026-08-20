@@ -202,7 +202,12 @@ var conditions: Array[Dictionary] = []
 ## 搬運相關狀態（#161，《99》P-27）
 var _hauling_target: Character = null		# 目前正在搬運誰
 var _hauled_by: Array[Character] = []		# 目前正被誰搬運
-var _speed_multiplier := 1.0				# 速度倍率（搬運時為 50%）
+
+## 速度倍率多源管理（#365 支持搬運與睏倦同時生效）
+var _speed_multipliers := {
+	"haul": 1.0,		# 搬運倍率（1.0 = 無效果，0.5 = HAUL_SPEED_MULTIPLIER）
+	"sleepy": 1.0,		# 睏倦倍率（1.0 = 無效果，0.85 = 睏倦速度減幅）
+}
 
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
@@ -420,6 +425,10 @@ func _update_conditions() -> void:
 	_set_condition(CONDITION_EXHAUSTED, stats.get_value("stamina") <= 0.0)
 	_set_condition(CONDITION_SLEEPY, stats.get_value("wakefulness") < 15.0)
 	_set_condition(CONDITION_FILTHY, stats.get_value("hygiene") < 20.0)
+
+	# (#365) sleepy 條件效果：移動速度降幅
+	var sleepy_speed_mult = 0.85 if has_condition(CONDITION_SLEEPY) else 1.0
+	_speed_multipliers["sleepy"] = sleepy_speed_mult
 
 	## 昏迷狀態觸發（health ≤ 0）——不是門檻自動，一旦進入必須明確結束
 	if health <= 0.0 and not has_condition(CONDITION_INCAPACITATED):
@@ -1390,7 +1399,10 @@ func is_hauling() -> bool:
 	return _hauling_target != null
 
 func effective_speed() -> float:
-	return SPEED * _speed_multiplier
+	var combined_multiplier := 1.0
+	for multiplier in _speed_multipliers.values():
+		combined_multiplier *= multiplier
+	return SPEED * combined_multiplier
 
 func start_haul(target: Character) -> String:
 	if target == null:
@@ -1406,7 +1418,7 @@ func start_haul(target: Character) -> String:
 
 	target._attach_haul(self)
 	_hauling_target = target
-	_speed_multiplier = HAUL_SPEED_MULTIPLIER
+	_speed_multipliers["haul"] = HAUL_SPEED_MULTIPLIER
 	target.set_being_carried(true)		# #271: 通知昏迷機制
 	return HAUL_OK
 
@@ -1418,7 +1430,7 @@ func stop_haul() -> void:
 		if not target.is_being_hauled():
 			target.set_being_carried(false)		# #271: 通知昏迷機制
 		_hauling_target = null
-	_speed_multiplier = 1.0
+	_speed_multipliers["haul"] = 1.0
 
 func _attach_haul(hauler: Character) -> void:
 	if not _hauled_by.has(hauler):
