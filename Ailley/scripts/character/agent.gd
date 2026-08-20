@@ -1294,7 +1294,9 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 		if _current_task.get("source", "") != "reflex" and committed_for < min_commit:
 			return
 
-	_select(best, now_minutes)
+	# current_still_valid：舊任務還在自己視窗內、沒過期，卻在這裡被換掉，
+	# 代表它是被 best 搶占的，not (自然結束)——today_log 記 ok=false（#366）
+	_select(best, now_minutes, not current_still_valid)
 
 ## 《01-2》§3 完整表格，數字照抄，含目前還沒接上執行邏輯的動作（等落地時
 ## 直接呼叫 _roll_success()，不用重寫一次成功率公式）。struggle 例外太多
@@ -1461,7 +1463,13 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 # SUCCESS_PARAMS 不能當白名單：_roll_success() 對不在表上的動作直接放行（見
 # _roll_success() 自己的註解），那些動作缺少執行邏輯時會靜默不做事，不符合
 # 「不被允許」與「還沒做」要分開失敗的設計原則
-func _select(task: Dictionary, now_minutes: int) -> void:
+## outgoing_ok：舊任務（換掉前的 _current_task）today_log 要記 ok=true 還是
+## false。呼叫端負責判斷——_consider_switch() 分得出「舊任務自己視窗已過／
+## 已過期，換下一筆是它自然結束」（true）跟「舊任務還在有效期內，被更高分
+## 的候選搶走」（false，CodeRabbit review #366：搶占時動作沒真的做完，不該
+## 算成功）；_current_task 是空的那個呼叫（沒有舊任務可記）傳什麼都無所謂，
+## 下面 _log_task_ended() 自己的 is_empty() 檢查會擋掉
+func _select(task: Dictionary, now_minutes: int, outgoing_ok: bool = true) -> void:
 	if task.get("source", "") == "llm":
 		var action: String = str(task.get("action", ""))
 		if not AISchema.is_implemented_action(action):
@@ -1470,12 +1478,8 @@ func _select(task: Dictionary, now_minutes: int) -> void:
 			return
 
 	# 換成別筆任務時舊任務不會經過 _clear_current_task()（下面直接覆寫，不會
-	# 先變成 {}），但一樣算「做過的事」，這裡補記一筆（#172）。ok=true：
-	# 走到這裡代表舊任務本身沒有失敗，只是被換掉（窗口到了換下一筆排程、
-	# 或被更高分的任務搶走），跟 resolve() 失敗／找不到目標那類真正的失敗
-	# 是不同語意，那些已經在各自的 _finish_task_and_request_next() 等路徑
-	# 明確傳 false
-	_log_task_ended(_current_task, true)
+	# 先變成 {}），但一樣算「做過的事」，這裡補記一筆（#172）
+	_log_task_ended(_current_task, outgoing_ok)
 
 	_current_task = task
 	# CodeRabbit review（#366）：schedule 任務的 Dictionary 跨時間窗、跨日重用，
