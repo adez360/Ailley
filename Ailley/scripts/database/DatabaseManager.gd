@@ -120,6 +120,12 @@ func _ready() -> void:
 			+ "部分基礎資料可能缺失。"
 		)
 
+		is_ready = false
+
+		db.close_db()
+
+		return
+
 
 	# -------------------------------------------------
 	# CharacterStatePersistence
