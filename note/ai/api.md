@@ -1184,6 +1184,8 @@ const DATABASE_PATH := "user://game.db"
 
 var db: SQLite
 var is_ready := false                        # false 時所有公開方法早退
+var is_seeded := false                       # 只在 DatabaseSeeder.seed_all() 成功後才 true；
+                                              # is_ready 只代表 schema/CRUD 可用，不保證基礎資料已補齊
 
 func query(sql: String, bindings: Array = []) -> bool
 func get_last_result() -> Array              # db.query_result；db==null 回 []
