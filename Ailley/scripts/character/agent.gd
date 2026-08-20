@@ -1039,8 +1039,9 @@ func _on_noise_heard(_source: Character) -> void:
 ## 仲裁常數（HYSTERESIS／MIN_COMMIT／LLM_WAIT_MIN_COMMIT／MIN_ACTION_DURATION／
 ## LLM_TASK_POOL_CAP，見上方各自的說明），沒有涵蓋這裡，這三個值還沒實測過。
 ##
-## 對照基準：stamina 的自然衰減是每現實秒 1.0（Stats.SPEC 的 drift），而一個遊戲
-## 分鐘正好是一現實秒，所以淨回復是這裡的值減 1
+## 對照基準：stamina 的自然衰減是每遊戲分鐘 1.0，但 Stats 漂移只在每 10 遊戲分鐘
+## 執行一次，所以每 tick（10 遊戲分鐘）的淨變化是 amount * 10 - 1.0。_apply_action_recovery()
+## 是每遊戲分鐘執行一次，所以 sleep/nap/rest/wash 的回復額在每 10 遊戲分鐘內累積
 ##
 ## 表的形狀是「動作 -> {stat, amount}」而不是單純「動作 -> 數字」：不同動作
 ## 要回復的欄位不見得相同（wash 回復的是 `hygiene` 不是 `stamina`），單純
@@ -1076,6 +1077,23 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 	_apply_action_recovery()
 	_reevaluate()
 
+# 力竭時強制進入休息，直到 stamina 恢復
+func _force_rest_until_recovered(now_minutes: int) -> void:
+	# 只有 reflex rest 已存在時才直接沿用
+	if _current_task.get("source", "") == "reflex" and current_state == "rest":
+		stop_moving()
+		return
+
+	stop_moving()
+	var rest_task: Dictionary = {
+		"id": "reflex_rest_" + str(randi()),
+		"action": "rest",
+		"source": "reflex",
+		"duration": 999999,
+		"params": {}
+	}
+	_select(rest_task, now_minutes)
+
 # 仲裁器的核心：每次重算，不維護「目前是第幾筆」。
 #
 # 1. 過濾出還在時間窗內的候選（沒有 window 的一律算候選）
@@ -1109,6 +1127,13 @@ func _reevaluate() -> void:
 
 func _reevaluate_once() -> void:
 	var now_minutes := _now_minutes()
+
+	# 力竭時強制進入休息，優先於一般的任務仲裁
+	var has_exhausted := conditions.any(func(c): return c.get("type") == "exhausted")
+	if has_exhausted:
+		_force_rest_until_recovered(now_minutes)
+		_pursue_current_task()
+		return
 
 	# 剛睡醒的偵測要在這裡的任何選任務邏輯跑之前先記下「進來的時候是不是
 	# 在睡」——選任務邏輯本身就可能把 current_state 從 sleep 換掉，這個

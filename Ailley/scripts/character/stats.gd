@@ -29,6 +29,7 @@ extends Node
 const MIN := 0.0
 const MAX := 100.0
 const CRITICAL := 30.0		# 低於這個值算「該處理了」
+const GAME_MINUTES_PER_TICK := 10	# Stats 漂移每 10 遊戲分鐘執行一次
 
 const SPEC := {
 	"satiety": {"label": "STAT_SATIETY", "drift": 3.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "tavern"},
@@ -45,6 +46,7 @@ const SPEC := {
 }
 
 var values := {}
+var _accumulated_minutes := 0	# 累積遊戲分鐘，達到 GAME_MINUTES_PER_TICK 時執行漂移
 
 ## `bleeding` condition 期間 `injury` 原本每 tick −0.5 的自然衰減要暫停
 ## （《02》§2-2 附注，唯一的例外規則）。由 Character 依 conditions 狀態設定，
@@ -55,15 +57,23 @@ var injury_decay_paused := false
 func _ready() -> void:
 	for key in SPEC:
 		values[key] = SPEC[key]["start"]
+	if GameClock:
+		GameClock.time_changed.connect(_on_time_changed)
 
-func _process(delta: float) -> void:
+func _on_time_changed(_hour: int, _minute: int) -> void:
+	_accumulated_minutes += 1
+	if _accumulated_minutes >= GAME_MINUTES_PER_TICK:
+		_accumulated_minutes = 0
+		_apply_drift()
+
+func _apply_drift() -> void:
 	for key in SPEC:
 		var spec: Dictionary = SPEC[key]
 		if spec["drift"] == 0.0:
 			continue
 		if key == "injury" and injury_decay_paused:
 			continue
-		values[key] = move_toward(values[key], spec["toward"], spec["drift"] * delta)
+		values[key] = move_toward(values[key], spec["toward"], spec["drift"])
 
 func get_value(key: String) -> float:
 	return values.get(key, 0.0)
