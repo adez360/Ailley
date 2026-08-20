@@ -50,7 +50,10 @@ const VERBOSE_SQL := false
 
 static func _compute_database_path() -> String:
 	var project_root := ProjectSettings.globalize_path("res://")
-	var checkout_hash := project_root.sha256_text().substr(0, 8)
+	# CodeRabbit review：截斷到 8 碼只剩 32-bit 命名空間，撞名機率不是理論上的
+	# 零——這個雜湊本身就是為了防撞名才加的，截斷等於自己削弱了要保護的東西。
+	# 用完整 sha256_text()，成本只是檔名長一點
+	var checkout_hash := project_root.sha256_text()
 	return "user://game_%s.db" % checkout_hash
 
 
@@ -623,7 +626,8 @@ func delete(
 ##
 ## 沒有重試／backoff：MVP 單一 Godot process 對應單一 db 連線，同一個連線
 ## 不會有兩個交易互搶（實測過，第二次 BEGIN 直接失敗，見
-## note/技術/存檔.md），這裡預留的是「多個 process 搶同一份 game.db」的情況，
+## note/技術/存檔.md），這裡預留的是「同一 checkout 被多個 process 開啟、
+## 搶同一份 DATABASE_PATH」的情況（跨 checkout 已靠雜湊隔開，不會撞）。
 ## 目前沒有任何呼叫端會製造這個情境（沒有多人連線）。真的接上多 process
 ## 寫入時才需要決定重試策略，不在這裡先猜
 func begin_transaction() -> bool:

@@ -23,8 +23,9 @@ extends RefCounted
 ## 也不會補進已存在的舊資料庫。用 PRAGMA user_version 記錄
 ## 目前的 schema 版本；偵測到既有資料庫版本落後時，依序套用
 ## MIGRATIONS 補齊結構差異，全部套用成功才把版本寫成
-## CURRENT_VERSION。版本比目前程式碼還新（例如切回舊分支、
-## 但 user:// 被新分支開過）則直接拒絕啟動，不嘗試往下相容。
+## CURRENT_VERSION。版本比目前程式碼還新（例如同一 checkout 切回舊分支、
+## 但 DATABASE_PATH 指向的 hashed database 被新分支開過）則直接拒絕啟動，
+## 不嘗試往下相容。
 ## =====================================================
 
 
@@ -158,8 +159,9 @@ static func initialize(db) -> bool:
 
 	var stored_version := _get_user_version(db)
 
-	# 資料庫版本比目前程式碼認得的還新——大概是切回舊分支、
-	# 但 user:// 資料夾（依專案名稱，不分 worktree）被新分支開過。
+	# 資料庫版本比目前程式碼認得的還新——大概是同一 checkout 切回舊分支、
+	# 但 DATABASE_PATH 指向的 hashed database 被新分支開過（跨 checkout
+	# 已靠雜湊隔開，不會撞到別的 worktree）。
 	# 不能往下走：schemas 陣列建的是舊分支自己認得的欄位，MIGRATIONS
 	# 也不含新分支已經套用過的項目，繼續執行會把 user_version 誤降回
 	# CURRENT_VERSION、讓新分支的 migration 之後被重複套用。
