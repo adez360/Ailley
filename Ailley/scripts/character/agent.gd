@@ -1896,13 +1896,18 @@ func _pursue_murmur_task() -> void:
 		should_speak = result["success"]
 		# murmur 沒有追逐、每筆任務只跑這裡一次，resolve() 的結果就是終局結果
 		# （不像 talk／give／attack 之後還有一次真正執行可能失敗）
-		_track_action_result_for_facts("murmur", should_speak)
 
 	# 內容層跟 talk 同一套「模板先頂著，LLM 版之後再換」的分工（見
 	# note/技術/talk 動作設計.md）：murmur 沒有聽者，講的是給自己聽的話，
 	# 不能沿用 DialogueLines.reply() 那組面向對話對象的句子
 	if should_speak and stats != null:
 		say(DialogueLines.murmur(stats))
+
+	# 連續失敗事實句涵蓋所有實際執行的動作，不分來源——跟 eat/drink/talk
+	# 既有規則一致（CodeRabbit review 抓到：原本只計 llm 來源，schedule 來源
+	# 的 murmur 成功時不會重設計數，先前的失敗事實句會卡住不消失，後續失敗
+	# 也會被錯誤累計）
+	_track_action_result_for_facts("murmur", should_speak)
 
 	_remove_task(_current_task.get("id", ""))
 	_current_task = {}
@@ -2327,12 +2332,17 @@ func _pursue_shout_task() -> void:
 			return
 		# shout 沒有追逐、每筆任務只跑這裡一次，resolve() 通過後 make_noise()
 		# 不會再失敗，這裡就是終局結果
-		_track_action_result_for_facts("shout", true)
 
 	# 半徑沿用 make_noise() 的預設值 NOISE_RADIUS——《07》§3 已定案「聽覺
 	# （shout）8 格」，跟 make_noise() 原本給玩家按鍵用的廣播半徑是同一個數字，
 	# 不用另外定義一個常數
 	make_noise()
+
+	# 連續失敗事實句涵蓋所有實際執行的動作，不分來源——跟 eat/drink/talk
+	# 既有規則一致（CodeRabbit review 抓到：原本只計 llm 來源，schedule 來源
+	# 的 shout 成功時不會重設計數，先前的失敗事實句會卡住不消失，後續失敗
+	# 也會被錯誤累計）
+	_track_action_result_for_facts("shout", true)
 	_finish_task_and_request_next()
 
 # 按顯示名找所有符合的角色，用於偵測撞名（resolve() 的歧義檢查）
