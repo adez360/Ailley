@@ -347,17 +347,28 @@ func _resolve_generated_id() -> String:
 	var dir := _PLAYER_ID_PATH.get_base_dir()
 	if not DirAccess.dir_exists_absolute(dir):
 		DirAccess.make_dir_recursive_absolute(dir)
-	var file := FileAccess.open(_PLAYER_ID_PATH, FileAccess.WRITE)
+	# 先寫暫存檔再 rename 蓋過去，避免 FileAccess.WRITE 直接截斷正式檔案時
+	# 中途中斷（當機／強制關閉），讓 player_id.txt 留下空檔或半截 id。
+	var tmp_path := _PLAYER_ID_PATH + ".tmp"
+	var file := FileAccess.open(tmp_path, FileAccess.WRITE)
 	if file == null:
 		push_error("player.gd: 無法寫入 %s（%s），character_id 這次不會跨場次持久化" % [
-			_PLAYER_ID_PATH, error_string(FileAccess.get_open_error())
+			tmp_path, error_string(FileAccess.get_open_error())
 		])
 		return id
 	file.store_string(id)
+	file.flush()
 	var write_error := file.get_error()
 	file.close()
 	if write_error != OK:
 		push_error("player.gd: 寫入 %s 失敗（%s），character_id 這次不會跨場次持久化" % [
-			_PLAYER_ID_PATH, error_string(write_error)
+			tmp_path, error_string(write_error)
+		])
+		DirAccess.remove_absolute(tmp_path)
+		return id
+	var rename_error := DirAccess.rename_absolute(tmp_path, _PLAYER_ID_PATH)
+	if rename_error != OK:
+		push_error("player.gd: 替換 %s 失敗（%s），character_id 這次不會跨場次持久化" % [
+			_PLAYER_ID_PATH, error_string(rename_error)
 		])
 	return id
