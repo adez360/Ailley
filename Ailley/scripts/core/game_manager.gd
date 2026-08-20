@@ -35,10 +35,10 @@ var identity_assignments = {}
 # 重開遊戲不會消失，不需要真的存檔
 var character_templates = {}
 
-# 玩家自建角色（#122）：靈魂庫，已建立但尚未投放的完整角色紀錄。跟著世界存檔
-# 一起存讀（#342，見 get_world_save_data()/apply_world_save_data()）——這份清單
-# 不屬於任何一個場上節點，沒有 Character.get_save_data() 可以掛，只能收在
-# 世界層這一包裡
+# 玩家自建角色（#122）：靈魂庫，記錄已建立的完整角色紀錄與 deployed 狀態。跟著
+# 世界存檔一起存讀（#342，見 get_world_save_data()/apply_world_save_data()）——
+# 這份清單不屬於任何一個場上節點，沒有 Character.get_save_data() 可以掛，只能
+# 收在世界層這一包裡
 const CHARACTER_LIBRARY_CAP := 15
 
 # 世界內同時投放上限（《10》B21，預設 5、房主可下修，這次先固定預設值）
@@ -277,6 +277,29 @@ func get_library_entry(id: String) -> Dictionary:
 	return {}
 
 
+# deploy_from_library() 直接索引 id／character_name／hexaco／character／
+# decision_source／model_name，缺欄位或型別不對的紀錄留到投放當下才炸，
+# 不如讀檔時就跳過——這幾個欄位跟其他「缺了用預設值補」的欄位不同，
+# 是 deploy_from_library() 沒有防呆能力的必要欄位（CodeRabbit review 抓到）
+func _is_valid_library_entry(entry) -> bool:
+	if not entry is Dictionary:
+		return false
+	var id = entry.get("id", null)
+	if not (id is String) or id.is_empty():
+		return false
+	if not entry.get("character_name", null) is String:
+		return false
+	if not entry.get("hexaco", null) is Dictionary:
+		return false
+	if not entry.get("character", null) is String:
+		return false
+	if not entry.get("decision_source", null) is String:
+		return false
+	if not entry.get("model_name", null) is String:
+		return false
+	return true
+
+
 # 已投放的角色不能刪——刪了場上生出來的 Character 節點會變孤兒（沒有任何
 # 紀錄指向它），deploy_from_library() 的 deployed_count 也只掃
 # character_library，刪掉之後計數會下降，變成可以無視 DEPLOY_CAP 重複投放
@@ -406,11 +429,19 @@ func apply_world_save_data(data: Dictionary) -> void:
 	var library_data = data.get("character_library", [])
 	if library_data is Array:
 		character_library.clear()
+		var seen_ids := {}
 		for entry in library_data:
-			if entry is Dictionary and not str(entry.get("id", "")).is_empty():
-				character_library.append(entry)
-			else:
-				push_error("apply_world_save_data: character_library 有一筆紀錄不是 Dictionary 或缺少 id，跳過")
+			if not _is_valid_library_entry(entry):
+				push_error("apply_world_save_data: character_library 有一筆紀錄格式不完整或缺必要欄位，跳過")
+				continue
+			var id: String = entry["id"]
+			if seen_ids.has(id):
+				push_error("apply_world_save_data: character_library 有重複 id %s，跳過" % id)
+				continue
+			seen_ids[id] = true
+			# 深複製隔離存檔載入來源的巢狀參照，跟 get_world_save_data() 存出去
+			# 時 duplicate(true) 同一個理由
+			character_library.append(entry.duplicate(true))
 	else:
 		push_error("apply_world_save_data: character_library 不是 Array，跳過角色庫載入")
 

@@ -304,6 +304,10 @@ func _esc(value: String) -> String:
 ##                      沒有讀寫它——round-trip 之後整段記憶遺失。schema 已有
 ##                      MemorySchema.gd（memories／memory_related_npcs 兩張表），
 ##                      要接上是把既有表接進這裡的四個函式，不是新增 schema
+## world 沒有            get_world_save_data() 存的 character_library（玩家自建
+## character_library    角色庫，#342）沒有對應欄位——world schema 沒有這欄，
+##                      get_world()/save_world() 也沒讀寫。round-trip 之後
+##                      角色庫會變空清單。JsonSaveService（目前使用中）不受影響
 ##
 ## 下列是《06》定義、但目前 Character/GameManager 根本沒有在存的欄位——
 ## 不是這裡的 schema 缺口，是上游還沒做，SqliteSaveService 目前故意不接：
