@@ -1271,11 +1271,22 @@ func _on_noise_heard(_source: Character) -> void:
 ## ACTION_RECOVERY 的數值原是針對舊的「漂移快 10 倍」情況設的（#361 修正前）。
 ## #361 修正後漂移改成每 tick（而非每現實秒），ACTION_RECOVERY 同步除以 10
 ## 以維持相對平衡（#361）。
+## (#362) sleep 同時回復 stamina 與 wakefulness，資料結構改成陣列以支持多個 stat
 const ACTION_RECOVERY := {
-	"sleep": {"stat": "stamina", "amount": 0.6},
-	"nap": {"stat": "stamina", "amount": 0.4},
-	"rest": {"stat": "stamina", "amount": 0.2},
-	"wash": {"stat": "hygiene", "amount": 0.3},
+	"sleep": [
+		{"stat": "stamina", "amount": 0.6},
+		{"stat": "wakefulness", "amount": 50},
+	],
+	"nap": [
+		{"stat": "stamina", "amount": 0.4},
+		{"stat": "wakefulness", "amount": 20},
+	],
+	"rest": [
+		{"stat": "stamina", "amount": 0.2},
+	],
+	"wash": [
+		{"stat": "hygiene", "amount": 0.3},
+	],
 }
 
 # 到了定點才開始回復——還在走去床邊的路上不算在睡覺。沒有指定地點的任務
@@ -1284,10 +1295,11 @@ const ACTION_RECOVERY := {
 func _apply_action_recovery() -> void:
 	if stats == null or is_moving():
 		return
-	var recovery: Dictionary = ACTION_RECOVERY.get(current_state, {})
-	if recovery.is_empty():
+	var recovery_list: Array = ACTION_RECOVERY.get(current_state, [])
+	if recovery_list.is_empty():
 		return
-	stats.add(recovery["stat"], recovery["amount"])
+	for recovery in recovery_list:
+		stats.add(recovery["stat"], recovery["amount"])
 
 func _on_time_changed(_hour: int, _minute: int) -> void:
 	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務
