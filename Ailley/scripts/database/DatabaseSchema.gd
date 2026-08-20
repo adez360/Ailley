@@ -32,7 +32,7 @@ extends RefCounted
 ## 導致既有 user://game.db 建出來的 table 跟新版 CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
-const CURRENT_VERSION := 2
+const CURRENT_VERSION := 3
 
 
 ## 版本落後時依序套用的變更，每個 entry：
@@ -50,6 +50,11 @@ const MIGRATIONS: Array[Dictionary] = [
 		"version": 2,
 		"name": "Backfill water.is_perishable and ale.decay_rate",
 		"apply": Callable(DatabaseSchema, "_migrate_v2_backfill_decay")
+	},
+	{
+		"version": 3,
+		"name": "Enforce memories.memory_id NOT NULL",
+		"apply": Callable(DatabaseSchema, "_migrate_v3_memories_id_not_null")
 	}
 ]
 
@@ -87,6 +92,116 @@ static func _migrate_v2_backfill_decay(db) -> bool:
 			+ db.error_message
 		)
 		return false
+
+	return true
+
+
+## Migration 3：`memories.memory_id` 原本只宣告 `TEXT PRIMARY KEY`——SQLite
+## 的 `TEXT PRIMARY KEY` 不像 `INTEGER PRIMARY KEY` 會隱含 `NOT NULL`，
+## 既有資料庫可能存有 memory_id 為 NULL 的列，破壞記憶資料的識別與關聯
+## （issue #393）。`MemorySchema.create()` 已經把新建的 `CREATE TABLE` 改成
+## `NOT NULL`，但那只對全新資料庫生效——`CREATE TABLE IF NOT EXISTS` 不會
+## 更動既有 table 的欄位約束，SQLite 也不支援直接 `ALTER TABLE ... ALTER
+## COLUMN` 補約束，只能重建表。
+##
+## 用「RENAME 舊表 → CREATE 新表 → 搬資料 → DROP 舊表」而不是直接
+## `DROP TABLE memories` 再重建：RENAME／INSERT 都不是 DELETE，不會觸發
+## `memory_related_npcs.memory_id` 的 `ON DELETE CASCADE`；等資料搬進新表、
+## 新表已經叫回 `memories` 之後才 DROP 暫存的舊表，此時
+## `memory_related_npcs` 的外鍵已經指向新表，不受影響。索引隨舊表一併被
+## RENAME/DROP，最後重新建立。
+##
+## `WHERE memory_id IS NOT NULL` 會把既有的 NULL memory_id 列擋在遷移之外
+## （否則 INSERT 違反新的 NOT NULL，整個 migration 失敗回滾）——這類列本來
+## 就是 issue #393 說的「破壞識別與關聯」的壞資料，`memory_related_npcs`
+## 也不可能有指向 NULL memory_id 的合法關聯，捨棄它們不影響其他有效資料。
+static func _migrate_v3_memories_id_not_null(db) -> bool:
+	if not db.query("ALTER TABLE memories RENAME TO memories_v2;"):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to rename memories: "
+			+ db.error_message
+		)
+		return false
+
+	var create_sql := """
+	CREATE TABLE memories (
+
+		memory_id TEXT PRIMARY KEY NOT NULL,
+
+		npc_id TEXT NOT NULL,
+
+		level INTEGER NOT NULL DEFAULT 1
+			CHECK(level BETWEEN 1 AND 4),
+
+		content TEXT NOT NULL
+			CHECK(length(content) <= 60),
+
+		valence TEXT NOT NULL DEFAULT 'neutral'
+			CHECK(
+				valence IN ('positive', 'negative', 'neutral')
+			),
+
+		importance INTEGER NOT NULL DEFAULT 0
+			CHECK(importance BETWEEN 0 AND 100),
+
+		decay_value INTEGER NOT NULL DEFAULT 100
+			CHECK(decay_value BETWEEN 0 AND 100),
+
+		created_tick INTEGER NOT NULL,
+		created_day INTEGER NOT NULL,
+
+		location_id TEXT,
+
+		created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+		embedding TEXT,
+
+		FOREIGN KEY (npc_id)
+			REFERENCES npc(npc_id)
+			ON DELETE CASCADE,
+
+		FOREIGN KEY (location_id)
+			REFERENCES location(location_id)
+			ON DELETE SET NULL
+	);
+	"""
+
+	if not db.query(create_sql):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to create new memories table: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query(
+		"INSERT INTO memories SELECT * FROM memories_v2 WHERE memory_id IS NOT NULL;"
+	):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to copy memories data: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query("DROP TABLE memories_v2;"):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to drop old memories table: "
+			+ db.error_message
+		)
+		return false
+
+	var index_sql := [
+		"CREATE INDEX IF NOT EXISTS idx_memories_npc_level ON memories(npc_id, level);",
+		"CREATE INDEX IF NOT EXISTS idx_memories_decay ON memories(decay_value);",
+		"CREATE INDEX IF NOT EXISTS idx_memories_npc_day ON memories(npc_id, created_day);"
+	]
+
+	for sql in index_sql:
+		if not db.query(sql):
+			push_error(
+				"[DatabaseSchema] Migration 3: Failed to recreate index: "
+				+ db.error_message
+			)
+			return false
 
 	return true
 

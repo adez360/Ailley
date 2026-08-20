@@ -137,11 +137,18 @@ func _ready() -> void:
 
 	# -------------------------------------------------
 	# CharacterStatePersistence
+	#
+	# 只在 is_seeded 為 true 時啟動——seed 失敗代表 item 目錄可能不完整
+	# （例如 ITEM_BALANCE 對不到 ItemDatabase），這時讓 CharacterStatePersistence
+	# 照常運作，角色買賣/背包同步會去 CRUD 一張缺料的 item 表，出錯不會
+	# 是「schema 沒開好」那種一眼看出的失敗，而是後續零散的 FK/查表落空。
 	# -------------------------------------------------
 
-	call_deferred(
-		"_start_character_state_persistence"
-	)
+	if is_seeded:
+
+		call_deferred(
+			"_start_character_state_persistence"
+		)
 
 
 # =====================================================

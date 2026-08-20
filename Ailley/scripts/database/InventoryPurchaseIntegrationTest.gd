@@ -604,8 +604,11 @@ func _cleanup_test_data(
 	elif money_current > money_before:
 		character.inventory.spend(money_current - money_before)
 
-	# 等待 persistence 完成
-	await get_tree().process_frame
+	# 等待 persistence 把還原後的數值真正寫回 SQLite，不要只等一個 frame——
+	# 理由同 _wait_for_inventory_sync() 上方註解：call_deferred() 何時執行
+	# 不保證落在單一幀內，測試流程結束後角色 node 可能隨場景一起被釋放，
+	# 讓還沒跑完的 deferred SAVE 遺失，SQLite 留下清理前的髒值。
+	await _wait_for_inventory_sync()
 
 	print(
 		"[TEST] 測試資料已清理：bread=%d->%d water=%d->%d money=%d->%d"

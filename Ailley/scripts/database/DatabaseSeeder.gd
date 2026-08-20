@@ -430,9 +430,10 @@ static func _upsert_item(
 		if not updated:
 
 			push_error(
-				"[DatabaseSeeder] "
-				+ "更新 item 失敗：%s | DB=%s"
-				% [
+				(
+					"[DatabaseSeeder] "
+					+ "更新 item 失敗：%s | DB=%s"
+				) % [
 					item_id,
 					DatabaseManager.db.error_message
 				]
@@ -441,9 +442,10 @@ static func _upsert_item(
 			return false
 
 		print(
-			"[DatabaseSeeder] "
-			+ "item 已同步：%s"
-			% item_id
+			(
+				"[DatabaseSeeder] "
+				+ "item 已同步：%s"
+			) % item_id
 		)
 
 		return true
