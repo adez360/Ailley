@@ -1595,9 +1595,11 @@ func _force_rest_until_recovered(now_minutes: int) -> void:
 			and _current_task.get("source", "") == "reflex":
 		return
 
-	# 不是 exhaustion_rest 的話，強制切換成 rest。選中新任務前先停止移動與
-	# 工作中狀態，避免舊動作在強制休息期間繼續執行
+	# 不是 exhaustion_rest 的話，強制切換成 rest。選中新任務前先停止移動、
+	# 結束對話與工作，避免舊動作在強制休息期間繼續執行
 	stop_moving()
+	if is_in_conversation():
+		leave_conversation()
 	if is_working():
 		_end_work(_current_workstation)
 

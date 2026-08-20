@@ -534,6 +534,8 @@ func _update_conditions() -> void:
 ## exhausted 需要一個恢復門檻（stamina <= 0 時觸發，stamina > 門檻時解除）。
 ## 門檻值待 #361 調校後調整
 func _update_exhausted_condition() -> void:
+	if stats == null:
+		return
 	var stamina := stats.get_value("stamina")
 
 	# 觸發：stamina 歸零且尚未 exhausted
