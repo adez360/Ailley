@@ -412,15 +412,22 @@ func get_world_save_data() -> Dictionary:
 func apply_world_save_data(data: Dictionary) -> void:
 	GameClock.day = int(data.get("day", GameClock.day))
 	allow_player_join = bool(data.get("allow_player_join", allow_player_join))
-	embodied_character_id = str(data.get("embodied_character_id", embodied_character_id))
+	# 缺欄位代表「這份存檔沒有記錄化身角色」（SQLite 的 world 表目前還沒有這個
+	# 欄位、或是 #373 之前存的舊 JSON 存檔），不能沿用 GameManager 目前記憶體裡
+	# 殘留的值——那個值可能是別份世界存檔留下的，繼續沿用會讓下面的 mismatch
+	# 判定跟其他之後讀這個欄位的系統看到錯誤的化身角色
+	embodied_character_id = str(data.get("embodied_character_id", ""))
 
 	# 場景裡目前的 player 節點如果不是存檔記錄的那一個，代表需要換身——但
 	# 換身機制（#371）還沒做，這裡只能示警，不能真的動。不視為錯誤：MVP
 	# 現在場景裡固定只有一個 player 節點，兩者本來就該一致，只有先前手動
-	# 換過場景或存檔跨場次挪用時才會觸發
+	# 換過場景或存檔跨場次挪用時才會觸發。「沒有 player 節點」正規化成空字串
+	# 再比較，涵蓋「存檔記錄空但場景有 player」與「存檔記錄有 id 但場景沒
+	# player」兩種原本會被漏掉的不一致
 	var player_node := get_tree().get_first_node_in_group("player") as Character
-	if player_node != null and not embodied_character_id.is_empty() and player_node.character_id != embodied_character_id:
-		push_warning("apply_world_save_data: 存檔記錄的化身角色 %s 跟場景目前的 player 節點 %s 不同，尚無自動換身機制（見 #371），需要手動處理" % [embodied_character_id, player_node.character_id])
+	var current_embodied_character_id := player_node.character_id if player_node != null else ""
+	if current_embodied_character_id != embodied_character_id:
+		push_warning("apply_world_save_data: 存檔記錄的化身角色 %s 跟場景目前的 player 節點 %s 不同，尚無自動換身機制（見 #371），需要手動處理" % [embodied_character_id, current_embodied_character_id])
 
 	var characters = data.get("characters", {})
 	# 驗證 characters 必須是 Dictionary，不是就跳過整個角色載入流程
