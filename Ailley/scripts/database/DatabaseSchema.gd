@@ -29,7 +29,8 @@ extends RefCounted
 
 
 ## schema 目前的版本。哪一支 *Schema.gd 的欄位／CHECK／FK／索引改了，
-## 導致既有 user://game.db 建出來的 table 跟新版 CREATE TABLE 對不上時，
+## 導致既有資料庫（DatabaseManager.DATABASE_PATH）建出來的 table 跟新版
+## CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
 const CURRENT_VERSION := 2

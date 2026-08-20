@@ -15,7 +15,8 @@ extends Node
 ##        └── DatabaseCRUDTest
 ## 3. 將本腳本掛在 DatabaseCRUDTest。
 ## 4. 確認 DatabaseManager 是 Autoload。
-## 5. 測試前刪除 user://game.db。
+## 5. 測試前刪除 DatabaseManager.DATABASE_PATH 指向的資料庫檔案
+##    （檔名依 checkout 算 hash，見 DatabaseManager.gd）。
 ## 6. 執行測試場景。
 ##
 ## 注意：

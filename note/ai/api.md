@@ -1188,7 +1188,7 @@ var hour := 8 · var minute := 0 · var day := 1
 ## DatabaseManager — scripts/database/DatabaseManager.gd · autoload · Node
 
 ```gdscript
-const DATABASE_PATH := "user://game.db"
+var DATABASE_PATH := _compute_database_path()  # user://game_<hash>.db，依 checkout 隔離
 
 var db: SQLite
 var is_ready := false                        # false 時所有公開方法早退
@@ -1308,7 +1308,7 @@ Agent 不對 Stats 反應（get_lowest_need_place() 可用但無呼叫端）
 noise_heard 對話中會被吞掉；睡覺中的 Agent 沒有排除，一樣會冒 !?
 SaveService 兩條實作並存：JsonSaveService（MVP 採用中）與 SqliteSaveService/DatabaseManager
   （非阻塞平行開發，見《99》P-26）；CharacterStatePersistence 已把 npc/npc_state/
-  npc_inventory/npc_wallet 同步進 user://game.db，但 character_id／GameClock.day 本身
+  npc_inventory/npc_wallet 同步進 DATABASE_PATH，但 character_id／GameClock.day 本身
   仍未持久化，見下行
 character_id 與 GameClock.day 都未持久化，重開就重來
 AIService 已接對話（conversation.gd 非同步）與行程（agent.gd 任務池＋決策迴圈，
