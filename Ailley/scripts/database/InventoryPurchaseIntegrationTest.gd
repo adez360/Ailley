@@ -388,7 +388,10 @@ func _run() -> void:
 ## 等到 CharacterStatePersistence 的 deferred inventory SAVE 真正跑完，
 ## 而不是賭固定幀數——call_deferred() 何時真正執行不保證落在單一幀內，
 ## 單次 await process_frame 可能在 SAVE 完成前就繼續，讓後面的 SELECT
-## 斷言間歇性失敗。逾時仍會返回，讓後面的 SELECT 斷言自然失敗並報錯。
+## 斷言間歇性失敗。逾時時明確呼叫 _fail()——原本想讓後面的 SELECT 斷言
+## 自然失敗，但 _cleanup_test_data() 這條路徑逾時後不會再做任何斷言，
+## 且 _run() 的購買後斷言只檢查「至少一筆」，逾時後可能被同一張表裡
+## 舊資料矇混過去，兩者都不保證逾時會被觀察到。
 func _wait_for_inventory_sync() -> void:
 
 	var persistence := DatabaseManager.get_node_or_null(
@@ -407,6 +410,13 @@ func _wait_for_inventory_sync() -> void:
 	):
 		await get_tree().process_frame
 		frames += 1
+
+	if persistence.has_pending_inventory_sync():
+		_fail(
+			"庫存同步逾時",
+			"等待 %d frame 後 CharacterStatePersistence 仍有未完成的 inventory sync"
+			% INVENTORY_SYNC_TIMEOUT_FRAMES
+		)
 
 
 func _find_player() -> Character:
