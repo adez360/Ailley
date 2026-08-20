@@ -10,8 +10,8 @@ extends CanvasLayer
 ## 面板開著時 ESC 該關面板，不是暫停。chat_input 走 _input，順序無關
 ## （且真的比對 ui_cancel action）；debug_console 也走 _input，但直接比對
 ## KEY_ESCAPE，不是 ui_cancel action；其餘會攔 Esc 的面板
-## （status_panel、inventory_panel、character_create……）都走 _unhandled_input，
-## 但直接比對 KEY_ESCAPE，不是 ui_cancel action——這裡只要它們是 PersistentUI
+## （status_panel、inventory_panel、character_create、character_library……）
+## 都走 _unhandled_input，且比對 ui_cancel action——這裡只要它們是 PersistentUI
 ## 底下排在 Pause 之後的子節點、且自己 set_input_as_handled()，就會比 Pause 先
 ## 收到，不需要另外做面板堆疊管理。這個「Pause 排最前面」的前提曾經因為
 ## #312 把 UI 拆進 hud.tscn 時弄丟過（#326），之後新增/搬動 PersistentUI

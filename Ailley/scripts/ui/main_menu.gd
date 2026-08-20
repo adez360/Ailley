@@ -11,8 +11,8 @@ extends Control
 ##     TitleLabel（遊戲名稱，不走翻譯 key——專有名詞）
 ##     ButtonsBox（VBoxContainer，置中）
 ##       StartButton / CreditsButton
-##     Scrim（ColorRect，全螢幕半透明，預設隱藏；點空白處關閉銘謝子畫面，
-##            做法跟 status_panel.gd／各面板的「點空白處或按 Esc 關閉」一致）
+##     Scrim（ColorRect，全螢幕半透明，預設隱藏；點面板外關閉銘謝子畫面，
+##            做法跟 status_panel.gd／各面板的「點面板外或按 Esc 關閉」一致）
 ##       CreditsPanel（Setting menu.png 九宮格，樣式沿用 status_panel.gd）
 ##         TitleBg / TitleLabel
 ##         VBox
