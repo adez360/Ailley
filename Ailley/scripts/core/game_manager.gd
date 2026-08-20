@@ -432,8 +432,10 @@ func apply_world_save_data(data: Dictionary) -> void:
 	allow_player_join = bool(data.get("allow_player_join", allow_player_join))
 
 	var library_data = data.get("character_library", [])
+	# clear() 在型別檢查之前——存檔壞掉、library_data 不是 Array 時，也不該
+	# 讓上一個世界殘留的 character_library 繼續留在記憶體裡（CodeRabbit review 抓到）
+	character_library.clear()
 	if library_data is Array:
-		character_library.clear()
 		var seen_ids := {}
 		for entry in library_data:
 			if not _is_valid_library_entry(entry):
