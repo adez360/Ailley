@@ -1090,7 +1090,8 @@ func _force_rest_until_recovered(now_minutes: int) -> void:
 		"action": "rest",
 		"source": "reflex",
 		"duration": 999999,
-		"params": {}
+		"params": {},
+		"interruptible": false,  # 力竭期間不可被打斷
 	}
 	_select(rest_task, now_minutes)
 
@@ -1461,29 +1462,6 @@ func _select(task: Dictionary, now_minutes: int) -> void:
 
 # 力竭狀態下強制休息（#364）。exhausted 激活時選不了別的動作，只能 rest
 # 直到 stamina 恢復到門檻為止。_reevaluate_once() 檢查到 exhausted 時呼叫
-func _force_rest_until_recovered(now_minutes: int) -> void:
-	# 如果已經在 rest，繼續就好
-	if current_state == "rest":
-		return
-
-	# 不是 rest 的話，強制切換成 rest（原地進行，不需要移動）
-	var rest_task: Dictionary = {
-		"id": "exhaustion_rest",
-		"action": "rest",
-		"params": {},
-		"priority": 999,  # 最高優先級
-		"window": null,  # 沒有時間窗限制
-		"duration": 0.0,  # 由引擎決定何時結束（stamina 恢復時）
-		"interruptible": false,  # 力竭期間不可被打斷
-		"preconditions": [],
-		"source": "reflex",  # 引擎強制執行，不是 LLM 決定
-		"created_at": now_minutes,
-		"expires_at": 0,
-		"retries": 0,
-	}
-
-	_select(rest_task, now_minutes)
-
 # 往 _current_task 的方向前進。無條件每次重算都跑一次，不管這次有沒有
 # 剛選定新任務——對話中會在這裡先返回、不移動，等下一次重算（對話結束後
 # 那次）才會真的呼叫 move_to()。
