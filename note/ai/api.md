@@ -1188,7 +1188,7 @@ var hour := 8 · var minute := 0 · var day := 1
 ## DatabaseManager — scripts/database/DatabaseManager.gd · autoload · Node
 
 ```gdscript
-const DATABASE_PATH := "user://game.db"
+var DATABASE_PATH := _compute_database_path()  # user://game_<hash>.db，依 checkout 隔離
 
 var db: SQLite
 var is_ready := false                        # false 時所有公開方法早退
@@ -1227,8 +1227,9 @@ select() 找不到列回傳 []，不是 error；update()/delete() 空 conditions
   拼 query_with_bindings() 的 UPDATE/DELETE，值仍是綁定參數
 ⚠ _table_has_column() 內部查 PRAGMA table_info() 會覆寫 db.query_result，查完會還原成呼叫端
   原本的結果，get_last_result() 不會拿到 PRAGMA 的資料
-沒有重試／backoff：MVP 單一 process 對應單一連線，多 process 搶同一份 game.db
-  目前沒有呼叫端會製造這個情境（無多人連線）
+沒有重試／backoff：MVP 單一 process 對應單一連線，同一 checkout 被多 process
+  搶同一份 DATABASE_PATH（跨 checkout 已靠雜湊隔開）目前沒有呼叫端會製造這個
+  情境（無多人連線）
 → 技術/存檔
 ```
 
@@ -1308,7 +1309,7 @@ Agent 不對 Stats 反應（get_lowest_need_place() 可用但無呼叫端）
 noise_heard 對話中會被吞掉；睡覺中的 Agent 沒有排除，一樣會冒 !?
 SaveService 兩條實作並存：JsonSaveService（MVP 採用中）與 SqliteSaveService/DatabaseManager
   （非阻塞平行開發，見《99》P-26）；CharacterStatePersistence 已把 npc/npc_state/
-  npc_inventory/npc_wallet 同步進 user://game.db，但 character_id／GameClock.day 本身
+  npc_inventory/npc_wallet 同步進 DATABASE_PATH，但 character_id／GameClock.day 本身
   仍未持久化，見下行
 character_id 與 GameClock.day 都未持久化，重開就重來
 AIService 已接對話（conversation.gd 非同步）與行程（agent.gd 任務池＋決策迴圈，
