@@ -45,6 +45,15 @@ var _words_to_creator_spoken := false
 ## 判定是否要說出口的 AI 呼叫進行中（見 maybe_speak_to_creator() 的鎖）
 var _words_to_creator_pending := false
 
+## #381：墓碑四內容欄位其中兩個（《規格書 09》§4-2）。last_words 由死者的 LLM
+## 在臨終時生成，可為空字串（來不及說）；life_highlights 由引擎彙整 L4 核心
+## 記憶與重大事件流產出，絕不讓 LLM 潤飾。目前死亡狀態機還沒做（見 #368），
+## 這裡先開欄位形狀讓存讀檔接得上，沒有任何呼叫端會寫入——不影響現有行為。
+## words_to_creator 是墓碑第三個欄位，已存在於上面（#164），不重複宣告。
+## 第四個欄位 epitaphs（一對多，SQLite）不在這裡，見 #382
+var last_words := ""
+var life_highlights: Array[String] = []
+
 ## schedule 任務給中間值，靠 time_bonus 拉開跟其他來源的差距，
 ## 不是靠 base priority 本身——見 [[行程佇列與任務仲裁]] 的「待決」那節
 const SCHEDULE_BASE_PRIORITY := 10.0
@@ -1172,6 +1181,36 @@ func get_state_snapshot() -> Dictionary:
 		"size": _tasks.size(),
 	}
 	return snapshot
+
+
+# ---- 存檔 ----
+
+# #381：墓碑三個「一份墓一筆」欄位（words_to_creator/last_words/life_highlights），
+# 比照 base 的欄位風格直接存讀，不建 SPEC——三個欄位型別互不相同（string/string/
+# array），硬套 Stats.SPEC 那種同型別、走訪產生數值的模式沒有意義；SPEC 那條
+# 規則要保的是「加一項不用到處改」，這裡欄位數量固定且各自的存讀邏輯本來就不同。
+# epitaphs（第四個欄位，一對多）不在這裡，走 SQLite，見 #382
+func get_save_data() -> Dictionary:
+	var data := super()
+	data["words_to_creator"] = words_to_creator
+	data["last_words"] = last_words
+	data["life_highlights"] = life_highlights.duplicate()
+	return data
+
+
+func load_save_data(data: Dictionary) -> void:
+	super(data)
+	if data.has("words_to_creator"):
+		var raw_words_to_creator: Variant = data["words_to_creator"]
+		words_to_creator = raw_words_to_creator if raw_words_to_creator is String else ""
+	var raw_last_words: Variant = data.get("last_words", "")
+	last_words = raw_last_words if raw_last_words is String else ""
+	var raw_highlights: Variant = data.get("life_highlights", [])
+	life_highlights.clear()
+	if raw_highlights is Array:
+		for item in raw_highlights:
+			if item is String:
+				life_highlights.append(item)
 
 # today_plan（#350）是跨天的承諾——「今天打算做這幾件事」——跟 current_goal
 # 那種瞬時念頭不同，重開遊戲不該讓它憑空消失（見 note/技術/存檔.md 的既有
