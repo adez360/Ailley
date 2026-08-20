@@ -1197,9 +1197,19 @@ func load_save_data(data: Dictionary) -> void:
 
 	# 沒有存檔資料時維持 _ready() 已經由 Personality.from_identity() 組好的值，
 	# 不清空——跟 stats／relationships 同一個理由，personality 不是每次都
-	# 隨存檔走的東西（沒建過角的預設角色也要有值）
+	# 隨存檔走的東西（沒建過角的預設角色也要有值）。
+	#
+	# 覆寫前先驗證結構完整（10 項欄位都在、值是合法數字）才套用——之後
+	# Agent._roll_success() 會把這幾項當 float 直接運算，缺欄位會被
+	# .get(key, 0.0) 悄悄當成 0（角色性格整個跑掉但不報錯），型別錯誤則要
+	# 到那裡才會炸開。壞掉的存檔資料寧可整包不套用、保留目前有效的人格，
+	# 也不要讓半殘資料靜默生效（CodeRabbit review 抓到）
 	if data.has("personality") and data["personality"] is Dictionary:
-		personality = (data["personality"] as Dictionary).duplicate(true)
+		var loaded_personality: Dictionary = data["personality"]
+		if _is_valid_personality_data(loaded_personality):
+			personality = loaded_personality.duplicate(true)
+		else:
+			push_error("Character %s: 存檔的 personality 資料結構不合法，保留目前人格" % character_name)
 
 	# memory 一定呼叫，跟 stats／relationships 特意不同：這個角色可能是已經在
 	# 場上跑過、累積了新記憶的既有節點（debug console `load` 就是這樣用），
@@ -1209,6 +1219,26 @@ func load_save_data(data: Dictionary) -> void:
 		var memory_data: Variant = data.get("memory", {})
 		memory.load_save_data(memory_data if memory_data is Dictionary else {})
 
+# personality 欄位清單跟 Personality.hexaco_to_personality() 實際產出的
+# 10 項對齊，不引用 Personality 常數——這裡只是「存檔資料合不合法」的結構
+# 檢查，跟 Personality 那邊「HEXACO 怎麼算出這 10 項」是不同層次的事
+const _PERSONALITY_FIELDS := [
+	"diligence", "courage", "sociability", "morality", "stability",
+	"romanticism", "curiosity", "grudge", "greed", "honesty",
+]
+
+# 存檔的 personality 必須恰好是這 10 項欄位、每項都是合法有限數字，才准
+# 覆寫目前人格——少欄位、多欄位、型別錯誤、NaN/Infinity 一律拒絕整包
+func _is_valid_personality_data(loaded: Dictionary) -> bool:
+	if loaded.size() != _PERSONALITY_FIELDS.size():
+		return false
+	for key in _PERSONALITY_FIELDS:
+		if not loaded.has(key):
+			return false
+		var value: Variant = loaded[key]
+		if not (value is int or value is float) or not is_finite(float(value)):
+			return false
+	return true
 
 # ---- 滑鼠選取 ----
 

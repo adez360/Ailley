@@ -1066,6 +1066,16 @@ func get_save_data() -> Dictionary:
 
 func load_save_data(data: Dictionary) -> void:
 	super(data)
+
+	# 讀檔當下若有一份決策請求還在飛（debug 主控台 load 指令對執行中的角色
+	# 呼叫這裡），那份回應是問著載入前的舊狀態，不能讓它晚到之後用
+	# _apply_today_plan() 蓋掉剛載入的 today_plan——跳世代讓
+	# _request_next_decision() 收到回應時自己認出這是過期世代整包丟棄，
+	# 跟 debug_set_llm_decision() 的翻轉世代同一招。_plan_update_requested
+	# 也一併清掉：那是舊決策留下的「下次讓我改」許可，不該帶進載入後的狀態
+	_decision_generation += 1
+	_plan_update_requested = false
+
 	_today_plan.clear()
 	var raw_plan: Variant = data.get("today_plan", [])
 	if raw_plan is Array:
