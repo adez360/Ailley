@@ -284,8 +284,8 @@ resolve() -> {"success": bool, "reason": String}   # reason 成功是空字串�
 † 先通過 AISchema.IMPLEMENTED_ACTIONS 的動作才會進入 LLM 任務流程；在已實作
   動作中，SUCCESS_PARAMS 表上的才會擲骰（《01-2》§2 公式），不在表上且無
   硬規則的動作固定成功。move_to/sleep 屬於這種。talk 不擲骰，但仍檢查目標
-  存在性與歧義；eat 目前不在 IMPLEMENTED_ACTIONS，根本進不到 resolve()，
-  不是「恆成功」
+  存在性與歧義；hunt_small 等 SUCCESS_PARAMS 上的動作目前都不在
+  IMPLEMENTED_ACTIONS，根本進不到 resolve()，不是「恆成功」（見 #216）
 † stamina 缺欄位時（#115 未落地）當中性值 50 處理，不吃到假懲罰；
   injury/alcohol 公式本來就是從 0 起算才扣分，缺欄位回傳的 0.0 剛好是
   中性值，不用特別處理
@@ -443,7 +443,10 @@ fun          娛樂     0.2    0       100    ✓        square
 mood         心情     0.5    50      50     ✗        ""
 
 † 加一項數值 = SPEC 加一列，其餘程式全不用改（含主控台 status 顯示）
-† drift 是每「現實秒」往 toward 靠近多少
+† drift 是每 tick（`GameClock.GAME_MINUTES_PER_TICK`＝10 遊戲分鐘）往 toward 靠近多少，
+  不是每現實秒——`Stats._on_time_changed()` 訂閱 `GameClock.time_changed`，只在
+  `_minute % GAME_MINUTES_PER_TICK == 0` 的分鐘邊界才真的套用一次（#361 修正，
+  修正前錯誤地每現實秒套用一次，漂移速度快了 10 倍）
 † place 只回名稱不回座標 — Stats 不可依賴場景（存檔/測試要能無場景使用）
 † satiety/hydration/stamina/wakefulness/hygiene/health 是《01》§4-1「越高越好」的需求型欄位；
   但 get_lowest_need()/needs_attention() 只掃 is_need=✓ 的 4 項（hygiene/health 沒有對應的
@@ -971,9 +974,13 @@ const ALLOWED_ACTIONS := [                   # 《07》《11》拍板的動作�
     "hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink",
     "move_to", "sleep", "nap", "rest", "wash", "idle",
     "steal", "attack",
-]                                             # murmur 是 #162 補上的，#88 population 時漏列
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "murmur"]
-# 後四個（nap/rest/wash/idle）是 #112 接上的，murmur 是 #162 接上的
+    "haul", "struggle",
+]                                             # murmur 是 #162 補上的，#88 population 時漏列；
+                                              # haul/struggle 是 #161 補上的（《99》P-27）
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade"]
+# 後四個（nap/rest/wash/idle）是 #112 接上的，murmur 是 #162 接上的；eat 是 #114、
+# drink 是 #163、give/shout 是 #158、haul/struggle 是 #161、attack 是 #159、
+# persuade 是 #227 接上的。ALLOWED_ACTIONS 其餘 9 個未接執行層，見 #216／#340／#141
 const MAX_TASKS_PER_RESPONSE := 5            # 單次決策回應最多幾筆任務
 const MAX_LINE_CHARS := 200                  # dialogue line／reasoning／inner_monologue 共用的截斷長度
 const ERROR_NOT_JSON := "not_json"
@@ -1006,7 +1013,7 @@ static func is_implemented_action(action: String) -> bool
 † 白名單不用黑名單：黑名單漏掉的那項就是被打穿的那項
 † ALLOWED 但非 IMPLEMENTED 的動作驗證會過，執行層回 NOT_IMPLEMENTED
   「不被允許」與「還沒做」是不同的失敗，混在一起 debug 分不清
-† ALLOWED_ACTIONS 刻意不含 "work"：《07》《11》的 22 個動作沒有它，
+† ALLOWED_ACTIONS 刻意不含 "work"：《07》《11》的 25 個動作沒有它，
   schedule 來源的 work 任務不經過這裡驗證，不受影響——只影響 LLM 不能自己決定叫角色去打工
 † reasoning／inner_monologue 選填、缺席給空字串、型別錯整包拒絕、超長截斷不拒絕
   ——跟 dialogue 的 line 用同一種寬鬆度，但語意不同（可以不存在、可以是空字串）
@@ -1163,6 +1170,7 @@ func load_npc_data()
 ```gdscript
 signal time_changed(hour: int, minute: int)  # 每遊戲分鐘
 signal day_changed(day: int)                 # 跨日，在同一次 time_changed 之前發
+const GAME_MINUTES_PER_TICK := 10            # 生理 tick 週期，Stats 漂移／conditions 共用同一個來源
 @export var seconds_per_game_minute := 1.0
 var hour := 8 · var minute := 0 · var day := 1
 ```
