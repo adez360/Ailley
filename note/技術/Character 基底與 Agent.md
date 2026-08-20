@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-17
+updated: 2026-08-20
 ---
 
 # Character 基底與 Agent
@@ -243,12 +243,13 @@ Agent/Agent2 是場景裡的靜態節點，`_ready()` 時自己查表更貼近�
 > 規格書《02》§1-4 定義 12 tick = 2 遊戲小時（120 遊戲分鐘），也就是 1 tick = 10 遊戲分鐘
 > ——用規格書自己的算例反查就對得起來：joy intensity=60、stability=90、grudge=75 算出
 > 9 tick，規格書寫「約 1.5 小時」＝90 遊戲分鐘。專案目前沒有事件驅動的 tick 引擎
-> （見《02》§4 的流程圖，那套還沒實作），`emotion.duration_left` 與 `_update_conditions()`
-> 的門檻重新檢查都掛在 `GameClock.time_changed`（每遊戲分鐘觸發一次）上，但用
-> `Character._tick_minute_accum` 每累積 10 次才真正跑一次 tick，不是每次 `time_changed`
-> 都跑。這跟 `Stats._process(delta)` 的連續 real-time drift 是兩套不同的時間模型——
-> `Stats` 的「每 tick」drift 值是直接當「每真實秒」在用，沒有經過 GameClock，也沒有
-> 10 倍的换算。兩邊是刻意不同調的兩套機制，日後真的做 tick 引擎時要分別處理。
+> （見《02》§4 的流程圖，那套還沒實作）。`GameClock.GAME_MINUTES_PER_TICK`（＝10）是唯一
+> 來源，`emotion.duration_left`／`_update_conditions()`／`Stats` 漂移三者都掛
+> `GameClock.time_changed`，各自在 `_minute % GAME_MINUTES_PER_TICK == 0` 的分鐘邊界
+> 才真的執行一次（#361 修正）——修正前 `Stats._process(delta)` 是連續 real-time drift，
+> 沒有經過 GameClock，也沒有 10 倍換算，跟 emotion／conditions 那套不同調，導致漂移
+> 速度快了 10 倍；`Character` 自己的本地 `_tick_minute_accum` 累加器也已經拿掉，
+> 改成跟 `Stats` 共用同一個全域分鐘邊界判斷，不再各自維護一份計數。
 
 ### emotion（`set_emotion()`）
 
@@ -270,8 +271,13 @@ Agent/Agent2 是場景裡的靜態節點，`_ready()` 時自己查表更貼近�
 | --- | --- |
 | `injured`／`drunk`／`sleepy`／`filthy` | `bleeding`（health −1.5/tick）／`starving`（health −0.5/tick）／`dehydrated`（health −1.0/tick） |
 
-`exhausted`（`stamina = 0`）目前也只做偵測——規格書寫的「強制昏睡」效果
-是行動佔用邏輯的一部分，留給接手 #160（昏迷狀態）的那則實作。
+`exhausted`（`stamina = 0`）已經不只是偵測（#361）：`agent.gd::_reevaluate_once()`
+偵測到這個 condition 時優先於一般任務仲裁，呼叫 `_force_rest_until_recovered()`
+塞一筆 `source: "reflex"`、`interruptible: false` 的 rest 任務並 `stop_moving()`，
+直到 stamina 回升、condition 清除為止；清除的當下 `_reevaluate_once()` 會清掉
+這筆 reflex 任務並重置追逐狀態，讓一般仲裁接手。「強制昏睡」（角色倒下、
+送醫這類更完整的行動佔用）仍留給接手 #160（昏迷狀態）的那則，這裡做的只是
+「不給選、強制休息」。
 
 行為成功率／說真心話機率（`injured`／`drunk` 的效果）刻意不做，留給 #120
 （成功率／硬規則檢查層）；`filthy` 的效果留給《99》P-35 重新設計。
