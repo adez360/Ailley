@@ -443,7 +443,10 @@ fun          娛樂     0.2    0       100    ✓        square
 mood         心情     0.5    50      50     ✗        ""
 
 † 加一項數值 = SPEC 加一列，其餘程式全不用改（含主控台 status 顯示）
-† drift 是每「現實秒」往 toward 靠近多少
+† drift 是每 tick（`GameClock.GAME_MINUTES_PER_TICK`＝10 遊戲分鐘）往 toward 靠近多少，
+  不是每現實秒——`Stats._on_time_changed()` 訂閱 `GameClock.time_changed`，只在
+  `_minute % GAME_MINUTES_PER_TICK == 0` 的分鐘邊界才真的套用一次（#361 修正，
+  修正前錯誤地每現實秒套用一次，漂移速度快了 10 倍）
 † place 只回名稱不回座標 — Stats 不可依賴場景（存檔/測試要能無場景使用）
 † satiety/hydration/stamina/wakefulness/hygiene/health 是《01》§4-1「越高越好」的需求型欄位；
   但 get_lowest_need()/needs_attention() 只掃 is_need=✓ 的 4 項（hygiene/health 沒有對應的
@@ -1167,6 +1170,7 @@ func load_npc_data()
 ```gdscript
 signal time_changed(hour: int, minute: int)  # 每遊戲分鐘
 signal day_changed(day: int)                 # 跨日，在同一次 time_changed 之前發
+const GAME_MINUTES_PER_TICK := 10            # 生理 tick 週期，Stats 漂移／conditions 共用同一個來源
 @export var seconds_per_game_minute := 1.0
 var hour := 8 · var minute := 0 · var day := 1
 ```

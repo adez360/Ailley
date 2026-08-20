@@ -330,26 +330,21 @@ func _find_id_holder(id: String) -> Character:
 
 # ---- 情緒與狀態 ----
 
-## 1 tick = 10 遊戲分鐘（《02》§1-4：12 tick = 2 遊戲小時）。GameClock.time_changed
-## 每遊戲分鐘觸發一次，所以要每累積 10 次才真正跑一次 tick，不是每次都跑——
-## 拿規格書自己的算例反查：joy intensity=60、stability=90、grudge=75 應該是
-## 9 tick ≈ 1.5 小時（90 遊戲分鐘），不是 9 遊戲分鐘
-const TICK_GAME_MINUTES := 10
-var _tick_minute_accum := 0
+## 1 tick = 10 遊戲分鐘（《02》§1-4：12 tick = 2 遊戲小時 ＝ GameClock.GAME_MINUTES_PER_TICK）。
+## GameClock.time_changed 每遊戲分鐘觸發一次，用 `_minute % GAME_MINUTES_PER_TICK == 0`
+## 判斷是否落在 tick 邊界上，不是每次都跑，也不是本地累加器——跟 Stats 漂移共用
+## 同一個全域邊界，兩者永遠同步觸發。拿規格書自己的算例反查：joy intensity=60、
+## stability=90、grudge=75 應該是 9 tick ≈ 1.5 小時（90 遊戲分鐘），不是 9 遊戲分鐘
 
 func _on_game_minute(_hour: int, _minute: int) -> void:
 	# 昏迷與治療檢查每遊戲分鐘執行（與 GameClock.time_changed 同步）
 	_update_incapacitation()
 	_update_treatment()
 
-	# 情緒與其他 condition 每 10 遊戲分鐘執行一次（tick 機制）
-	_tick_minute_accum += 1
-	if _tick_minute_accum < TICK_GAME_MINUTES:
-		return
-	_tick_minute_accum = 0
-
-	_tick_emotion()
-	_update_conditions()
+	# 情緒與其他 condition 在全局分鐘邊界執行（tick 機制，與 Stats 漂移同步）
+	if _minute % GameClock.GAME_MINUTES_PER_TICK == 0:
+		_tick_emotion()
+		_update_conditions()
 
 ## AI 宣告新情緒。type 必須是 EMOTION_TYPES 之一，intensity 0–100。
 ## stability／grudge 是《02》§1-4 持續時間公式的人格係數，人格資料還沒接上
@@ -1053,7 +1048,7 @@ func attack(other: Character) -> String:
 		other.stats.add("injury", ATTACK_INJURY_DELTA)
 		# 立即同步 bleeding／injury 衰減暫停，不等 _update_conditions() 的 10 分鐘
 		# 一次 tick——命中瞬間 injury 可能已經跨過 20 的門檻，晚同步的話這段空窗期
-		# injury 會繼續被 Stats._process() 的自然衰減蓋掉這次造成的傷害
+		# injury 會繼續被 Stats 的自然衰減（GameClock 驅動）蓋掉這次造成的傷害
 		other._set_condition(CONDITION_BLEEDING, other.stats.get_value("injury") >= 20.0)
 		other.stats.injury_decay_paused = other.has_condition(CONDITION_BLEEDING)
 	other.force_interrupt()

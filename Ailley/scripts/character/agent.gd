@@ -1039,8 +1039,9 @@ func _on_noise_heard(_source: Character) -> void:
 ## 仲裁常數（HYSTERESIS／MIN_COMMIT／LLM_WAIT_MIN_COMMIT／MIN_ACTION_DURATION／
 ## LLM_TASK_POOL_CAP，見上方各自的說明），沒有涵蓋這裡，這三個值還沒實測過。
 ##
-## 對照基準：stamina 的自然衰減是每現實秒 1.0（Stats.SPEC 的 drift），而一個遊戲
-## 分鐘正好是一現實秒，所以淨回復是這裡的值減 1
+## 對照基準：stamina 的自然衰減是每遊戲分鐘 1.0，但 Stats 漂移只在每 10 遊戲分鐘
+## 執行一次，所以每 tick（10 遊戲分鐘）的淨變化是 amount * 10 - 1.0。_apply_action_recovery()
+## 是每遊戲分鐘執行一次，所以 sleep/nap/rest/wash 的回復額在每 10 遊戲分鐘內累積
 ##
 ## 表的形狀是「動作 -> {stat, amount}」而不是單純「動作 -> 數字」：不同動作
 ## 要回復的欄位不見得相同（wash 回復的是 `hygiene` 不是 `stamina`），單純
@@ -1049,14 +1050,14 @@ func _on_noise_heard(_source: Character) -> void:
 ## 發呆本來就不回復任何東西，它的用途是「合法地什麼都不做」，讓 AI 逾時或
 ## 沒事可做時有一個不必假裝在忙的選項
 ##
-## wash 的 3.0 跟 sleep/nap/rest 三個數字同一種狀態：《07》§2-3 只給
-## 「wash 提升 hygiene」，沒給相對關係也沒給數字，待實跑校準的暫定值，
-## 不是規格定案（#241）
+## ACTION_RECOVERY 的數值原是針對舊的「漂移快 10 倍」情況設的（#361 修正前）。
+## #361 修正後漂移改成每 tick（而非每現實秒），ACTION_RECOVERY 同步除以 10
+## 以維持相對平衡（#361）。
 const ACTION_RECOVERY := {
-	"sleep": {"stat": "stamina", "amount": 6.0},
-	"nap": {"stat": "stamina", "amount": 4.0},
-	"rest": {"stat": "stamina", "amount": 2.0},
-	"wash": {"stat": "hygiene", "amount": 3.0},
+	"sleep": {"stat": "stamina", "amount": 0.6},
+	"nap": {"stat": "stamina", "amount": 0.4},
+	"rest": {"stat": "stamina", "amount": 0.2},
+	"wash": {"stat": "hygiene", "amount": 0.3},
 }
 
 # 到了定點才開始回復——還在走去床邊的路上不算在睡覺。沒有指定地點的任務
@@ -1075,6 +1076,24 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 	# 會用新任務的 current_state 結算最後一分鐘
 	_apply_action_recovery()
 	_reevaluate()
+
+# 力竭時強制進入休息，直到 stamina 恢復
+func _force_rest_until_recovered(now_minutes: int) -> void:
+	# 只有 reflex rest 已存在時才直接沿用
+	if _current_task.get("source", "") == "reflex" and current_state == "rest":
+		stop_moving()
+		return
+
+	stop_moving()
+	var rest_task: Dictionary = {
+		"id": "reflex_rest_" + str(randi()),
+		"action": "rest",
+		"source": "reflex",
+		"duration": 999999,
+		"params": {},
+		"interruptible": false,  # 力竭期間不可被打斷
+	}
+	_select(rest_task, now_minutes)
 
 # 仲裁器的核心：每次重算，不維護「目前是第幾筆」。
 #
@@ -1109,6 +1128,28 @@ func _reevaluate() -> void:
 
 func _reevaluate_once() -> void:
 	var now_minutes := _now_minutes()
+
+	# 力竭時強制進入休息，優先於一般的任務仲裁
+	var has_exhausted := conditions.any(func(c): return c.get("type") == "exhausted")
+	if has_exhausted:
+		_force_rest_until_recovered(now_minutes)
+		_pursue_current_task()
+		return
+
+	# exhausted 清除時，移除 reflex rest 並恢復一般仲裁
+	if _current_task.get("source", "") == "reflex":
+		_current_task = {}
+		current_state = "idle"
+		current_place = ""
+		# 重置各追逐狀態，以便正常仲裁能清楚地選擇下一個任務
+		_talk_pursuit_stuck_ticks = 0
+		_talk_pursuit_last_distance = INF
+		_give_pursuit_stuck_ticks = 0
+		_give_pursuit_last_distance = INF
+		_attack_pursuit_stuck_ticks = 0
+		_attack_pursuit_last_distance = INF
+		_persuade_pursuit_stuck_ticks = 0
+		_persuade_pursuit_last_distance = INF
 
 	# 剛睡醒的偵測要在這裡的任何選任務邏輯跑之前先記下「進來的時候是不是
 	# 在睡」——選任務邏輯本身就可能把 current_state 從 sleep 換掉，這個
@@ -1434,6 +1475,8 @@ func _select(task: Dictionary, now_minutes: int) -> void:
 	_persuade_pursuit_last_distance = INF
 	_persuade_delivered = false
 
+# 力竭狀態下強制休息（#364）。exhausted 激活時選不了別的動作，只能 rest
+# 直到 stamina 恢復到門檻為止。_reevaluate_once() 檢查到 exhausted 時呼叫
 # 往 _current_task 的方向前進。無條件每次重算都跑一次，不管這次有沒有
 # 剛選定新任務——對話中會在這裡先返回、不移動，等下一次重算（對話結束後
 # 那次）才會真的呼叫 move_to()。
