@@ -29,7 +29,6 @@ extends Node
 const MIN := 0.0
 const MAX := 100.0
 const CRITICAL := 30.0		# 低於這個值算「該處理了」
-const GAME_MINUTES_PER_TICK := 10	# Stats 漂移每 10 遊戲分鐘執行一次
 
 const SPEC := {
 	"satiety": {"label": "STAT_SATIETY", "drift": 3.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "tavern"},
@@ -62,7 +61,7 @@ func _ready() -> void:
 
 func _on_time_changed(_hour: int, _minute: int) -> void:
 	_accumulated_minutes += 1
-	if _accumulated_minutes >= GAME_MINUTES_PER_TICK:
+	if _accumulated_minutes >= GameClock.GAME_MINUTES_PER_TICK:
 		_accumulated_minutes = 0
 		_apply_drift()
 

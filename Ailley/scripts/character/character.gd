@@ -334,7 +334,6 @@ func _find_id_holder(id: String) -> Character:
 ## 每遊戲分鐘觸發一次，所以要每累積 10 次才真正跑一次 tick，不是每次都跑——
 ## 拿規格書自己的算例反查：joy intensity=60、stability=90、grudge=75 應該是
 ## 9 tick ≈ 1.5 小時（90 遊戲分鐘），不是 9 遊戲分鐘
-const TICK_GAME_MINUTES := 10
 var _tick_minute_accum := 0
 
 func _on_game_minute(_hour: int, _minute: int) -> void:
@@ -342,9 +341,9 @@ func _on_game_minute(_hour: int, _minute: int) -> void:
 	_update_incapacitation()
 	_update_treatment()
 
-	# 情緒與其他 condition 每 10 遊戲分鐘執行一次（tick 機制）
+	# 情緒與其他 condition 每 10 遊戲分鐘執行一次（tick 機制，與 Stats 漂移同步）
 	_tick_minute_accum += 1
-	if _tick_minute_accum < TICK_GAME_MINUTES:
+	if _tick_minute_accum < GameClock.GAME_MINUTES_PER_TICK:
 		return
 	_tick_minute_accum = 0
 

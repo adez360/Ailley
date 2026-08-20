@@ -1136,6 +1136,21 @@ func _reevaluate_once() -> void:
 		_pursue_current_task()
 		return
 
+	# exhausted 清除時，移除 reflex rest 並恢復一般仲裁
+	if _current_task.get("source", "") == "reflex":
+		_current_task = {}
+		current_state = "idle"
+		current_place = ""
+		# 重置各追逐狀態，以便正常仲裁能清楚地選擇下一個任務
+		_talk_pursuit_stuck_ticks = 0
+		_talk_pursuit_last_distance = INF
+		_give_pursuit_stuck_ticks = 0
+		_give_pursuit_last_distance = INF
+		_attack_pursuit_stuck_ticks = 0
+		_attack_pursuit_last_distance = INF
+		_persuade_pursuit_stuck_ticks = 0
+		_persuade_pursuit_last_distance = INF
+
 	# 剛睡醒的偵測要在這裡的任何選任務邏輯跑之前先記下「進來的時候是不是
 	# 在睡」——選任務邏輯本身就可能把 current_state 從 sleep 換掉，這個
 	# 函式結尾要拿它跟「換完之後」比較，才抓得到真正的轉換瞬間
