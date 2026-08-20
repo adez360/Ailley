@@ -27,6 +27,10 @@ static func create(db) -> bool:
 			REFERENCES location(location_id)
 			ON DELETE SET NULL
 	);
+
+	CREATE INDEX IF NOT EXISTS
+	idx_npc_schedule_npc
+	ON npc_schedule(npc_id, start_time);
 	"""
 
 	if not db.query(sql):

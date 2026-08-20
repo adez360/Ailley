@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-19
+updated: 2026-08-20
 ---
 
 # api
@@ -20,12 +20,15 @@ env  Godot 4.5.1-stable · gl_compatibility · default_texture_filter=0
 ## autoload
 
 ```text
-GameManager   scripts/core/game_manager.gd
-GameClock     scripts/core/GameClock.gd
-AIService     scripts/ai/ai_service.gd
-DatabaseManager   database/DatabaseManager.gd
+GameManager       scripts/core/game_manager.gd
+GameClock         scripts/core/GameClock.gd
+AIService         scripts/ai/ai_service.gd
+SaveService       scripts/save/json_save_service.gd
 _mcp_game_helper  addons/godot_ai/runtime/game_helper.gd   † 勿移除
+DatabaseManager   scripts/database/DatabaseManager.gd
 ```
+
+順序即 `project.godot` 的 autoload 載入順序。
 
 ## groups
 
@@ -1182,13 +1185,15 @@ var hour := 8 · var minute := 0 · var day := 1
 ⚠ day 還沒持久化，重開仍從 1 開始 —— 要等世界存檔（#21）
 ```
 
-## DatabaseManager — database/DatabaseManager.gd · autoload · Node
+## DatabaseManager — scripts/database/DatabaseManager.gd · autoload · Node
 
 ```gdscript
 const DATABASE_PATH := "user://game.db"
 
 var db: SQLite
 var is_ready := false                        # false 時所有公開方法早退
+var is_seeded := false                       # 只在 DatabaseSeeder.seed_all() 成功後才 true；
+                                              # is_ready 只代表 schema/CRUD 可用，不保證基礎資料已補齊
 
 func query(sql: String, bindings: Array = []) -> bool
 func get_last_result() -> Array              # db.query_result；db==null 回 []
@@ -1227,10 +1232,11 @@ select() 找不到列回傳 []，不是 error；update()/delete() 空 conditions
 → 技術/存檔
 ```
 
-## CharacterStatePersistence — database/CharacterStatePersistence.gd · Node · DatabaseManager 的子節點
+## CharacterStatePersistence — scripts/database/CharacterStatePersistence.gd · Node · DatabaseManager 的子節點
 
 ```gdscript
-func sync_now() -> void                          # 手動觸發全體同步（等同 _ready() 首次跑的那次）
+func sync_now() -> bool                          # 手動觸發全體同步（等同 _ready() 首次跑的那次），
+                                                   # 回傳是否所有角色都同步成功
 func sync_character(character: Character) -> bool
 func get_all_states() -> Array                    # SELECT npc_id/各項數值/location_id FROM npc_state
 ```
@@ -1242,6 +1248,9 @@ func get_all_states() -> Array                    # SELECT npc_id/各項數值/l
 ⚠ DatabaseManager.is_ready 在 _ready() 裡同步設為 true，之後才 call_deferred() 建立這個節點——
   is_ready==true 那一刻不保證這個子節點已存在，DatabaseManager.get_node() 在極早期可能撲空；
   等下一個 idle frame（或直接訂閱 DatabaseManager 的樹狀態變化）再拿節點比較保險
+⚠ 這個節點只在 DatabaseManager.is_seeded == true（seed 成功）時才會被建立／掛上樹——
+  is_ready 只代表 schema 開好、CRUD 可用，不代表基礎資料已補齊，呼叫端不能只看
+  is_ready 就假設這個節點存在或呼叫 sync_now()
 † 同步對象是 npc / npc_state / npc_inventory / npc_wallet 四張表，relations／memory／
   personality 等其他欄位不在這裡
 † GameClock.time_changed 每遊戲分鐘觸發一次「僅 state/wallet」定期同步（不含 inventory）；
@@ -1254,7 +1263,7 @@ func get_all_states() -> Array                    # SELECT npc_id/各項數值/l
   SQLite 裡的舊 npc_id 列會變成孤兒資料，不會自動對應回同一個角色
 ```
 
-## DatabaseSeeder — database/DatabaseSeeder.gd · class_name · RefCounted
+## DatabaseSeeder — scripts/database/DatabaseSeeder.gd · class_name · RefCounted
 
 ```gdscript
 const ITEM_BALANCE := {...}   # item_id -> {name, item_type, base_price, max_stack,
@@ -1262,14 +1271,18 @@ const ITEM_BALANCE := {...}   # item_id -> {name, item_type, base_price, max_sta
                                # durability_cost?, effect_*}，涵蓋 data/items.json
                                # 全部 18 個 item_id（食物/飲品/獵物水產/採集品/隨身用品）
 
-static func seed_all() -> void      # 呼叫端：DatabaseManager._ready()，schema 建立後跑一次
-static func seed_items() -> void
+static func seed_all() -> bool      # 呼叫端：DatabaseManager._ready()，schema 建立後跑一次
+static func seed_items() -> bool
 ```
 
 ```text
 ITEM_BALANCE 的 key 必須存在於 res://data/items.json（ItemDatabase 為單一事實來源），
   查不到就 push_error 並跳過該筆，避免兩份物品清單各自漂移出不存在的 item_id
-seed_items() 逐筆用 select_where(item_id) 檢查是否已存在才 INSERT，重複呼叫不出錯也不覆寫
+seed_items() 逐筆用 select_where(item_id) 檢查是否已存在，不存在就 INSERT，
+  存在就用 ITEM_BALANCE／ItemDatabase 目前的定義 UPDATE（_upsert_item()）——
+  每次開機都同步成目前的定義，不會停留在第一次建立當下的舊值；
+  任一筆 item_id 對不上 items.json 或 INSERT/UPDATE 失敗都會讓 seed_items() 回傳 false，
+  seed_all() 直接轉傳這個結果給呼叫端
 † Seeder 不建表、不改 schema、不做遊戲中的資料更新，只負責第一次啟動的基礎資料
 ```
 

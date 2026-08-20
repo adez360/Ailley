@@ -120,19 +120,24 @@ func _on_time_changed(
 # Global Sync
 # =====================================================
 
-func _sync_all_characters() -> void:
+func _sync_all_characters() -> bool:
 
 	if not DatabaseManager.is_ready:
-		return
+		return false
 
 	var characters := get_tree().get_nodes_in_group(
 		"characters"
 	)
 
 	if characters.is_empty():
-		return
+		return true
 
 	var success_count := 0
+	# "characters" group 目前只會有 Character 節點（Character._ready() 自己
+	# add_to_group()），as Character 轉型失敗理論上不會發生，但這裡的分母要用
+	# 實際處理過的數量，不是 characters.size()——否則萬一哪天真的混進非
+	# Character 節點，每一隻 Character 都同步成功，還是會回報假失敗
+	var processed_count := 0
 
 	for node in characters:
 
@@ -141,6 +146,8 @@ func _sync_all_characters() -> void:
 		if character == null:
 			continue
 
+		processed_count += 1
+
 		if _save_character(character):
 			success_count += 1
 
@@ -148,9 +155,11 @@ func _sync_all_characters() -> void:
 		"[CharacterStatePersistence] 同步完成：%d / %d"
 		% [
 			success_count,
-			characters.size()
+			processed_count
 		]
 	)
+
+	return success_count == processed_count
 
 
 func _sync_all_characters_periodic() -> void:
@@ -982,6 +991,20 @@ func _connect_inventory_changed(
 	}
 
 
+	var exit_callback := Callable(
+		self,
+		"_on_character_tree_exited"
+	).bind(npc_id)
+
+	if not character.tree_exited.is_connected(
+		exit_callback
+	):
+
+		character.tree_exited.connect(
+			exit_callback
+		)
+
+
 	print(
 		"[CharacterStatePersistence] "
 		+ "Inventory.changed 已連線：%s | instance=%d"
@@ -989,6 +1012,38 @@ func _connect_inventory_changed(
 			npc_id,
 			inventory_id
 		]
+	)
+
+
+# =====================================================
+# Character Removed：清理追蹤字典
+#
+# 角色節點釋放後，_inventory_connected 裡的 inventory
+# 參照會變成失效 instance；_inventory_loaded／_loading
+# 也會殘留無用的 npc_id 項目。統一在這裡清掉。
+#
+# 注意：不清 _inventory_sync_pending。tree_exited 觸發時
+# 節點通常還沒真的被釋放（queue_free 要等到下一個 idle
+# frame），這裡若有還沒 flush 的 inventory 異動，直接清掉
+# 會讓最後一次改動遺失存檔；_flush_pending_inventory_sync()
+# 本來就會用 is_instance_valid() 檢查，node 真的釋放後自然
+# 跳過，不需要在這裡搶先清。
+# =====================================================
+
+func _on_character_tree_exited(
+	npc_id: String
+) -> void:
+
+	_disconnect_inventory_changed(
+		npc_id
+	)
+
+	_inventory_loaded.erase(
+		npc_id
+	)
+
+	_inventory_loading.erase(
+		npc_id
 	)
 
 
@@ -1566,6 +1621,7 @@ func _save_inventory(
 			% npc_id
 		)
 
+		DatabaseManager.rollback_transaction()
 		return false
 
 
@@ -1939,9 +1995,9 @@ func _log_state(
 # Public
 # =====================================================
 
-func sync_now() -> void:
+func sync_now() -> bool:
 
-	_sync_all_characters()
+	return _sync_all_characters()
 
 
 func sync_character(

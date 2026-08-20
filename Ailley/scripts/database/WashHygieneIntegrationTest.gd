@@ -33,15 +33,15 @@ func _run() -> void:
 	var agent := _find_test_agent()
 
 	if agent == null:
-		push_error(
-			"[WashHygieneIntegrationTest] 場景中找不到 Agent。"
-			+ "請在正常遊戲場景執行本測試，不要在空白測試場景執行。"
+		_fail(
+			"Agent",
+			"場景中找不到 Agent。請在正常遊戲場景執行本測試，不要在空白測試場景執行。"
 		)
 		_finish()
 		return
 
 	if agent.stats == null:
-		push_error("[WashHygieneIntegrationTest] Agent 沒有 Stats。")
+		_fail("Agent.stats", "Agent 沒有 Stats。")
 		_finish()
 		return
 

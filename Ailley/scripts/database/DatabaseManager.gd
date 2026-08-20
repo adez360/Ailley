@@ -46,6 +46,12 @@ const VERBOSE_SQL := false
 var db: SQLite
 var is_ready := false
 
+## is_ready 只代表「連線與 schema 都開好，CRUD 可以用」——DatabaseSeeder
+## 自己就要靠 CRUD 才能把基礎資料寫進去，所以不能拿 is_ready 當作「seed
+## 已完成」的訊號。呼叫端需要「基礎資料真的補齊了嗎」這個答案時
+## 應該同時檢查這個旗標，而不是只看 is_ready。
+var is_seeded := false
+
 # table -> Array[String]，_table_has_column() 的欄位快取，
 # schema 建立後不會再變，查一次記住即可，不必每次 UPDATE 都跑 PRAGMA
 var _table_columns_cache := {}
@@ -111,18 +117,35 @@ func _ready() -> void:
 
 	# -------------------------------------------------
 	# Seed
+	#
+	# DatabaseSeeder 自己要靠 is_ready 才能呼叫 CRUD，所以要排在
+	# is_ready = true 之後；但 is_seeded 要等 seed 真的成功才設，
+	# 消費端不該把「schema 開好」跟「基礎資料補齊」看成同一件事。
 	# -------------------------------------------------
 
-	DatabaseSeeder.seed_all()
+	if not DatabaseSeeder.seed_all():
+
+		push_error(
+			"[Database] "
+			+ "Seed 失敗，資料庫可能不完整，不標記為 is_seeded。"
+		)
+
+	else:
+
+		is_seeded = true
 
 
-	# -------------------------------------------------
-	# CharacterStatePersistence
-	# -------------------------------------------------
+		# -------------------------------------------------
+		# CharacterStatePersistence
+		#
+		# 排在 is_seeded 分支裡——item 這類基礎資料沒補齊時就開始寫入，
+		# CharacterStatePersistence 可能因為外鍵約束（item_id 對不到任何
+		# item row）整批失敗（CodeRabbit review 抓到）
+		# -------------------------------------------------
 
-	call_deferred(
-		"_start_character_state_persistence"
-	)
+		call_deferred(
+			"_start_character_state_persistence"
+		)
 
 
 # =====================================================
@@ -138,6 +161,7 @@ func _exit_tree() -> void:
 		db = null
 
 		is_ready = false
+		is_seeded = false
 
 
 # =====================================================
@@ -710,7 +734,7 @@ func _start_character_state_persistence() -> void:
 
 
 	var script: Script = load(
-		"res://database/CharacterStatePersistence.gd"
+		"res://scripts/database/CharacterStatePersistence.gd"
 	)
 
 
