@@ -45,6 +45,15 @@ var _words_to_creator_spoken := false
 ## 判定是否要說出口的 AI 呼叫進行中（見 maybe_speak_to_creator() 的鎖）
 var _words_to_creator_pending := false
 
+## #381：墓碑四內容欄位其中兩個（《規格書 09》§4-2）。last_words 由死者的 LLM
+## 在臨終時生成，可為空字串（來不及說）；life_highlights 由引擎彙整 L4 核心
+## 記憶與重大事件流產出，絕不讓 LLM 潤飾。目前死亡狀態機還沒做（見 #368），
+## 這裡先開欄位形狀讓存讀檔接得上，沒有任何呼叫端會寫入——不影響現有行為。
+## words_to_creator 是墓碑第三個欄位，已存在於上面（#164），不重複宣告。
+## 第四個欄位 epitaphs（一對多，SQLite）不在這裡，見 #382
+var last_words := ""
+var life_highlights: Array[String] = []
+
 ## schedule 任務給中間值，靠 time_bonus 拉開跟其他來源的差距，
 ## 不是靠 base priority 本身——見 [[行程佇列與任務仲裁]] 的「待決」那節
 const SCHEDULE_BASE_PRIORITY := 10.0
@@ -182,6 +191,16 @@ var _reacting := false
 # _consider_switch() 靠它決定要用 MIN_COMMIT 還是 LLM_WAIT_MIN_COMMIT
 var _awaiting_decision := false
 
+# 同一套道理用在 request_sleep_reflection()：睡眠事件觸發跟 debug_console.gd
+# 的 `reflect` 指令都可能呼叫它，這通吃 await，沒有這個旗標擋，重疊呼叫會
+# 讓兩個請求同時讀寫同一份 _daily_events（CodeRabbit review 抓到）
+var _sleep_reflection_in_flight := false
+
+# 撞期時記「還有一次要補跑」，不能就這樣把那次請求默默丟掉——它很可能是想
+# 反思等待期間才新累積的事件（CodeRabbit review 抓到，見
+# _finish_sleep_reflection_request()）
+var _sleep_reflection_pending := false
+
 ## 給 debug_console.gd 判斷要不要印「正在問地端模型...」用——open 呼叫
 ## debug_set_llm_decision(true) 前先問一次，才不會在請求根本沒送出（已經有
 ## 一份在飛）的情況下印出誤導的等待訊息
@@ -216,9 +235,19 @@ var _next_plan_id := 0
 ## 申請」：不是每次決策都能改，得先問過、下一輪才真的給
 var _plan_update_requested := false
 
+## load_save_data() 清除 _plan_update_requested 時遞增的 epoch，用於保護
+## 載入流程不被過期的決策請求覆寫——見 _request_next_decision() 的 epoch 檢查
+var _plan_update_epoch := 0
+
 ## 這次重算「進來的時候」current_state 是不是 sleep——用來偵測「剛睡醒」
 ## 那個轉換瞬間，見 _reevaluate() 怎麼用它
 var _was_sleeping := false
+
+## 睡醒自動存檔失敗時設 true，下一個遊戲分鐘的 _on_time_changed() 會補
+## 重試一次——不額外養計時器，本來就有的每分鐘 tick 天然就是節流過的重試
+## 間隔，同一次失敗不會被密集重試到成功為止（#427／CodeRabbit review 抓到：
+## 原本 save_character() 回傳值被直接丟掉，失敗就整批資料悄悄遺失）
+var _pending_save_retry := false
 
 ## #265：_reevaluate() 的重入保護（trampoline）。_pursue_current_task()
 ## 選中 give/shout、或 talk 判定失敗時會呼叫 _finish_task_and_request_next()，
@@ -269,6 +298,61 @@ func _push_daily_event(content: String) -> void:
 	_next_daily_event_id += 1
 	if _daily_events.size() > DAILY_EVENTS_CAP:
 		_daily_events.pop_front()
+
+## ---- 事實句機制（#338，《01-3》§3）----
+##
+## 1 tick = 10 遊戲分鐘（《02》§1-4／《01-3》§3 三處門檻互相驗證過），下面
+## 門檻常數統一換算成遊戲分鐘，跟 _now_minutes() 同一個時間基準
+
+const FACT_SOCIAL_SILENCE_3H_MIN := 180		# 18 tick
+const FACT_SOCIAL_SILENCE_HALF_DAY_MIN := 360	# 36 tick
+const FACT_SOCIAL_SILENCE_1_DAY_MIN := 1440	# 144 tick
+const FACT_GOAL_STALE_MIN := 360				# 36 tick
+const FACT_CONSECUTIVE_FAILURE_THRESHOLD := 3
+
+## 上次「跟人講完話」的時間點，_ready() 時初始化成出生那一刻，不是 0——
+## 不然剛出生的角色會立刻背著「已經一整天沒說話」的事實句
+var _last_social_minute := 0
+
+## current_goal 最後一次被模型「改成新內容」的時間點（不是每次原樣重申都
+## 更新）。-1 代表還沒設過，事實句判斷時用這個排除掉「模型從沒填過
+## current_goal」跟「填了但很久」這兩種狀況
+var _goal_set_minute := -1
+
+## 去過的地點，只記有沒有去過，不記次數——判斷「首次造訪」用
+var _visited_places := {}
+
+## 一次性事實句佇列。跟「距上次社交」那種可持續重算的條件不同，「第一次
+## 來這裡」是事件觸發的瞬間才成立，只在真的被送出且回應成功套用後才消費
+## （見 _request_next_decision() 的 fact_lines_sent_count 說明），不是
+## _fact_lines_summary() 組信封當下就清掉——回應失敗或被世代淘汰的話，
+## 這句事實句要留著下一輪再問，不能就這樣不見
+var _pending_fact_lines: Array[String] = []
+
+## 連續同一動作失敗的追蹤。由各 _pursue_*_task() 在真正的終局結果（前置檢查
+## 沒過、或 talk_to()／give_to()／attack()／eat()／drink() 等實際執行完成）
+## 呼叫 _track_action_result_for_facts() 記錄——不能包在 resolve() 裡自動記，
+## 那樣追逐目標時每個遊戲分鐘的前置檢查通過都會被當一次「成功」洗掉真正的
+## 連續失敗（CodeRabbit review 抓到，見 resolve() 的說明）
+var _consecutive_failure_action := ""
+var _consecutive_failure_count := 0
+
+func _note_place_visited(place: String) -> void:
+	if place.is_empty() or _visited_places.has(place):
+		return
+	_visited_places[place] = true
+	_pending_fact_lines.append("你以前沒有來過「%s」。" % place)
+
+func _track_action_result_for_facts(action: String, success: bool) -> void:
+	if success:
+		_consecutive_failure_count = 0
+		_consecutive_failure_action = ""
+		return
+	if action == _consecutive_failure_action:
+		_consecutive_failure_count += 1
+	else:
+		_consecutive_failure_action = action
+		_consecutive_failure_count = 1
 
 ## #164：天神之石的話傳到範圍內的角色（world/god_stone_input.gd 逐一呼叫）。
 ## 記一筆事實句（跟 _on_spotted() 的 "你第一次注意到 %s" 同一種寫法，不經
@@ -342,6 +426,9 @@ func _ready() -> void:
 	_provider = _make_provider()
 	_load_schedule()
 	_generate_words_to_creator()
+	# 出生那一刻起算，不是 0——不然剛出生的角色會立刻背著「一整天沒說話」
+	# 的事實句（#338）
+	_last_social_minute = _now_minutes()
 
 ## 公開版的「重建 provider」（#122，CodeRabbit review 抓到的時序 bug）。
 ## GameManager.deploy_from_library() 會在 add_child()（進而觸發這個節點的
@@ -563,6 +650,8 @@ func exit_conversation() -> void:
 		var other: Character = _conversation.target if _conversation.initiator == self else _conversation.initiator
 		if other != null:
 			_push_daily_event("你跟 %s 講完話了" % other.character_name)
+			# 「多久沒說話」事實句的計時基準（#338）
+			_last_social_minute = _now_minutes()
 
 	super()
 
@@ -659,9 +748,14 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 ## 交給 memory 分級寫入。importance/valence 完全由 LLM 決定（見 validate_reflection()
 ## 的註解），這裡不重算或覆寫這兩個值。
 ##
-## 回傳 {"ok": bool}：ok=false 代表這次沒有真的反思到（未啟用/逾時/驗證失敗/
-## 沒有事件可反思），last_reflection_summary 維持上一次成功的舊值不變——
-## 呼叫端不該把舊摘要誤當成「這次」的結果來顯示（max 等級 code review 抓到）
+## 回傳三種狀態：
+## - {"ok": true, ...}：這次真的反思到，並套用了結果
+## - {"ok": false}：真正沒反思到（未啟用/逾時/驗證失敗/沒有事件可反思），
+##   last_reflection_summary 維持上一次成功的舊值不變——呼叫端不該把舊摘要
+##   誤當成「這次」的結果來顯示（max 等級 code review 抓到）
+## - {"ok": false, "queued": true}：撞到已經有一份請求在飛，這次已經記進
+##   _sleep_reflection_pending，會在那份做完後自動補跑一次——不是失敗，呼叫端
+##   不該印成錯誤訊息（見 _cmd_reflect 的處理，CodeRabbit review 抓到）
 ##
 ## 失敗時不清空 _daily_events——今天的事還沒被評過分，清空等於直接遺失，
 ## 留著等下次睡眠反思重試，最壞情況是被 DAILY_EVENTS_CAP 的 FIFO 擠掉，
@@ -675,11 +769,27 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 ## 下次反思會再送一次（max 等級 code review 抓到：純用送出筆數 pop_front()
 ## 的近似法，在這兩種情況下都可能誤刪還沒被評到分的事件）
 ##
-## 觸發時機目前只有 debug_console.gd 的 `reflect` 指令手動呼叫——真正的睡眠
-## 動作（#112）落地後，在角色進入睡眠那個時間點呼叫這個函式，這裡不用改
+## 觸發時機有兩個：debug_console.gd 的 `reflect` 指令手動呼叫，以及
+## _reevaluate_once() 偵測到角色進入睡眠狀態時自動呼叫（#112 落地後接上）
 func request_sleep_reflection() -> Dictionary:
+	# 同一時間只能有一個反思請求在飛（CodeRabbit review 抓到）：睡眠事件跟
+	# debug_console.gd 的 `reflect` 指令都會呼叫這裡，這通吃 await，重疊呼叫
+	# 會讓兩個請求同時讀寫同一份 _daily_events——後回來的那個 filter() 會用
+	# 自己那批 scored_ids 蓋掉先回來那個已經處理過的結果，兩邊都可能重複計分
+	# 或漏算。撞期的這次不能就這樣丟掉不管：疊加的那次很可能是想反思等待期間
+	# 新累積的事件，直接吞掉會讓那批事件在 _daily_events 裡卡到下次才補評——
+	# 記一個「還有一次補跑」的旗標，等目前這次真的做完（不管成敗）才補跑一次
+	# （CodeRabbit review 抓到，見 _finish_sleep_reflection_request()）
+	if _sleep_reflection_in_flight:
+		_sleep_reflection_pending = true
+		# 帶 queued=true 跟真正的失敗（驗證失敗、逾時等）區分開——呼叫端
+		# （debug_console.gd 的 `reflect` 指令）不能把「已經排隊等補跑」當成
+		# 「反思失敗」印出來，那會誤導使用者以為今天的事沒了，其實只是排到
+		# 下一次補跑（CodeRabbit review 抓到）
+		return {"ok": false, "queued": true}
 	if memory == null or _daily_events.is_empty():
 		return {"ok": false}
+	_sleep_reflection_in_flight = true
 
 	var events_sent := _daily_events.duplicate(true)
 
@@ -705,6 +815,7 @@ func request_sleep_reflection() -> Dictionary:
 	var envelope := PromptBuilder.build_reflection_envelope(self, events_sent)
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	if not result["ok"]:
+		_finish_sleep_reflection_request()
 		return {"ok": false}
 
 	var data: Dictionary = result["data"]
@@ -717,7 +828,36 @@ func request_sleep_reflection() -> Dictionary:
 
 	_daily_events = _daily_events.filter(func(e): return not scored_ids.has(e["id"]))
 
+	# personality_delta（#349，《03》§5 流程圖 ⑥）：validate_reflection() 已經
+	# 夾制過每一項到 ±MAX_PERSONALITY_DELTA，這裡直接加總套用，不再二次判斷——
+	# 「這個人今天該不該變得更記仇」是模型的判斷，引擎只做防止數值失控的夾制
+	var personality_delta: Dictionary = data.get("personality_delta", {})
+	for dim in personality_delta.keys():
+		var current: float = float(personality.get(dim, 50.0))
+		personality[dim] = clampf(current + float(personality_delta[dim]), 0.0, 100.0)
+
+	# today_plan（#350，流程圖 ②）：反思產出的是「明天的新計畫」，跟決策中途
+	# 的 update_plan 是同一個欄位、同一種整份取代語意，直接沿用 _apply_today_plan()
+	var new_plan: Variant = data.get("today_plan")
+	if new_plan != null:
+		_apply_today_plan(new_plan)
+
+	# L1 清空（流程圖⑤）已經在呼叫端（_reevaluate_once() 偵測到入睡轉換時）
+	# 統一做過了，不管反思成不成功都會清——這裡不再重複清一次，見那邊的註解
+	_finish_sleep_reflection_request()
 	return {"ok": true}
+
+# 收尾這次反思請求：解除在飛旗標，如果有撞期被記下的補跑需求就立刻補一次
+# （CodeRabbit review 抓到）。不用 await 這次補跑的結果——呼叫端只在意自己
+# 那次請求的成敗，撞期的那次本來就沒有呼叫端在等結果（原本被靜默丟棄，見
+# request_sleep_reflection() 頂端的說明），讓它自己跑完就好。如果補跑當下
+# _daily_events 已經被這次清空／filter() 到空了，request_sleep_reflection()
+# 開頭的 is_empty() 檢查會自然讓它變成無事可做的空跑，不用另外判斷
+func _finish_sleep_reflection_request() -> void:
+	_sleep_reflection_in_flight = false
+	if _sleep_reflection_pending:
+		_sleep_reflection_pending = false
+		request_sleep_reflection()
 
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
 ## AIService、parse_completion、validate_*，任何一關失敗都靜默放棄，任務池
@@ -738,8 +878,11 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 
 	# 記下消費前的值，等這次回應因世代不符被丟棄時原封不動還回去——
 	# 「跟從沒問過模型一樣」不能只是不套用任務，連這個已經兌現掉的許可
-	# 也要還原，不然角色會憑空少一次原本已經賺到的 update_plan 機會
+	# 也要還原，不然角色會憑空少一次原本已經賺到的 update_plan 機會。
+	# 但若是載入造成的世代不符，則不該還原：load_save_data() 清除許可的同時
+	# 也遞增了 _plan_update_epoch，下面只在 epoch 不變時才還原
 	var had_plan_update_requested := _plan_update_requested
+	var my_plan_update_epoch := _plan_update_epoch
 	var effective_allow_update_plan := allow_update_plan or _plan_update_requested
 	_plan_update_requested = false
 
@@ -758,6 +901,14 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	# 所以下面只在 had_pending_persuade 為真時才碰 _pending_persuade
 	var had_pending_persuade := not _pending_persuade.is_empty()
 
+	# 同一輪快照一次性事實句要送出的數量（CodeRabbit review 抓到）：這通吃
+	# await，等待期間可能有新的一次性事實句進來（例如剛好走到沒去過的地點）。
+	# 舊寫法在組信封當下就把 _pending_fact_lines 清空，回應失敗或被世代淘汰時
+	# 這些事實句就這樣不見了，下一輪決策問不到；也可能把等待期間新加入、
+	# 這次根本沒送出去的事實句一起清掉。改成只記「送出了幾筆」，等這次回應
+	# 真的被套用時，才從佇列前面移掉對應筆數——等待期間新增的一律留在後面
+	var fact_lines_sent_count := _pending_fact_lines.size()
+
 	var visible: Array[Character] = vision.get_visible_characters() if vision != null else []
 	var envelope := PromptBuilder.build_plan_envelope(
 		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan,
@@ -771,15 +922,24 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 
 	# 世代編號在 await 期間變了，代表 debug_set_llm_decision() 至少關過一次
 	# 決策開關——不管回應抵達當下旗標是什麼值（就算又被重新打開），這份回應
-	# 都屬於已經作廢的世代，整包淘汰，不套用任何任務或計畫更新
+	# 都屬於已經作廢的世代，整包淘汰，不套用任何任務或計畫更新。
+	# 還原 had_plan_update_requested 時同時檢查 epoch：若 load_save_data() 發生過
+	# （epoch 已遞增），則保持清除狀態，不讓過期請求重新授予 update_plan 許可
 	if my_generation != _decision_generation:
-		_plan_update_requested = had_plan_update_requested
+		if my_plan_update_epoch == _plan_update_epoch:
+			_plan_update_requested = had_plan_update_requested
 		return {"ok": false, "triggered": true}
 
 	if not result["ok"]:
 		return {"ok": false, "triggered": true}
 
 	var data: Dictionary = result["data"]
+
+	# 這輪回應真的通過驗證、確定會被套用，才消費快照下來的一次性事實句數量——
+	# 只砍前面 fact_lines_sent_count 筆，等待期間新增的（在陣列後段）留著給
+	# 下一輪
+	if fact_lines_sent_count > 0:
+		_pending_fact_lines = _pending_fact_lines.slice(fact_lines_sent_count)
 
 	# reasoning／inner_monologue 印出來給人排查，跟 _trigger_village_ai() 的
 	# print() 除錯模式一致；不進遊戲內 UI。決策準不準沒有系統性驗證，
@@ -788,6 +948,35 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	print("[llm_decision] %s inner_monologue: %s" % [character_name, data.get("inner_monologue", "")])
 
 	var tasks_added := _push_llm_tasks(data["tasks"], data)
+
+	# emotion（#351）：每次決策都必填，validate_tasks() 已經驗證過 type／
+	# intensity 合法，這裡直接套用，不再二次判斷——AI 自己宣告的內在狀態，
+	# 引擎不覆寫、不打折扣。stability／grudge 帶這隻角色自己的人格值——不帶
+	# 的話 set_emotion() 會退回中性值 50.0，讓《02》§1-4 的持續時間公式對
+	# 每個角色都算出同一個結果，人格再怎麼極端也不影響情緒撐多久
+	# （CodeRabbit review 抓到）
+	var emotion_data: Dictionary = data.get("emotion", {})
+	set_emotion(
+		emotion_data.get("type", "neutral"), emotion_data.get("intensity", 0), "",
+		personality.get("stability", 50.0), personality.get("grudge", 50.0)
+	)
+
+	# current_goal（#352）：模型完全沒填這欄位（current_goal_provided=false）
+	# 就維持原樣不動，跟 update_plan 的「整份取代」不同，這是「有意思表示才
+	# 動」的單一標籤。有填的話分兩種：空字串代表模型明確判斷這個目標已完成或
+	# 不再追蹤，清空並停止目標拖延事實句的計時；非空字串才是真的設定/換目標
+	# （CodeRabbit review 抓到：原本「沒填」跟「填空字串」都被當「沒更新」，
+	# 目標永遠沒有清除路徑，拖延事實句會無限期一直觸發下去）
+	if data.get("current_goal_provided", false):
+		var new_goal: String = data.get("current_goal", "")
+		if new_goal.is_empty():
+			current_goal = ""
+			_goal_set_minute = -1
+		elif new_goal != current_goal:
+			current_goal = new_goal
+			# 目標拖延事實句的計時基準（#338）：只在目標真的換了內容才重新起算，
+			# 模型原樣重申同一個目標不算「重新設定」，不然這句事實句永遠不會累積
+			_goal_set_minute = _now_minutes()
 
 	# 不管這輪有沒有拿到 update_plan 許可，模型都可能問「下次讓我改」——記
 	# 下來，下一次不管是哪個理由觸發 _request_next_decision() 都會兌現
@@ -993,6 +1182,74 @@ func get_state_snapshot() -> Dictionary:
 	}
 	return snapshot
 
+
+# ---- 存檔 ----
+
+# #381：墓碑三個「一份墓一筆」欄位（words_to_creator/last_words/life_highlights），
+# 比照 base 的欄位風格直接存讀，不建 SPEC——三個欄位型別互不相同（string/string/
+# array），硬套 Stats.SPEC 那種同型別、走訪產生數值的模式沒有意義；SPEC 那條
+# 規則要保的是「加一項不用到處改」，這裡欄位數量固定且各自的存讀邏輯本來就不同。
+# epitaphs（第四個欄位，一對多）不在這裡，走 SQLite，見 #382
+func get_save_data() -> Dictionary:
+	var data := super()
+	data["words_to_creator"] = words_to_creator
+	data["last_words"] = last_words
+	data["life_highlights"] = life_highlights.duplicate()
+	return data
+
+
+func load_save_data(data: Dictionary) -> void:
+	super(data)
+	if data.has("words_to_creator"):
+		var raw_words_to_creator: Variant = data["words_to_creator"]
+		words_to_creator = raw_words_to_creator if raw_words_to_creator is String else ""
+	var raw_last_words: Variant = data.get("last_words", "")
+	last_words = raw_last_words if raw_last_words is String else ""
+	var raw_highlights: Variant = data.get("life_highlights", [])
+	life_highlights.clear()
+	if raw_highlights is Array:
+		for item in raw_highlights:
+			if item is String:
+				life_highlights.append(item)
+
+# today_plan（#350）是跨天的承諾——「今天打算做這幾件事」——跟 current_goal
+# 那種瞬時念頭不同，重開遊戲不該讓它憑空消失（見 note/技術/存檔.md 的既有
+# 拍板；current_goal 刻意不存，這裡不要一起加進去）。id 是本機重新配發的
+# 序號（見 _apply_today_plan() 的說明），跟存檔格式無關，原樣存回沒有問題——
+# 下一次 _apply_today_plan() 呼叫本來就會整份取代並重新配發
+func get_save_data() -> Dictionary:
+	var data := super()
+	data["today_plan"] = _today_plan.duplicate(true)
+	return data
+
+func load_save_data(data: Dictionary) -> void:
+	super(data)
+
+	# 讀檔當下若有一份決策請求還在飛（debug 主控台 load 指令對執行中的角色
+	# 呼叫這裡），那份回應是問著載入前的舊狀態，不能讓它晚到之後用
+	# _apply_today_plan() 蓋掉剛載入的 today_plan——跳世代讓
+	# _request_next_decision() 收到回應時自己認出這是過期世代整包丟棄，
+	# 跟 debug_set_llm_decision() 的翻轉世代同一招。_plan_update_requested
+	# 也一併清掉：那是舊決策留下的「下次讓我改」許可，不該帶進載入後的狀態。
+	# 遞增 _plan_update_epoch 確保過期請求不會在還原 had_plan_update_requested 時
+	# 重新授予已經被載入清除的許可
+	_decision_generation += 1
+	_plan_update_requested = false
+	_plan_update_epoch += 1
+
+	# 只在資料裡真的有 today_plan 這個 key 時才覆寫——跟 character.gd 的
+	# personality 同一個「省略 key＝不動」語意。沒有這條防呆的話，讀一份
+	# 沒有 today_plan 欄位的存檔（例如舊格式、或只想局部更新其他欄位的
+	# 呼叫端）會把角色現有的今日計畫整包清空，不是「維持原樣」
+	# （CodeRabbit review 抓到）
+	if data.has("today_plan"):
+		_today_plan.clear()
+		var raw_plan: Variant = data.get("today_plan", [])
+		if raw_plan is Array:
+			for item in raw_plan:
+				if item is Dictionary:
+					_today_plan.append((item as Dictionary).duplicate(true))
+
 # 第一次看到某個陌生人就停下來愣一下。
 #
 # 認識的人不算 —— 每天上班都會遇到的同事不會讓人「！」。
@@ -1039,8 +1296,9 @@ func _on_noise_heard(_source: Character) -> void:
 ## 仲裁常數（HYSTERESIS／MIN_COMMIT／LLM_WAIT_MIN_COMMIT／MIN_ACTION_DURATION／
 ## LLM_TASK_POOL_CAP，見上方各自的說明），沒有涵蓋這裡，這三個值還沒實測過。
 ##
-## 對照基準：stamina 的自然衰減是每現實秒 1.0（Stats.SPEC 的 drift），而一個遊戲
-## 分鐘正好是一現實秒，所以淨回復是這裡的值減 1
+## 對照基準：stamina 的自然衰減是每遊戲分鐘 1.0，但 Stats 漂移只在每 10 遊戲分鐘
+## 執行一次，所以每 tick（10 遊戲分鐘）的淨變化是 amount * 10 - 1.0。_apply_action_recovery()
+## 是每遊戲分鐘執行一次，所以 sleep/nap/rest/wash 的回復額在每 10 遊戲分鐘內累積
 ##
 ## 表的形狀是「動作 -> {stat, amount}」而不是單純「動作 -> 數字」：不同動作
 ## 要回復的欄位不見得相同（wash 回復的是 `hygiene` 不是 `stamina`），單純
@@ -1049,14 +1307,25 @@ func _on_noise_heard(_source: Character) -> void:
 ## 發呆本來就不回復任何東西，它的用途是「合法地什麼都不做」，讓 AI 逾時或
 ## 沒事可做時有一個不必假裝在忙的選項
 ##
-## wash 的 3.0 跟 sleep/nap/rest 三個數字同一種狀態：《07》§2-3 只給
-## 「wash 提升 hygiene」，沒給相對關係也沒給數字，待實跑校準的暫定值，
-## 不是規格定案（#241）
+## ACTION_RECOVERY 的數值原是針對舊的「漂移快 10 倍」情況設的（#361 修正前）。
+## #361 修正後漂移改成每 tick（而非每現實秒），ACTION_RECOVERY 同步除以 10
+## 以維持相對平衡（#361）。
+## (#362) sleep 同時回復 stamina 與 wakefulness，資料結構改成陣列以支持多個 stat
 const ACTION_RECOVERY := {
-	"sleep": {"stat": "stamina", "amount": 6.0},
-	"nap": {"stat": "stamina", "amount": 4.0},
-	"rest": {"stat": "stamina", "amount": 2.0},
-	"wash": {"stat": "hygiene", "amount": 3.0},
+	"sleep": [
+		{"stat": "stamina", "amount": 0.6},
+		{"stat": "wakefulness", "amount": 50},
+	],
+	"nap": [
+		{"stat": "stamina", "amount": 0.4},
+		{"stat": "wakefulness", "amount": 20},
+	],
+	"rest": [
+		{"stat": "stamina", "amount": 0.2},
+	],
+	"wash": [
+		{"stat": "hygiene", "amount": 0.3},
+	],
 }
 
 # 到了定點才開始回復——還在走去床邊的路上不算在睡覺。沒有指定地點的任務
@@ -1065,16 +1334,51 @@ const ACTION_RECOVERY := {
 func _apply_action_recovery() -> void:
 	if stats == null or is_moving():
 		return
-	var recovery: Dictionary = ACTION_RECOVERY.get(current_state, {})
-	if recovery.is_empty():
+	var recovery_list: Array = ACTION_RECOVERY.get(current_state, [])
+	if recovery_list.is_empty():
 		return
-	stats.add(recovery["stat"], recovery["amount"])
+	for recovery in recovery_list:
+		stats.add(recovery["stat"], recovery["amount"])
 
 func _on_time_changed(_hour: int, _minute: int) -> void:
 	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務
 	# 會用新任務的 current_state 結算最後一分鐘
 	_apply_action_recovery()
+	if _pending_save_retry:
+		_autosave_on_wake()
 	_reevaluate()
+
+# 力竭時強制進入休息，直到 stamina 恢復
+func _force_rest_until_recovered(now_minutes: int) -> void:
+	# 只有 reflex rest 已存在時才直接沿用
+	if _current_task.get("source", "") == "reflex" and current_state == "rest":
+		stop_moving()
+		return
+
+	stop_moving()
+	var rest_task: Dictionary = {
+		"id": "reflex_rest_" + str(randi()),
+		"action": "rest",
+		"source": "reflex",
+		"duration": 999999,
+		"params": {},
+		"interruptible": false,  # 力竭期間不可被打斷
+	}
+	_select(rest_task, now_minutes)
+
+# 睡醒自動存檔（#427），失敗時記錄角色識別資訊並排一次下個遊戲分鐘的
+# 補重試——原本 save_character() 的回傳值被直接丟掉，失敗就整批資料悄悄
+# 遺失，跟 #427 本來要解決的問題是同一種事故（CodeRabbit review 抓到）
+func _autosave_on_wake() -> void:
+	if SaveService == null:
+		return
+	if SaveService.save_character(character_id, get_save_data()):
+		_pending_save_retry = false
+		return
+	push_error("Agent %s（%s）睡醒自動存檔失敗，下個遊戲分鐘會補重試一次" % [
+		character_name, character_id
+	])
+	_pending_save_retry = true
 
 # 仲裁器的核心：每次重算，不維護「目前是第幾筆」。
 #
@@ -1109,6 +1413,28 @@ func _reevaluate() -> void:
 
 func _reevaluate_once() -> void:
 	var now_minutes := _now_minutes()
+
+	# 力竭時強制進入休息，優先於一般的任務仲裁
+	var has_exhausted := conditions.any(func(c): return c.get("type") == "exhausted")
+	if has_exhausted:
+		_force_rest_until_recovered(now_minutes)
+		_pursue_current_task()
+		return
+
+	# exhausted 清除時，移除 reflex rest 並恢復一般仲裁
+	if _current_task.get("source", "") == "reflex":
+		_current_task = {}
+		current_state = "idle"
+		current_place = ""
+		# 重置各追逐狀態，以便正常仲裁能清楚地選擇下一個任務
+		_talk_pursuit_stuck_ticks = 0
+		_talk_pursuit_last_distance = INF
+		_give_pursuit_stuck_ticks = 0
+		_give_pursuit_last_distance = INF
+		_attack_pursuit_stuck_ticks = 0
+		_attack_pursuit_last_distance = INF
+		_persuade_pursuit_stuck_ticks = 0
+		_persuade_pursuit_last_distance = INF
 
 	# 剛睡醒的偵測要在這裡的任何選任務邏輯跑之前先記下「進來的時候是不是
 	# 在睡」——選任務邏輯本身就可能把 current_state 從 sleep 換掉，這個
@@ -1196,8 +1522,32 @@ func _reevaluate_once() -> void:
 	# 在睡，選完任務之後不再是了，就是這個轉換瞬間。只在真正換出 sleep 的
 	# 那一次觸發，不會每個遊戲分鐘都重問——_was_sleeping 是這次呼叫一開頭
 	# 記的，只反映「這一次」的轉換，不是累積狀態
-	if _was_sleeping and current_state != "sleep" and llm_decision_enabled and not _awaiting_decision:
-		_request_next_decision(true)
+	if _was_sleeping and current_state != "sleep":
+		# 自動存檔（issue #427）：睡醒是「一天告一段落」的自然檢查點，大約
+		# 一天一次，I/O 成本可以忽略。跟下面的決策請求分開判斷——存檔不該被
+		# llm_decision_enabled／_awaiting_decision 這兩個只跟決策迴圈有關的
+		# 旗標擋住，AI 決策關掉時角色一樣會睡醒，一樣該存。之前沒有任何自動
+		# 存檔機制，長時間無人值守的驗證只要沒人記得手動下 `save` 指令，
+		# 執行期資料在 stop 的當下就整批消失，這是實際發生過的事故
+		_autosave_on_wake()
+		if llm_decision_enabled and not _awaiting_decision:
+			_request_next_decision(true)
+
+	# 剛入睡（#348，《03》§5 流程圖）：跟上面「剛睡醒」對稱的鏡像判斷——
+	# 這次重算進來的時候不在睡，選完任務後變成在睡，就是這個轉換瞬間，
+	# 只在真正換進 sleep 的那一次觸發。不掛 llm_decision_enabled——反思是
+	# 獨立的 LLM 呼叫，不是決策迴圈的一部分，跟 _generate_words_to_creator()
+	# 同一個道理，排程模式的角色一樣要能睡前反思。不 await：fire-and-forget，
+	# _reevaluate_once() 是同步函式，不該卡在一次網路往返上
+	if not _was_sleeping and current_state == "sleep":
+		# 清空 L1（流程圖⑤）在這裡做，不是等 request_sleep_reflection() 成功
+		# 才清——不然沒有事件可反思（該函式一開頭就 return）或反思失敗
+		# （LLM 逾時／驗證不過）時 L1 永遠不會清空。入睡本身就是「今天的
+		# 短期記憶窗口該重置」的事件，跟反思成不成功是兩件事（CodeRabbit
+		# review 抓到）
+		if memory != null:
+			memory.l1.clear()
+		request_sleep_reflection()
 
 	_pursue_current_task()
 
@@ -1330,7 +1680,15 @@ func _environment_risk(_action: String, _params: Dictionary) -> float:
 
 ## 決策執行前的檢查層（#120，《00》原則一：LLM 決定想做什麼，引擎決定做不做得到）。
 ## 只管兩件事：目標/前提是不是真的存在（硬規則），以及擲不擲得過成功率——語意
-## 驗證/白名單那些是 AISchema 的事，這裡假設 action/params 已經過白名單
+## 驗證/白名單那些是 AISchema 的事，這裡假設 action/params 已經過白名單。
+##
+## 「連續同一動作失敗」（#338）不在這裡記——talk／give／attack／persuade 追逐
+## 目標時，這個函式每個遊戲分鐘都會被呼叫一次做前置檢查，追逐中途每次通過都
+## 算「成功」的話，連續失敗計數會被追逐過程本身洗掉，也量不到 talk_to()／
+## give_to()／attack()／eat()／drink() 真正執行後才會出現的失敗（CodeRabbit
+## review 抓到）。改成由各 _pursue_*_task() 自己在真正的終局結果（前置檢查
+## 沒過、或實際執行完成）呼叫 _track_action_result_for_facts()，只在任務真的
+## 結束的那一刻記一次
 func resolve(action: String, params: Dictionary) -> Dictionary:
 	match action:
 		"talk":
@@ -1434,6 +1792,8 @@ func _select(task: Dictionary, now_minutes: int) -> void:
 	_persuade_pursuit_last_distance = INF
 	_persuade_delivered = false
 
+# 力竭狀態下強制休息（#364）。exhausted 激活時選不了別的動作，只能 rest
+# 直到 stamina 恢復到門檻為止。_reevaluate_once() 檢查到 exhausted 時呼叫
 # 往 _current_task 的方向前進。無條件每次重算都跑一次，不管這次有沒有
 # 剛選定新任務——對話中會在這裡先返回、不移動，等下一次重算（對話結束後
 # 那次）才會真的呼叫 move_to()。
@@ -1524,6 +1884,11 @@ func _pursue_current_task() -> void:
 		stop_moving()
 		_pursued_place = current_place
 		_pursuit_done = true
+		# 首次造訪事實句（#338）。_note_place_visited() 自己用 _visited_places
+		# 判斷是不是真的第一次，這裡不用管——之後每輪重算都會重進這個分支
+		# （已到達的地點沒換，仍然會命中 _has_arrived_at），呼叫端沒有節流
+		# 責任
+		_note_place_visited(current_place)
 		return
 
 	# 地點沒換的話，這一趟只起步一次：還在走就繼續走（重下指令會重設
@@ -1581,7 +1946,10 @@ func _pursue_talk_task() -> void:
 		if not result["success"]:
 			# resolve() 判定失敗的任務不留在池子裡繼續佔位——不移除的話
 			# 下次重算分數不變，會馬上又選到同一筆，變成每分鐘重試一次
-			# 同樣失敗的無限迴圈。跟 give／shout「做一次就結束」共用同一套收尾
+			# 同樣失敗的無限迴圈。跟 give／shout「做一次就結束」共用同一套收尾。
+			# 任務在這裡就終結，不會有下一個 tick 重算，記一次不會被追逐過程
+			# 本身重複洗掉（見 resolve() 的說明）
+			_track_action_result_for_facts("talk", false)
 			_finish_task_and_request_next()
 			return
 
@@ -1613,6 +1981,10 @@ func _pursue_talk_task() -> void:
 		stop_moving()
 		_pursued_place = current_place
 		_pursuit_done = true
+		# 首次造訪事實句（#338）：排程觸發的 talk 也是一種「移動到地點」的
+		# 抵達分支，跟 _pursue_current_task() 的一般移動分支同樣要記
+		# （CodeRabbit review 抓到：這裡原本漏了）
+		_note_place_visited(current_place)
 
 	# #281：排程觸發的 talk（target_name 為空）沒有指定對象——查證過
 	# npc_schedule.json，這類排程本來就沒有 target 欄位，涼亭這類地點的
@@ -1654,12 +2026,16 @@ func _pursue_talk_task() -> void:
 			# 照樣可能把 _current_task 換成別的（見 exit_conversation() 的註解）
 			_active_talk_task_id = _current_task.get("id", "")
 			_active_talk_task_source = _current_task.get("source", "")
+			_track_action_result_for_facts("talk", true)
 		else:
 			# 失敗不放棄任務，下個遊戲分鐘再試——對方可能只是暫時忙碌（TARGET_BUSY
-			# 等），跟 move_to() 走不到只 push_warning 不整筆放棄是同一種態度
+			# 等），跟 move_to() 走不到只 push_warning 不整筆放棄是同一種態度。
+			# 這裡是 talk_to() 真正執行後的結果，不是追逐中的前置檢查，每次
+			# 重試都是一次真實的失敗，該算進連續失敗計數
 			push_warning("Agent %s: 搭話 %s 失敗（%s）" % [
 				character_name, target.character_name, failure
 			])
+			_track_action_result_for_facts("talk", false)
 		return
 
 	# 找不到路徑要講出來——跟地點式任務一樣，不然「永遠追不到人」在 log 裡
@@ -1691,12 +2067,18 @@ func _pursue_eat_task() -> void:
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
 		proceed = result["success"]
+		if not proceed:
+			_track_action_result_for_facts("eat", false)
 
 	if proceed:
 		var reason := eat()
 		last_action_result = reason
 		if reason != Character.EAT_OK:
 			push_warning("Agent %s: eat 失敗（%s）" % [character_name, reason])
+		# 連續失敗事實句涵蓋所有實際執行的動作，不分來源——跟 talk 的既有規則
+		# 一致（CodeRabbit review 抓到：原本只計 llm 來源，talk 卻不分來源，
+		# 兩套契約不一致，schedule／llm 交錯時計數會被錯誤重設或漏算）
+		_track_action_result_for_facts("eat", reason == Character.EAT_OK)
 
 	# 不管成功失敗都收尾：跟 _pursue_talk_task() 的 resolve() 失敗分支一樣，
 	# 這筆任務不留在池子裡繼續佔位（吃不到就是吃不到，不會下一分鐘自己變出食物），
@@ -1723,12 +2105,16 @@ func _pursue_drink_task() -> void:
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
 		proceed = result["success"]
+		if not proceed:
+			_track_action_result_for_facts("drink", false)
 
 	if proceed:
 		var reason := drink()
 		last_action_result = reason
 		if reason != Character.DRINK_OK:
 			push_warning("Agent %s: drink 失敗（%s）" % [character_name, reason])
+		# 不分來源都記——理由同 _pursue_eat_task()
+		_track_action_result_for_facts("drink", reason == Character.DRINK_OK)
 
 	if _current_task.get("source", "") == "llm":
 		_remove_task(_current_task.get("id", ""))
@@ -1757,12 +2143,20 @@ func _pursue_murmur_task() -> void:
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
 		should_speak = result["success"]
+		# murmur 沒有追逐、每筆任務只跑這裡一次，resolve() 的結果就是終局結果
+		# （不像 talk／give／attack 之後還有一次真正執行可能失敗）
 
 	# 內容層跟 talk 同一套「模板先頂著，LLM 版之後再換」的分工（見
 	# note/技術/talk 動作設計.md）：murmur 沒有聽者，講的是給自己聽的話，
 	# 不能沿用 DialogueLines.reply() 那組面向對話對象的句子
 	if should_speak and stats != null:
 		say(DialogueLines.murmur(stats))
+
+	# 連續失敗事實句涵蓋所有實際執行的動作，不分來源——跟 eat/drink/talk
+	# 既有規則一致（CodeRabbit review 抓到：原本只計 llm 來源，schedule 來源
+	# 的 murmur 成功時不會重設計數，先前的失敗事實句會卡住不消失，後續失敗
+	# 也會被錯誤累計）
+	_track_action_result_for_facts("murmur", should_speak)
 
 	_remove_task(_current_task.get("id", ""))
 	_current_task = {}
@@ -1815,6 +2209,7 @@ func _pursue_give_task() -> void:
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
 		if not result["success"]:
+			_track_action_result_for_facts("give", false)
 			_finish_task_and_request_next()
 			return
 
@@ -1824,6 +2219,10 @@ func _pursue_give_task() -> void:
 
 	if target == null:
 		last_action_result = "找不到這個人，可能已經離開了"
+		# 連續失敗事實句涵蓋所有實際執行的動作，不分來源（CodeRabbit review
+		# 抓到：原本只計 llm 來源，talk 卻不分來源，兩套契約不一致，統一成
+		# 都不分來源）
+		_track_action_result_for_facts("give", false)
 		_finish_task_and_request_next()
 		return
 
@@ -1834,6 +2233,7 @@ func _pursue_give_task() -> void:
 		if not move_to(target.get_body_position()):
 			push_warning("Agent %s: 走不到送禮對象 %s" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，禮物送不出去"
+			_track_action_result_for_facts("give", false)
 			_finish_task_and_request_next()
 			return
 
@@ -1847,13 +2247,16 @@ func _pursue_give_task() -> void:
 		if progress["threshold_reached"]:
 			push_warning("Agent %s: 送禮對象 %s 卡住走不到，放棄" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，禮物送不出去"
+			_track_action_result_for_facts("give", false)
 			_finish_task_and_request_next()
 		return
 
 	stop_moving()
 	var item_id: String = str(params.get("item_id", ""))
 	var count: int = int(params.get("count", 1))
-	last_action_result = _give_failure_message(give_to(target, item_id, count))
+	var give_failure := give_to(target, item_id, count)
+	last_action_result = _give_failure_message(give_failure)
+	_track_action_result_for_facts("give", give_failure == Character.GIVE_OK)
 	_finish_task_and_request_next()
 
 # give_to() 失敗原因碼轉中文，格式跟 _failure_reason() 一致——《01-2》§5
@@ -1887,6 +2290,7 @@ func _pursue_attack_task() -> void:
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
 		if not result["success"]:
+			_track_action_result_for_facts("attack", false)
 			_finish_task_and_request_next()
 			return
 
@@ -1896,6 +2300,7 @@ func _pursue_attack_task() -> void:
 
 	if target == null:
 		last_action_result = "找不到這個人，可能已經離開了"
+		_track_action_result_for_facts("attack", false)
 		_finish_task_and_request_next()
 		return
 
@@ -1904,6 +2309,7 @@ func _pursue_attack_task() -> void:
 		if not move_to(target.get_body_position()):
 			push_warning("Agent %s: 走不到攻擊對象 %s" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，攻擊不到"
+			_track_action_result_for_facts("attack", false)
 			_finish_task_and_request_next()
 			return
 
@@ -1916,11 +2322,14 @@ func _pursue_attack_task() -> void:
 		if _attack_pursuit_stuck_ticks >= 3:
 			push_warning("Agent %s: 攻擊對象 %s 卡住走不到，放棄" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，攻擊不到"
+			_track_action_result_for_facts("attack", false)
 			_finish_task_and_request_next()
 		return
 
 	stop_moving()
-	last_action_result = _attack_failure_message(attack(target))
+	var attack_failure := attack(target)
+	last_action_result = _attack_failure_message(attack_failure)
+	_track_action_result_for_facts("attack", attack_failure == Character.ATTACK_OK)
 	_finish_task_and_request_next()
 
 # attack() 失敗原因碼轉中文，格式跟 _give_failure_message() 一致
@@ -1955,6 +2364,7 @@ func _pursue_persuade_task() -> void:
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
 		if not result["success"]:
+			_track_action_result_for_facts("persuade", false)
 			_finish_task_and_request_next()
 			return
 
@@ -1964,6 +2374,7 @@ func _pursue_persuade_task() -> void:
 
 	if target == null:
 		last_action_result = "找不到這個人，可能已經離開了"
+		_track_action_result_for_facts("persuade", false)
 		_finish_task_and_request_next()
 		return
 
@@ -1976,6 +2387,7 @@ func _pursue_persuade_task() -> void:
 	# 卡死，之後任何人都說服不了這個目標（忙碌拒絕永遠擋著）
 	if not (target.is_in_group("agents") and (target as Agent).llm_decision_enabled):
 		last_action_result = "這個人好像沒辦法被說服"
+		_track_action_result_for_facts("persuade", false)
 		_finish_task_and_request_next()
 		return
 
@@ -1986,6 +2398,7 @@ func _pursue_persuade_task() -> void:
 		if not move_to(target.get_body_position()):
 			push_warning("Agent %s: 走不到說服對象 %s" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，話說不出口"
+			_track_action_result_for_facts("persuade", false)
 			_finish_task_and_request_next()
 			return
 
@@ -1998,6 +2411,7 @@ func _pursue_persuade_task() -> void:
 		if progress["threshold_reached"]:
 			push_warning("Agent %s: 說服對象 %s 卡住走不到，放棄" % [character_name, target.character_name])
 			last_action_result = "靠近不了對方，話說不出口"
+			_track_action_result_for_facts("persuade", false)
 			_finish_task_and_request_next()
 		return
 
@@ -2009,6 +2423,7 @@ func _pursue_persuade_task() -> void:
 		last_action_result = "你試著說服 %s，等他自己想清楚" % target.character_name
 	else:
 		last_action_result = "%s 好像還在想別人剛才說的話，你的話插不進去" % target.character_name
+	_track_action_result_for_facts("persuade", recorded)
 	_persuade_delivered = true
 	# 不在這裡呼叫 _finish_task_and_request_next()：P-09 拍板 persuade 佔用
 	# 固定時長（模型填的建議值 10 分鐘），跟 gather／hunt_small 同一套用法——
@@ -2032,24 +2447,54 @@ func try_record_pending_persuade(persuader: String, persuader_id: String, reason
 	_pending_persuade = pending
 	return true
 
-# 待回應事實句摘要（#227，《01-3》§3）。目前唯一來源是 persuade——其他
-# 《01-3》§3 列的觸發條件（多久沒說話、地點首次造訪等）還沒接進來，不在
-# 這次範圍內
+# 事實句摘要（《01-3》§3）。九條裡本則（#227＋#338）接了七條：persuade
+# 待回應（#227）、社交沉默三級距、目標拖延、首次造訪、連續同一動作失敗。
+# 剩下兩條是搬運相關（正被搬運中／醒來發現位置變了），依賴 haul 執行層，
+# 見 #338 範圍界線
 func _fact_lines_summary() -> Array[String]:
 	var lines: Array[String] = []
-	if _pending_persuade.is_empty():
-		return lines
 
-	var persuader: String = str(_pending_persuade.get("persuader", ""))
-	var reason: String = str(_pending_persuade.get("reason", ""))
-	var proposed_task: Dictionary = _pending_persuade.get("proposed_task", {})
+	# 一次性事件（首次造訪等）。這裡只讀不清——真的被這輪回應消費掉才清，
+	# 由 _request_next_decision() 在回應通過驗證後處理（見那邊
+	# fact_lines_sent_count 的說明），這裡單純組信封用的內容，不能假設
+	# 這次一定會送成功
+	lines.append_array(_pending_fact_lines)
 
-	if proposed_task.is_empty():
-		lines.append("剛才 %s 試著說服你：%s，你被說動了嗎？" % [persuader, reason])
-	else:
-		lines.append("剛才 %s 試著說服你（%s），希望你能去做「%s」，你被說動了嗎？" % [
-			persuader, reason, _describe_task_intent(proposed_task)
-		])
+	if not _pending_persuade.is_empty():
+		var persuader: String = str(_pending_persuade.get("persuader", ""))
+		var reason: String = str(_pending_persuade.get("reason", ""))
+		var proposed_task: Dictionary = _pending_persuade.get("proposed_task", {})
+
+		if proposed_task.is_empty():
+			lines.append("剛才 %s 試著說服你：%s，你被說動了嗎？" % [persuader, reason])
+		else:
+			lines.append("剛才 %s 試著說服你（%s），希望你能去做「%s」，你被說動了嗎？" % [
+				persuader, reason, _describe_task_intent(proposed_task)
+			])
+
+	# 社交沉默：三級距取最長那條符合的，不三句一起塞（#338 建議做法）
+	var since_social := _now_minutes() - _last_social_minute
+	if since_social >= FACT_SOCIAL_SILENCE_1_DAY_MIN:
+		lines.append("你整整一天沒有和任何人說過話。")
+	elif since_social >= FACT_SOCIAL_SILENCE_HALF_DAY_MIN:
+		lines.append("你已經大半天沒和任何人說過話了。")
+	elif since_social >= FACT_SOCIAL_SILENCE_3H_MIN:
+		lines.append("你已經三個小時沒和任何人說過話了。")
+
+	# 目標拖延：只有真的設過 current_goal（_goal_set_minute >= 0）才判斷，
+	# 沒設過目標不該無中生有講「你想做的那件事拖很久」
+	if _goal_set_minute >= 0 and _now_minutes() - _goal_set_minute >= FACT_GOAL_STALE_MIN:
+		lines.append("你想做的那件事已經拖了很久還沒完成。")
+
+	# 連續同一動作失敗。次數用實際值帶入，不要寫死「三次」——
+	# _consecutive_failure_count 沒有上限，角色可能卡在同一動作連續失敗
+	# 10 次、20 次，寫死的話這句話從第 4 次開始就是假話，還會每次決策
+	# 都重複注入同一句過期文字（code review 抓到，跟社交沉默/目標拖延
+	# 那幾條「條件持續成立就持續注入」是同一種行為，不是新增的問題；
+	# 問題只在文字內容沒有跟著次數更新）
+	if _consecutive_failure_count >= FACT_CONSECUTIVE_FAILURE_THRESHOLD:
+		lines.append("你已經連續 %d 次沒能完成「%s」。" % [_consecutive_failure_count, _consecutive_failure_action])
+
 	return lines
 
 # 把 proposed_task 的 action／params 組成一句人看得懂的意圖描述，給
@@ -2131,13 +2576,22 @@ func _pursue_shout_task() -> void:
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
 		last_action_result = result["reason"]
 		if not result["success"]:
+			_track_action_result_for_facts("shout", false)
 			_finish_task_and_request_next()
 			return
+		# shout 沒有追逐、每筆任務只跑這裡一次，resolve() 通過後 make_noise()
+		# 不會再失敗，這裡就是終局結果
 
 	# 半徑沿用 make_noise() 的預設值 NOISE_RADIUS——《07》§3 已定案「聽覺
 	# （shout）8 格」，跟 make_noise() 原本給玩家按鍵用的廣播半徑是同一個數字，
 	# 不用另外定義一個常數
 	make_noise()
+
+	# 連續失敗事實句涵蓋所有實際執行的動作，不分來源——跟 eat/drink/talk
+	# 既有規則一致（CodeRabbit review 抓到：原本只計 llm 來源，schedule 來源
+	# 的 shout 成功時不會重設計數，先前的失敗事實句會卡住不消失，後續失敗
+	# 也會被錯誤累計）
+	_track_action_result_for_facts("shout", true)
 	_finish_task_and_request_next()
 
 # 按顯示名找所有符合的角色，用於偵測撞名（resolve() 的歧義檢查）
