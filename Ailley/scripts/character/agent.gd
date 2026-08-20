@@ -2232,9 +2232,14 @@ func _fact_lines_summary() -> Array[String]:
 	if _goal_set_minute >= 0 and _now_minutes() - _goal_set_minute >= FACT_GOAL_STALE_MIN:
 		lines.append("你想做的那件事已經拖了很久還沒完成。")
 
-	# 連續同一動作失敗
+	# 連續同一動作失敗。次數用實際值帶入，不要寫死「三次」——
+	# _consecutive_failure_count 沒有上限，角色可能卡在同一動作連續失敗
+	# 10 次、20 次，寫死的話這句話從第 4 次開始就是假話，還會每次決策
+	# 都重複注入同一句過期文字（code review 抓到，跟社交沉默/目標拖延
+	# 那幾條「條件持續成立就持續注入」是同一種行為，不是新增的問題；
+	# 問題只在文字內容沒有跟著次數更新）
 	if _consecutive_failure_count >= FACT_CONSECUTIVE_FAILURE_THRESHOLD:
-		lines.append("你已經連續三次沒能完成「%s」。" % _consecutive_failure_action)
+		lines.append("你已經連續 %d 次沒能完成「%s」。" % [_consecutive_failure_count, _consecutive_failure_action])
 
 	return lines
 
