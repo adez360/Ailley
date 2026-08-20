@@ -408,6 +408,7 @@ func _on_game_minute(_hour: int, _minute: int) -> void:
 	# 昏迷與治療檢查每遊戲分鐘執行（與 GameClock.time_changed 同步）
 	_update_incapacitation()
 	_update_treatment()
+	_update_exhausted_condition()
 
 	# 情緒與其他 condition 在全局分鐘邊界執行（tick 機制，與 Stats 漂移同步）
 	if _minute % GameClock.GAME_MINUTES_PER_TICK == 0:
@@ -512,7 +513,6 @@ func _update_conditions() -> void:
 	_set_condition(CONDITION_DRUNK, stats.get_value("alcohol") > 30.0)
 	_set_condition(CONDITION_STARVING, stats.get_value("satiety") < 10.0)
 	_set_condition(CONDITION_DEHYDRATED, stats.get_value("hydration") < 10.0)
-	_update_exhausted_condition()
 	_set_condition(CONDITION_SLEEPY, stats.get_value("wakefulness") < 15.0)
 	_set_condition(CONDITION_FILTHY, stats.get_value("hygiene") < 20.0)
 
@@ -1337,6 +1337,7 @@ func load_save_data(data: Dictionary) -> void:
 	# 不是「缺欄位」那種能被 has() 擋掉的情況（CodeRabbit review 抓到）
 	if stats != null and data.get("stats", null) is Dictionary:
 		stats.load_save_data(data["stats"])
+		_update_exhausted_condition()
 	if relationships != null and data.get("relationships", null) is Dictionary:
 		relationships.load_save_data(data["relationships"])
 
