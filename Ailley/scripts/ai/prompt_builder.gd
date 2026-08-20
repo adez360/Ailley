@@ -166,7 +166,7 @@ important THIS EVENT IS TO YOU PERSONALLY — not how objectively severe it is, 
 how much you personally care about it. Also classify it as "positive", "negative",
 or "neutral" based on how it felt to you. Echo back the same "id" for each event you
 score.
-"personality_delta" is optional: if today's events genuinely shifted how you are, not just how you feel right now, include changed traits from this list only: %s. Each value must be an integer from -3 to 3 — small, incremental shifts, not big swings from one day. Omit any trait that didn't change, and omit the whole field if nothing did.
+"personality_delta" is optional: if today's events genuinely shifted how you are, not just how you feel right now, include changed traits from this list only: %s. Each value must be a number from -3 to 3 — small, incremental shifts, not big swings from one day. Omit any trait that didn't change, and omit the whole field if nothing did.
 "today_plan" is optional: 2-4 short intents (in your own words) for what you plan to do tomorrow, based on today's events and how you're feeling. This replaces any previous plan entirely.
 Reply with JSON only, no prose, no code fence:
 {"summary": "<one sentence summarizing your day>",
