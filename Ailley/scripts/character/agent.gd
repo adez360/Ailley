@@ -234,6 +234,12 @@ var _plan_update_epoch := 0
 ## 那個轉換瞬間，見 _reevaluate() 怎麼用它
 var _was_sleeping := false
 
+## 睡醒自動存檔失敗時設 true，下一個遊戲分鐘的 _on_time_changed() 會補
+## 重試一次——不額外養計時器，本來就有的每分鐘 tick 天然就是節流過的重試
+## 間隔，同一次失敗不會被密集重試到成功為止（#427／CodeRabbit review 抓到：
+## 原本 save_character() 回傳值被直接丟掉，失敗就整批資料悄悄遺失）
+var _pending_save_retry := false
+
 ## #265：_reevaluate() 的重入保護（trampoline）。_pursue_current_task()
 ## 選中 give/shout、或 talk 判定失敗時會呼叫 _finish_task_and_request_next()，
 ## 它又呼叫一次 _reevaluate()——如果任務池裡連續好幾筆都是「一叫就結束」的
@@ -1089,12 +1095,18 @@ func load_save_data(data: Dictionary) -> void:
 	_plan_update_requested = false
 	_plan_update_epoch += 1
 
-	_today_plan.clear()
-	var raw_plan: Variant = data.get("today_plan", [])
-	if raw_plan is Array:
-		for item in raw_plan:
-			if item is Dictionary:
-				_today_plan.append((item as Dictionary).duplicate(true))
+	# 只在資料裡真的有 today_plan 這個 key 時才覆寫——跟 character.gd 的
+	# personality 同一個「省略 key＝不動」語意。沒有這條防呆的話，讀一份
+	# 沒有 today_plan 欄位的存檔（例如舊格式、或只想局部更新其他欄位的
+	# 呼叫端）會把角色現有的今日計畫整包清空，不是「維持原樣」
+	# （CodeRabbit review 抓到）
+	if data.has("today_plan"):
+		_today_plan.clear()
+		var raw_plan: Variant = data.get("today_plan", [])
+		if raw_plan is Array:
+			for item in raw_plan:
+				if item is Dictionary:
+					_today_plan.append((item as Dictionary).duplicate(true))
 
 # 第一次看到某個陌生人就停下來愣一下。
 #
@@ -1178,6 +1190,8 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務
 	# 會用新任務的 current_state 結算最後一分鐘
 	_apply_action_recovery()
+	if _pending_save_retry:
+		_autosave_on_wake()
 	_reevaluate()
 
 # 力竭時強制進入休息，直到 stamina 恢復
@@ -1197,6 +1211,20 @@ func _force_rest_until_recovered(now_minutes: int) -> void:
 		"interruptible": false,  # 力竭期間不可被打斷
 	}
 	_select(rest_task, now_minutes)
+
+# 睡醒自動存檔（#427），失敗時記錄角色識別資訊並排一次下個遊戲分鐘的
+# 補重試——原本 save_character() 的回傳值被直接丟掉，失敗就整批資料悄悄
+# 遺失，跟 #427 本來要解決的問題是同一種事故（CodeRabbit review 抓到）
+func _autosave_on_wake() -> void:
+	if SaveService == null:
+		return
+	if SaveService.save_character(character_id, get_save_data()):
+		_pending_save_retry = false
+		return
+	push_error("Agent %s（%s）睡醒自動存檔失敗，下個遊戲分鐘會補重試一次" % [
+		character_name, character_id
+	])
+	_pending_save_retry = true
 
 # 仲裁器的核心：每次重算，不維護「目前是第幾筆」。
 #
@@ -1347,8 +1375,7 @@ func _reevaluate_once() -> void:
 		# 旗標擋住，AI 決策關掉時角色一樣會睡醒，一樣該存。之前沒有任何自動
 		# 存檔機制，長時間無人值守的驗證只要沒人記得手動下 `save` 指令，
 		# 執行期資料在 stop 的當下就整批消失，這是實際發生過的事故
-		if SaveService != null:
-			SaveService.save_character(character_id, get_save_data())
+		_autosave_on_wake()
 		if llm_decision_enabled and not _awaiting_decision:
 			_request_next_decision(true)
 
