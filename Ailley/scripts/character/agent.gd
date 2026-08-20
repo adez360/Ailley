@@ -1644,6 +1644,11 @@ func _pursue_current_task() -> void:
 		_pursue_buy_task()
 		return
 
+	# work 是長動作，執行協程會自己跑 5 分鐘，只能呼叫一次（#358）
+	if current_state == "work":
+		_pursue_work_task()
+		return
+
 	if current_place.is_empty():
 		return
 
@@ -1932,6 +1937,62 @@ func _find_vending_machine_at_place(place: String) -> VendingMachine:
 	return null
 	# 那條同一個問題）
 	_reevaluate()
+
+# work 任務的執行（#358）：長動作，執行協程會自己跑 5 遊戲分鐘。
+# 跟 eat／drink 的差異是需要先走到工作地點，到達後才呼叫 work_at()。
+# 工作開始後 `_working = true`，後續 _pursue_current_task() 會因 is_working()
+# 直接返回，協程會自己監控 5 分鐘、完成時自動收尾（或中途異常中止）。
+# 成功或失敗都不在這裡結束任務——schedule 任務靠 window 自然退場，
+# 失敗時 resolve() 層級也會記錄原因（未來若開放 LLM 選 work 時）
+func _pursue_work_task() -> void:
+	# 檢查是否已到達工作地點
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null or current_place.is_empty() or not anchors.has(current_place):
+		last_action_result = Character.WORK_TARGET_NOT_FOUND
+		push_warning("Agent %s: work 失敗（無法解析地點 %s）" % [character_name, current_place])
+		_current_task = {}
+		current_state = "idle"
+		return
+
+	var target: Vector2 = anchors.resolve(current_place)
+
+	# 還沒到達就先走過去
+	if not _has_arrived_at(target):
+		# 這一趟只起步一次，沒換地點就繼續走（同 _pursue_current_task 的邏輯）
+		if current_place != _pursued_place or not is_moving():
+			_pursued_place = current_place
+			_pursuit_done = false
+			if not move_to(target):
+				push_warning("Agent %s: 走不到工作地點 %s" % [character_name, current_place])
+				_pursuit_done = true
+		return
+
+	# 已到達工作地點，找工作站並執行 work_at()
+	stop_moving()
+	_pursued_place = current_place
+	_pursuit_done = true
+
+	# 找最近的工作站（MVP 只有一個，但用最近的方式向前相容）
+	var workstations: Array = get_tree().get_nodes_in_group("workstations")
+	var nearest_workstation: Workstation = null
+	var nearest_distance := INF
+
+	for ws in workstations:
+		var distance := get_body_position().distance_to(ws.global_position)
+		if distance < nearest_distance:
+			nearest_distance = distance
+			nearest_workstation = ws
+
+	# 呼叫 work_at() 並記錄結果
+	var reason := work_at(nearest_workstation)
+	last_action_result = reason
+
+	if reason != Character.WORK_OK:
+		push_warning("Agent %s: work_at 失敗（%s）" % [character_name, reason])
+		# 工作失敗就收尾任務；成功的話協程會自己管理、完成後呼叫 _on_work_finished()
+		_current_task = {}
+		current_state = "idle"
+		_reevaluate()
 
 # murmur 任務的執行（#162）：沒有目標、不用移動，講給自己聽當下就結束——不像
 # talk 要追著會動的目標走，也不像 nap／rest 那類要佔滿整段 duration。resolve()
