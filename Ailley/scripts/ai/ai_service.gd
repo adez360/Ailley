@@ -133,6 +133,14 @@ func reload_config() -> void:
 # 呼叫端看見「查無此 provider」，不是靜默給錯的狀態
 func get_readiness(provider_name: String = "") -> Dictionary:
 	var resolved := provider_name if not provider_name.is_empty() else config.default_provider
+
+	# 查無此 provider（拼字錯）跟「這個 provider 存在、只是還沒檢查過」是
+	# 兩種不同的錯——前者退到 AI_READY_NOT_CHECKED 的話，打錯字會被誤報成
+	# 「還沒檢查」，讓人以為等一下就會有結果，實際上永遠不會有（CodeRabbit
+	# review 抓到）
+	if not config.providers.has(resolved):
+		return {"ready": false, "reason": L10n.tf("AI_READY_PROVIDER_NOT_FOUND", {"name": resolved})}
+
 	return _readiness.get(resolved, {"ready": false, "reason": L10n.t("AI_READY_NOT_CHECKED")})
 
 

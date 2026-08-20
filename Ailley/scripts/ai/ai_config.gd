@@ -218,7 +218,12 @@ func _parse_provider(provider_name: String, data: Dictionary) -> Provider:
 	provider.name = provider_name
 	provider.base_url = str(data.get("base_url", DEFAULT_BASE_URL)).strip_edges().rstrip("/")
 	provider.model = str(data.get("model", DEFAULT_MODEL)).strip_edges()
-	provider.timeout = float(data.get("timeout", DEFAULT_TIMEOUT))
+	# HTTPRequest.timeout <= 0 在 Godot 裡代表「不設逾時」，不是「立刻逾時」——
+	# 設定檔手滑填 0 或負值會讓 _send()／_probe_models() 的請求永遠不逾時，
+	# 卡住的節點回不了池子。這裡退回 DEFAULT_TIMEOUT，不信任設定檔給的非正值
+	# （CodeRabbit review 抓到）
+	var raw_timeout := float(data.get("timeout", DEFAULT_TIMEOUT))
+	provider.timeout = raw_timeout if raw_timeout > 0.0 else DEFAULT_TIMEOUT
 	provider.api_key = str(data.get("api_key", "")).strip_edges()
 	provider.supports_json_schema = bool(data.get("supports_json_schema", true))
 	provider.format_guaranteed = bool(data.get("format_guaranteed", false))
