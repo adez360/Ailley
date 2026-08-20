@@ -655,7 +655,7 @@ func _complete_treatment() -> void:
 		stats.set_value("alcohol", 0.0)		# 清除酒精
 		stats.set_value("satiety", 50.0)	# 恢復飽食度
 		stats.set_value("hydration", 50.0)	# 恢復水分
-		stats.set_value("stamina", 50.0)	# 恢復體力
+		stats.set_value("stamina", EXHAUSTION_RECOVERY_THRESHOLD + 1.0)	# 恢復體力，超過力竭恢復門檻
 		stats.set_value("wakefulness", 50.0)	# 恢復清醒度
 		stats.set_value("hygiene", 50.0)	# 恢復衛生
 
@@ -1284,6 +1284,7 @@ func get_save_data() -> Dictionary:
 		# 性格漂移不該因為重開就被重置回建角當下的原始值——跟 today_plan「跨天
 		# 承諾不該憑空消失」同一個道理（見 note/技術/存檔.md）
 		"personality": personality.duplicate(true),
+		"is_exhausted": has_condition(CONDITION_EXHAUSTED),
 	}
 
 	if stats != null:
@@ -1339,7 +1340,12 @@ func load_save_data(data: Dictionary) -> void:
 	# 不是「缺欄位」那種能被 has() 擋掉的情況（CodeRabbit review 抓到）
 	if stats != null and data.get("stats", null) is Dictionary:
 		stats.load_save_data(data["stats"])
-		_update_exhausted_condition()
+		# 優先還原保存的 exhausted 狀態（處理邊界情況如 stamina = 1-50）
+		# 如果存檔中有 is_exhausted 欄位則直接還原，否則由 stamina 推斷
+		if data.has("is_exhausted"):
+			_set_condition(CONDITION_EXHAUSTED, data["is_exhausted"])
+		else:
+			_update_exhausted_condition()
 	if relationships != null and data.get("relationships", null) is Dictionary:
 		relationships.load_save_data(data["relationships"])
 
