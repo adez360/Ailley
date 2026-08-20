@@ -46,6 +46,12 @@ const VERBOSE_SQL := false
 var db: SQLite
 var is_ready := false
 
+## is_ready 只代表「連線與 schema 都開好，CRUD 可以用」——DatabaseSeeder
+## 自己就要靠 CRUD 才能把基礎資料寫進去，所以不能拿 is_ready 當作「seed
+## 已完成」的訊號。呼叫端需要「基礎資料真的補齊了嗎」這個答案時
+## 應該同時檢查這個旗標，而不是只看 is_ready。
+var is_seeded := false
+
 # table -> Array[String]，_table_has_column() 的欄位快取，
 # schema 建立後不會再變，查一次記住即可，不必每次 UPDATE 都跑 PRAGMA
 var _table_columns_cache := {}
@@ -111,20 +117,22 @@ func _ready() -> void:
 
 	# -------------------------------------------------
 	# Seed
+	#
+	# DatabaseSeeder 自己要靠 is_ready 才能呼叫 CRUD，所以要排在
+	# is_ready = true 之後；但 is_seeded 要等 seed 真的成功才設，
+	# 消費端不該把「schema 開好」跟「基礎資料補齊」看成同一件事。
 	# -------------------------------------------------
 
 	if not DatabaseSeeder.seed_all():
 
 		push_error(
-			"[Database] DatabaseSeeder.seed_all() 未完全成功，"
-			+ "部分基礎資料可能缺失。"
+			"[Database] "
+			+ "Seed 失敗，資料庫可能不完整，不標記為 is_seeded。"
 		)
 
-		is_ready = false
+	else:
 
-		db.close_db()
-
-		return
+		is_seeded = true
 
 
 	# -------------------------------------------------
@@ -149,6 +157,7 @@ func _exit_tree() -> void:
 		db = null
 
 		is_ready = false
+		is_seeded = false
 
 
 # =====================================================

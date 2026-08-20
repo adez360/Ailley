@@ -350,6 +350,8 @@ static func seed_all() -> bool:
 ## Item Seed
 ## =====================================================
 
+## 回傳 false 代表至少一個 item_id 沒能正確建立
+## （ITEM_BALANCE 查不到 ItemDatabase 對應項目、或 INSERT 失敗）。
 static func seed_items() -> bool:
 
 	var ok := true
@@ -375,25 +377,33 @@ static func seed_items() -> bool:
 		item_data["item_id"] = item_id
 		item_data["is_active"] = 1
 
-		if not _insert_item_if_missing(
+		if not _upsert_item(
 			item_id,
 			item_data
 		):
+
 			ok = false
 
 
 	print(
 		"[DatabaseSeeder] Item seed 完成。"
+		if ok
+		else "[DatabaseSeeder] Item seed 有錯誤，詳見上方錯誤訊息。"
 	)
 
 	return ok
 
 
 ## =====================================================
-## Insert Item If Missing
+## Upsert Item
+##
+## item 是全域目錄表，沒有任何其他地方會在執行期改動它——
+## 每次開機都用 ITEM_BALANCE／ItemDatabase 目前的定義覆蓋既有 row，
+## 兩份清單改了任何欄位，既有存檔的 SQLite 都會跟著同步，
+## 不會停留在第一次建立當下的舊值。
 ## =====================================================
 
-static func _insert_item_if_missing(
+static func _upsert_item(
 	item_id: String,
 	item_data: Dictionary
 ) -> bool:
@@ -416,9 +426,29 @@ static func _insert_item_if_missing(
 
 	if not existing.is_empty():
 
+		var updated := DatabaseManager.update(
+			"item",
+			item_data,
+			"item_id = '%s'"
+			% DatabaseManager.escape_sql_string(item_id)
+		)
+
+		if not updated:
+
+			push_error(
+				"[DatabaseSeeder] "
+				+ "更新 item 失敗：%s | DB=%s"
+				% [
+					item_id,
+					DatabaseManager.db.error_message
+				]
+			)
+
+			return false
+
 		print(
 			"[DatabaseSeeder] "
-			+ "item 已存在：%s"
+			+ "item 已同步：%s"
 			% item_id
 		)
 

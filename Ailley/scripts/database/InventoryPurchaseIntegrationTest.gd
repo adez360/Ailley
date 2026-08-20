@@ -56,11 +56,11 @@ func _run() -> void:
 	var ready_wait_frames := 0
 	const READY_WAIT_TIMEOUT_FRAMES := 300
 
-	while not DatabaseManager.is_ready:
+	while not DatabaseManager.is_seeded:
 		ready_wait_frames += 1
 		if ready_wait_frames > READY_WAIT_TIMEOUT_FRAMES:
 			_fail(
-				"DatabaseManager.is_ready",
+				"DatabaseManager.is_seeded",
 				"等待逾時（%d frames），資料庫可能初始化失敗" % READY_WAIT_TIMEOUT_FRAMES
 			)
 			_finish()

@@ -1265,8 +1265,10 @@ static func seed_items() -> bool
 ```text
 ITEM_BALANCE 的 key 必須存在於 res://data/items.json（ItemDatabase 為單一事實來源），
   查不到就 push_error 並跳過該筆，避免兩份物品清單各自漂移出不存在的 item_id
-seed_items() 逐筆用 select_where(item_id) 檢查是否已存在才 INSERT，重複呼叫不出錯也不覆寫；
-  任一筆 item_id 對不上 items.json 或 INSERT 失敗都會讓 seed_items() 回傳 false，
+seed_items() 逐筆用 select_where(item_id) 檢查是否已存在，不存在就 INSERT，
+  存在就用 ITEM_BALANCE／ItemDatabase 目前的定義 UPDATE（_upsert_item()）——
+  每次開機都同步成目前的定義，不會停留在第一次建立當下的舊值；
+  任一筆 item_id 對不上 items.json 或 INSERT/UPDATE 失敗都會讓 seed_items() 回傳 false，
   seed_all() 直接轉傳這個結果給呼叫端
 † Seeder 不建表、不改 schema、不做遊戲中的資料更新，只負責第一次啟動的基礎資料
 ```
