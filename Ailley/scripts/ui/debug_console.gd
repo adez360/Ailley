@@ -987,7 +987,11 @@ func _cmd_emotion(args: PackedStringArray) -> void:
 	}))
 
 func _cmd_ai(args: PackedStringArray) -> void:
-	AIService.reload_config()
+	# 用等待版：reload_config() 本身刻意不等探測完成（開機時呼叫不能卡住
+	# 遊戲啟動），但這裡是玩家主動下指令要看結果，值得等探測真的做完才印，
+	# 不然十之八九會印出 AI_READY_NOT_CHECKED 這種還沒測完的假象
+	# （CodeRabbit review 抓到）
+	await AIService.reload_config_and_wait()
 	var config: AIConfig = AIService.config
 
 	# config 的 _to_string() 只會吐遮蔽過的金鑰，這裡不另外碰 api_key
@@ -996,6 +1000,19 @@ func _cmd_ai(args: PackedStringArray) -> void:
 	if not config.enabled:
 		_print("[color=ffcc66]%s[/color]" % L10n.tf("CON_AI_DISABLED", {"reason": config.status_reason}))
 		return
+
+	# 就緒狀態逐 provider 印，不是只印 default_provider 一個——地端沒開、
+	# 雲端連得上這種情況，取單一代表值會蓋掉另一邊的資訊（issue #345）
+	for name in config.providers.keys():
+		var readiness: Dictionary = AIService.get_readiness(name)
+		var marker := " (default)" if name == config.default_provider else ""
+		var color := "88ff88" if readiness["ready"] else "ff8888"
+		_print("[color=%s]%s[/color]" % [color, L10n.tf("CON_AI_READY_LINE", {
+			"ready": L10n.t("CON_AI_READY_YES" if readiness["ready"] else "CON_AI_READY_NO"),
+			"name": name,
+			"default_marker": marker,
+			"reason": readiness["reason"],
+		})])
 
 	# 第一個參數是 dialogue 就切成對話政策，其餘參數仍然是探針句
 	var policy := AIService.Policy.SCHEDULED
