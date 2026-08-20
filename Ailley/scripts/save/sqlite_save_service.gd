@@ -1,7 +1,8 @@
 extends "res://scripts/save/save_service.gd"
 class_name SqliteSaveService
 
-## SaveService 的 SQLite 實作，走 DatabaseManager autoload 存取 user://game.db。
+## SaveService 的 SQLite 實作，走 DatabaseManager autoload 存取
+## DatabaseManager.DATABASE_PATH。
 ## 介面定義見 note/規格書/14_存檔資料存取層規格書.md §2。
 ##
 ## 《14》§5 要求兩個實作的資料形狀必須一致——這裡讀寫的 Dictionary 形狀
