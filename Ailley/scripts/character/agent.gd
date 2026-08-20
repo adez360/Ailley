@@ -1054,6 +1054,25 @@ func get_state_snapshot() -> Dictionary:
 	}
 	return snapshot
 
+# today_plan（#350）是跨天的承諾——「今天打算做這幾件事」——跟 current_goal
+# 那種瞬時念頭不同，重開遊戲不該讓它憑空消失（見 note/技術/存檔.md 的既有
+# 拍板；current_goal 刻意不存，這裡不要一起加進去）。id 是本機重新配發的
+# 序號（見 _apply_today_plan() 的說明），跟存檔格式無關，原樣存回沒有問題——
+# 下一次 _apply_today_plan() 呼叫本來就會整份取代並重新配發
+func get_save_data() -> Dictionary:
+	var data := super()
+	data["today_plan"] = _today_plan.duplicate(true)
+	return data
+
+func load_save_data(data: Dictionary) -> void:
+	super(data)
+	_today_plan.clear()
+	var raw_plan: Variant = data.get("today_plan", [])
+	if raw_plan is Array:
+		for item in raw_plan:
+			if item is Dictionary:
+				_today_plan.append((item as Dictionary).duplicate(true))
+
 # 第一次看到某個陌生人就停下來愣一下。
 #
 # 認識的人不算 —— 每天上班都會遇到的同事不會讓人「！」。
@@ -1298,8 +1317,17 @@ func _reevaluate_once() -> void:
 	# 在睡，選完任務之後不再是了，就是這個轉換瞬間。只在真正換出 sleep 的
 	# 那一次觸發，不會每個遊戲分鐘都重問——_was_sleeping 是這次呼叫一開頭
 	# 記的，只反映「這一次」的轉換，不是累積狀態
-	if _was_sleeping and current_state != "sleep" and llm_decision_enabled and not _awaiting_decision:
-		_request_next_decision(true)
+	if _was_sleeping and current_state != "sleep":
+		# 自動存檔（issue #427）：睡醒是「一天告一段落」的自然檢查點，大約
+		# 一天一次，I/O 成本可以忽略。跟下面的決策請求分開判斷——存檔不該被
+		# llm_decision_enabled／_awaiting_decision 這兩個只跟決策迴圈有關的
+		# 旗標擋住，AI 決策關掉時角色一樣會睡醒，一樣該存。之前沒有任何自動
+		# 存檔機制，長時間無人值守的驗證只要沒人記得手動下 `save` 指令，
+		# 執行期資料在 stop 的當下就整批消失，這是實際發生過的事故
+		if SaveService != null:
+			SaveService.save_character(character_id, get_save_data())
+		if llm_decision_enabled and not _awaiting_decision:
+			_request_next_decision(true)
 
 	# 剛入睡（#348，《03》§5 流程圖）：跟上面「剛睡醒」對稱的鏡像判斷——
 	# 這次重算進來的時候不在睡，選完任務後變成在睡，就是這個轉換瞬間，

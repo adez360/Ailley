@@ -1152,6 +1152,10 @@ func get_save_data() -> Dictionary:
 		"is_being_carried": _is_being_carried,
 		"treatment_start_minute": _treatment_start_minute,
 		"treatment_location": _treatment_location,
+		# 睡前反思（#349）會用 personality_delta 累積調整這 10 項，跨天累積的
+		# 性格漂移不該因為重開就被重置回建角當下的原始值——跟 today_plan「跨天
+		# 承諾不該憑空消失」同一個道理（見 note/技術/存檔.md）
+		"personality": personality.duplicate(true),
 	}
 
 	if stats != null:
@@ -1190,6 +1194,12 @@ func load_save_data(data: Dictionary) -> void:
 		stats.load_save_data(data["stats"])
 	if relationships != null and data.has("relationships"):
 		relationships.load_save_data(data["relationships"])
+
+	# 沒有存檔資料時維持 _ready() 已經由 Personality.from_identity() 組好的值，
+	# 不清空——跟 stats／relationships 同一個理由，personality 不是每次都
+	# 隨存檔走的東西（沒建過角的預設角色也要有值）
+	if data.has("personality") and data["personality"] is Dictionary:
+		personality = (data["personality"] as Dictionary).duplicate(true)
 
 	# memory 一定呼叫，跟 stats／relationships 特意不同：這個角色可能是已經在
 	# 場上跑過、累積了新記憶的既有節點（debug console `load` 就是這樣用），
