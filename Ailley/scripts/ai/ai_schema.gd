@@ -100,6 +100,10 @@ const MAX_TASKS_PER_RESPONSE := 5
 # 會頂到
 const MAX_PLAN_ITEMS := 10
 
+# personality_delta 單項絕對值上限（#349，《03》§5、《04》§4 都明訂「單項
+# 絕對值超過 3 時，房主機夾制，不採信 LLM 的數字」）
+const MAX_PERSONALITY_DELTA := 3.0
+
 # 單筆 text 最長幾字（#89，CodeRabbit review）。MAX_PLAN_ITEMS 只擋筆數，
 # 沒擋單筆長度——today_plan 每次決策都會重新壓成句子塞回 prompt
 # （_today_plan_sentence()），單筆文字要是無上限，被誘導或壞掉的回應可以
@@ -677,7 +681,66 @@ static func validate_reflection(data: Dictionary) -> Dictionary:
 			"importance": importance,
 		})
 
-	return _ok({"summary": summary, "events": events})
+	# personality_delta（#349，《03》§5 流程圖 ⑥、《04》§4）：選填，只列出
+	# 有變動的維度。欄位名必須是 Personality.PERSONALITY_KEYS 之一——不是
+	# 白名單就整包拒絕，這是分類欄位不是自由文字，跟 valence 同一個嚴格度。
+	# 單項數值只夾制到 ±3，不採信 LLM 給的更大數字（《03》§5 警語明講「引擎
+	# 夾制，不採信 LLM 的數字」），不是拒絕整包——跟 importance 同一個理由，
+	# 越界不是安全問題
+	var personality_delta := {}
+	if data.has("personality_delta"):
+		if not data["personality_delta"] is Dictionary:
+			return _fail(ERROR_BAD_SHAPE)
+		for key in (data["personality_delta"] as Dictionary).keys():
+			if not key is String or not Personality.PERSONALITY_KEYS.has(key):
+				return _fail(ERROR_BAD_SHAPE)
+			var delta_value: Variant = data["personality_delta"][key]
+			if not (delta_value is int or delta_value is float) or not is_finite(float(delta_value)):
+				return _fail(ERROR_BAD_SHAPE)
+			personality_delta[key] = clampf(float(delta_value), -MAX_PERSONALITY_DELTA, MAX_PERSONALITY_DELTA)
+
+	# today_plan（#350，《03》§5 流程圖 ②）：選填，形狀比照 validate_tasks()
+	# 的 update_plan——同樣是「整份取代」語意，同一套驗證邏輯（text 必填、
+	# 截斷不拒絕、上限筆數防禦）。規格書寫「2~4 件」是給模型的量級參考
+	# （見 REFLECTION_SYSTEM 措辭），這裡只擋筆數上限跟結構，不強制下限——
+	# 模型少給幾件不該讓整包反思（含 events 評分）都作廢，跟這個檔案一貫
+	# 「越界夾制/截斷，不是動輒整包拒絕」的態度一致
+	var today_plan: Variant = null
+	if data.has("today_plan"):
+		if not data["today_plan"] is Array:
+			return _fail(ERROR_BAD_SHAPE)
+		var raw_plan := data["today_plan"] as Array
+		if raw_plan.size() > MAX_PLAN_ITEMS:
+			return _fail(ERROR_BAD_SHAPE)
+
+		var plan_items: Array[Dictionary] = []
+		for item in raw_plan:
+			if not item is Dictionary:
+				return _fail(ERROR_BAD_SHAPE)
+			var plan_item := item as Dictionary
+			if not plan_item.has("text") or not plan_item["text"] is String:
+				return _fail(ERROR_BAD_SHAPE)
+
+			var plan_text: String = (plan_item["text"] as String).strip_edges()
+			if plan_text.is_empty() or plan_text.length() > MAX_PLAN_TEXT_CHARS:
+				return _fail(ERROR_BAD_SHAPE)
+
+			var is_done := false
+			if plan_item.has("is_done"):
+				if not plan_item["is_done"] is bool:
+					return _fail(ERROR_BAD_SHAPE)
+				is_done = plan_item["is_done"]
+
+			plan_items.append({"text": plan_text, "is_done": is_done})
+
+		today_plan = plan_items
+
+	return _ok({
+		"summary": summary,
+		"events": events,
+		"personality_delta": personality_delta,
+		"today_plan": today_plan,
+	})
 
 
 # 建角完成當下的一次性回應（《05》流程圖 ⑤，#122）：角色對自己性格設定的
@@ -861,6 +924,34 @@ static func reflection_response_schema() -> Dictionary:
 								"importance": {"type": "number"},
 							},
 							"required": ["id", "content", "importance"],
+						},
+					},
+					# personality_delta（#349）：選填物件，key 限定 10 個人格維度之一，
+					# 值夾在 ±MAX_PERSONALITY_DELTA。property 名不能動態產生（json_schema
+					# 的 properties 是固定 key），所以用 patternProperties 風格不適用——
+					# 這裡改用寬鬆的 additionalProperties number，實際的欄位名白名單
+					# 交給 validate_reflection() 那層做，跟 ALLOWED_ACTIONS 那套「schema
+					# 管型別、驗證層管白名單」分工一致
+					"personality_delta": {
+						"type": "object",
+						"additionalProperties": {
+							"type": "number",
+							"minimum": -MAX_PERSONALITY_DELTA,
+							"maximum": MAX_PERSONALITY_DELTA,
+						},
+					},
+					# today_plan（#350）：形狀跟 plan_response_schema() 的 update_plan
+					# 一致，選填
+					"today_plan": {
+						"type": "array",
+						"maxItems": MAX_PLAN_ITEMS,
+						"items": {
+							"type": "object",
+							"properties": {
+								"text": {"type": "string", "maxLength": MAX_PLAN_TEXT_CHARS},
+								"is_done": {"type": "boolean"},
+							},
+							"required": ["text"],
 						},
 					},
 				},

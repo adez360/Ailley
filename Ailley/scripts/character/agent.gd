@@ -182,6 +182,16 @@ var _reacting := false
 # _consider_switch() 靠它決定要用 MIN_COMMIT 還是 LLM_WAIT_MIN_COMMIT
 var _awaiting_decision := false
 
+# 同一套道理用在 request_sleep_reflection()：睡眠事件觸發跟 debug_console.gd
+# 的 `reflect` 指令都可能呼叫它，這通吃 await，沒有這個旗標擋，重疊呼叫會
+# 讓兩個請求同時讀寫同一份 _daily_events（CodeRabbit review 抓到）
+var _sleep_reflection_in_flight := false
+
+# 撞期時記「還有一次要補跑」，不能就這樣把那次請求默默丟掉——它很可能是想
+# 反思等待期間才新累積的事件（CodeRabbit review 抓到，見
+# _finish_sleep_reflection_request()）
+var _sleep_reflection_pending := false
+
 ## 給 debug_console.gd 判斷要不要印「正在問地端模型...」用——open 呼叫
 ## debug_set_llm_decision(true) 前先問一次，才不會在請求根本沒送出（已經有
 ## 一份在飛）的情況下印出誤導的等待訊息
@@ -659,9 +669,14 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 ## 交給 memory 分級寫入。importance/valence 完全由 LLM 決定（見 validate_reflection()
 ## 的註解），這裡不重算或覆寫這兩個值。
 ##
-## 回傳 {"ok": bool}：ok=false 代表這次沒有真的反思到（未啟用/逾時/驗證失敗/
-## 沒有事件可反思），last_reflection_summary 維持上一次成功的舊值不變——
-## 呼叫端不該把舊摘要誤當成「這次」的結果來顯示（max 等級 code review 抓到）
+## 回傳三種狀態：
+## - {"ok": true, ...}：這次真的反思到，並套用了結果
+## - {"ok": false}：真正沒反思到（未啟用/逾時/驗證失敗/沒有事件可反思），
+##   last_reflection_summary 維持上一次成功的舊值不變——呼叫端不該把舊摘要
+##   誤當成「這次」的結果來顯示（max 等級 code review 抓到）
+## - {"ok": false, "queued": true}：撞到已經有一份請求在飛，這次已經記進
+##   _sleep_reflection_pending，會在那份做完後自動補跑一次——不是失敗，呼叫端
+##   不該印成錯誤訊息（見 _cmd_reflect 的處理，CodeRabbit review 抓到）
 ##
 ## 失敗時不清空 _daily_events——今天的事還沒被評過分，清空等於直接遺失，
 ## 留著等下次睡眠反思重試，最壞情況是被 DAILY_EVENTS_CAP 的 FIFO 擠掉，
@@ -675,11 +690,27 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 ## 下次反思會再送一次（max 等級 code review 抓到：純用送出筆數 pop_front()
 ## 的近似法，在這兩種情況下都可能誤刪還沒被評到分的事件）
 ##
-## 觸發時機目前只有 debug_console.gd 的 `reflect` 指令手動呼叫——真正的睡眠
-## 動作（#112）落地後，在角色進入睡眠那個時間點呼叫這個函式，這裡不用改
+## 觸發時機有兩個：debug_console.gd 的 `reflect` 指令手動呼叫，以及
+## _reevaluate_once() 偵測到角色進入睡眠狀態時自動呼叫（#112 落地後接上）
 func request_sleep_reflection() -> Dictionary:
+	# 同一時間只能有一個反思請求在飛（CodeRabbit review 抓到）：睡眠事件跟
+	# debug_console.gd 的 `reflect` 指令都會呼叫這裡，這通吃 await，重疊呼叫
+	# 會讓兩個請求同時讀寫同一份 _daily_events——後回來的那個 filter() 會用
+	# 自己那批 scored_ids 蓋掉先回來那個已經處理過的結果，兩邊都可能重複計分
+	# 或漏算。撞期的這次不能就這樣丟掉不管：疊加的那次很可能是想反思等待期間
+	# 新累積的事件，直接吞掉會讓那批事件在 _daily_events 裡卡到下次才補評——
+	# 記一個「還有一次補跑」的旗標，等目前這次真的做完（不管成敗）才補跑一次
+	# （CodeRabbit review 抓到，見 _finish_sleep_reflection_request()）
+	if _sleep_reflection_in_flight:
+		_sleep_reflection_pending = true
+		# 帶 queued=true 跟真正的失敗（驗證失敗、逾時等）區分開——呼叫端
+		# （debug_console.gd 的 `reflect` 指令）不能把「已經排隊等補跑」當成
+		# 「反思失敗」印出來，那會誤導使用者以為今天的事沒了，其實只是排到
+		# 下一次補跑（CodeRabbit review 抓到）
+		return {"ok": false, "queued": true}
 	if memory == null or _daily_events.is_empty():
 		return {"ok": false}
+	_sleep_reflection_in_flight = true
 
 	var events_sent := _daily_events.duplicate(true)
 
@@ -705,6 +736,7 @@ func request_sleep_reflection() -> Dictionary:
 	var envelope := PromptBuilder.build_reflection_envelope(self, events_sent)
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	if not result["ok"]:
+		_finish_sleep_reflection_request()
 		return {"ok": false}
 
 	var data: Dictionary = result["data"]
@@ -717,7 +749,36 @@ func request_sleep_reflection() -> Dictionary:
 
 	_daily_events = _daily_events.filter(func(e): return not scored_ids.has(e["id"]))
 
+	# personality_delta（#349，《03》§5 流程圖 ⑥）：validate_reflection() 已經
+	# 夾制過每一項到 ±MAX_PERSONALITY_DELTA，這裡直接加總套用，不再二次判斷——
+	# 「這個人今天該不該變得更記仇」是模型的判斷，引擎只做防止數值失控的夾制
+	var personality_delta: Dictionary = data.get("personality_delta", {})
+	for dim in personality_delta.keys():
+		var current: float = float(personality.get(dim, 50.0))
+		personality[dim] = clampf(current + float(personality_delta[dim]), 0.0, 100.0)
+
+	# today_plan（#350，流程圖 ②）：反思產出的是「明天的新計畫」，跟決策中途
+	# 的 update_plan 是同一個欄位、同一種整份取代語意，直接沿用 _apply_today_plan()
+	var new_plan: Variant = data.get("today_plan")
+	if new_plan != null:
+		_apply_today_plan(new_plan)
+
+	# L1 清空（流程圖⑤）已經在呼叫端（_reevaluate_once() 偵測到入睡轉換時）
+	# 統一做過了，不管反思成不成功都會清——這裡不再重複清一次，見那邊的註解
+	_finish_sleep_reflection_request()
 	return {"ok": true}
+
+# 收尾這次反思請求：解除在飛旗標，如果有撞期被記下的補跑需求就立刻補一次
+# （CodeRabbit review 抓到）。不用 await 這次補跑的結果——呼叫端只在意自己
+# 那次請求的成敗，撞期的那次本來就沒有呼叫端在等結果（原本被靜默丟棄，見
+# request_sleep_reflection() 頂端的說明），讓它自己跑完就好。如果補跑當下
+# _daily_events 已經被這次清空／filter() 到空了，request_sleep_reflection()
+# 開頭的 is_empty() 檢查會自然讓它變成無事可做的空跑，不用另外判斷
+func _finish_sleep_reflection_request() -> void:
+	_sleep_reflection_in_flight = false
+	if _sleep_reflection_pending:
+		_sleep_reflection_pending = false
+		request_sleep_reflection()
 
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
 ## AIService、parse_completion、validate_*，任何一關失敗都靜默放棄，任務池
@@ -1239,6 +1300,22 @@ func _reevaluate_once() -> void:
 	# 記的，只反映「這一次」的轉換，不是累積狀態
 	if _was_sleeping and current_state != "sleep" and llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(true)
+
+	# 剛入睡（#348，《03》§5 流程圖）：跟上面「剛睡醒」對稱的鏡像判斷——
+	# 這次重算進來的時候不在睡，選完任務後變成在睡，就是這個轉換瞬間，
+	# 只在真正換進 sleep 的那一次觸發。不掛 llm_decision_enabled——反思是
+	# 獨立的 LLM 呼叫，不是決策迴圈的一部分，跟 _generate_words_to_creator()
+	# 同一個道理，排程模式的角色一樣要能睡前反思。不 await：fire-and-forget，
+	# _reevaluate_once() 是同步函式，不該卡在一次網路往返上
+	if not _was_sleeping and current_state == "sleep":
+		# 清空 L1（流程圖⑤）在這裡做，不是等 request_sleep_reflection() 成功
+		# 才清——不然沒有事件可反思（該函式一開頭就 return）或反思失敗
+		# （LLM 逾時／驗證不過）時 L1 永遠不會清空。入睡本身就是「今天的
+		# 短期記憶窗口該重置」的事件，跟反思成不成功是兩件事（CodeRabbit
+		# review 抓到）
+		if memory != null:
+			memory.l1.clear()
+		request_sleep_reflection()
 
 	_pursue_current_task()
 
