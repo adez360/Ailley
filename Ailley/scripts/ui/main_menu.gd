@@ -31,10 +31,11 @@ func _ready() -> void:
 	start_button.pressed.connect(_on_start_pressed)
 	credits_button.pressed.connect(_on_credits_pressed)
 	scrim.gui_input.connect(_on_scrim_gui_input)
+	start_button.grab_focus()
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if scrim.visible and event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+	if scrim.visible and event.is_action_pressed("ui_cancel"):
 		_close_credits()
 		get_viewport().set_input_as_handled()
 
@@ -47,11 +48,15 @@ func _on_credits_pressed() -> void:
 	scrim.show()
 
 
-# Scrim 蓋滿全螢幕，CreditsPanel 疊在它上面。CreditsPanel（以及它底下的
-# TitleBg/TitleLabel/VBox 的 Label 群）mouse_filter 都是預設值 STOP，
-# 點面板內部的事件會被那些節點自己吃掉、不會傳到這裡——收到代表點在面板外。
+# Scrim 蓋滿全螢幕，CreditsPanel 疊在它上面。CreditsPanel 底下的 TitleBg 有
+# 明確覆寫 mouse_filter=IGNORE 只是純裝飾；TitleLabel/VBox 的 Label 群沒覆寫，
+# 走 Godot 4 的 Label/Container 預設值 IGNORE，點擊會穿過它們，落到 CreditsPanel
+# 本體（Panel 預設 STOP）才被吃掉——不會傳到這裡，收到代表點在面板外。
+# 只認滑鼠左鍵：event 也包含滾輪 tick（合成的 button pressed 事件）與右鍵/中鍵，
+# 不過濾 button_index 的話滾一下滑鼠滾輪就會把面板關掉，跟 status_panel.gd
+# 的 _input() 用同一個判斷式對齊。
 func _on_scrim_gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		_close_credits()
 
 
