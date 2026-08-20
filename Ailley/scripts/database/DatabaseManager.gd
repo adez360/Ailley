@@ -135,13 +135,17 @@ func _ready() -> void:
 		is_seeded = true
 
 
-	# -------------------------------------------------
-	# CharacterStatePersistence
-	# -------------------------------------------------
+		# -------------------------------------------------
+		# CharacterStatePersistence
+		#
+		# 排在 is_seeded 分支裡——item 這類基礎資料沒補齊時就開始寫入，
+		# CharacterStatePersistence 可能因為外鍵約束（item_id 對不到任何
+		# item row）整批失敗（CodeRabbit review 抓到）
+		# -------------------------------------------------
 
-	call_deferred(
-		"_start_character_state_persistence"
-	)
+		call_deferred(
+			"_start_character_state_persistence"
+		)
 
 
 # =====================================================
