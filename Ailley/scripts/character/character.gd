@@ -161,7 +161,8 @@ const CONDITION_INCAPACITATED := "incapacitated"
 ## 是內部識別字，不拿來顯示，也**不要去解析它** —— 格式只有 generate_id() 說了算。
 ##
 ## 留空就生成一個，這是正常路徑；`@export` 只留給場景裡手擺的測試角色。
-## 目前每次開遊戲都重新生成，要跨場次接續得等存檔把它寫下來
+## 場景裡固定的 NPC 靠 identities 表跨場次穩定，Player 靠 _resolve_generated_id()
+## 的覆寫額外持久化；動態生成、沒有這兩者的角色才會每次開遊戲重新生成
 @export var character_id := ""
 
 ## 玩家給角色取的名字，是拿來顯示與被指令指名的那一個，可以改、可以撞名。
@@ -274,7 +275,7 @@ func _ready() -> void:
 	if character_id.is_empty():
 		character_id = str(identity.get("character_id", ""))
 	if character_id.is_empty():
-		character_id = generate_id()
+		character_id = _resolve_generated_id()
 
 	if character_name.is_empty():
 		character_name = str(identity.get("character_name", ""))
@@ -311,6 +312,14 @@ static func generate_id() -> String:
 		hex.substr(0, 8), hex.substr(8, 4), hex.substr(12, 4),
 		hex.substr(16, 4), hex.substr(20, 12),
 	]
+
+# 走到第三層（沒有 @export 手擺值、npc_schedule.json 也查不到）時要用哪個 id，
+# 預設就是普通生成，即用即棄。Player 覆寫這個函式讓生成的 id 額外持久化，
+# 下次開遊戲沿用同一組——動態生成的角色（spawn_character()）不需要這件事：
+# 它們要嘛已經帶著角色庫存好的 character_id（不會走到這裡），要嘛本來就是
+# 一次性測試用途，沒有「跨場次是同一隻」的需求
+func _resolve_generated_id() -> String:
+	return generate_id()
 
 # 撞 id 的兩隻會共用同一份關係與記憶（relationships.gd 拿 id 當 key），
 # 所以這裡換掉一個，而不是印完錯誤照樣讓兩隻共用。
@@ -1182,27 +1191,46 @@ func get_save_data() -> Dictionary:
 # （_ensure_unique_id() 註解講的那個坑）。還沒進 tree 就不用管，接下來的 _ready()
 # 本來就會做這件事，這裡搶著做反而會在 get_tree() 是 null 時炸掉
 func load_save_data(data: Dictionary) -> void:
-	character_id = data.get("character_id", character_id)
+	# 每個欄位都先取出來檢查型別再指定，不直接 data.get(key, 現有值)——
+	# 這幾個都是型別化屬性（String/int/bool），壞掉的存檔把值存成別的型別
+	# 時直接指定會是執行期型別錯誤；型別不對就沿用現有值，跟 stats／
+	# relationships 那兩處是同一個理由（CodeRabbit review 抓到）
+	var loaded_id: Variant = data.get("character_id", character_id)
+	character_id = loaded_id if loaded_id is String else character_id
 	if character_id.is_empty():
-		character_id = generate_id()
+		character_id = _resolve_generated_id()
 	if is_inside_tree():
 		_ensure_unique_id()
-	character_name = data.get("character_name", character_name)
+	# 空字串不是合法的存檔值——_ready() 一定會把空名稱解析成節點名再存進
+	# get_save_data()，能存出空字串的只有損毀存檔，接受它會讓主控台指令／
+	# UI 找不到或顯示空白名稱，跟型別不對一樣沿用現有值
+	var loaded_name: Variant = data.get("character_name", character_name)
+	character_name = loaded_name if loaded_name is String and not loaded_name.is_empty() else character_name
 
-	# 還原昏迷與治療狀態（用 -1 作為哨兵值表示未進入該狀態）
-	_incapacitation_start_minute = data.get("incapacitation_start_minute", -1)
-	_is_being_carried = data.get("is_being_carried", false)
-	_treatment_start_minute = data.get("treatment_start_minute", -1)
-	_treatment_location = data.get("treatment_location", "")
+	# 還原昏迷與治療狀態（用 -1 作為哨兵值表示未進入該狀態，其餘合法值是
+	# GameClock.hour*60+GameClock.minute 那個 [0, 1439] 範圍——只驗證 is int
+	# 不夠，-2 這種值會通過型別檢查、又不等於 -1，被當成合法的昏迷/治療
+	# 時間點還原，角色可能被錯誤鎖定或直接進入治療流程）
+	var loaded_incap: Variant = data.get("incapacitation_start_minute", _incapacitation_start_minute)
+	_incapacitation_start_minute = loaded_incap if loaded_incap is int and (loaded_incap == -1 or (loaded_incap >= 0 and loaded_incap < 1440)) else _incapacitation_start_minute
+	var loaded_carried: Variant = data.get("is_being_carried", _is_being_carried)
+	_is_being_carried = loaded_carried if loaded_carried is bool else _is_being_carried
+	var loaded_treat_start: Variant = data.get("treatment_start_minute", _treatment_start_minute)
+	_treatment_start_minute = loaded_treat_start if loaded_treat_start is int and (loaded_treat_start == -1 or (loaded_treat_start >= 0 and loaded_treat_start < 1440)) else _treatment_start_minute
+	var loaded_treat_loc: Variant = data.get("treatment_location", _treatment_location)
+	_treatment_location = loaded_treat_loc if loaded_treat_loc is String else _treatment_location
 
 	# 治療與昏迷互斥（見 _send_to_herb_shop_for_treatment()），治療中的存檔優先還原成治療狀態，
 	# 不重建 CONDITION_INCAPACITATED；只有「昏迷中但還沒送醫」才需要重建
 	if _incapacitation_start_minute != -1 and _treatment_start_minute == -1:
 		_set_condition(CONDITION_INCAPACITATED, true)
 
-	if stats != null and data.has("stats"):
+	# is Dictionary 而不是只看 has()——壞掉的存檔把 stats/relationships 存成
+	# 別的型別時，直接把值傳給下面兩個型別化參數的函式會是執行期型別錯誤，
+	# 不是「缺欄位」那種能被 has() 擋掉的情況（CodeRabbit review 抓到）
+	if stats != null and data.get("stats", null) is Dictionary:
 		stats.load_save_data(data["stats"])
-	if relationships != null and data.has("relationships"):
+	if relationships != null and data.get("relationships", null) is Dictionary:
 		relationships.load_save_data(data["relationships"])
 
 	# 沒有存檔資料時維持 _ready() 已經由 Personality.from_identity() 組好的值，

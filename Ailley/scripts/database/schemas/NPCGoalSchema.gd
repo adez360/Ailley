@@ -7,7 +7,7 @@ static func create(db) -> bool:
 	var sql := """
 	CREATE TABLE IF NOT EXISTS npc_goal (
 
-		npc_id TEXT PRIMARY KEY,
+		npc_id TEXT NOT NULL PRIMARY KEY,
 
 		current_goal TEXT NOT NULL DEFAULT ''
 			CHECK (LENGTH(current_goal) <= 40),

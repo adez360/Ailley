@@ -20,9 +20,9 @@ config/icon="res://icon.svg"
 GameManager="*res://scripts/core/game_manager.gd"
 GameClock="*res://scripts/core/GameClock.gd"
 AIService="*res://scripts/ai/ai_service.gd"
-DatabaseManager="*res://database/DatabaseManager.gd"
 SaveService="*res://scripts/save/json_save_service.gd"
 _mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
+DatabaseManager="*res://scripts/database/DatabaseManager.gd"
 
 [display]
 
