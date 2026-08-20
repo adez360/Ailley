@@ -118,6 +118,12 @@ func get_save_data() -> Dictionary:
 func load_save_data(data: Dictionary) -> void:
 	records.clear()
 	for other_id in data:
+		# 壞掉的存檔可能把某筆值存成非 Dictionary——records 已經 clear() 過，
+		# 這裡直接當 Dictionary 用會是執行期型別錯誤，中斷整個迴圈，讓後面
+		# 沒處理到的紀錄全部遺失。單筆型別不對就跳過那一筆，不影響其他筆
+		if not data[other_id] is Dictionary:
+			push_error("Relationships: %s 的紀錄不是 Dictionary，跳過" % other_id)
+			continue
 		var saved: Dictionary = data[other_id]
 		var record: Dictionary = DEFAULT_RECORD.duplicate(true)
 		for key in DEFAULT_RECORD:

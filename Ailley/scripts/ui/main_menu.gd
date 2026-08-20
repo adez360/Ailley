@@ -11,9 +11,10 @@ extends Control
 ##     Background（ColorRect，全螢幕）
 ##     TitleLabel（遊戲名稱，不走翻譯 key——專有名詞）
 ##     ButtonsBox（VBoxContainer，置中）
-##       ContinueButton（預設隱藏，只有 SaveService.has_world() 為 true 才顯示）
+##       ContinueButton（預設隱藏，只有 SaveService.has_world() 為 true 且
+##                       is_world_data_valid() 通過才顯示）
 ##       StartButton / CreditsButton
-##       LoadErrorLabel（預設隱藏，只有「存檔存在但讀不出來」時才顯示）
+##       LoadErrorLabel（預設隱藏，只有「存檔存在但讀不出來或格式不完整」時才顯示）
 ##     Scrim（ColorRect，全螢幕半透明，預設隱藏；點空白處關閉銘謝子畫面，
 ##            做法跟 status_panel.gd／各面板的「點空白處或按 Esc 關閉」一致）
 ##       CreditsPanel（Setting menu.png 九宮格，樣式沿用 status_panel.gd）
@@ -48,9 +49,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
-## has_world()==true 但 get_world() 讀出空 Dictionary：存檔存在但解析失敗
-## （損毀／格式錯誤），不能讓玩家以為自己從沒存過檔——藏起 ContinueButton
-## 的同時要顯示明確的失敗訊息，不能悄悄只留新遊戲選項（見 issue #343 範圍）
+## has_world()==true 但 is_world_data_valid() 沒過：存檔存在但解析失敗或
+## 巢狀欄位格式不完整（損毀／格式錯誤），不能讓玩家以為自己從沒存過檔——
+## 藏起 ContinueButton 的同時要顯示明確的失敗訊息，不能悄悄只留新遊戲選項
+## （見 issue #343 範圍）
 func _refresh_continue_button() -> void:
 	if not SaveService.has_world(GameManager.DEFAULT_WORLD_ID):
 		continue_button.hide()

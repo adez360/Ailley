@@ -73,4 +73,7 @@ func save_world(id: String, data: Dictionary) -> bool:
 func is_world_data_valid(data: Dictionary) -> bool:
 	if data.is_empty():
 		return false
-	return data.get("characters", {}) is Dictionary
+	# has() 而不是 get(default={})——get_world_save_data() 一定會寫出
+	# characters 這個 key（沒有角色也是 {}），完全缺這個 key 代表寫入被截斷
+	# 之類的損毀，不是「零角色」的正常情況，不該放行
+	return data.has("characters") and data["characters"] is Dictionary

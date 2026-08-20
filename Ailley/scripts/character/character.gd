@@ -1176,9 +1176,12 @@ func load_save_data(data: Dictionary) -> void:
 	if _incapacitation_start_minute != -1 and _treatment_start_minute == -1:
 		_set_condition(CONDITION_INCAPACITATED, true)
 
-	if stats != null and data.has("stats"):
+	# is Dictionary 而不是只看 has()——壞掉的存檔把 stats/relationships 存成
+	# 別的型別時，直接把值傳給下面兩個型別化參數的函式會是執行期型別錯誤，
+	# 不是「缺欄位」那種能被 has() 擋掉的情況（CodeRabbit review 抓到）
+	if stats != null and data.get("stats", null) is Dictionary:
 		stats.load_save_data(data["stats"])
-	if relationships != null and data.has("relationships"):
+	if relationships != null and data.get("relationships", null) is Dictionary:
 		relationships.load_save_data(data["relationships"])
 
 	# memory 一定呼叫，跟 stats／relationships 特意不同：這個角色可能是已經在
