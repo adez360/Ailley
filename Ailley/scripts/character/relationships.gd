@@ -126,9 +126,19 @@ func load_save_data(data: Dictionary) -> void:
 			continue
 		var saved: Dictionary = data[other_id]
 		var record: Dictionary = DEFAULT_RECORD.duplicate(true)
-		for key in DEFAULT_RECORD:
-			if saved.has(key):
-				record[key] = saved[key]
+		# 逐欄驗證型別，不是 has(key) 就直接收——壞掉的存檔可能把 trust 存成
+		# "bad"、met_count 存成 []，直接指定會在 add_trust()/note_meeting() 做
+		# 算術時才炸（跟 character.gd::load_save_data() 同一套規則）。型別不對
+		# 就沿用 DEFAULT_RECORD 的預設值，不是跳過整筆——其他欄位仍然有效
+		var saved_trust: Variant = saved.get("trust")
+		if saved_trust is int or saved_trust is float:
+			record["trust"] = clampf(float(saved_trust), TRUST_MIN, TRUST_MAX)
+		var saved_met_count: Variant = saved.get("met_count")
+		if saved_met_count is int:
+			record["met_count"] = maxi(0, saved_met_count)
+		var saved_appearance: Variant = saved.get("appearance_cache")
+		if saved_appearance is String:
+			record["appearance_cache"] = saved_appearance
 		# 存檔繞過 set_appearance_cache()，20 字上限要在這裡再夾一次，
 		# 否則手改過的存檔可以把任意長度的描述帶進 payload
 		record["appearance_cache"] = String(record["appearance_cache"]).substr(0, APPEARANCE_MAX_CHARS)
