@@ -10,6 +10,16 @@ const DEFAULT_WORLD_ID := "world_001"
 ## 後者是角色層的事，不在這裡算
 var allow_player_join := true
 
+## 目前被玩家操控的 character_id，跟 allow_player_join 同一層世界存檔資料
+## （見 note/技術/存檔.md、issue #373）。存檔時從場景 "player" 分組即時算出來
+## （見 get_world_save_data()），不是這裡手動維護的即時狀態——這個變數只在
+## 讀檔時被寫入，放在這裡讓其他系統之後有地方可以查。
+##
+## 目前沒有任何呼叫端會依這個值重新指派化身：真正的「換身」需要 #371（化身者
+## 投放路由）先把「投放時選擇由玩家操控」這個機制做出來，這裡只先接上存讀路徑，
+## 跟 #381 墓碑欄位那次同一種「欄位形狀先確定，行為留給依賴的 issue」處理方式
+var embodied_character_id := ""
+
 var npc_data = {}
 
 # 節點名 -> schedule_template。行程模板是「用哪份資料」，而它跟角色的對應
@@ -35,10 +45,10 @@ var identity_assignments = {}
 # 重開遊戲不會消失，不需要真的存檔
 var character_templates = {}
 
-# 玩家自建角色（#122）：靈魂庫，已建立但尚未投放的完整角色紀錄。先用記憶體
-# 清單，不等存檔系統（#21/#22）——理由跟 character_templates 同一條，這則的
-# 重點是把「建角→存檔驗證→角色生成→角色庫→投放」這條管線走通，真正的跨場次
-# 持久化留給存檔系統落地時接上，不是這個容量上限本身依賴存不存得住
+# 玩家自建角色（#122）：靈魂庫，記錄已建立的完整角色紀錄與 deployed 狀態。跟著
+# 世界存檔一起存讀（#342，見 get_world_save_data()/apply_world_save_data()）——
+# 這份清單不屬於任何一個場上節點，沒有 Character.get_save_data() 可以掛，只能
+# 收在世界層這一包裡
 const CHARACTER_LIBRARY_CAP := 15
 
 # 世界內同時投放上限（《10》B21，預設 5、房主可下修，這次先固定預設值）
@@ -277,6 +287,34 @@ func get_library_entry(id: String) -> Dictionary:
 	return {}
 
 
+# deploy_from_library() 直接索引 id／character_name／hexaco／character／
+# decision_source／model_name，缺欄位或型別不對的紀錄留到投放當下才炸，
+# 不如讀檔時就跳過——這幾個欄位跟其他「缺了用預設值補」的欄位不同，
+# 是 deploy_from_library() 沒有防呆能力的必要欄位（CodeRabbit review 抓到）
+func _is_valid_library_entry(entry) -> bool:
+	if not entry is Dictionary:
+		return false
+	var id = entry.get("id", null)
+	if not (id is String) or id.is_empty():
+		return false
+	if not entry.get("character_name", null) is String:
+		return false
+	if not entry.get("hexaco", null) is Dictionary:
+		return false
+	if not entry.get("character", null) is String:
+		return false
+	if not entry.get("decision_source", null) is String:
+		return false
+	if not entry.get("model_name", null) is String:
+		return false
+	# deployed 缺欄位是舊存檔相容（視同 false），但存在就要是 bool——
+	# deploy_from_library() 的投放人數計算跟 character_library.gd 的
+	# var deployed: bool 都會拿它當條件用，型別不對會在別處才炸
+	if entry.has("deployed") and not entry["deployed"] is bool:
+		return false
+	return true
+
+
 # 已投放的角色不能刪——刪了場上生出來的 Character 節點會變孤兒（沒有任何
 # 紀錄指向它），deploy_from_library() 的 deployed_count 也只掃
 # character_library，刪掉之後計數會下降，變成可以無視 DEPLOY_CAP 重複投放
@@ -384,18 +422,67 @@ func get_world_save_data() -> Dictionary:
 			entry["current_state"] = character.get("current_state")
 		characters[character.character_id] = entry
 
+	# "player" 分組只會有玩家目前操控的那一個節點（player.gd::_ready() 裡
+	# add_to_group("player")），沒有玩家在場（觀察者模式）就是空的——跟
+	# characters 一樣即時從場景算，不吃快取的 embodied_character_id
+	var player_node := get_tree().get_first_node_in_group("player") as Character
+
 	return {
 		"day": GameClock.day,
 		"allow_player_join": allow_player_join,
+		"embodied_character_id": player_node.character_id if player_node != null else "",
 		"characters": characters,
+		# deep duplicate：character_library 裡的巢狀 hexaco/personality 字典
+		# 不能跟目前記憶體裡那份共用參照，否則存檔之後繼續玩，字典被原地改到
+		# 會連已經寫出去的這包也跟著變
+		"character_library": character_library.duplicate(true),
 	}
 
 # data 缺欄位一律用預設值補，不當成錯誤（跟 character.gd 同一條規則）。
 # 只套用場景裡目前找得到的角色——重新生成存檔裡有記載但場景沒有的角色
-# 不在這則骨架範圍內（見 issue #21「不包含 player 加入世界的實際流程」）
+# 不在這則骨架範圍內（見 issue #21「不包含 player 加入世界的實際流程」）。
+# character_library 同理：只還原清單本身，"deployed" 為 true 的紀錄不會在這裡
+# 重新生成場上節點——那是另一件事，見 issue #342 範圍界線
 func apply_world_save_data(data: Dictionary) -> void:
 	GameClock.day = int(data.get("day", GameClock.day))
 	allow_player_join = bool(data.get("allow_player_join", allow_player_join))
+	# 缺欄位代表「這份存檔沒有記錄化身角色」（SQLite 的 world 表目前還沒有這個
+	# 欄位、或是 #373 之前存的舊 JSON 存檔），不能沿用 GameManager 目前記憶體裡
+	# 殘留的值——那個值可能是別份世界存檔留下的，繼續沿用會讓下面的 mismatch
+	# 判定跟其他之後讀這個欄位的系統看到錯誤的化身角色
+	embodied_character_id = str(data.get("embodied_character_id", ""))
+
+	# 場景裡目前的 player 節點如果不是存檔記錄的那一個，代表需要換身——但
+	# 換身機制（#371）還沒做，這裡只能示警，不能真的動。不視為錯誤：MVP
+	# 現在場景裡固定只有一個 player 節點，兩者本來就該一致，只有先前手動
+	# 換過場景或存檔跨場次挪用時才會觸發。「沒有 player 節點」正規化成空字串
+	# 再比較，涵蓋「存檔記錄空但場景有 player」與「存檔記錄有 id 但場景沒
+	# player」兩種原本會被漏掉的不一致
+	var player_node := get_tree().get_first_node_in_group("player") as Character
+	var current_embodied_character_id := player_node.character_id if player_node != null else ""
+	if current_embodied_character_id != embodied_character_id:
+		push_warning("apply_world_save_data: 存檔記錄的化身角色 %s 跟場景目前的 player 節點 %s 不同，尚無自動換身機制（見 #371），需要手動處理" % [embodied_character_id, current_embodied_character_id])
+
+	var library_data = data.get("character_library", [])
+	# clear() 在型別檢查之前——存檔壞掉、library_data 不是 Array 時，也不該
+	# 讓上一個世界殘留的 character_library 繼續留在記憶體裡（CodeRabbit review 抓到）
+	character_library.clear()
+	if library_data is Array:
+		var seen_ids := {}
+		for entry in library_data:
+			if not _is_valid_library_entry(entry):
+				push_error("apply_world_save_data: character_library 有一筆紀錄格式不完整或缺必要欄位，跳過")
+				continue
+			var id: String = entry["id"]
+			if seen_ids.has(id):
+				push_error("apply_world_save_data: character_library 有重複 id %s，跳過" % id)
+				continue
+			seen_ids[id] = true
+			# 深複製隔離存檔載入來源的巢狀參照，跟 get_world_save_data() 存出去
+			# 時 duplicate(true) 同一個理由
+			character_library.append(entry.duplicate(true))
+	else:
+		push_error("apply_world_save_data: character_library 不是 Array，跳過角色庫載入")
 
 	var characters = data.get("characters", {})
 	# 驗證 characters 必須是 Dictionary，不是就跳過整個角色載入流程

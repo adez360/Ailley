@@ -75,27 +75,40 @@ func _run() -> void:
 	agent._apply_action_recovery()
 
 	# -------------------------------------------------
-	# 4. 比對：hygiene 是否精確增加 ACTION_RECOVERY["wash"]["amount"]
+	# 4. 比對：hygiene 是否精確增加 ACTION_RECOVERY["wash"] 陣列中 hygiene 項的 amount
 	# -------------------------------------------------
 
-	var recovery: Dictionary = Agent.ACTION_RECOVERY.get("wash", {})
+	var recovery_list: Array = Agent.ACTION_RECOVERY.get("wash", [])
 
-	if recovery.is_empty():
+	if recovery_list.is_empty():
 		_fail(
 			"ACTION_RECOVERY[\"wash\"]",
 			"表裡沒有 wash 這個鍵——回復邏輯還沒接上"
 		)
 	else:
-		var expected := 20.0 + float(recovery["amount"])
-		var actual := agent.stats.get_value("hygiene")
+		# 從 wash 的回復陣列中找 hygiene 項
+		var hygiene_recovery: Dictionary = {}
+		for recovery in recovery_list:
+			if recovery.get("stat") == "hygiene":
+				hygiene_recovery = recovery
+				break
 
-		if is_equal_approx(expected, actual):
-			_pass("wash 後 hygiene = %.1f（預期 %.1f）" % [actual, expected])
-		else:
+		if hygiene_recovery.is_empty():
 			_fail(
-				"wash hygiene",
-				"預期 %.1f，實際 %.1f" % [expected, actual]
+				"ACTION_RECOVERY[\"wash\"][hygiene]",
+				"wash 的回復陣列沒有 hygiene 項"
 			)
+		else:
+			var expected := 20.0 + float(hygiene_recovery["amount"])
+			var actual := agent.stats.get_value("hygiene")
+
+			if is_equal_approx(expected, actual):
+				_pass("wash 後 hygiene = %.1f（預期 %.1f）" % [actual, expected])
+			else:
+				_fail(
+					"wash hygiene",
+					"預期 %.1f，實際 %.1f" % [expected, actual]
+				)
 
 		if recovery.get("stat", "") != "hygiene":
 			_fail(

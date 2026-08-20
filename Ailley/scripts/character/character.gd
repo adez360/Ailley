@@ -161,7 +161,8 @@ const CONDITION_INCAPACITATED := "incapacitated"
 ## 是內部識別字，不拿來顯示，也**不要去解析它** —— 格式只有 generate_id() 說了算。
 ##
 ## 留空就生成一個，這是正常路徑；`@export` 只留給場景裡手擺的測試角色。
-## 目前每次開遊戲都重新生成，要跨場次接續得等存檔把它寫下來
+## 場景裡固定的 NPC 靠 identities 表跨場次穩定，Player 靠 _resolve_generated_id()
+## 的覆寫額外持久化；動態生成、沒有這兩者的角色才會每次開遊戲重新生成
 @export var character_id := ""
 
 ## 玩家給角色取的名字，是拿來顯示與被指令指名的那一個，可以改、可以撞名。
@@ -199,6 +200,12 @@ var emotion := {
 ## LLM 不可宣告；目前只實作 8 種生理衍生 condition，見 _update_conditions()
 var conditions: Array[Dictionary] = []
 
+## AI 自由填寫、自己更新的短期目標（《06》，≤40 字）。跟 today_plan 不同層級：
+## today_plan 是一串今天想做的事，current_goal 是模型自己選的「現在最想達成
+## 的那一件」，沒有更細的結構。引擎只負責存跟注入，不驗證內容合不合理、
+## 不強制跟 today_plan 對齊（#352）
+var current_goal := ""
+
 ## 搬運相關狀態（#161，《99》P-27）
 var _hauling_target: Character = null		# 目前正在搬運誰
 var _hauled_by: Array[Character] = []		# 目前正被誰搬運
@@ -214,6 +221,9 @@ var _speed_multiplier := 1.0				# 速度倍率（搬運時為 50%）
 @onready var work_progress: WorkProgress = get_node_or_null("WorkProgress")
 @onready var money_popup: MoneyPopup = get_node_or_null("MoneyPopup")
 @onready var memory: Memory = get_node_or_null("Memory")
+# 只有 Player 掛這個節點——NPC 不需要被引導去任何地方。get_node_or_null()
+# 在沒有這個節點的 Agent 實例上安靜回 null，呼叫端（#305）自己判斷要不要用
+@onready var waypoint_indicator: WaypointIndicator = get_node_or_null("WaypointIndicator")
 
 # 最後一次的面向：front / back / right，停下時用來挑 idle 動畫
 var facing := "front"
@@ -241,6 +251,7 @@ var _incapacitation_start_minute := -1		# 昏迷開始的遊戲分鐘，-1 表�
 var _is_being_carried := false				# 標記正在被搬運（#161 會設置此項）
 var _treatment_start_minute := -1			# 藥草鋪治療開始的遊戲分鐘，-1 表示未治療
 var _treatment_location := ""				# 治療地點（暫定「藥草鋪」）
+var _herb_shop_lookup_error_reported := false	# 找不到 herb_shop 時只記一次錯誤，避免昏迷期間每遊戲分鐘洗版
 
 # 滑鼠 hover（selection.gd）跟 E 鍵目前的互動目標（player.gd）是兩個獨立的
 # 高亮來源，任一個成立就該顯示描邊。分開存，不是合用一個布林值——CodeRabbit
@@ -264,7 +275,7 @@ func _ready() -> void:
 	if character_id.is_empty():
 		character_id = str(identity.get("character_id", ""))
 	if character_id.is_empty():
-		character_id = generate_id()
+		character_id = _resolve_generated_id()
 
 	if character_name.is_empty():
 		character_name = str(identity.get("character_name", ""))
@@ -302,6 +313,14 @@ static func generate_id() -> String:
 		hex.substr(16, 4), hex.substr(20, 12),
 	]
 
+# 走到第三層（沒有 @export 手擺值、npc_schedule.json 也查不到）時要用哪個 id，
+# 預設就是普通生成，即用即棄。Player 覆寫這個函式讓生成的 id 額外持久化，
+# 下次開遊戲沿用同一組——動態生成的角色（spawn_character()）不需要這件事：
+# 它們要嘛已經帶著角色庫存好的 character_id（不會走到這裡），要嘛本來就是
+# 一次性測試用途，沒有「跨場次是同一隻」的需求
+func _resolve_generated_id() -> String:
+	return generate_id()
+
 # 撞 id 的兩隻會共用同一份關係與記憶（relationships.gd 拿 id 當 key），
 # 所以這裡換掉一個，而不是印完錯誤照樣讓兩隻共用。
 # 生成的 id 不會撞，會走到這裡的是場景裡手寫重複，或日後讀進壞掉的存檔
@@ -329,26 +348,21 @@ func _find_id_holder(id: String) -> Character:
 
 # ---- 情緒與狀態 ----
 
-## 1 tick = 10 遊戲分鐘（《02》§1-4：12 tick = 2 遊戲小時）。GameClock.time_changed
-## 每遊戲分鐘觸發一次，所以要每累積 10 次才真正跑一次 tick，不是每次都跑——
-## 拿規格書自己的算例反查：joy intensity=60、stability=90、grudge=75 應該是
-## 9 tick ≈ 1.5 小時（90 遊戲分鐘），不是 9 遊戲分鐘
-const TICK_GAME_MINUTES := 10
-var _tick_minute_accum := 0
+## 1 tick = 10 遊戲分鐘（《02》§1-4：12 tick = 2 遊戲小時 ＝ GameClock.GAME_MINUTES_PER_TICK）。
+## GameClock.time_changed 每遊戲分鐘觸發一次，用 `_minute % GAME_MINUTES_PER_TICK == 0`
+## 判斷是否落在 tick 邊界上，不是每次都跑，也不是本地累加器——跟 Stats 漂移共用
+## 同一個全域邊界，兩者永遠同步觸發。拿規格書自己的算例反查：joy intensity=60、
+## stability=90、grudge=75 應該是 9 tick ≈ 1.5 小時（90 遊戲分鐘），不是 9 遊戲分鐘
 
 func _on_game_minute(_hour: int, _minute: int) -> void:
 	# 昏迷與治療檢查每遊戲分鐘執行（與 GameClock.time_changed 同步）
 	_update_incapacitation()
 	_update_treatment()
 
-	# 情緒與其他 condition 每 10 遊戲分鐘執行一次（tick 機制）
-	_tick_minute_accum += 1
-	if _tick_minute_accum < TICK_GAME_MINUTES:
-		return
-	_tick_minute_accum = 0
-
-	_tick_emotion()
-	_update_conditions()
+	# 情緒與其他 condition 在全局分鐘邊界執行（tick 機制，與 Stats 漂移同步）
+	if _minute % GameClock.GAME_MINUTES_PER_TICK == 0:
+		_tick_emotion()
+		_update_conditions()
 
 ## AI 宣告新情緒。type 必須是 EMOTION_TYPES 之一，intensity 0–100。
 ## stability／grudge 是《02》§1-4 持續時間公式的人格係數，人格資料還沒接上
@@ -501,7 +515,21 @@ func _send_to_herb_shop_for_treatment() -> void:
 
 	print_debug("Character %s 昏迷 30 分鐘無人搬走，自動傳送藥草鋪治療" % character_name)
 
-	# TODO：實現自動傳送邏輯（awaiting #162 或專門的傳送 issue）
+	# 直接瞬移，不做「NPC 走過來救」的移動演出——《99》P-27 明講 MVP 簡化做法。
+	# 用 places.gd 的 PlaceAnchors 當單一事實來源，跟 _pursue_current_task() 解析
+	# 地點座標同一條路（見 places.gd 開頭註解：不要另開第二份寫死座標）。
+	# 這一刻 stop_moving() 沒有必要——_is_movement_locked() 已經把
+	# CONDITION_INCAPACITATED 期間鎖死，不會有殘留路徑在同一 tick 跟瞬移搶位置
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null or not anchors.has("herb_shop"):
+		if not _herb_shop_lookup_error_reported:
+			push_error("Character %s: 找不到 herb_shop 地點，無法傳送治療" % character_name)
+			_herb_shop_lookup_error_reported = true
+		return
+	_herb_shop_lookup_error_reported = false
+
+	global_position = anchors.resolve("herb_shop")
+
 	# 記錄治療開始時間，_update_treatment() 會處理倒計時
 	_treatment_start_minute = GameClock.hour * 60 + GameClock.minute
 	_treatment_location = "herb_shop"
@@ -1038,7 +1066,7 @@ func attack(other: Character) -> String:
 		other.stats.add("injury", ATTACK_INJURY_DELTA)
 		# 立即同步 bleeding／injury 衰減暫停，不等 _update_conditions() 的 10 分鐘
 		# 一次 tick——命中瞬間 injury 可能已經跨過 20 的門檻，晚同步的話這段空窗期
-		# injury 會繼續被 Stats._process() 的自然衰減蓋掉這次造成的傷害
+		# injury 會繼續被 Stats 的自然衰減（GameClock 驅動）蓋掉這次造成的傷害
 		other._set_condition(CONDITION_BLEEDING, other.stats.get_value("injury") >= 20.0)
 		other.stats.injury_decay_paused = other.has_condition(CONDITION_BLEEDING)
 	other.force_interrupt()
@@ -1097,6 +1125,7 @@ func get_state_snapshot() -> Dictionary:
 		# 快照會連帶改到 Character 內部狀態，繞過 set_emotion() 的驗證
 		"emotion": emotion.duplicate(true),
 		"conditions": conditions.duplicate(true),
+		"current_goal": current_goal,
 	}
 
 	if stats != null:
@@ -1142,6 +1171,10 @@ func get_save_data() -> Dictionary:
 		"is_being_carried": _is_being_carried,
 		"treatment_start_minute": _treatment_start_minute,
 		"treatment_location": _treatment_location,
+		# 睡前反思（#349）會用 personality_delta 累積調整這 10 項，跨天累積的
+		# 性格漂移不該因為重開就被重置回建角當下的原始值——跟 today_plan「跨天
+		# 承諾不該憑空消失」同一個道理（見 note/技術/存檔.md）
+		"personality": personality.duplicate(true),
 	}
 
 	if stats != null:
@@ -1160,7 +1193,7 @@ func get_save_data() -> Dictionary:
 func load_save_data(data: Dictionary) -> void:
 	character_id = data.get("character_id", character_id)
 	if character_id.is_empty():
-		character_id = generate_id()
+		character_id = _resolve_generated_id()
 	if is_inside_tree():
 		_ensure_unique_id()
 	character_name = data.get("character_name", character_name)
@@ -1181,6 +1214,22 @@ func load_save_data(data: Dictionary) -> void:
 	if relationships != null and data.has("relationships"):
 		relationships.load_save_data(data["relationships"])
 
+	# 沒有存檔資料時維持 _ready() 已經由 Personality.from_identity() 組好的值，
+	# 不清空——跟 stats／relationships 同一個理由，personality 不是每次都
+	# 隨存檔走的東西（沒建過角的預設角色也要有值）。
+	#
+	# 覆寫前先驗證結構完整（10 項欄位都在、值是合法數字）才套用——之後
+	# Agent._roll_success() 會把這幾項當 float 直接運算，缺欄位會被
+	# .get(key, 0.0) 悄悄當成 0（角色性格整個跑掉但不報錯），型別錯誤則要
+	# 到那裡才會炸開。壞掉的存檔資料寧可整包不套用、保留目前有效的人格，
+	# 也不要讓半殘資料靜默生效（CodeRabbit review 抓到）
+	if data.has("personality") and data["personality"] is Dictionary:
+		var loaded_personality: Dictionary = data["personality"]
+		if _is_valid_personality_data(loaded_personality):
+			personality = loaded_personality.duplicate(true)
+		else:
+			push_error("Character %s: 存檔的 personality 資料結構不合法，保留目前人格" % character_name)
+
 	# memory 一定呼叫，跟 stats／relationships 特意不同：這個角色可能是已經在
 	# 場上跑過、累積了新記憶的既有節點（debug console `load` 就是這樣用），
 	# 讀進來的存檔沒有 memory 欄位時要把記憶重設成空，而不是保留讀檔前的
@@ -1189,6 +1238,26 @@ func load_save_data(data: Dictionary) -> void:
 		var memory_data: Variant = data.get("memory", {})
 		memory.load_save_data(memory_data if memory_data is Dictionary else {})
 
+# personality 欄位清單跟 Personality.hexaco_to_personality() 實際產出的
+# 10 項對齊，不引用 Personality 常數——這裡只是「存檔資料合不合法」的結構
+# 檢查，跟 Personality 那邊「HEXACO 怎麼算出這 10 項」是不同層次的事
+const _PERSONALITY_FIELDS := [
+	"diligence", "courage", "sociability", "morality", "stability",
+	"romanticism", "curiosity", "grudge", "greed", "honesty",
+]
+
+# 存檔的 personality 必須恰好是這 10 項欄位、每項都是合法有限數字，才准
+# 覆寫目前人格——少欄位、多欄位、型別錯誤、NaN/Infinity 一律拒絕整包
+func _is_valid_personality_data(loaded: Dictionary) -> bool:
+	if loaded.size() != _PERSONALITY_FIELDS.size():
+		return false
+	for key in _PERSONALITY_FIELDS:
+		if not loaded.has(key):
+			return false
+		var value: Variant = loaded[key]
+		if not (value is int or value is float) or not is_finite(float(value)):
+			return false
+	return true
 
 # ---- 滑鼠選取 ----
 
