@@ -1578,6 +1578,9 @@ func _apply_action_recovery() -> void:
 		return
 	for recovery in recovery_list:
 		stats.add(recovery["stat"], recovery["amount"])
+		# 若是回復 stamina 的動作，立即同步 exhausted 狀態，避免延遲至下一個 tick
+		if recovery.get("stat") == "stamina":
+			_update_exhausted_condition()
 
 func _on_time_changed(_hour: int, _minute: int) -> void:
 	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務
