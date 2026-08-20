@@ -1340,14 +1340,16 @@ func load_save_data(data: Dictionary) -> void:
 	# 不是「缺欄位」那種能被 has() 擋掉的情況（CodeRabbit review 抓到）
 	if stats != null and data.get("stats", null) is Dictionary:
 		stats.load_save_data(data["stats"])
-		# 優先還原保存的 exhausted 狀態（處理邊界情況如 stamina = 1-50）
-		# 如果存檔中有 is_exhausted 欄位則直接還原，否則由 stamina 推斷
-		if data.has("is_exhausted"):
-			_set_condition(CONDITION_EXHAUSTED, data["is_exhausted"])
-		else:
-			_update_exhausted_condition()
 	if relationships != null and data.get("relationships", null) is Dictionary:
 		relationships.load_save_data(data["relationships"])
+
+	# 獨立還原力竭狀態（不依賴 stats 存在，處理沒有 Stats 節點的角色，也處理
+	# stamina = 1-50 這種邊界情況）。新存檔有 is_exhausted 欄位則直接還原，
+	# 舊存檔沒有這個欄位、但有 stats 可用時才由 stamina 推斷
+	if data.has("is_exhausted"):
+		_set_condition(CONDITION_EXHAUSTED, data["is_exhausted"])
+	elif stats != null:
+		_update_exhausted_condition()
 
 	# 沒有存檔資料時維持 _ready() 已經由 Personality.from_identity() 組好的值，
 	# 不清空——跟 stats／relationships 同一個理由，personality 不是每次都
