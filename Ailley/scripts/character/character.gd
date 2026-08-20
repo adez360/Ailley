@@ -1204,13 +1204,16 @@ func load_save_data(data: Dictionary) -> void:
 	var loaded_name: Variant = data.get("character_name", character_name)
 	character_name = loaded_name if loaded_name is String else character_name
 
-	# 還原昏迷與治療狀態（用 -1 作為哨兵值表示未進入該狀態）
+	# 還原昏迷與治療狀態（用 -1 作為哨兵值表示未進入該狀態，其餘合法值是
+	# GameClock.hour*60+GameClock.minute 那個 [0, 1439] 範圍——只驗證 is int
+	# 不夠，-2 這種值會通過型別檢查、又不等於 -1，被當成合法的昏迷/治療
+	# 時間點還原，角色可能被錯誤鎖定或直接進入治療流程）
 	var loaded_incap: Variant = data.get("incapacitation_start_minute", _incapacitation_start_minute)
-	_incapacitation_start_minute = loaded_incap if loaded_incap is int else _incapacitation_start_minute
+	_incapacitation_start_minute = loaded_incap if loaded_incap is int and (loaded_incap == -1 or (loaded_incap >= 0 and loaded_incap < 1440)) else _incapacitation_start_minute
 	var loaded_carried: Variant = data.get("is_being_carried", _is_being_carried)
 	_is_being_carried = loaded_carried if loaded_carried is bool else _is_being_carried
 	var loaded_treat_start: Variant = data.get("treatment_start_minute", _treatment_start_minute)
-	_treatment_start_minute = loaded_treat_start if loaded_treat_start is int else _treatment_start_minute
+	_treatment_start_minute = loaded_treat_start if loaded_treat_start is int and (loaded_treat_start == -1 or (loaded_treat_start >= 0 and loaded_treat_start < 1440)) else _treatment_start_minute
 	var loaded_treat_loc: Variant = data.get("treatment_location", _treatment_location)
 	_treatment_location = loaded_treat_loc if loaded_treat_loc is String else _treatment_location
 
