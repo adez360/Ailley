@@ -335,9 +335,12 @@ func _resolve_generated_id() -> String:
 	if FileAccess.file_exists(_PLAYER_ID_PATH):
 		var read_file := FileAccess.open(_PLAYER_ID_PATH, FileAccess.READ)
 		if read_file == null:
-			push_error("player.gd: 無法讀取 %s（%s），改成生成新的 character_id" % [
+			# 讀取失敗不等於檔案是空的（可能是暫時性的權限／鎖定問題），
+			# 不能落到下面的寫入流程去覆蓋掉可能還是好的正式檔案。
+			push_error("player.gd: 無法讀取 %s（%s），這次改用新生成的 character_id（不寫回檔案）" % [
 				_PLAYER_ID_PATH, error_string(FileAccess.get_open_error())
 			])
+			return generate_id()
 		else:
 			var existing := read_file.get_as_text().strip_edges()
 			if not existing.is_empty():
@@ -371,4 +374,5 @@ func _resolve_generated_id() -> String:
 		push_error("player.gd: 替換 %s 失敗（%s），character_id 這次不會跨場次持久化" % [
 			_PLAYER_ID_PATH, error_string(rename_error)
 		])
+		DirAccess.remove_absolute(tmp_path)
 	return id
