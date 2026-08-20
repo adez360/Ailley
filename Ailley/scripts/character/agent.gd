@@ -2228,7 +2228,7 @@ func _fact_lines_summary() -> Array[String]:
 	if since_social >= FACT_SOCIAL_SILENCE_1_DAY_MIN:
 		lines.append("你整整一天沒有和任何人說過話。")
 	elif since_social >= FACT_SOCIAL_SILENCE_HALF_DAY_MIN:
-		lines.append("你已經半天沒和任何人說過話了。")
+		lines.append("你已經大半天沒和任何人說過話了。")
 	elif since_social >= FACT_SOCIAL_SILENCE_3H_MIN:
 		lines.append("你已經三個小時沒和任何人說過話了。")
 
