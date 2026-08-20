@@ -303,3 +303,23 @@ Agent/Agent2 是場景裡的靜態節點，`_ready()` 時自己查表更貼近�
   [[人格與 System Prompt]]
 - 兩隻的家都是 `home_001`。已拍板「家要各自不同」（規格書《01》§1-1 `home_location_id`、
   《07_地點/家》），但還沒實作——地圖上要放幾間房子、怎麼指派給角色仍待規劃（《99》P-17 #12）
+
+## 行為判定系統（Success Roll）的當前狀態
+
+`_roll_success()` 與 `_failure_reason()` 實作了規格書《01-2》§2 的通用成功率公式，包含 stamina／injury／alcohol 三項修正。但這套系統在 MVP-1 **全程都不會被執行過一次**——見 #216 決策記錄（`note/交流/issue-216-success-params-not-in-mvp.md`）。
+
+### 原因
+
+- `SUCCESS_PARAMS` 表上 6 個動作（`hunt_small`／`hunt_large`／`gather`／`fish`／`steal`／`perform`）都在完整版，不在 MVP-1
+- MVP-1 的其他動作要麼直接判定必中（`attack`），要麼不走擲骰（`persuade`／`give`／`shout`），要麼尚未實作（`struggle`）
+
+### 誰會第一個真正執行這段公式？
+
+**`struggle`（掙脫搬運，#337）** 是最可能的候選。規格書《01-2》§3 給了它判定參數，但當前 `SUCCESS_PARAMS` 缺少這一筆。#337 實作時需要：
+
+1. 補 `struggle` 進 `SUCCESS_PARAMS`
+2. 把 `_roll_success()` 與 `_failure_reason()` 當成**未驗證的程式碼**對待
+3. 特別注意「雙人搬運一律失敗，不套用公式」的例外分支（規格書《01-2》§3 例外二）
+4. 驗證 stamina 中性值（50）、injury 與 alcohol 修正項的計算邏輯
+
+之後每次新增動作時重新檢視公式。
