@@ -1020,8 +1020,11 @@ func get_save_data() -> Dictionary:
 
 func load_save_data(data: Dictionary) -> void:
 	super(data)
-	words_to_creator = data.get("words_to_creator", words_to_creator)
-	last_words = data.get("last_words", "")
+	if data.has("words_to_creator"):
+		var raw_words_to_creator: Variant = data["words_to_creator"]
+		words_to_creator = raw_words_to_creator if raw_words_to_creator is String else ""
+	var raw_last_words: Variant = data.get("last_words", "")
+	last_words = raw_last_words if raw_last_words is String else ""
 	var raw_highlights: Variant = data.get("life_highlights", [])
 	life_highlights.clear()
 	if raw_highlights is Array:
