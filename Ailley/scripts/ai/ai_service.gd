@@ -149,11 +149,15 @@ func reload_config() -> void:
 # 呼叫 reload_config() 後立刻印 get_readiness()，探測都還沒回來就先印了）
 func reload_config_and_wait() -> void:
 	reload_config()
-	var generation := _readiness_generation
-	while _pending_readiness_count.has(generation):
-		var finished_generation: int = await readiness_batch_finished
-		if finished_generation == generation:
-			return
+
+	# 每次迴圈重新讀 _readiness_generation，不要在第一輪就把世代號碼定住——
+	# 定住的話，等待期間如果又有一輪 reload_config()（例如玩家很快連下兩次
+	# `ai` 指令）把世代蓋過去，這裡等到的會是「舊世代做完了」，回去讀
+	# get_readiness() 時新世代可能還在飛，撈到新舊混雜、不一致的結果
+	# （CodeRabbit review 抓到）。動態重讀的話，等待期間世代被蓋過時，
+	# 下一輪迴圈會自動改成等最新那一批，回傳時保證讀到的是同一批的結果
+	while _pending_readiness_count.has(_readiness_generation):
+		await readiness_batch_finished
 
 
 # 給 #357／debug 主控台查某個 provider 就不就緒。**只有空字串會退回
@@ -215,10 +219,15 @@ func _check_provider_readiness(provider_name: String, generation: int) -> void:
 
 		# 等待期間可能有新一輪 reload_config() 把這批檢查整批作廢——世代
 		# 對不上就不用再打第二次網路請求了，反正 _apply_readiness() 最後也會
-		# 丟棄結果，這裡提前退出純粹是不浪費一次已知會被丟掉的探測
-		if generation != _readiness_generation:
-			return
-		outcome = await _probe_models(provider)
+		# 丟棄結果，不浪費一次已知會被丟掉的探測。但**不能直接 return**：
+		# 這個 provider 對它自己出生時的舊世代而言還是要算「有了結果」，
+		# 不然那個舊世代在 _pending_readiness_count 裡的計數永遠不會歸零，
+		# 任何還在 await reload_config_and_wait() 那個舊世代的呼叫端會永遠
+		# 卡住等不到 readiness_batch_finished（CodeRabbit review 抓到，
+		# 原本的 early return 連 _apply_readiness()／_note_readiness_done()
+		# 都跳過了）
+		if generation == _readiness_generation:
+			outcome = await _probe_models(provider)
 
 	_apply_readiness(provider_name, generation, outcome)
 
