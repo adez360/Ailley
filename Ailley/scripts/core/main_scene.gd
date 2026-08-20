@@ -26,8 +26,8 @@ func _apply_continue() -> void:
 		return
 
 	var world_data := SaveService.get_world(GameManager.DEFAULT_WORLD_ID)
-	if world_data.is_empty():
-		push_error("main_scene: 世界存檔 %s 讀取失敗（存在但無法解析，可能已損毀），維持新遊戲狀態" % GameManager.DEFAULT_WORLD_ID)
+	if not SaveService.is_world_data_valid(world_data):
+		push_error("main_scene: 世界存檔 %s 讀取失敗或格式不完整（可能已損毀），維持新遊戲狀態" % GameManager.DEFAULT_WORLD_ID)
 		return
 	GameManager.apply_world_save_data(world_data)
 

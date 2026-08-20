@@ -8,7 +8,7 @@ extends Node
 ## 直接 Parser Error）。子類別改用路徑繼承：
 ## extends "res://scripts/save/save_service.gd"
 ##
-## 呼叫端（角色生成、睡眠反思寫回、debug console 等）一律只呼叫這四個函式，
+## 呼叫端（角色生成、睡眠反思寫回、debug console 等）一律只呼叫這六個函式，
 ## 不直接使用 FileAccess 或任何資料庫 API —— 存取邏輯只能在這個介面的實作裡。
 ##
 ## 兩個實作：
@@ -61,3 +61,16 @@ func get_world(id: String) -> Dictionary:
 func save_world(id: String, data: Dictionary) -> bool:
 	push_error("SaveService: save_world 未實作")
 	return false
+
+
+## has_world()==true 且 get_world() 非空只代表頂層有解析出東西，不保證巢狀
+## 欄位型別正確（例如存檔被手改成 "characters": [] 而不是 {}）。
+## GameManager.apply_world_save_data() 對這種情況會 push_error 後跳過角色
+## 載入、不是硬性失敗——但主選單只看頂層 is_empty() 判斷「可以繼續」的話，
+## 玩家會看到 ContinueButton 可按，實際套用卻悄悄漏掉角色資料。main_menu.gd
+## （要不要顯示 Continue）跟 main_scene.gd（要不要套用）共用這個判斷，兩邊
+## 對「這份存檔算不算讀得出來」的認定才會一致
+func is_world_data_valid(data: Dictionary) -> bool:
+	if data.is_empty():
+		return false
+	return data.get("characters", {}) is Dictionary

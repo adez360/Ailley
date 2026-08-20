@@ -56,7 +56,7 @@ func _refresh_continue_button() -> void:
 		continue_button.hide()
 		return
 
-	if SaveService.get_world(GameManager.DEFAULT_WORLD_ID).is_empty():
+	if not SaveService.is_world_data_valid(SaveService.get_world(GameManager.DEFAULT_WORLD_ID)):
 		continue_button.hide()
 		load_error_label.show()
 		return
