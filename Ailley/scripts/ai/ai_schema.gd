@@ -110,6 +110,10 @@ const MAX_PERSONALITY_DELTA := 3.0
 # 讓 prompt 越長越大。跟 MAX_LINE_CHARS 一樣的道理，數字也直接沿用
 const MAX_PLAN_TEXT_CHARS := MAX_LINE_CHARS
 
+# current_goal 上限 40 字（《06》資料欄位對應表定案），比 MAX_LINE_CHARS 短
+# 得多——這是「現在最想做的一件事」的簡短標籤，不是完整的句子或段落
+const MAX_CURRENT_GOAL_CHARS := 40
+
 # #224：LLM 任務 priority／duration 的合理範圍。實跑觀察到只給文字說明
 # 量級不夠——模型會回 Infinity、或 1e15／5000 這種有限但失控的數字，
 # 讓那筆任務在仲裁時永遠贏、永遠換不掉（見 agent.gd HYSTERESIS 的說明）。
@@ -598,6 +602,47 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minute
 			return _fail(ERROR_BAD_SHAPE)
 		valence = data["valence"]
 
+	# emotion（#351，《02》§1-3 規則 1）：AI 唯一可自行宣告的內在狀態，每次
+	# 決策都必須回傳——跟 persuaded／importance 那組「省略就用預設值」不同，
+	# 這裡整個欄位缺席就整包拒絕。type 是固定 8 種 enum，型別／enum 錯直接
+	# 拒絕（跟 valence 同一個嚴格度，這是分類欄位不是自由文字）；intensity
+	# 越界只夾制，不拒絕——跟 importance 同一個理由，是主觀強度不是安全問題。
+	# duration_left 不接受 AI 填（規則 2），這裡只讀 type／intensity 兩項，
+	# 其餘留給 Character.set_emotion() 自己算
+	if not data.has("emotion") or not data["emotion"] is Dictionary:
+		return _fail(ERROR_BAD_SHAPE)
+	var emotion_data: Dictionary = data["emotion"]
+	if not emotion_data.has("type") or not emotion_data["type"] is String \
+			or not Character.EMOTION_TYPES.has(emotion_data["type"]):
+		return _fail(ERROR_BAD_SHAPE)
+	if not emotion_data.has("intensity"):
+		return _fail(ERROR_BAD_SHAPE)
+	var intensity_value: Variant = emotion_data["intensity"]
+	if not (intensity_value is int or intensity_value is float) or not is_finite(float(intensity_value)):
+		return _fail(ERROR_BAD_SHAPE)
+	var emotion := {
+		"type": emotion_data["type"],
+		"intensity": clampi(int(intensity_value), 0, 100),
+	}
+
+	# current_goal（#352，《06》）：選填，AI 自由填寫的短期目標。跟
+	# reasoning／inner_monologue 同一種寬鬆度——型別錯才拒絕，超長截斷不拒絕。
+	#
+	# current_goal_provided 保留「模型完全沒填這欄位」跟「模型明確填了空字串」
+	# 這兩種語意不同的意思表示（CodeRabbit review 抓到：這兩種原本會被壓成
+	# 同一個空字串，agent.gd 完全分不出來）：前者是「這輪沒有更新，維持原樣」，
+	# 後者是模型自己判斷目標已完成／不再追蹤、明確要求清除——這個目標本來就是
+	# 模型自由填寫、沒有任何外部依據可查核，是否達成也只能由模型自己認定，
+	# 不是引擎能替它判斷的事（見《00》原則二）
+	var current_goal := ""
+	var current_goal_provided := data.has("current_goal")
+	if current_goal_provided:
+		if not data["current_goal"] is String:
+			return _fail(ERROR_BAD_SHAPE)
+		current_goal = (data["current_goal"] as String).strip_edges()
+		if current_goal.length() > MAX_CURRENT_GOAL_CHARS:
+			current_goal = current_goal.substr(0, MAX_CURRENT_GOAL_CHARS)
+
 	return _ok({
 		"tasks": tasks,
 		"reasoning": reasoning,
@@ -607,6 +652,9 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minute
 		"persuaded": persuaded,
 		"importance": importance,
 		"valence": valence,
+		"emotion": emotion,
+		"current_goal": current_goal,
+		"current_goal_provided": current_goal_provided,
 	})
 
 
@@ -847,6 +895,21 @@ static func plan_response_schema(allow_update_plan: bool = false, has_pending_pe
 		"reasoning": {"type": "string"},
 		"inner_monologue": {"type": "string"},
 		"request_plan_update": {"type": "boolean"},
+		# emotion（#351，《02》§1-3 規則 1）：每次決策都必填，不是條件式欄位——
+		# 跟 update_plan／persuaded 那組「只在特定情境才存在」不同，情緒宣告
+		# 沒有情境門檻。duration_left 不開放給模型填（規則 2），schema 只收
+		# type／intensity 兩項
+		"emotion": {
+			"type": "object",
+			"properties": {
+				"type": {"type": "string", "enum": Character.EMOTION_TYPES},
+				"intensity": {"type": "number", "minimum": 0, "maximum": 100},
+			},
+			"required": ["type", "intensity"],
+		},
+		# current_goal（#352，《06》）：選填，模型想更新才給。40 字上限對齊
+		# MAX_CURRENT_GOAL_CHARS——這是簡短標籤不是完整句子
+		"current_goal": {"type": "string", "maxLength": MAX_CURRENT_GOAL_CHARS},
 		"tasks": {
 			"type": "array",
 			"maxItems": MAX_TASKS_PER_RESPONSE,
@@ -894,7 +957,7 @@ static func plan_response_schema(allow_update_plan: bool = false, has_pending_pe
 			"schema": {
 				"type": "object",
 				"properties": properties,
-				"required": ["tasks"],
+				"required": ["tasks", "emotion"],
 			},
 		},
 	}
