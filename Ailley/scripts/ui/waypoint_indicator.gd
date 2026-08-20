@@ -94,12 +94,17 @@ func _process(delta: float) -> void:
 	_check_timer += delta
 	if _check_timer < CHECK_INTERVAL_SEC:
 		return
+	# 用實際累積的取樣間隔，不是固定的 CHECK_INTERVAL_SEC——掉幀讓單幀 delta
+	# 超過檢查間隔時（例如一幀就經過 1.5 秒），_check_timer 這次真正涵蓋的是
+	# 那 1.5 秒，只算 0.5 秒會低估放棄計時的累積速度，讓玩家能拖過 4 秒門檻
+	# 還不觸發 _on_abandoned（CodeRabbit review 抓到）
+	var elapsed_since_check := _check_timer
 	_check_timer = 0.0
 
 	# 容差內視為「沒有變遠」，不然玩家站著不動也會被物理解算的次像素抖動
 	# 判定成持續遠離
 	if distance > _last_distance + DISTANCE_TOLERANCE:
-		_worse_streak_sec += CHECK_INTERVAL_SEC
+		_worse_streak_sec += elapsed_since_check
 		if _worse_streak_sec >= ABANDON_WINDOW_SEC:
 			_finish(_on_abandoned)
 			return
