@@ -1238,6 +1238,9 @@ func get_all_states() -> Array                    # SELECT npc_id/各項數值/l
 ⚠ DatabaseManager.is_ready 在 _ready() 裡同步設為 true，之後才 call_deferred() 建立這個節點——
   is_ready==true 那一刻不保證這個子節點已存在，DatabaseManager.get_node() 在極早期可能撲空；
   等下一個 idle frame（或直接訂閱 DatabaseManager 的樹狀態變化）再拿節點比較保險
+⚠ 這個節點只在 DatabaseManager.is_seeded == true（seed 成功）時才會被建立／掛上樹——
+  is_ready 只代表 schema 開好、CRUD 可用，不代表基礎資料已補齊，呼叫端不能只看
+  is_ready 就假設這個節點存在或呼叫 sync_now()
 † 同步對象是 npc / npc_state / npc_inventory / npc_wallet 四張表，relations／memory／
   personality 等其他欄位不在這裡
 † GameClock.time_changed 每遊戲分鐘觸發一次「僅 state/wallet」定期同步（不含 inventory）；
