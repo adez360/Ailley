@@ -97,6 +97,17 @@ var _readiness := {}				# provider 名字 -> {"ready": bool, "reason": String}
 # 前先比對世代還新不新（跟 agent.gd 的決策世代編號同一個防呆手法）
 var _readiness_generation := 0
 
+# 這個世代還有幾個 provider 的探測沒回來。世代 -> 剩餘數量，全部回來後
+# 那個 key 會被移除並 emit readiness_batch_finished——給需要「探測全部做完
+# 才印結果」的呼叫端（debug 主控台 ai 指令）await 用，見 reload_config_and_wait()
+var _pending_readiness_count := {}
+
+## _check_readiness_all() 啟動的那一批探測全部有了結果（不管每個 provider
+## 本身是就緒還是失敗）時 emit，帶那一批的世代編號。呼叫端 await 這個訊號
+## 時要自己比對世代——舊世代可能在等待期間被新一輪 reload_config() 蓋過，
+## 見 reload_config_and_wait() 的迴圈
+signal readiness_batch_finished(generation: int)
+
 
 func _ready() -> void:
 	reload_config()
@@ -122,10 +133,27 @@ func _ready() -> void:
 
 # 玩家寫好 user://ai_config.json 之後不必重開遊戲，debug 主控台的 ai 指令會先叫這個。
 # 就緒表也一併重算——這是唯一的手動重測入口，開場瞬斷之外的網路狀態變化
-# （例如玩到一半才把 llama-server 開起來）都靠這裡救回來，不做背景輪詢
+# （例如玩到一半才把 llama-server 開起來）都靠這裡救回來，不做背景輪詢。
+#
+# 刻意不 await 這批探測——_ready() 開機時呼叫這個，遊戲啟動不該被網路
+# 探測卡住。想等探測全部做完才拿結果的呼叫端（debug 主控台 ai 指令）
+# 用 reload_config_and_wait()
 func reload_config() -> void:
 	config = AIConfig.load_from_user()
 	_check_readiness_all()
+
+
+# reload_config() 的等待版——探測全部做完（不管每個 provider 本身就緒或
+# 失敗）才回來，讓呼叫端這時候讀 get_readiness() 才不會撈到上一批舊結果或
+# AI_READY_NOT_CHECKED（CodeRabbit review 抓到：debug 主控台的 ai 指令原本
+# 呼叫 reload_config() 後立刻印 get_readiness()，探測都還沒回來就先印了）
+func reload_config_and_wait() -> void:
+	reload_config()
+	var generation := _readiness_generation
+	while _pending_readiness_count.has(generation):
+		var finished_generation: int = await readiness_batch_finished
+		if finished_generation == generation:
+			return
 
 
 # 給 #357／debug 主控台查某個 provider 就不就緒。**只有空字串會退回
@@ -150,11 +178,19 @@ func _check_readiness_all() -> void:
 	_readiness.clear()
 
 	# config 沒啟用就不用打網路——AIConfig.status_reason 已經講清楚原因，
-	# 打了也只會全部落在「設定層失敗」，多一輪網路等待沒有意義
+	# 打了也只會全部落在「設定層失敗」，多一輪網路等待沒有意義。這批探測
+	# 等於零個 provider，直接視為「已完成」，不然等這批的呼叫端會永遠等不到
 	if not config.enabled:
+		readiness_batch_finished.emit(generation)
 		return
 
-	for provider_name in config.providers.keys():
+	var provider_names := config.providers.keys()
+	if provider_names.is_empty():
+		readiness_batch_finished.emit(generation)
+		return
+
+	_pending_readiness_count[generation] = provider_names.size()
+	for provider_name in provider_names:
 		_check_provider_readiness(provider_name, generation)
 
 
@@ -190,9 +226,28 @@ func _check_provider_readiness(provider_name: String, generation: int) -> void:
 # 舊世代的探測結果比新一輪 reload_config() 晚回來時直接丟棄，不寫入
 # _readiness——不然「玩到一半重新整理設定」會被更早、已經過期的探測結果蓋回去
 func _apply_readiness(provider_name: String, generation: int, outcome: Dictionary) -> void:
-	if generation != _readiness_generation:
+	if generation == _readiness_generation:
+		_readiness[provider_name] = {"ready": outcome["ready"], "reason": outcome["reason"]}
+
+	# 一定要在真正寫完 _readiness 之後才呼叫——signal 的 emit() 是同步的，
+	# await 這個訊號的呼叫端（reload_config_and_wait()）會在 emit() 呼叫的
+	# 當下就恢復執行，寫在它前面的話，呼叫端讀到 get_readiness() 時這個
+	# provider 的結果根本還沒寫進去，撈到的還是 AI_READY_NOT_CHECKED
+	# （這裡曾經寫反過，用 game_eval 實測抓到：signal 正確帶對的世代觸發，
+	# 但緊接著讀 get_readiness() 卻是空的）
+	_note_readiness_done(generation)
+
+
+# 一個 provider 的探測有了結果（不管就緒還失敗）就呼叫一次。同一世代的
+# provider 全部呼叫過後，這裡才 emit readiness_batch_finished——
+# reload_config_and_wait() 靠這個訊號知道「這批全部做完了」
+func _note_readiness_done(generation: int) -> void:
+	if not _pending_readiness_count.has(generation):
 		return
-	_readiness[provider_name] = {"ready": outcome["ready"], "reason": outcome["reason"]}
+	_pending_readiness_count[generation] -= 1
+	if _pending_readiness_count[generation] <= 0:
+		_pending_readiness_count.erase(generation)
+		readiness_batch_finished.emit(generation)
 
 
 # 連線層探針：打 GET {base_url}/models。不用《04》§4-1 想像的 /health——
@@ -241,8 +296,12 @@ func _probe_models(provider: AIConfig.Provider) -> Dictionary:
 		return _readiness_result(
 			false, L10n.tf("AI_READY_HTTP", {"url": provider.models_url(), "code": response_code}), true
 		)
-	if response_code >= 400:
-		# 請求本身錯了（金鑰無效、模型名打錯），重試只會再錯一次
+	# 只有 2xx 才算就緒——HTTPRequest.RESULT_SUCCESS 只代表網路請求本身
+	# 有始有終，不代表 HTTP 狀態碼是成功的。原本只擋 4xx／5xx，1xx（少見但
+	# 合法）跟 3xx（重導向，通常代表 base_url 設錯或該服務把 /models
+	# 導去別的地方）會落進最後的 return true，被誤報成「就緒」
+	# （CodeRabbit review 抓到）。跟 4xx 同一個理由：這種回應重試不會變好
+	if response_code < 200 or response_code >= 300:
 		return _readiness_result(false, L10n.tf("AI_READY_HTTP", {"url": provider.models_url(), "code": response_code}))
 
 	return _readiness_result(true, L10n.t("AI_READY_OK"))
