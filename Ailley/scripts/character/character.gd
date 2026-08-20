@@ -161,7 +161,8 @@ const CONDITION_INCAPACITATED := "incapacitated"
 ## 是內部識別字，不拿來顯示，也**不要去解析它** —— 格式只有 generate_id() 說了算。
 ##
 ## 留空就生成一個，這是正常路徑；`@export` 只留給場景裡手擺的測試角色。
-## 目前每次開遊戲都重新生成，要跨場次接續得等存檔把它寫下來
+## 場景裡固定的 NPC 靠 identities 表跨場次穩定，Player 靠 _resolve_generated_id()
+## 的覆寫額外持久化；動態生成、沒有這兩者的角色才會每次開遊戲重新生成
 @export var character_id := ""
 
 ## 玩家給角色取的名字，是拿來顯示與被指令指名的那一個，可以改、可以撞名。
@@ -274,7 +275,7 @@ func _ready() -> void:
 	if character_id.is_empty():
 		character_id = str(identity.get("character_id", ""))
 	if character_id.is_empty():
-		character_id = generate_id()
+		character_id = _resolve_generated_id()
 
 	if character_name.is_empty():
 		character_name = str(identity.get("character_name", ""))
@@ -311,6 +312,14 @@ static func generate_id() -> String:
 		hex.substr(0, 8), hex.substr(8, 4), hex.substr(12, 4),
 		hex.substr(16, 4), hex.substr(20, 12),
 	]
+
+# 走到第三層（沒有 @export 手擺值、npc_schedule.json 也查不到）時要用哪個 id，
+# 預設就是普通生成，即用即棄。Player 覆寫這個函式讓生成的 id 額外持久化，
+# 下次開遊戲沿用同一組——動態生成的角色（spawn_character()）不需要這件事：
+# 它們要嘛已經帶著角色庫存好的 character_id（不會走到這裡），要嘛本來就是
+# 一次性測試用途，沒有「跨場次是同一隻」的需求
+func _resolve_generated_id() -> String:
+	return generate_id()
 
 # 撞 id 的兩隻會共用同一份關係與記憶（relationships.gd 拿 id 當 key），
 # 所以這裡換掉一個，而不是印完錯誤照樣讓兩隻共用。
@@ -1184,7 +1193,7 @@ func get_save_data() -> Dictionary:
 func load_save_data(data: Dictionary) -> void:
 	character_id = data.get("character_id", character_id)
 	if character_id.is_empty():
-		character_id = generate_id()
+		character_id = _resolve_generated_id()
 	if is_inside_tree():
 		_ensure_unique_id()
 	character_name = data.get("character_name", character_name)
