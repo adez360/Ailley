@@ -622,10 +622,17 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minute
 	}
 
 	# current_goal（#352，《06》）：選填，AI 自由填寫的短期目標。跟
-	# reasoning／inner_monologue 同一種寬鬆度——型別錯才拒絕，超長截斷不拒絕，
-	# 缺席時用空字串（呼叫端據此判斷「這輪沒有更新」，見 agent.gd）
+	# reasoning／inner_monologue 同一種寬鬆度——型別錯才拒絕，超長截斷不拒絕。
+	#
+	# current_goal_provided 保留「模型完全沒填這欄位」跟「模型明確填了空字串」
+	# 這兩種語意不同的意思表示（CodeRabbit review 抓到：這兩種原本會被壓成
+	# 同一個空字串，agent.gd 完全分不出來）：前者是「這輪沒有更新，維持原樣」，
+	# 後者是模型自己判斷目標已完成／不再追蹤、明確要求清除——這個目標本來就是
+	# 模型自由填寫、沒有任何外部依據可查核，是否達成也只能由模型自己認定，
+	# 不是引擎能替它判斷的事（見《00》原則二）
 	var current_goal := ""
-	if data.has("current_goal"):
+	var current_goal_provided := data.has("current_goal")
+	if current_goal_provided:
 		if not data["current_goal"] is String:
 			return _fail(ERROR_BAD_SHAPE)
 		current_goal = (data["current_goal"] as String).strip_edges()
@@ -643,6 +650,7 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minute
 		"valence": valence,
 		"emotion": emotion,
 		"current_goal": current_goal,
+		"current_goal_provided": current_goal_provided,
 	})
 
 

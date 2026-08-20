@@ -90,13 +90,18 @@ const PLAN_SYSTEM_PERSUADE := """
 ## 不然模型會想在 emotion 物件裡多塞一個欄位
 ##
 ## current_goal 是選填（#352，《06》），不強迫每次都更新——沒有變化就不用
-## 重寫，跟 today_plan 的「整份取代」語意不同，這是單一簡短標籤
+## 重寫，跟 today_plan 的「整份取代」語意不同，這是單一簡短標籤。
+##
+## 「省略」跟「明確傳空字串」講清楚是兩種不同意思（CodeRabbit review 抓到：
+## 原本沒有清除的路徑，目標一旦設定就永遠不會消滅，拖延事實句會無限期觸發）——
+## 這個目標本來就是角色自己給自己訂的，達成與否沒有外部依據可查核，只能由
+## 角色自己判斷、自己明確表示清除，引擎不會替它認定
 const PLAN_SYSTEM_TAIL_TEMPLATE := """
 "priority" must be an integer between %d and %d, on the same scale your schedule already uses. 10-110 is for ordinary preferences — a task already in its scheduled time window is worth 110, so an everyday preference at that level still won't outrank it. Only use %d-%d, and only for a genuine emergency happening right now (someone in danger, an attack) that would justify abandoning a meal or work already in progress — never for ordinary preferences.
 "duration" is your own estimate, in game minutes, of how long this action will take. It must be a positive integer, up to %d (one full day) — never 0. Most actions take somewhere between 10 and 60 minutes; sleeping through the night can reasonably take several hundred.
 "expires_in_minutes" is optional: how many game minutes from now this task should still be worth doing before it's no longer relevant (e.g. an appointment you're setting up for later today). It must be an integer between %d and %d. Omit it for tasks you intend to act on right away.
 "emotion" is required every time — it's the only inner state you get to declare yourself. Set "type" to whichever of these fits best right now: %s (use "neutral" if nothing stands out), and "intensity" (0-100) to how strong it is. Base it on your personality and what just happened to you, not on some neutral default. Do not include a duration — how long it lasts is not yours to decide.
-"current_goal" is optional: a short label (a few words, not a sentence) for the one thing you most want to accomplish right now. Only include it when you're setting or changing this goal — omit it if nothing's changed since last time.
+"current_goal" is optional: a short label (a few words, not a sentence) for the one thing you most want to accomplish right now. Omit it if nothing's changed since last time. Once you've accomplished it, or it's no longer something you're pursuing, send an empty string "" to clear it — don't just stop mentioning it, since omitting the field only means "no change."
 Reply with JSON only, no prose, no code fence:
 {"reasoning": "<why you decided this, brief>",
  "inner_monologue": "<what this character is thinking right now, first person>",

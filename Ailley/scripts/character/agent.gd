@@ -875,15 +875,22 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 		personality.get("stability", 50.0), personality.get("grudge", 50.0)
 	)
 
-	# current_goal（#352）：選填，模型沒填就維持原樣不動——跟 update_plan
-	# 的「整份取代」不同，這是「有變化才更新」的單一標籤，空字串代表這輪
-	# 沒有要更新，不是要清空
-	var new_goal: String = data.get("current_goal", "")
-	if not new_goal.is_empty() and new_goal != current_goal:
-		current_goal = new_goal
-		# 目標拖延事實句的計時基準（#338）：只在目標真的換了內容才重新起算，
-		# 模型原樣重申同一個目標不算「重新設定」，不然這句事實句永遠不會累積
-		_goal_set_minute = _now_minutes()
+	# current_goal（#352）：模型完全沒填這欄位（current_goal_provided=false）
+	# 就維持原樣不動，跟 update_plan 的「整份取代」不同，這是「有意思表示才
+	# 動」的單一標籤。有填的話分兩種：空字串代表模型明確判斷這個目標已完成或
+	# 不再追蹤，清空並停止目標拖延事實句的計時；非空字串才是真的設定/換目標
+	# （CodeRabbit review 抓到：原本「沒填」跟「填空字串」都被當「沒更新」，
+	# 目標永遠沒有清除路徑，拖延事實句會無限期一直觸發下去）
+	if data.get("current_goal_provided", false):
+		var new_goal: String = data.get("current_goal", "")
+		if new_goal.is_empty():
+			current_goal = ""
+			_goal_set_minute = -1
+		elif new_goal != current_goal:
+			current_goal = new_goal
+			# 目標拖延事實句的計時基準（#338）：只在目標真的換了內容才重新起算，
+			# 模型原樣重申同一個目標不算「重新設定」，不然這句事實句永遠不會累積
+			_goal_set_minute = _now_minutes()
 
 	# 不管這輪有沒有拿到 update_plan 許可，模型都可能問「下次讓我改」——記
 	# 下來，下一次不管是哪個理由觸發 _request_next_decision() 都會兌現
