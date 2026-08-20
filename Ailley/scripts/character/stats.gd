@@ -45,7 +45,6 @@ const SPEC := {
 }
 
 var values := {}
-var _accumulated_minutes := 0	# 累積遊戲分鐘，達到 GAME_MINUTES_PER_TICK 時執行漂移
 
 ## `bleeding` condition 期間 `injury` 原本每 tick −0.5 的自然衰減要暫停
 ## （《02》§2-2 附注，唯一的例外規則）。由 Character 依 conditions 狀態設定，
@@ -60,9 +59,8 @@ func _ready() -> void:
 		GameClock.time_changed.connect(_on_time_changed)
 
 func _on_time_changed(_hour: int, _minute: int) -> void:
-	_accumulated_minutes += 1
-	if _accumulated_minutes >= GameClock.GAME_MINUTES_PER_TICK:
-		_accumulated_minutes = 0
+	# Stats 漂移在全局分鐘邊界執行，以全局時間為準而非本地累計
+	if _minute % GameClock.GAME_MINUTES_PER_TICK == 0:
 		_apply_drift()
 
 func _apply_drift() -> void:

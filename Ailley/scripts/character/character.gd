@@ -334,21 +334,16 @@ func _find_id_holder(id: String) -> Character:
 ## 每遊戲分鐘觸發一次，所以要每累積 10 次才真正跑一次 tick，不是每次都跑——
 ## 拿規格書自己的算例反查：joy intensity=60、stability=90、grudge=75 應該是
 ## 9 tick ≈ 1.5 小時（90 遊戲分鐘），不是 9 遊戲分鐘
-var _tick_minute_accum := 0
 
 func _on_game_minute(_hour: int, _minute: int) -> void:
 	# 昏迷與治療檢查每遊戲分鐘執行（與 GameClock.time_changed 同步）
 	_update_incapacitation()
 	_update_treatment()
 
-	# 情緒與其他 condition 每 10 遊戲分鐘執行一次（tick 機制，與 Stats 漂移同步）
-	_tick_minute_accum += 1
-	if _tick_minute_accum < GameClock.GAME_MINUTES_PER_TICK:
-		return
-	_tick_minute_accum = 0
-
-	_tick_emotion()
-	_update_conditions()
+	# 情緒與其他 condition 在全局分鐘邊界執行（tick 機制，與 Stats 漂移同步）
+	if _minute % GameClock.GAME_MINUTES_PER_TICK == 0:
+		_tick_emotion()
+		_update_conditions()
 
 ## AI 宣告新情緒。type 必須是 EMOTION_TYPES 之一，intensity 0–100。
 ## stability／grudge 是《02》§1-4 持續時間公式的人格係數，人格資料還沒接上
