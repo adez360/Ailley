@@ -297,6 +297,11 @@ func _is_valid_library_entry(entry) -> bool:
 		return false
 	if not entry.get("model_name", null) is String:
 		return false
+	# deployed 缺欄位是舊存檔相容（視同 false），但存在就要是 bool——
+	# deploy_from_library() 的投放人數計算跟 character_library.gd 的
+	# var deployed: bool 都會拿它當條件用，型別不對會在別處才炸
+	if entry.has("deployed") and not entry["deployed"] is bool:
+		return false
 	return true
 
 
