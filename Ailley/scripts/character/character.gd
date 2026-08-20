@@ -1158,18 +1158,28 @@ func get_save_data() -> Dictionary:
 # （_ensure_unique_id() 註解講的那個坑）。還沒進 tree 就不用管，接下來的 _ready()
 # 本來就會做這件事，這裡搶著做反而會在 get_tree() 是 null 時炸掉
 func load_save_data(data: Dictionary) -> void:
-	character_id = data.get("character_id", character_id)
+	# 每個欄位都先取出來檢查型別再指定，不直接 data.get(key, 現有值)——
+	# 這幾個都是型別化屬性（String/int/bool），壞掉的存檔把值存成別的型別
+	# 時直接指定會是執行期型別錯誤；型別不對就沿用現有值，跟 stats／
+	# relationships 那兩處是同一個理由（CodeRabbit review 抓到）
+	var loaded_id: Variant = data.get("character_id", character_id)
+	character_id = loaded_id if loaded_id is String else character_id
 	if character_id.is_empty():
 		character_id = generate_id()
 	if is_inside_tree():
 		_ensure_unique_id()
-	character_name = data.get("character_name", character_name)
+	var loaded_name: Variant = data.get("character_name", character_name)
+	character_name = loaded_name if loaded_name is String else character_name
 
 	# 還原昏迷與治療狀態（用 -1 作為哨兵值表示未進入該狀態）
-	_incapacitation_start_minute = data.get("incapacitation_start_minute", -1)
-	_is_being_carried = data.get("is_being_carried", false)
-	_treatment_start_minute = data.get("treatment_start_minute", -1)
-	_treatment_location = data.get("treatment_location", "")
+	var loaded_incap: Variant = data.get("incapacitation_start_minute", _incapacitation_start_minute)
+	_incapacitation_start_minute = loaded_incap if loaded_incap is int else _incapacitation_start_minute
+	var loaded_carried: Variant = data.get("is_being_carried", _is_being_carried)
+	_is_being_carried = loaded_carried if loaded_carried is bool else _is_being_carried
+	var loaded_treat_start: Variant = data.get("treatment_start_minute", _treatment_start_minute)
+	_treatment_start_minute = loaded_treat_start if loaded_treat_start is int else _treatment_start_minute
+	var loaded_treat_loc: Variant = data.get("treatment_location", _treatment_location)
+	_treatment_location = loaded_treat_loc if loaded_treat_loc is String else _treatment_location
 
 	# 治療與昏迷互斥（見 _send_to_herb_shop_for_treatment()），治療中的存檔優先還原成治療狀態，
 	# 不重建 CONDITION_INCAPACITATED；只有「昏迷中但還沒送醫」才需要重建
