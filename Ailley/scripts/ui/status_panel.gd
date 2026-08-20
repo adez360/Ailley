@@ -143,14 +143,22 @@ func _pick_character(screen_pos: Vector2) -> Character:
 
 ## 面板先前隱藏時開啟：切回狀態分頁。面板開著時點另一個角色：只換資料，
 ## 維持目前分頁——玩家連續點角色比對物品時不該每次被踢回狀態頁（《15》§2-3）
+##
+## CodeRabbit review（#366）：原本在設定 _character 之前就呼叫 _set_tab(0)，
+## 那時 _set_tab() 讀到的還是舊角色（甚至 null），內容刷新直接被它自己的
+## null 檢查擋掉；而面板已開啟、只是換角色那個分支，先前完全沒呼叫任何刷新，
+## 分頁內容會停在前一個角色身上。統一改成：先決定分頁號碼（要不要重置成 0）、
+## 換好角色資料，最後一次呼叫 _set_tab() 把「顯示哪個分頁」跟「刷新該分頁
+## 內容」黏在一起做，兩個分支都會用到已經換好的新角色
 func open(character: Character) -> void:
 	if not panel.visible:
-		_set_tab(0)
+		_current_tab = 0
 	_disconnect_inventory_changed()
 	_character = character
 	_connect_inventory_changed()
 	title_label.text = character.character_name
 	panel.show()
+	_set_tab(_current_tab)
 
 func close() -> void:
 	panel.hide()

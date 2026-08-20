@@ -1478,6 +1478,11 @@ func _select(task: Dictionary, now_minutes: int) -> void:
 	_log_task_ended(_current_task, true)
 
 	_current_task = task
+	# CodeRabbit review（#366）：schedule 任務的 Dictionary 跨時間窗、跨日重用，
+	# 不像 llm 任務每次決策都是新的 Dictionary——"_logged" 記在上一次執行留下
+	# 沒清，這次真的執行完會被當成「已經記過」而漏記。這裡是任務「開始執行」
+	# 唯一的進入點，起跑時清乾淨，讓旗標只管「這一次執行」有沒有記過
+	_current_task.erase("_logged")
 	_current_task_started_at = now_minutes
 	current_place = str(task.get("params", {}).get("place", ""))
 	current_state = str(task.get("action", ""))
