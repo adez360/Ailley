@@ -10,6 +10,16 @@ const DEFAULT_WORLD_ID := "world_001"
 ## 後者是角色層的事，不在這裡算
 var allow_player_join := true
 
+## 目前被玩家操控的 character_id，跟 allow_player_join 同一層世界存檔資料
+## （見 note/技術/存檔.md、issue #373）。存檔時從場景 "player" 分組即時算出來
+## （見 get_world_save_data()），不是這裡手動維護的即時狀態——這個變數只在
+## 讀檔時被寫入，放在這裡讓其他系統之後有地方可以查。
+##
+## 目前沒有任何呼叫端會依這個值重新指派化身：真正的「換身」需要 #371（化身者
+## 投放路由）先把「投放時選擇由玩家操控」這個機制做出來，這裡只先接上存讀路徑，
+## 跟 #381 墓碑欄位那次同一種「欄位形狀先確定，行為留給依賴的 issue」處理方式
+var embodied_character_id := ""
+
 var npc_data = {}
 
 # 節點名 -> schedule_template。行程模板是「用哪份資料」，而它跟角色的對應
@@ -384,9 +394,15 @@ func get_world_save_data() -> Dictionary:
 			entry["current_state"] = character.get("current_state")
 		characters[character.character_id] = entry
 
+	# "player" 分組只會有玩家目前操控的那一個節點（player.gd::_ready() 裡
+	# add_to_group("player")），沒有玩家在場（觀察者模式）就是空的——跟
+	# characters 一樣即時從場景算，不吃快取的 embodied_character_id
+	var player_node := get_tree().get_first_node_in_group("player") as Character
+
 	return {
 		"day": GameClock.day,
 		"allow_player_join": allow_player_join,
+		"embodied_character_id": player_node.character_id if player_node != null else "",
 		"characters": characters,
 	}
 
@@ -396,6 +412,15 @@ func get_world_save_data() -> Dictionary:
 func apply_world_save_data(data: Dictionary) -> void:
 	GameClock.day = int(data.get("day", GameClock.day))
 	allow_player_join = bool(data.get("allow_player_join", allow_player_join))
+	embodied_character_id = str(data.get("embodied_character_id", embodied_character_id))
+
+	# 場景裡目前的 player 節點如果不是存檔記錄的那一個，代表需要換身——但
+	# 換身機制（#371）還沒做，這裡只能示警，不能真的動。不視為錯誤：MVP
+	# 現在場景裡固定只有一個 player 節點，兩者本來就該一致，只有先前手動
+	# 換過場景或存檔跨場次挪用時才會觸發
+	var player_node := get_tree().get_first_node_in_group("player") as Character
+	if player_node != null and not embodied_character_id.is_empty() and player_node.character_id != embodied_character_id:
+		push_warning("apply_world_save_data: 存檔記錄的化身角色 %s 跟場景目前的 player 節點 %s 不同，尚無自動換身機制（見 #371），需要手動處理" % [embodied_character_id, player_node.character_id])
 
 	var characters = data.get("characters", {})
 	# 驗證 characters 必須是 Dictionary，不是就跳過整個角色載入流程
