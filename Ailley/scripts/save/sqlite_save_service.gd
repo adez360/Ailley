@@ -55,6 +55,14 @@ const STATE_DEFAULTS := {
 }
 
 
+## 查 npc_state 而不是 npc：npc 這一列在角色 _ready() 掛進場景、還沒真的
+## save_character() 過的時候就可能已經存在（見「schema 缺口」對 npc 表的
+## 說明），查 npc 會把「場上有這隻角色」誤判成「這隻角色存過檔」。npc_state
+## 只有 save_character() 才會寫，是這裡要的「真的存過」訊號
+func has_character(id: String) -> bool:
+	return not DatabaseManager.select("npc_state", "npc_id = '%s'" % _esc(id)).is_empty()
+
+
 ## 讀一個角色的完整資料，找不到回傳空 Dictionary
 ##
 ## 回傳形狀跟 Character.get_save_data() 一致：
@@ -168,6 +176,10 @@ func save_character(id: String, data: Dictionary) -> bool:
 	# 因為交易還在跑而失敗，之後所有存檔都會跟著壞掉
 	DatabaseManager.rollback_transaction()
 	return false
+
+
+func has_world(id: String) -> bool:
+	return not DatabaseManager.select("world", "world_id = '%s'" % _esc(id)).is_empty()
 
 
 ## 讀一個世界的完整資料

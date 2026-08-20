@@ -51,6 +51,10 @@ const LOCK_INFO_FILENAME := "info.json"
 var _held_locks: Dictionary = {} # lock_dir(String) -> true，這個 process 目前持有寫入權的存檔
 
 
+func has_character(id: String) -> bool:
+	return FileAccess.file_exists("%s/%s.json" % [CHARACTERS_DIR, id])
+
+
 func get_character(id: String) -> Dictionary:
 	return _read("%s/%s.json" % [CHARACTERS_DIR, id])
 
@@ -63,6 +67,10 @@ func save_character(id: String, data: Dictionary) -> bool:
 	if not _acquire_write_lock(path):
 		return false
 	return _write(CHARACTERS_DIR, id, data)
+
+
+func has_world(id: String) -> bool:
+	return FileAccess.file_exists("%s/%s.json" % [WORLDS_DIR, id])
 
 
 func get_world(id: String) -> Dictionary:

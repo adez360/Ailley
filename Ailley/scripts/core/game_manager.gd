@@ -10,6 +10,21 @@ const DEFAULT_WORLD_ID := "world_001"
 ## 後者是角色層的事，不在這裡算
 var allow_player_join := true
 
+## 主選單按下「繼續遊戲」時設為 true，main.tscn 的 MainScene._ready() 讀到
+## true 才會套用世界／角色存檔，讀完立刻重設回 false（見 scripts/core/main_scene.gd）。
+## GameManager 是 autoload，換場景不會重置，這個旗標是唯一分辨「這次進
+## main.tscn 是繼續遊戲還是開新遊戲」的方式——兩條路徑進場景後場景本身
+## 完全一樣，差別只在要不要套用存檔
+var continue_requested := false
+
+## main_scene.gd 發現「主選單檢查時還在」的世界存檔在轉場後消失或讀不出來時
+## 設為 true。這種情況下 continue_requested 已經被清成 false，主選單只靠
+## has_world()/is_world_data_valid() 重新檢查會誤判成「本來就沒有存檔」，
+## 玩家只看得到開始遊戲、看不到明確的讀檔失敗提示——這個旗標讓主選單分辨
+## 這兩種情況。跟 continue_requested 一樣是一次性的，main_menu.gd 讀過一次
+## 就要重設回 false（見 main_scene.gd::_apply_continue()）
+var continue_load_failed := false
+
 ## 目前被玩家操控的 character_id，跟 allow_player_join 同一層世界存檔資料
 ## （見 note/技術/存檔.md、issue #373）。存檔時從場景 "player" 分組即時算出來
 ## （見 get_world_save_data()），不是這裡手動維護的即時狀態——這個變數只在
