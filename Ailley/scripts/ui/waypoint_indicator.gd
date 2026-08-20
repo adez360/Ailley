@@ -17,6 +17,14 @@ const ABANDON_WINDOW_SEC := 4.0
 ## 或只是微調站位）就會被誤判成「變遠」，拉長取樣間隔可以把這種雜訊平滑掉
 const CHECK_INTERVAL_SEC := 0.5
 
+## 單次取樣最多能計入放棄計時的秒數（見 _process() 的說明）。掉一兩幀讓
+## 單次 delta 略超過 CHECK_INTERVAL_SEC 是正常的，照實計入沒問題；但真的
+## 停格／視窗失焦幾秒這種長時間沒取樣的情況，中間玩家實際上在做什麼完全
+## 不知道，只看得到「取樣起點」跟「恢復後那一刻」兩個點距離變遠了，不代表
+## 整段期間都在持續遠離。設一個上限，讓單次超長間隔頂多貢獻這麼多秒，
+## 不會單靠一次失焦就吃光整個 ABANDON_WINDOW_SEC（CodeRabbit review 抓到）
+const MAX_CREDITED_INTERVAL_SEC := CHECK_INTERVAL_SEC * 2.0
+
 ## 兩次距離量測的容許誤差。浮點與物理解算會有次像素級的抖動，玩家站著不動
 ## 時距離不會剛好逐位元相等——沒有這個容差，原地不動也會被判定成「變遠」
 const DISTANCE_TOLERANCE := 0.5
@@ -97,8 +105,10 @@ func _process(delta: float) -> void:
 	# 用實際累積的取樣間隔，不是固定的 CHECK_INTERVAL_SEC——掉幀讓單幀 delta
 	# 超過檢查間隔時（例如一幀就經過 1.5 秒），_check_timer 這次真正涵蓋的是
 	# 那 1.5 秒，只算 0.5 秒會低估放棄計時的累積速度，讓玩家能拖過 4 秒門檻
-	# 還不觸發 _on_abandoned（CodeRabbit review 抓到）
-	var elapsed_since_check := _check_timer
+	# 還不觸發 _on_abandoned（CodeRabbit review 抓到）。上限見
+	# MAX_CREDITED_INTERVAL_SEC 的說明——真的長時間沒取樣（停格／失焦）不能
+	# 照實整段計入，只能算一段封頂的代表值
+	var elapsed_since_check := minf(_check_timer, MAX_CREDITED_INTERVAL_SEC)
 	_check_timer = 0.0
 
 	# 容差內視為「沒有變遠」，不然玩家站著不動也會被物理解算的次像素抖動
