@@ -26,12 +26,14 @@ func _ready() -> void:
 func _apply_continue() -> void:
 	if not SaveService.has_world(GameManager.DEFAULT_WORLD_ID):
 		push_error("main_scene: continue_requested 但世界存檔 %s 不存在，返回主選單" % GameManager.DEFAULT_WORLD_ID)
+		GameManager.continue_load_failed = true
 		get_tree().change_scene_to_file(MAIN_MENU_SCENE)
 		return
 
 	var world_data := SaveService.get_world(GameManager.DEFAULT_WORLD_ID)
 	if not SaveService.is_world_data_valid(world_data):
 		push_error("main_scene: 世界存檔 %s 讀取失敗或格式不完整（可能已損毀），返回主選單" % GameManager.DEFAULT_WORLD_ID)
+		GameManager.continue_load_failed = true
 		get_tree().change_scene_to_file(MAIN_MENU_SCENE)
 		return
 	GameManager.apply_world_save_data(world_data)
@@ -46,12 +48,14 @@ func _apply_continue() -> void:
 			push_error("main_scene: 角色存檔 %s（%s）讀取失敗（存在但無法解析，可能已損毀），該角色維持預設狀態" % [character.character_id, character.character_name])
 			continue
 
-		# character_id 有值且是 String，卻跟查詢用的 id 對不上——存檔內容跟檔名
-		# 認定的角色不是同一個（可能已損毀或被誤覆蓋），套用下去 load_save_data()
-		# 會直接把場上角色的 id 改掉，跟世界存檔已套用的位置／關係對不起來
+		# character_id 一定要存在、是 String、且跟查詢用的 id 對得上——
+		# get_save_data() 永遠會寫入這個欄位，缺欄位／型別不對／對不上
+		# 都代表存檔內容跟檔名認定的角色不是同一個（可能已損毀或被誤覆蓋），
+		# 套用下去 load_save_data() 會直接把場上角色的 id 改掉，跟世界存檔
+		# 已套用的位置／關係對不起來
 		var stored_id: Variant = data.get("character_id")
-		if stored_id is String and stored_id != character.character_id:
-			push_error("main_scene: 角色存檔 %s（%s）內容的 character_id（%s）與檔名不符，可能已損毀，該角色維持預設狀態" % [character.character_id, character.character_name, stored_id])
+		if not (stored_id is String and stored_id == character.character_id):
+			push_error("main_scene: 角色存檔 %s（%s）內容缺少或 character_id 不符（%s），可能已損毀，該角色維持預設狀態" % [character.character_id, character.character_name, stored_id])
 			continue
 
 		character.load_save_data(data)

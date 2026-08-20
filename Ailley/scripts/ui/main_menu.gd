@@ -53,7 +53,19 @@ func _unhandled_input(event: InputEvent) -> void:
 ## 巢狀欄位格式不完整（損毀／格式錯誤），不能讓玩家以為自己從沒存過檔——
 ## 藏起 ContinueButton 的同時要顯示明確的失敗訊息，不能悄悄只留新遊戲選項
 ## （見 issue #343 範圍）
+##
+## GameManager.continue_load_failed 覆蓋另一種情況：這裡檢查時存檔還在，
+## 玩家按下繼續遊戲之後，main_scene.gd 轉場套用時才發現存檔消失或讀不出來
+## ——這時 has_world()/is_world_data_valid() 現在重新檢查會查到「不存在」，
+## 跟「本來就沒存過」是同一個結果，沒有這個旗標會誤判成後者、悄悄只顯示
+## StartButton。優先權比下面兩個檢查高，且是一次性的，讀過一次要立刻清掉
 func _refresh_continue_button() -> void:
+	if GameManager.continue_load_failed:
+		GameManager.continue_load_failed = false
+		continue_button.hide()
+		load_error_label.show()
+		return
+
 	if not SaveService.has_world(GameManager.DEFAULT_WORLD_ID):
 		continue_button.hide()
 		return

@@ -17,6 +17,14 @@ var allow_player_join := true
 ## 完全一樣，差別只在要不要套用存檔
 var continue_requested := false
 
+## main_scene.gd 發現「主選單檢查時還在」的世界存檔在轉場後消失或讀不出來時
+## 設為 true。這種情況下 continue_requested 已經被清成 false，主選單只靠
+## has_world()/is_world_data_valid() 重新檢查會誤判成「本來就沒有存檔」，
+## 玩家只看得到開始遊戲、看不到明確的讀檔失敗提示——這個旗標讓主選單分辨
+## 這兩種情況。跟 continue_requested 一樣是一次性的，main_menu.gd 讀過一次
+## 就要重設回 false（見 main_scene.gd::_apply_continue()）
+var continue_load_failed := false
+
 var npc_data = {}
 
 # 節點名 -> schedule_template。行程模板是「用哪份資料」，而它跟角色的對應

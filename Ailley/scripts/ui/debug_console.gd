@@ -742,11 +742,11 @@ func _cmd_load(_args: PackedStringArray) -> void:
 		var data := SaveService.get_character(character.character_id)
 		if data.is_empty():
 			continue
-		# 跟 main_scene.gd 同一套邊界檢查：character_id 有值且跟查詢用的 id
-		# 對不上，代表存檔內容跟檔名認定的角色不是同一個，不套用
+		# 跟 main_scene.gd 同一套邊界檢查：character_id 一定要存在、是
+		# String、且跟查詢用的 id 對得上，缺欄位／型別不對／對不上都不套用
 		var stored_id: Variant = data.get("character_id")
-		if stored_id is String and stored_id != character.character_id:
-			_error("角色存檔 %s 內容的 character_id（%s）與檔名不符，可能已損毀，跳過" % [character.character_id, stored_id])
+		if not (stored_id is String and stored_id == character.character_id):
+			_error("角色存檔 %s 內容缺少或 character_id 不符（%s），可能已損毀，跳過" % [character.character_id, stored_id])
 			continue
 		character.load_save_data(data)
 		count += 1
