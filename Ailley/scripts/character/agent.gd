@@ -226,6 +226,10 @@ var _next_plan_id := 0
 ## 申請」：不是每次決策都能改，得先問過、下一輪才真的給
 var _plan_update_requested := false
 
+## load_save_data() 清除 _plan_update_requested 時遞增的 epoch，用於保護
+## 載入流程不被過期的決策請求覆寫——見 _request_next_decision() 的 epoch 檢查
+var _plan_update_epoch := 0
+
 ## 這次重算「進來的時候」current_state 是不是 sleep——用來偵測「剛睡醒」
 ## 那個轉換瞬間，見 _reevaluate() 怎麼用它
 var _was_sleeping := false
@@ -799,8 +803,11 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 
 	# 記下消費前的值，等這次回應因世代不符被丟棄時原封不動還回去——
 	# 「跟從沒問過模型一樣」不能只是不套用任務，連這個已經兌現掉的許可
-	# 也要還原，不然角色會憑空少一次原本已經賺到的 update_plan 機會
+	# 也要還原，不然角色會憑空少一次原本已經賺到的 update_plan 機會。
+	# 但若是載入造成的世代不符，則不該還原：load_save_data() 清除許可的同時
+	# 也遞增了 _plan_update_epoch，下面只在 epoch 不變時才還原
 	var had_plan_update_requested := _plan_update_requested
+	var my_plan_update_epoch := _plan_update_epoch
 	var effective_allow_update_plan := allow_update_plan or _plan_update_requested
 	_plan_update_requested = false
 
@@ -832,9 +839,12 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 
 	# 世代編號在 await 期間變了，代表 debug_set_llm_decision() 至少關過一次
 	# 決策開關——不管回應抵達當下旗標是什麼值（就算又被重新打開），這份回應
-	# 都屬於已經作廢的世代，整包淘汰，不套用任何任務或計畫更新
+	# 都屬於已經作廢的世代，整包淘汰，不套用任何任務或計畫更新。
+	# 還原 had_plan_update_requested 時同時檢查 epoch：若 load_save_data() 發生過
+	# （epoch 已遞增），則保持清除狀態，不讓過期請求重新授予 update_plan 許可
 	if my_generation != _decision_generation:
-		_plan_update_requested = had_plan_update_requested
+		if my_plan_update_epoch == _plan_update_epoch:
+			_plan_update_requested = had_plan_update_requested
 		return {"ok": false, "triggered": true}
 
 	if not result["ok"]:
@@ -1072,9 +1082,12 @@ func load_save_data(data: Dictionary) -> void:
 	# _apply_today_plan() 蓋掉剛載入的 today_plan——跳世代讓
 	# _request_next_decision() 收到回應時自己認出這是過期世代整包丟棄，
 	# 跟 debug_set_llm_decision() 的翻轉世代同一招。_plan_update_requested
-	# 也一併清掉：那是舊決策留下的「下次讓我改」許可，不該帶進載入後的狀態
+	# 也一併清掉：那是舊決策留下的「下次讓我改」許可，不該帶進載入後的狀態。
+	# 遞增 _plan_update_epoch 確保過期請求不會在還原 had_plan_update_requested 時
+	# 重新授予已經被載入清除的許可
 	_decision_generation += 1
 	_plan_update_requested = false
+	_plan_update_epoch += 1
 
 	_today_plan.clear()
 	var raw_plan: Variant = data.get("today_plan", [])
