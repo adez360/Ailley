@@ -1249,11 +1249,18 @@ func get_state_snapshot() -> Dictionary:
 # array），硬套 Stats.SPEC 那種同型別、走訪產生數值的模式沒有意義；SPEC 那條
 # 規則要保的是「加一項不用到處改」，這裡欄位數量固定且各自的存讀邏輯本來就不同。
 # epitaphs（第四個欄位，一對多）不在這裡，走 SQLite，見 #382
+#
+# today_plan（#350）是跨天的承諾——「今天打算做這幾件事」——跟 current_goal
+# 那種瞬時念頭不同，重開遊戲不該讓它憑空消失（見 note/技術/存檔.md 的既有
+# 拍板；current_goal 刻意不存，這裡不要一起加進去）。id 是本機重新配發的
+# 序號（見 _apply_today_plan() 的說明），跟存檔格式無關，原樣存回沒有問題——
+# 下一次 _apply_today_plan() 呼叫本來就會整份取代並重新配發
 func get_save_data() -> Dictionary:
 	var data := super()
 	data["words_to_creator"] = words_to_creator
 	data["last_words"] = last_words
 	data["life_highlights"] = life_highlights.duplicate()
+	data["today_plan"] = _today_plan.duplicate(true)
 	return data
 
 
@@ -1270,19 +1277,6 @@ func load_save_data(data: Dictionary) -> void:
 		for item in raw_highlights:
 			if item is String:
 				life_highlights.append(item)
-
-# today_plan（#350）是跨天的承諾——「今天打算做這幾件事」——跟 current_goal
-# 那種瞬時念頭不同，重開遊戲不該讓它憑空消失（見 note/技術/存檔.md 的既有
-# 拍板；current_goal 刻意不存，這裡不要一起加進去）。id 是本機重新配發的
-# 序號（見 _apply_today_plan() 的說明），跟存檔格式無關，原樣存回沒有問題——
-# 下一次 _apply_today_plan() 呼叫本來就會整份取代並重新配發
-func get_save_data() -> Dictionary:
-	var data := super()
-	data["today_plan"] = _today_plan.duplicate(true)
-	return data
-
-func load_save_data(data: Dictionary) -> void:
-	super(data)
 
 	# 讀檔當下若有一份決策請求還在飛（debug 主控台 load 指令對執行中的角色
 	# 呼叫這裡），那份回應是問著載入前的舊狀態，不能讓它晚到之後用
