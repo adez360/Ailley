@@ -330,10 +330,11 @@ func _find_id_holder(id: String) -> Character:
 
 # ---- 情緒與狀態 ----
 
-## 1 tick = 10 遊戲分鐘（《02》§1-4：12 tick = 2 遊戲小時）。GameClock.time_changed
-## 每遊戲分鐘觸發一次，所以要每累積 10 次才真正跑一次 tick，不是每次都跑——
-## 拿規格書自己的算例反查：joy intensity=60、stability=90、grudge=75 應該是
-## 9 tick ≈ 1.5 小時（90 遊戲分鐘），不是 9 遊戲分鐘
+## 1 tick = 10 遊戲分鐘（《02》§1-4：12 tick = 2 遊戲小時 ＝ GameClock.GAME_MINUTES_PER_TICK）。
+## GameClock.time_changed 每遊戲分鐘觸發一次，用 `_minute % GAME_MINUTES_PER_TICK == 0`
+## 判斷是否落在 tick 邊界上，不是每次都跑，也不是本地累加器——跟 Stats 漂移共用
+## 同一個全域邊界，兩者永遠同步觸發。拿規格書自己的算例反查：joy intensity=60、
+## stability=90、grudge=75 應該是 9 tick ≈ 1.5 小時（90 遊戲分鐘），不是 9 遊戲分鐘
 
 func _on_game_minute(_hour: int, _minute: int) -> void:
 	# 昏迷與治療檢查每遊戲分鐘執行（與 GameClock.time_changed 同步）

@@ -7,7 +7,8 @@ extends Node
 ## 要加一項數值只要在 SPEC 加一列，其餘程式都不用動（連 debug 主控台的顯示也是）：
 ##   label    顯示名稱的翻譯 key（res://locale/game.csv 的 STAT_*）。
 ##            這裡刻意存 key 不存字：SPEC 是純資料，翻譯留給顯示端做
-##   drift    每現實秒往 toward 靠近多少，0 表示不會自然變化
+##   drift    每 tick（GameClock.GAME_MINUTES_PER_TICK＝10 遊戲分鐘）往 toward
+##            靠近多少，0 表示不會自然變化
 ##   toward   數值自然漂向哪裡。需求類漂向 0（會餓、會累），心情漂回平常值
 ##   is_need  是不是「低了就該去解決」的東西。心情不是，所以不會被
 ##            get_lowest_need() 選中，也不算進 needs_attention()
