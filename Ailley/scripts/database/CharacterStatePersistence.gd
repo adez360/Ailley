@@ -120,17 +120,17 @@ func _on_time_changed(
 # Global Sync
 # =====================================================
 
-func _sync_all_characters() -> void:
+func _sync_all_characters() -> bool:
 
 	if not DatabaseManager.is_ready:
-		return
+		return false
 
 	var characters := get_tree().get_nodes_in_group(
 		"characters"
 	)
 
 	if characters.is_empty():
-		return
+		return true
 
 	var success_count := 0
 
@@ -151,6 +151,8 @@ func _sync_all_characters() -> void:
 			characters.size()
 		]
 	)
+
+	return success_count == characters.size()
 
 
 func _sync_all_characters_periodic() -> void:
@@ -1986,9 +1988,9 @@ func _log_state(
 # Public
 # =====================================================
 
-func sync_now() -> void:
+func sync_now() -> bool:
 
-	_sync_all_characters()
+	return _sync_all_characters()
 
 
 func sync_character(

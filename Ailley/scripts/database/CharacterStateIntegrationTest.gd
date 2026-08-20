@@ -313,7 +313,11 @@ func _restore_stats(
 		character.stats.set_value(key, original_stats[key])
 
 	if persistence != null:
-		_sync_now(persistence)
+		if not _sync_now(persistence):
+			_fail(
+				"restore_sync",
+				"還原 Stats 後同步失敗，SQLite 可能仍保留測試值"
+			)
 
 
 func _sync_now(persistence: Node) -> bool:
@@ -324,8 +328,7 @@ func _sync_now(persistence: Node) -> bool:
 		)
 		return false
 
-	persistence.sync_now()
-	return true
+	return persistence.sync_now()
 
 
 func _find_test_character() -> Character:

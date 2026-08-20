@@ -1225,7 +1225,8 @@ select() 找不到列回傳 []，不是 error；update()/delete() 空 conditions
 ## CharacterStatePersistence — scripts/database/CharacterStatePersistence.gd · Node · DatabaseManager 的子節點
 
 ```gdscript
-func sync_now() -> void                          # 手動觸發全體同步（等同 _ready() 首次跑的那次）
+func sync_now() -> bool                          # 手動觸發全體同步（等同 _ready() 首次跑的那次），
+                                                   # 回傳是否所有角色都同步成功
 func sync_character(character: Character) -> bool
 func get_all_states() -> Array                    # SELECT npc_id/各項數值/location_id FROM npc_state
 ```
@@ -1257,14 +1258,16 @@ const ITEM_BALANCE := {...}   # item_id -> {name, item_type, base_price, max_sta
                                # durability_cost?, effect_*}，涵蓋 data/items.json
                                # 全部 18 個 item_id（食物/飲品/獵物水產/採集品/隨身用品）
 
-static func seed_all() -> void      # 呼叫端：DatabaseManager._ready()，schema 建立後跑一次
-static func seed_items() -> void
+static func seed_all() -> bool      # 呼叫端：DatabaseManager._ready()，schema 建立後跑一次
+static func seed_items() -> bool
 ```
 
 ```text
 ITEM_BALANCE 的 key 必須存在於 res://data/items.json（ItemDatabase 為單一事實來源），
   查不到就 push_error 並跳過該筆，避免兩份物品清單各自漂移出不存在的 item_id
-seed_items() 逐筆用 select_where(item_id) 檢查是否已存在才 INSERT，重複呼叫不出錯也不覆寫
+seed_items() 逐筆用 select_where(item_id) 檢查是否已存在才 INSERT，重複呼叫不出錯也不覆寫；
+  任一筆 item_id 對不上 items.json 或 INSERT 失敗都會讓 seed_items() 回傳 false，
+  seed_all() 直接轉傳這個結果給呼叫端
 † Seeder 不建表、不改 schema、不做遊戲中的資料更新，只負責第一次啟動的基礎資料
 ```
 
