@@ -3,6 +3,7 @@
 [ext_resource type="PackedScene" uid="uid://v21qv1icuh5m" path="res://scenes/player.tscn" id="1_ljsu2"]
 [ext_resource type="Script" uid="uid://bxtstp8huotpd" path="res://scripts/core/main_scene.gd" id="1_o6xl0"]
 [ext_resource type="PackedScene" uid="uid://b2e0tw4w7vsnc" path="res://scenes/level.tscn" id="1_tefeu"]
+[ext_resource type="Script" uid="uid://dprecikypmnvi" path="res://scripts/ui/waypoint_indicator.gd" id="4_o6xl0"]
 [ext_resource type="PackedScene" uid="uid://b5yxvqqruap3c" path="res://scenes/agent.tscn" id="6_nnngi"]
 [ext_resource type="PackedScene" uid="uid://c5fffesir3r4v" path="res://scenes/workstation.tscn" id="12_0ld40"]
 [ext_resource type="PackedScene" uid="uid://wo0a0v2y4gj1" path="res://scenes/hud.tscn" id="13_trceg"]
@@ -19,6 +20,14 @@ script = ExtResource("1_o6xl0")
 z_index = 1
 position = Vector2(0, -12)
 character_name = "player"
+
+[node name="WaypointIndicator" type="Node2D" parent="Player"]
+position = Vector2(0, -14)
+script = ExtResource("4_o6xl0")
+
+[node name="Arrow" type="Polygon2D" parent="Player/WaypointIndicator"]
+color = Color(0.909, 0.698, 0.235, 1)
+polygon = PackedVector2Array(10, 0, -4, -5, -4, 5)
 
 [node name="Agent" parent="." instance=ExtResource("6_nnngi")]
 position = Vector2(40, -8)

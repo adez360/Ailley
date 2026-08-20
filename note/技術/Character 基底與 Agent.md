@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-17
+updated: 2026-08-20
 ---
 
 # Character 基底與 Agent
@@ -53,8 +53,10 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 「玩家可改」不等於「這一場不會變」：`character_id` 玩家碰不到，但撞號時
 `_ensure_unique_id()` 會就地換掉一個，別把它快取在 `_ready()` 之外。
 
-**跨場次是否穩定要看走到第幾層**：走第 2 層的固定 NPC 每次開遊戲都拿到同一個 id
-（`identities` 是靜態資料），走第 3 層的角色每次重開都是新 UUID。
+**跨場次是否穩定要看走到第幾層，第 3 層本身又分兩種**：走第 2 層的固定 NPC
+每次開遊戲都拿到同一個 id（`identities` 是靜態資料）；走第 3 層的 Player
+一樣穩定，但穩定的方式不同——見下面「Player 的 id 額外持久化」；走第 3 層的
+其他動態角色（非角色庫投放、沒有事先帶 `character_id` 的）才是每次重開都新 UUID。
 
 ## `character_id` 是生成的 UUID，不帶任何語意
 
@@ -75,9 +77,24 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 而不是印完錯誤讓兩隻共用。共用 id 等於共用一份關係與記憶
 （`relationships.gd` 拿 id 當 key）。生成的 id 不會撞，會走到這條的是場景裡手寫重複。
 
-走第 2 層（`npc_schedule.json` identities）的固定 NPC 已經跨場次穩定；
-Player 沒有對應的 identities 項目，id 目前每次開遊戲都重新生成，追蹤在
-[issue #399](https://github.com/adez360/Ailley/issues/399)，細節見 [[存檔]]。
+### Player 的 id 額外持久化（issue #399）
+
+固定 NPC 靠 `identities` 表天生穩定，但 Player 沒有節點名可查的身分資料——
+`main.tscn` 不能直接 `@export` 填一個固定字串（那個欄位是給場景裡手擺的
+**測試角色**用，填死字串也違反「id 不帶語意」的原則）。
+
+做法是讓 `_ready()` 走到第三層時，改呼叫一個可被子類別覆寫的 hook
+（`_resolve_generated_id()`，預設就是 `generate_id()`）。`player.gd` 覆寫它：
+第一次生成後，把這組 UUID 額外寫進 `user://saves/player_id.txt`——
+跟 `user://saves/characters/`／`user://saves/worlds/`（見 [[存檔]]）分開放，
+因為它不屬於 `SaveService` 那套整包讀寫／版本／鎖的機制，從頭到尾只有一個值，
+寫一次之後只會被讀取。下次 `_ready()` 先讀這個檔案，讀得到就沿用，不必再過一次
+存檔那套重量級流程。
+
+動態生成的角色（`spawn_character()`）不需要覆寫這個 hook：它們要嘛已經帶著角色庫
+存好的 `character_id`（走第一層就結束，不會落到這裡），要嘛是一次性測試用途，
+沒有「跨場次是同一隻」的需求，仍會呼叫到基底 `_resolve_generated_id()`
+再由基底實作執行 `generate_id()`。
 
 > [!important] 為什麼 `schedule_template` 不共用 `character_id`
 > 它是「用哪份資料」不是「我是誰」。id 既然是全遊戲唯一身分，
@@ -245,12 +262,13 @@ Agent/Agent2 是場景裡的靜態節點，`_ready()` 時自己查表更貼近�
 > 規格書《02》§1-4 定義 12 tick = 2 遊戲小時（120 遊戲分鐘），也就是 1 tick = 10 遊戲分鐘
 > ——用規格書自己的算例反查就對得起來：joy intensity=60、stability=90、grudge=75 算出
 > 9 tick，規格書寫「約 1.5 小時」＝90 遊戲分鐘。專案目前沒有事件驅動的 tick 引擎
-> （見《02》§4 的流程圖，那套還沒實作），`emotion.duration_left` 與 `_update_conditions()`
-> 的門檻重新檢查都掛在 `GameClock.time_changed`（每遊戲分鐘觸發一次）上，但用
-> `Character._tick_minute_accum` 每累積 10 次才真正跑一次 tick，不是每次 `time_changed`
-> 都跑。這跟 `Stats._process(delta)` 的連續 real-time drift 是兩套不同的時間模型——
-> `Stats` 的「每 tick」drift 值是直接當「每真實秒」在用，沒有經過 GameClock，也沒有
-> 10 倍的换算。兩邊是刻意不同調的兩套機制，日後真的做 tick 引擎時要分別處理。
+> （見《02》§4 的流程圖，那套還沒實作）。`GameClock.GAME_MINUTES_PER_TICK`（＝10）是唯一
+> 來源，`emotion.duration_left`／`_update_conditions()`／`Stats` 漂移三者都掛
+> `GameClock.time_changed`，各自在 `_minute % GAME_MINUTES_PER_TICK == 0` 的分鐘邊界
+> 才真的執行一次（#361 修正）——修正前 `Stats._process(delta)` 是連續 real-time drift，
+> 沒有經過 GameClock，也沒有 10 倍換算，跟 emotion／conditions 那套不同調，導致漂移
+> 速度快了 10 倍；`Character` 自己的本地 `_tick_minute_accum` 累加器也已經拿掉，
+> 改成跟 `Stats` 共用同一個全域分鐘邊界判斷，不再各自維護一份計數。
 
 ### emotion（`set_emotion()`）
 
@@ -272,8 +290,13 @@ Agent/Agent2 是場景裡的靜態節點，`_ready()` 時自己查表更貼近�
 | --- | --- |
 | `injured`／`drunk`／`sleepy`／`filthy` | `bleeding`（health −1.5/tick）／`starving`（health −0.5/tick）／`dehydrated`（health −1.0/tick） |
 
-`exhausted`（`stamina = 0`）目前也只做偵測——規格書寫的「強制昏睡」效果
-是行動佔用邏輯的一部分，留給接手 #160（昏迷狀態）的那則實作。
+`exhausted`（`stamina = 0`）已經不只是偵測（#361）：`agent.gd::_reevaluate_once()`
+偵測到這個 condition 時優先於一般任務仲裁，呼叫 `_force_rest_until_recovered()`
+塞一筆 `source: "reflex"`、`interruptible: false` 的 rest 任務並 `stop_moving()`，
+直到 stamina 回升、condition 清除為止；清除的當下 `_reevaluate_once()` 會清掉
+這筆 reflex 任務並重置追逐狀態，讓一般仲裁接手。「強制昏睡」（角色倒下、
+送醫這類更完整的行動佔用）仍留給接手 #160（昏迷狀態）的那則，這裡做的只是
+「不給選、強制休息」。
 
 行為成功率／說真心話機率（`injured`／`drunk` 的效果）刻意不做，留給 #120
 （成功率／硬規則檢查層）；`filthy` 的效果留給《99》P-35 重新設計。

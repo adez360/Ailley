@@ -7,7 +7,7 @@ static func create(db) -> bool:
 	var sql := """
 	CREATE TABLE IF NOT EXISTS location (
 
-		location_id TEXT PRIMARY KEY,
+		location_id TEXT NOT NULL PRIMARY KEY,
 
 		name TEXT NOT NULL,
 

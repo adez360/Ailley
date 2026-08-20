@@ -7,7 +7,7 @@ static func create(db) -> bool:
 	var sql := """
 	CREATE TABLE IF NOT EXISTS npc_last_action (
 
-		npc_id TEXT PRIMARY KEY,
+		npc_id TEXT NOT NULL PRIMARY KEY,
 
 		-- 規格 L3：last_action_result.action
 		action TEXT NOT NULL DEFAULT '',

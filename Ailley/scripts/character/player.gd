@@ -26,6 +26,11 @@ signal turn_resolved(text: String, ok: bool)
 ## vision.get_visible_characters()，見 _get_interact_candidates() 的說明
 var _nearby_interactables: Array[Node2D] = []
 
+## Player 的 character_id 跨場次持久化檔案，跟世界／角色存檔（user://saves/
+## characters|worlds/）分開放——這個檔案不屬於 SaveService 那套整包讀寫／
+## 版本／鎖的機制，它從頭到尾只有一個值，寫一次之後只會被讀取（issue #399）
+const _PLAYER_ID_PATH := "user://saves/player_id.txt"
+
 
 func _ready() -> void:
 	super()
@@ -320,3 +325,55 @@ func _decide_velocity() -> Vector2:
 func next_line(_listener: Character, _turns: Array[Dictionary], _max_turns: int) -> Dictionary:
 	var resolved: Array = await turn_resolved
 	return {"ok": resolved[1], "line": resolved[0], "end": false}
+
+## Player 沒有 npc_schedule.json 的 identities 項目可查（那份表本來就只給場景裡
+## 固定的 NPC 用），每次開遊戲都會走到 Character._ready() 的第三層。這裡覆寫
+## 掉那層預設的「即用即棄」：第一次生成後把 id 存進獨立檔案，之後開遊戲沿用
+## 同一組——不然 relationships／存檔都拿 character_id 當 key，id 每次重開都變
+## 等於玩家每次都是「新來的陌生人」，世界／角色存檔也永遠查不到自己（#399）
+func _resolve_generated_id() -> String:
+	if FileAccess.file_exists(_PLAYER_ID_PATH):
+		var read_file := FileAccess.open(_PLAYER_ID_PATH, FileAccess.READ)
+		if read_file == null:
+			# 讀取失敗不等於檔案是空的（可能是暫時性的權限／鎖定問題），
+			# 不能落到下面的寫入流程去覆蓋掉可能還是好的正式檔案。
+			push_error("player.gd: 無法讀取 %s（%s），這次改用新生成的 character_id（不寫回檔案）" % [
+				_PLAYER_ID_PATH, error_string(FileAccess.get_open_error())
+			])
+			return generate_id()
+		else:
+			var existing := read_file.get_as_text().strip_edges()
+			read_file.close()
+			if not existing.is_empty():
+				return existing
+
+	var id := generate_id()
+	var dir := _PLAYER_ID_PATH.get_base_dir()
+	if not DirAccess.dir_exists_absolute(dir):
+		DirAccess.make_dir_recursive_absolute(dir)
+	# 先寫暫存檔再 rename 蓋過去，避免 FileAccess.WRITE 直接截斷正式檔案時
+	# 中途中斷（當機／強制關閉），讓 player_id.txt 留下空檔或半截 id。
+	var tmp_path := _PLAYER_ID_PATH + ".tmp"
+	var file := FileAccess.open(tmp_path, FileAccess.WRITE)
+	if file == null:
+		push_error("player.gd: 無法寫入 %s（%s），character_id 這次不會跨場次持久化" % [
+			tmp_path, error_string(FileAccess.get_open_error())
+		])
+		return id
+	file.store_string(id)
+	file.flush()
+	var write_error := file.get_error()
+	file.close()
+	if write_error != OK:
+		push_error("player.gd: 寫入 %s 失敗（%s），character_id 這次不會跨場次持久化" % [
+			tmp_path, error_string(write_error)
+		])
+		DirAccess.remove_absolute(tmp_path)
+		return id
+	var rename_error := DirAccess.rename_absolute(tmp_path, _PLAYER_ID_PATH)
+	if rename_error != OK:
+		push_error("player.gd: 替換 %s 失敗（%s），character_id 這次不會跨場次持久化" % [
+			_PLAYER_ID_PATH, error_string(rename_error)
+		])
+		DirAccess.remove_absolute(tmp_path)
+	return id

@@ -100,6 +100,13 @@ class Provider extends RefCounted:
 	func completions_url() -> String:
 		return base_url + "/chat/completions"
 
+	# 就緒檢查用（issue #345）。刻意不用《04》§4-1 想像的 `/health`——那是
+	# 假設一個自架後端才成立的端點，本機 llama-server 有但雲端 OpenRouter
+	# 沒有。`/models` 是 OpenAI 相容 API 的標準端點，跟 completions_url() 一樣
+	# 每個 provider 走同一條路徑，不用為本機/雲端分岔，還能順便驗證金鑰有效
+	func models_url() -> String:
+		return base_url + "/models"
+
 	# 給 debug 主控台印一行摘要。冷卻／每日配額／對話豁免是全域設定，不屬於
 	# 這個 provider 自己，由呼叫端（AIConfig）傳進來，不是這個類別自己存的——
 	# 這樣同一份全域設定印在每個 provider 底下時保證一致，不會各自維護一份
@@ -211,7 +218,12 @@ func _parse_provider(provider_name: String, data: Dictionary) -> Provider:
 	provider.name = provider_name
 	provider.base_url = str(data.get("base_url", DEFAULT_BASE_URL)).strip_edges().rstrip("/")
 	provider.model = str(data.get("model", DEFAULT_MODEL)).strip_edges()
-	provider.timeout = float(data.get("timeout", DEFAULT_TIMEOUT))
+	# HTTPRequest.timeout <= 0 在 Godot 裡代表「不設逾時」，不是「立刻逾時」——
+	# 設定檔手滑填 0 或負值會讓 _send()／_probe_models() 的請求永遠不逾時，
+	# 卡住的節點回不了池子。這裡退回 DEFAULT_TIMEOUT，不信任設定檔給的非正值
+	# （CodeRabbit review 抓到）
+	var raw_timeout := float(data.get("timeout", DEFAULT_TIMEOUT))
+	provider.timeout = raw_timeout if raw_timeout > 0.0 else DEFAULT_TIMEOUT
 	provider.api_key = str(data.get("api_key", "")).strip_edges()
 	provider.supports_json_schema = bool(data.get("supports_json_schema", true))
 	provider.format_guaranteed = bool(data.get("format_guaranteed", false))

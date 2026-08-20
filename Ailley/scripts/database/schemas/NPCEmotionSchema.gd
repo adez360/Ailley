@@ -7,7 +7,7 @@ static func create(db) -> bool:
 	var sql := """
 	CREATE TABLE IF NOT EXISTS npc_emotion (
 
-		npc_id TEXT PRIMARY KEY,
+		npc_id TEXT NOT NULL PRIMARY KEY,
 
 		emotion TEXT NOT NULL DEFAULT 'neutral'
 			CHECK(

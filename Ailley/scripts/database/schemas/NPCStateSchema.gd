@@ -7,7 +7,7 @@ static func create(db) -> bool:
 	var sql := """
 	CREATE TABLE IF NOT EXISTS npc_state (
 
-		npc_id TEXT PRIMARY KEY,
+		npc_id TEXT NOT NULL PRIMARY KEY,
 
 		-- 生理狀態：全部 0-100，跟規格書《01》§4-1 對齊（2026-08-16，見《99》P-32）。
 		-- satiety/hydration/wakefulness 原欄位名 hunger/thirst/sleepiness 已改名，理由見《01》§4-1 的說明
