@@ -91,9 +91,10 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 寫一次之後只會被讀取。下次 `_ready()` 先讀這個檔案，讀得到就沿用，不必再過一次
 存檔那套重量級流程。
 
-動態生成的角色（`spawn_character()`）不用這個 hook：它們要嘛已經帶著角色庫
+動態生成的角色（`spawn_character()`）不需要覆寫這個 hook：它們要嘛已經帶著角色庫
 存好的 `character_id`（走第一層就結束，不會落到這裡），要嘛是一次性測試用途，
-沒有「跨場次是同一隻」的需求。
+沒有「跨場次是同一隻」的需求，仍會呼叫到基底 `_resolve_generated_id()`
+再由基底實作執行 `generate_id()`。
 
 > [!important] 為什麼 `schedule_template` 不共用 `character_id`
 > 它是「用哪份資料」不是「我是誰」。id 既然是全遊戲唯一身分，

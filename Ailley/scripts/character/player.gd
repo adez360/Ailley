@@ -333,9 +333,15 @@ func next_line(_listener: Character, _turns: Array[Dictionary], _max_turns: int)
 ## 等於玩家每次都是「新來的陌生人」，世界／角色存檔也永遠查不到自己（#399）
 func _resolve_generated_id() -> String:
 	if FileAccess.file_exists(_PLAYER_ID_PATH):
-		var existing := FileAccess.open(_PLAYER_ID_PATH, FileAccess.READ).get_as_text().strip_edges()
-		if not existing.is_empty():
-			return existing
+		var read_file := FileAccess.open(_PLAYER_ID_PATH, FileAccess.READ)
+		if read_file == null:
+			push_error("player.gd: 無法讀取 %s（%s），改成生成新的 character_id" % [
+				_PLAYER_ID_PATH, error_string(FileAccess.get_open_error())
+			])
+		else:
+			var existing := read_file.get_as_text().strip_edges()
+			if not existing.is_empty():
+				return existing
 
 	var id := generate_id()
 	var dir := _PLAYER_ID_PATH.get_base_dir()
@@ -348,4 +354,10 @@ func _resolve_generated_id() -> String:
 		])
 		return id
 	file.store_string(id)
+	var write_error := file.get_error()
+	file.close()
+	if write_error != OK:
+		push_error("player.gd: 寫入 %s 失敗（%s），character_id 這次不會跨場次持久化" % [
+			_PLAYER_ID_PATH, error_string(write_error)
+		])
 	return id

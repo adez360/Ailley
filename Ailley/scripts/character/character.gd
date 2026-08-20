@@ -161,7 +161,8 @@ const CONDITION_INCAPACITATED := "incapacitated"
 ## 是內部識別字，不拿來顯示，也**不要去解析它** —— 格式只有 generate_id() 說了算。
 ##
 ## 留空就生成一個，這是正常路徑；`@export` 只留給場景裡手擺的測試角色。
-## 目前每次開遊戲都重新生成，要跨場次接續得等存檔把它寫下來
+## 場景裡固定的 NPC 靠 identities 表跨場次穩定，Player 靠 _resolve_generated_id()
+## 的覆寫額外持久化；動態生成、沒有這兩者的角色才會每次開遊戲重新生成
 @export var character_id := ""
 
 ## 玩家給角色取的名字，是拿來顯示與被指令指名的那一個，可以改、可以撞名。
@@ -1183,7 +1184,7 @@ func get_save_data() -> Dictionary:
 func load_save_data(data: Dictionary) -> void:
 	character_id = data.get("character_id", character_id)
 	if character_id.is_empty():
-		character_id = generate_id()
+		character_id = _resolve_generated_id()
 	if is_inside_tree():
 		_ensure_unique_id()
 	character_name = data.get("character_name", character_name)
