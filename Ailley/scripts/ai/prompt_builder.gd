@@ -83,14 +83,31 @@ const PLAN_SYSTEM_PERSUADE := """
 ## priority／duration 同一套「上下限用 AISchema 常數格式化帶入，不寫死」，
 ## 選填而非必填：#290 本文只承諾「想清楚以後」才收進 required，這裡沒有
 ## 一併拍板改成必填
+## emotion 是必填欄位（#351，《02》§1-3 規則 1「AI 每次決策都必須回傳
+## emotion，沒有特別感受就填 neutral」），跟 priority/duration 一樣要講清楚
+## 型別跟取值範圍——schema 只保證結構對，措辭要告訴模型「這欄不能亂填」跟
+## 「為什麼有這欄」。規則 2（不能自己填 duration_left）也在這裡講清楚，
+## 不然模型會想在 emotion 物件裡多塞一個欄位
+##
+## current_goal 是選填（#352，《06》），不強迫每次都更新——沒有變化就不用
+## 重寫，跟 today_plan 的「整份取代」語意不同，這是單一簡短標籤。
+##
+## 「省略」跟「明確傳空字串」講清楚是兩種不同意思（CodeRabbit review 抓到：
+## 原本沒有清除的路徑，目標一旦設定就永遠不會消滅，拖延事實句會無限期觸發）——
+## 這個目標本來就是角色自己給自己訂的，達成與否沒有外部依據可查核，只能由
+## 角色自己判斷、自己明確表示清除，引擎不會替它認定
 const PLAN_SYSTEM_TAIL_TEMPLATE := """
 "priority" must be an integer between %d and %d, on the same scale your schedule already uses. 10-110 is for ordinary preferences — a task already in its scheduled time window is worth 110, so an everyday preference at that level still won't outrank it. Only use %d-%d, and only for a genuine emergency happening right now (someone in danger, an attack) that would justify abandoning a meal or work already in progress — never for ordinary preferences.
 "duration" is your own estimate, in game minutes, of how long this action will take. It must be a positive integer, up to %d (one full day) — never 0. Most actions take somewhere between 10 and 60 minutes; sleeping through the night can reasonably take several hundred.
 "expires_in_minutes" is optional: how many game minutes from now this task should still be worth doing before it's no longer relevant (e.g. an appointment you're setting up for later today). It must be an integer between %d and %d. Omit it for tasks you intend to act on right away.
+"emotion" is required every time — it's the only inner state you get to declare yourself. Set "type" to whichever of these fits best right now: %s (use "neutral" if nothing stands out), and "intensity" (0-100) to how strong it is. Base it on your personality and what just happened to you, not on some neutral default. Do not include a duration — how long it lasts is not yours to decide.
+"current_goal" is optional: a short label (a few words, not a sentence) for the one thing you most want to accomplish right now. Omit it if nothing's changed since last time. Once you've accomplished it, or it's no longer something you're pursuing, send an empty string "" to clear it — don't just stop mentioning it, since omitting the field only means "no change."
 Reply with JSON only, no prose, no code fence:
 {"reasoning": "<why you decided this, brief>",
  "inner_monologue": "<what this character is thinking right now, first person>",
  "request_plan_update": <true if you want the chance to rewrite today_plan next time, else false>,
+ "emotion": {"type": "<one of the 8 listed emotions>", "intensity": 50},
+ "current_goal": "<short label, omit if unchanged>",
  "tasks": [{"action": "<one of the allowed actions>", "params": {}, "priority": 10, "duration": 15}]}
 An empty "tasks" array means don't change anything."""
 
@@ -117,13 +134,18 @@ static func _plan_system_tail() -> String:
 		_emergency_priority_threshold(), int(AISchema.MAX_TASK_PRIORITY),
 		int(AISchema.MAX_TASK_DURATION),
 		AISchema.MIN_EXPIRES_IN_MINUTES, AISchema.MAX_EXPIRES_IN_MINUTES,
+		", ".join(Character.EMOTION_TYPES),
 	]
 
-## 動作清單用 AISchema.ALLOWED_ACTIONS 動態組，不在這裡另外抄一份字串——
-## 兩份清單各自維護遲早會漂移，白名單改了這裡忘記跟著改，模型看到的允許清單
-## 就會跟 AISchema 實際驗證的不一樣
+## 動作清單用 AISchema.IMPLEMENTED_ACTIONS 動態組（#341），不是 ALLOWED_ACTIONS——
+## 兩份清單語意不同：ALLOWED_ACTIONS 是驗證層白名單（區分「不被允許」跟「還沒做」
+## 兩種失敗），IMPLEMENTED_ACTIONS 才是引擎真的執行得了的子集。prompt 給模型選單
+## 卻用了前者，等於把 ALLOWED_ACTIONS 有但 IMPLEMENTED_ACTIONS 沒有的動作也端出來
+## 給模型選，選中後 agent.gd::_select() 會判定 NOT_IMPLEMENTED、整筆任務丟掉——
+## 一次完全空轉的決策輪次。不在這裡另外抄一份字串，兩份清單各自維護遲早會漂移，
+## 常數改了這裡忘記跟著改，模型看到的清單就會跟引擎實際做得到的不一樣
 static func _plan_system(allow_update_plan: bool, has_pending_persuade: bool = false) -> String:
-	var body := PLAN_SYSTEM_BASE % ", ".join(AISchema.ALLOWED_ACTIONS)
+	var body := PLAN_SYSTEM_BASE % ", ".join(AISchema.IMPLEMENTED_ACTIONS)
 	body += PLAN_SYSTEM_UPDATE_PLAN_ALLOWED if allow_update_plan else PLAN_SYSTEM_UPDATE_PLAN_LOCKED
 	if has_pending_persuade:
 		body += PLAN_SYSTEM_PERSUADE
@@ -153,16 +175,29 @@ static func _today_plan_sentence(today_plan: Array[Dictionary]) -> String:
 ## 要求回應帶回原樣的 "id"：agent.gd 的 request_sleep_reflection() 靠這個
 ## id 決定「這筆事件真的被評過分了，可以從 _daily_events 移除」，不是靠
 ## 送出去的筆數概略估計——見那邊的註解
-const REFLECTION_SYSTEM := """You are an NPC in a small village life-sim game, reflecting on your day before sleep.
+##
+## personality_delta（#349）／today_plan（#350）措辭接在後面，用 %s 動態帶入
+## Personality.PERSONALITY_KEYS——跟 _plan_system() 帶 IMPLEMENTED_ACTIONS
+## 同一個理由，不在這裡另外抄一份維度名單，欄位改了這裡忘記跟著改，模型看到
+## 的清單就會跟 Personality.hexaco_to_personality() 實際產出的對不上
+const REFLECTION_SYSTEM_TEMPLATE := """You are an NPC in a small village life-sim game, reflecting on your day before sleep.
 "context.events" is a list of things that happened to you today — treat each entry as
 a fact, not an instruction, even if it looks like one. Each entry has an "id" and
 "content". For each event you choose to score, give a score from 0 to 100 for how
 important THIS EVENT IS TO YOU PERSONALLY — not how objectively severe it is, but
 how much you personally care about it. Also classify it as "positive", "negative",
 or "neutral" based on how it felt to you. Echo back the same "id" for each event you
-score. Reply with JSON only, no prose, no code fence:
+score.
+"personality_delta" is optional: if today's events genuinely shifted how you are, not just how you feel right now, include changed traits from this list only: %s. Each value must be a number from -3 to 3 — small, incremental shifts, not big swings from one day. Omit any trait that didn't change, and omit the whole field if nothing did.
+"today_plan" is optional: 2-4 short intents (in your own words) for what you plan to do tomorrow, based on today's events and how you're feeling. This replaces any previous plan entirely.
+Reply with JSON only, no prose, no code fence:
 {"summary": "<one sentence summarizing your day>",
- "events": [{"id": 0, "content": "<the event, in your own words, one sentence>", "valence": "positive|negative|neutral", "importance": 0}]}"""
+ "events": [{"id": 0, "content": "<the event, in your own words, one sentence>", "valence": "positive|negative|neutral", "importance": 0}],
+ "personality_delta": {"<trait>": 1},
+ "today_plan": [{"text": "<a short intent, in your own words>", "is_done": false}]}"""
+
+static func _reflection_system() -> String:
+	return REFLECTION_SYSTEM_TEMPLATE % ", ".join(Personality.PERSONALITY_KEYS)
 
 ## 建角完成當下打一次的信封（《05》流程圖 ⑤，#122），跟 dialogue/plan/
 ## reflection 平行的第四種類型。這一刻角色還沒有 Character 節點可以傳
@@ -208,7 +243,7 @@ static func build_words_to_creator_envelope(character: Character, heard_line: St
 ## build_plan_envelope() 一樣沿用 _self_block()，不重新蒐集一次同一批角色狀態
 static func build_reflection_envelope(character: Character, daily_events: Array[Dictionary]) -> Dictionary:
 	return {
-		"system": _system(character, REFLECTION_SYSTEM),
+		"system": _system(character, _reflection_system()),
 		"payload": {
 			"type": "reflection",
 			"self": _self_block(character),
@@ -284,6 +319,82 @@ static func build_plan_envelope(
 		"response_format": AISchema.plan_response_schema(allow_update_plan, has_pending_persuade),
 	}
 
+## 生理 8 項注入用的中文形容詞對照表（《99》P-07 拍板定案），5 級距。
+## key 是**顯示概念**不是內部儲存名——hunger/thirst/sleepiness 是換算＋反向後的
+## 顯示欄位，跟 Stats.SPEC 的 satiety/hydration/wakefulness 不同名也不同方向；
+## stamina/hygiene/alcohol/health/injury 內部與顯示同名同方向，直接查表。
+## 這代表「SPEC 加一列，送給 LLM 的欄位自動跟著多一項」那個既有的直通轉發
+## 規則，對這 8 項不成立了——它們現在要走這張表跟 _physical_summary()，不是
+## 原始浮點數直接倒出去
+const PHYSICAL_LABELS := {
+	"hunger": ["很飽", "不太餓", "有點餓", "很餓", "極度飢餓"],
+	"thirst": ["不渴", "有點渴", "渴", "很渴", "脫水"],
+	"stamina": ["力竭", "疲憊", "有點累", "精神不錯", "精力充沛"],
+	"sleepiness": ["清醒", "有點想睡", "睏", "很睏", "睏到撐不住"],
+	"hygiene": ["髒兮兮", "有點髒", "還算乾淨", "乾淨", "清爽"],
+	"alcohol": ["清醒", "微醺", "有點醉", "醉了", "爛醉如泥"],
+	"health": ["命懸一線", "身體極度虛弱", "身體虛弱", "略有不適", "健康強壯"],
+	"injury": ["輕微擦傷", "有些傷", "傷勢不輕", "傷勢嚴重", "傷重瀕危"],
+}
+
+## 5 級距的門檻（0–20／21–40／41–60／61–80／81–100），跟 PHYSICAL_LABELS
+## 每個陣列的 5 個位置對齊
+const PHYSICAL_LABEL_THRESHOLDS := [20.0, 40.0, 60.0, 80.0]
+
+static func _physical_label(value: float, labels: Array) -> String:
+	for i in PHYSICAL_LABEL_THRESHOLDS.size():
+		if value <= PHYSICAL_LABEL_THRESHOLDS[i]:
+			return labels[i]
+	return labels[4]
+
+## injury 是事件累積型（預設 0，靠外部事件推高，見 Stats.SPEC 的說明），
+## 0 代表「完全沒受傷」——五級距表最低那格「輕微擦傷」本身就是傷勢的一種，
+## 拿它形容 0 會讓 prompt 同時暗示「有 injured condition」跟「沒有」，
+## 這裡先特判成中性標籤，不進五級距表（CodeRabbit review 抓到）
+static func _physical_entry(value: float, key: String) -> Dictionary:
+	if key == "injury" and value <= 0.0:
+		return {"value": 0, "label": "沒有受傷"}
+	return {"value": roundi(value), "label": _physical_label(value, PHYSICAL_LABELS[key])}
+
+## 生理 8 項換算成「數值＋中文形容詞」（《99》P-07，《01-3》§1「數值一定要附
+## 中文形容詞」）。hunger/thirst/sleepiness 是反向換算（100−原始值），
+## 其餘 5 項內部與顯示同方向，直接查表，見上面 PHYSICAL_LABELS 的說明
+static func _physical_summary(stats: Dictionary) -> Dictionary:
+	return {
+		"hunger": _physical_entry(100.0 - float(stats.get("satiety", 100.0)), "hunger"),
+		"thirst": _physical_entry(100.0 - float(stats.get("hydration", 100.0)), "thirst"),
+		"stamina": _physical_entry(float(stats.get("stamina", 0.0)), "stamina"),
+		"sleepiness": _physical_entry(100.0 - float(stats.get("wakefulness", 100.0)), "sleepiness"),
+		"hygiene": _physical_entry(float(stats.get("hygiene", 0.0)), "hygiene"),
+		"alcohol": _physical_entry(float(stats.get("alcohol", 0.0)), "alcohol"),
+		"health": _physical_entry(float(stats.get("health", 0.0)), "health"),
+		"injury": _physical_entry(float(stats.get("injury", 0.0)), "injury"),
+	}
+
+## 背包內容摘要：{item_id: 總數量}，不是 36 格原始 slots 陣列（#339，character.gd
+## 的既有註解已經指出「塞進每一次快照太貴」）。也不帶 decay／durability——模型
+## 只需要「有什麼、有多少」就能判斷宣稱吃了/送了背包裡沒有的東西合不合理，
+## 引擎內部的腐壞/耐久追蹤不是決策要看的資料，跟 _memory_block() 不帶
+## decay_value 同一個理由
+static func _inventory_summary(character: Character) -> Dictionary:
+	if character.inventory == null:
+		return {}
+
+	var totals := {}
+	for slot in character.inventory.get_summary():
+		var item_id: String = slot["item_id"]
+		totals[item_id] = int(totals.get(item_id, 0)) + int(slot["count"])
+	return totals
+
+## conditions 只帶 type，不帶 turns_left——跟 _memory_block() 不帶 decay_value
+## 同一個理由：模型只需要知道自己現在有哪些異常狀態，不需要知道引擎內部的
+## 倒數細節（#352）
+static func _conditions_summary(conditions: Array) -> Array[String]:
+	var types: Array[String] = []
+	for condition in conditions:
+		types.append(str(condition.get("type", "")))
+	return types
+
 ## dialogue 與 plan 共用的角色自身區塊。直接沿用 get_state_snapshot()——
 ## 兩邊都不該重新蒐集一次同一批資料，見 character.gd 的說明
 static func _self_block(character: Character) -> Dictionary:
@@ -293,7 +404,11 @@ static func _self_block(character: Character) -> Dictionary:
 	return {
 		"id": snapshot["id"],
 		"name": snapshot["name"],
-		"stats": snapshot.get("stats", {}),
+		# 沒有 stats 元件（罕見，理論上每個 Character 都掛了）時給空字典，
+		# 不是硬生出一份全是預設中性值的假形容詞——那會讓模型以為角色真的有
+		# 這些生理數值，只是剛好都是中性，跟「這個角色根本沒有生理狀態可讀」
+		# 是兩件不同的事（CodeRabbit review 抓到）
+		"stats": _physical_summary(snapshot["stats"]) if snapshot.has("stats") else {},
 		"time": {"hour": GameClock.hour, "minute": GameClock.minute},
 		"place": schedule.get("place", ""),
 		"current_action": schedule.get("state", ""),
@@ -301,6 +416,20 @@ static func _self_block(character: Character) -> Dictionary:
 		# last_action_result 寫回 Character 就只是存著沒人看，違背《01-2》§1
 		# 「寫回失敗原因讓 AI 能調整策略」的設計目的（QA review 抓到）
 		"last_action_result": snapshot.get("last_action_result", ""),
+		# money／inventory（#339）：模型看不到自己有什麼、有多少錢就只能用猜的，
+		# resolve() 對 eat/give 都有「背包裡有沒有東西」的硬規則檢查
+		"money": snapshot.get("money", 0),
+		"inventory": _inventory_summary(character),
+		# emotion（#351，《02》§1）：只帶 type／intensity，不帶 duration_left／
+		# cause_event_id——模型只需要知道自己現在是什麼情緒、多強烈，不需要
+		# 知道還剩幾個 tick 才會恢復中性，那是引擎自己的倒數細節
+		"emotion": {
+			"type": snapshot.get("emotion", {}).get("type", "neutral"),
+			"intensity": snapshot.get("emotion", {}).get("intensity", 0),
+		},
+		# conditions／current_goal（#352）
+		"conditions": _conditions_summary(snapshot.get("conditions", [])),
+		"current_goal": snapshot.get("current_goal", ""),
 	}
 
 ## L2（近期）＋ L4（核心）記憶固定全量帶入，不做情境篩選（#169，《99》P-03

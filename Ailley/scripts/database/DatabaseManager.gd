@@ -6,7 +6,7 @@ extends Node
 ##
 ## 負責：
 ##
-## 1. 開啟 user://game.db
+## 1. 開啟 DATABASE_PATH（依 checkout 算 hash，見下方）
 ## 2. 建立 DatabaseSchema
 ## 3. 統一管理 SQLite CRUD
 ## 4. 啟動 CharacterStatePersistence
@@ -35,7 +35,13 @@ extends Node
 ## =====================================================
 
 
-const DATABASE_PATH := "user://game.db"
+## user:// 只依 project.godot 的 project name 解析實體路徑，同一台機器上
+## 所有 worktree／checkout 的 project name 都相同，寫死檔名會讓全機所有
+## 平行 Godot process 共用同一個實體 SQLite 檔案、互相覆寫或撞 schema
+## （issue #334）。用 res:// 的絕對路徑（等於這個 checkout 的實體位置）算一段
+## 完整 sha256 雜湊接在檔名後（不截斷，截斷等於自己削弱防撞名的效果），
+## 讓不同 worktree 各自落地成不同檔案。
+var DATABASE_PATH := _compute_database_path()
 
 # CRUD 診斷用的逐筆 print()。單一角色同步一輪就會觸發數十次 CRUD，
 # 正常遊玩預設關閉；除錯時改成 true。錯誤路徑一律用 push_error()，
@@ -43,8 +49,23 @@ const DATABASE_PATH := "user://game.db"
 const VERBOSE_SQL := false
 
 
+static func _compute_database_path() -> String:
+	var project_root := ProjectSettings.globalize_path("res://")
+	# CodeRabbit review：截斷到 8 碼只剩 32-bit 命名空間，撞名機率不是理論上的
+	# 零——這個雜湊本身就是為了防撞名才加的，截斷等於自己削弱了要保護的東西。
+	# 用完整 sha256_text()，成本只是檔名長一點
+	var checkout_hash := project_root.sha256_text()
+	return "user://game_%s.db" % checkout_hash
+
+
 var db: SQLite
 var is_ready := false
+
+## is_ready 只代表「連線與 schema 都開好，CRUD 可以用」——DatabaseSeeder
+## 自己就要靠 CRUD 才能把基礎資料寫進去，所以不能拿 is_ready 當作「seed
+## 已完成」的訊號。呼叫端需要「基礎資料真的補齊了嗎」這個答案時
+## 應該同時檢查這個旗標，而不是只看 is_ready。
+var is_seeded := false
 
 # table -> Array[String]，_table_has_column() 的欄位快取，
 # schema 建立後不會再變，查一次記住即可，不必每次 UPDATE 都跑 PRAGMA
@@ -111,18 +132,35 @@ func _ready() -> void:
 
 	# -------------------------------------------------
 	# Seed
+	#
+	# DatabaseSeeder 自己要靠 is_ready 才能呼叫 CRUD，所以要排在
+	# is_ready = true 之後；但 is_seeded 要等 seed 真的成功才設，
+	# 消費端不該把「schema 開好」跟「基礎資料補齊」看成同一件事。
 	# -------------------------------------------------
 
-	DatabaseSeeder.seed_all()
+	if not DatabaseSeeder.seed_all():
+
+		push_error(
+			"[Database] "
+			+ "Seed 失敗，資料庫可能不完整，不標記為 is_seeded。"
+		)
+
+	else:
+
+		is_seeded = true
 
 
-	# -------------------------------------------------
-	# CharacterStatePersistence
-	# -------------------------------------------------
+		# -------------------------------------------------
+		# CharacterStatePersistence
+		#
+		# 排在 is_seeded 分支裡——item 這類基礎資料沒補齊時就開始寫入，
+		# CharacterStatePersistence 可能因為外鍵約束（item_id 對不到任何
+		# item row）整批失敗（CodeRabbit review 抓到）
+		# -------------------------------------------------
 
-	call_deferred(
-		"_start_character_state_persistence"
-	)
+		call_deferred(
+			"_start_character_state_persistence"
+		)
 
 
 # =====================================================
@@ -138,6 +176,7 @@ func _exit_tree() -> void:
 		db = null
 
 		is_ready = false
+		is_seeded = false
 
 
 # =====================================================
@@ -588,7 +627,8 @@ func delete(
 ##
 ## 沒有重試／backoff：MVP 單一 Godot process 對應單一 db 連線，同一個連線
 ## 不會有兩個交易互搶（實測過，第二次 BEGIN 直接失敗，見
-## note/技術/存檔.md），這裡預留的是「多個 process 搶同一份 game.db」的情況，
+## note/技術/存檔.md），這裡預留的是「同一 checkout 被多個 process 開啟、
+## 搶同一份 DATABASE_PATH」的情況（跨 checkout 已靠雜湊隔開，不會撞）。
 ## 目前沒有任何呼叫端會製造這個情境（沒有多人連線）。真的接上多 process
 ## 寫入時才需要決定重試策略，不在這裡先猜
 func begin_transaction() -> bool:
@@ -710,7 +750,7 @@ func _start_character_state_persistence() -> void:
 
 
 	var script: Script = load(
-		"res://database/CharacterStatePersistence.gd"
+		"res://scripts/database/CharacterStatePersistence.gd"
 	)
 
 

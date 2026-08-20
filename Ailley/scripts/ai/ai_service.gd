@@ -74,6 +74,11 @@ const ERROR_NETWORK := "network"
 const ERROR_HTTP := "http"
 const ERROR_BAD_JSON := "bad_json"
 
+# 就緒檢查（issue #345）失敗後，隔幾秒重試一次的等待時間。只救「開場那一刻
+# 剛好卡一下」的瞬斷，不是背景輪詢——兩次都失敗就定型成未就緒，之後要
+# 重測得靠 reload_config()（debug 主控台的 ai 指令會叫它），不會自己一直重試
+const READINESS_RETRY_DELAY_SEC := 3.0
+
 var config: AIConfig
 
 var _pool: Array[HTTPRequest] = []
@@ -83,6 +88,25 @@ var _queue: Array = []			# 等節點的 _Job，先進先出
 var _last_call_msec := {}			# requester_id -> Time.get_ticks_msec()，只記受限的呼叫
 var _calls_today := {}				# requester_id -> 今天已用的「受限」次數，吃配額
 var _dialogue_calls_today := {}		# requester_id -> 今天的對話輪次，只計帳不設限
+
+var _readiness := {}				# provider 名字 -> {"ready": bool, "reason": String}
+
+# 每呼叫一次 _check_readiness_all() 就 +1。reload_config() 可能在上一批探測
+# 還在飛的時候又觸發一批新的——舊那批探測回來得比新那批晚時，不能覆蓋新結果，
+# 所以每個 _check_provider_readiness() 記住自己出生時的世代，寫回 _readiness
+# 前先比對世代還新不新（跟 agent.gd 的決策世代編號同一個防呆手法）
+var _readiness_generation := 0
+
+# 這個世代還有幾個 provider 的探測沒回來。世代 -> 剩餘數量，全部回來後
+# 那個 key 會被移除並 emit readiness_batch_finished——給需要「探測全部做完
+# 才印結果」的呼叫端（debug 主控台 ai 指令）await 用，見 reload_config_and_wait()
+var _pending_readiness_count := {}
+
+## _check_readiness_all() 啟動的那一批探測全部有了結果（不管每個 provider
+## 本身是就緒還是失敗）時 emit，帶那一批的世代編號。呼叫端 await 這個訊號
+## 時要自己比對世代——舊世代可能在等待期間被新一輪 reload_config() 蓋過，
+## 見 reload_config_and_wait() 的迴圈
+signal readiness_batch_finished(generation: int)
 
 
 func _ready() -> void:
@@ -102,10 +126,198 @@ func _ready() -> void:
 
 	GameClock.day_changed.connect(_on_day_changed)
 
+	# reload_config() 上面已經呼叫過，裡面自己會觸發 _check_readiness_all()
+	# （見該函式），這裡不用再呼叫一次——CodeRabbit review 抓到：原本這裡
+	# 多打一次，開機時會送出兩批重複的 /models 請求
 
-# 玩家寫好 user://ai_config.json 之後不必重開遊戲，debug 主控台的 ai 指令會先叫這個
+
+# 玩家寫好 user://ai_config.json 之後不必重開遊戲，debug 主控台的 ai 指令會先叫這個。
+# 就緒表也一併重算——這是唯一的手動重測入口，開場瞬斷之外的網路狀態變化
+# （例如玩到一半才把 llama-server 開起來）都靠這裡救回來，不做背景輪詢。
+#
+# 刻意不 await 這批探測——_ready() 開機時呼叫這個，遊戲啟動不該被網路
+# 探測卡住。想等探測全部做完才拿結果的呼叫端（debug 主控台 ai 指令）
+# 用 reload_config_and_wait()
 func reload_config() -> void:
 	config = AIConfig.load_from_user()
+	_check_readiness_all()
+
+
+# reload_config() 的等待版——探測全部做完（不管每個 provider 本身就緒或
+# 失敗）才回來，讓呼叫端這時候讀 get_readiness() 才不會撈到上一批舊結果或
+# AI_READY_NOT_CHECKED（CodeRabbit review 抓到：debug 主控台的 ai 指令原本
+# 呼叫 reload_config() 後立刻印 get_readiness()，探測都還沒回來就先印了）
+func reload_config_and_wait() -> void:
+	reload_config()
+
+	# 每次迴圈重新讀 _readiness_generation，不要在第一輪就把世代號碼定住——
+	# 定住的話，等待期間如果又有一輪 reload_config()（例如玩家很快連下兩次
+	# `ai` 指令）把世代蓋過去，這裡等到的會是「舊世代做完了」，回去讀
+	# get_readiness() 時新世代可能還在飛，撈到新舊混雜、不一致的結果
+	# （CodeRabbit review 抓到）。動態重讀的話，等待期間世代被蓋過時，
+	# 下一輪迴圈會自動改成等最新那一批，回傳時保證讀到的是同一批的結果
+	while _pending_readiness_count.has(_readiness_generation):
+		await readiness_batch_finished
+
+
+# 給 #357／debug 主控台查某個 provider 就不就緒。**只有空字串會退回
+# default_provider**，跟 AIConfig.get_provider() 同一個規則——名字打錯要讓
+# 呼叫端看見「查無此 provider」，不是靜默給錯的狀態
+func get_readiness(provider_name: String = "") -> Dictionary:
+	var resolved := provider_name if not provider_name.is_empty() else config.default_provider
+
+	# 查無此 provider（拼字錯）跟「這個 provider 存在、只是還沒檢查過」是
+	# 兩種不同的錯——前者退到 AI_READY_NOT_CHECKED 的話，打錯字會被誤報成
+	# 「還沒檢查」，讓人以為等一下就會有結果，實際上永遠不會有（CodeRabbit
+	# review 抓到）
+	if not config.providers.has(resolved):
+		return {"ready": false, "reason": L10n.tf("AI_READY_PROVIDER_NOT_FOUND", {"name": resolved})}
+
+	return _readiness.get(resolved, {"ready": false, "reason": L10n.t("AI_READY_NOT_CHECKED")})
+
+
+func _check_readiness_all() -> void:
+	_readiness_generation += 1
+	var generation := _readiness_generation
+	_readiness.clear()
+
+	# config 沒啟用就不用打網路——AIConfig.status_reason 已經講清楚原因，
+	# 打了也只會全部落在「設定層失敗」，多一輪網路等待沒有意義。這批探測
+	# 等於零個 provider，直接視為「已完成」，不然等這批的呼叫端會永遠等不到
+	if not config.enabled:
+		readiness_batch_finished.emit(generation)
+		return
+
+	var provider_names := config.providers.keys()
+	if provider_names.is_empty():
+		readiness_batch_finished.emit(generation)
+		return
+
+	_pending_readiness_count[generation] = provider_names.size()
+	for provider_name in provider_names:
+		_check_provider_readiness(provider_name, generation)
+
+
+# 逐 provider 各自跑，互不等待——local 連不上不該拖累 openrouter 的檢查結果
+func _check_provider_readiness(provider_name: String, generation: int) -> void:
+	var provider: AIConfig.Provider = config.providers[provider_name]
+
+	if not provider.valid:
+		# 設定層失敗（base_url／model 空白）不用打網路就知道，也不用重試——
+		# 重試網路請求救不了一個本來就沒填齊的設定
+		_apply_readiness(provider_name, generation, _readiness_result(
+			false, L10n.tf("AI_READY_CONFIG_INVALID", {"reason": provider.status_reason})
+		))
+		return
+
+	var outcome := await _probe_models(provider)
+	if not outcome["ready"] and outcome.get("retryable", false):
+		# 只重試值得重試的失敗——4xx（金鑰錯／模型名打錯）跟逾時再打一次
+		# 也不會變好，白等一次 provider.timeout。跟 _interpret() 判斷
+		# retryable 的邏輯同一套標準，不要各自一套
+		await get_tree().create_timer(READINESS_RETRY_DELAY_SEC).timeout
+
+		# 等待期間可能有新一輪 reload_config() 把這批檢查整批作廢——世代
+		# 對不上就不用再打第二次網路請求了，反正 _apply_readiness() 最後也會
+		# 丟棄結果，不浪費一次已知會被丟掉的探測。但**不能直接 return**：
+		# 這個 provider 對它自己出生時的舊世代而言還是要算「有了結果」，
+		# 不然那個舊世代在 _pending_readiness_count 裡的計數永遠不會歸零，
+		# 任何還在 await reload_config_and_wait() 那個舊世代的呼叫端會永遠
+		# 卡住等不到 readiness_batch_finished（CodeRabbit review 抓到，
+		# 原本的 early return 連 _apply_readiness()／_note_readiness_done()
+		# 都跳過了）
+		if generation == _readiness_generation:
+			outcome = await _probe_models(provider)
+
+	_apply_readiness(provider_name, generation, outcome)
+
+
+# 舊世代的探測結果比新一輪 reload_config() 晚回來時直接丟棄，不寫入
+# _readiness——不然「玩到一半重新整理設定」會被更早、已經過期的探測結果蓋回去
+func _apply_readiness(provider_name: String, generation: int, outcome: Dictionary) -> void:
+	if generation == _readiness_generation:
+		_readiness[provider_name] = {"ready": outcome["ready"], "reason": outcome["reason"]}
+
+	# 一定要在真正寫完 _readiness 之後才呼叫——signal 的 emit() 是同步的，
+	# await 這個訊號的呼叫端（reload_config_and_wait()）會在 emit() 呼叫的
+	# 當下就恢復執行，寫在它前面的話，呼叫端讀到 get_readiness() 時這個
+	# provider 的結果根本還沒寫進去，撈到的還是 AI_READY_NOT_CHECKED
+	# （這裡曾經寫反過，用 game_eval 實測抓到：signal 正確帶對的世代觸發，
+	# 但緊接著讀 get_readiness() 卻是空的）
+	_note_readiness_done(generation)
+
+
+# 一個 provider 的探測有了結果（不管就緒還失敗）就呼叫一次。同一世代的
+# provider 全部呼叫過後，這裡才 emit readiness_batch_finished——
+# reload_config_and_wait() 靠這個訊號知道「這批全部做完了」
+func _note_readiness_done(generation: int) -> void:
+	if not _pending_readiness_count.has(generation):
+		return
+	_pending_readiness_count[generation] -= 1
+	if _pending_readiness_count[generation] <= 0:
+		_pending_readiness_count.erase(generation)
+		readiness_batch_finished.emit(generation)
+
+
+# 連線層探針：打 GET {base_url}/models。不用《04》§4-1 想像的 /health——
+# 那是假設一個自架後端才有的端點，OpenRouter 這類雲端 provider 根本沒有；
+# /models 是 OpenAI 相容 API 的標準端點，本機／雲端同一條路徑，還能順便
+# 驗證金鑰有效（/health 不驗證 Authorization）
+func _probe_models(provider: AIConfig.Provider) -> Dictionary:
+	var http := HTTPRequest.new()
+	http.timeout = provider.timeout
+	http.use_threads = true
+	add_child(http)
+
+	var headers := PackedStringArray()
+	if not provider.api_key.is_empty():
+		headers.append("Authorization: Bearer %s" % provider.api_key)
+
+	var err := http.request(provider.models_url(), headers, HTTPClient.METHOD_GET)
+	if err != OK:
+		http.queue_free()
+		# 「連送都送不出去」（URL 格式錯、節點忙）不是網路往返失敗，跟
+		# _send() 的判斷一致：重試同樣送不出去，不值得重試
+		return _readiness_result(
+			false, L10n.tf("AI_READY_NETWORK", {"url": provider.models_url(), "detail": "request()=%d" % err})
+		)
+
+	# HTTPRequest.request_completed 是引擎自己在真正的網路 I/O 完成後才發，
+	# 不會在 request() 呼叫的當下同步觸發，所以這裡可以直接 await，不需要
+	# _Job.finished 那種 call_deferred 的防呆——那個防呆解的是另一個問題
+	# （我們自己手動 emit 的訊號有可能在呼叫端 await 之前就先發生）
+	var response: Array = await http.request_completed
+	http.queue_free()
+
+	var result: int = response[0]
+	var response_code: int = response[1]
+
+	if result == HTTPRequest.RESULT_TIMEOUT:
+		# 跟 _interpret() 同一個理由：已經燒掉整個 timeout，重試只是再等一次
+		return _readiness_result(false, L10n.tf("AI_READY_TIMEOUT", {"url": provider.models_url()}))
+	if result != HTTPRequest.RESULT_SUCCESS:
+		# 連不上／握手失敗這種立刻就知道結果的錯，值得重試一次
+		return _readiness_result(
+			false, L10n.tf("AI_READY_NETWORK", {"url": provider.models_url(), "detail": "result=%d" % result}), true
+		)
+	if response_code >= 500:
+		# 對面自己壞了，重試一次有機會落到健康的機器上
+		return _readiness_result(
+			false, L10n.tf("AI_READY_HTTP", {"url": provider.models_url(), "code": response_code}), true
+		)
+	# 只有 2xx 才算就緒——HTTPRequest.RESULT_SUCCESS 只代表網路請求本身
+	# 有始有終，不代表 HTTP 狀態碼是成功的。原本只擋 4xx／5xx，1xx（少見但
+	# 合法）跟 3xx（重導向，通常代表 base_url 設錯或該服務把 /models
+	# 導去別的地方）會落進最後的 return true，被誤報成「就緒」
+	# （CodeRabbit review 抓到）。跟 4xx 同一個理由：這種回應重試不會變好
+	if response_code < 200 or response_code >= 300:
+		return _readiness_result(false, L10n.tf("AI_READY_HTTP", {"url": provider.models_url(), "code": response_code}))
+
+	return _readiness_result(true, L10n.t("AI_READY_OK"))
+
+
+func _readiness_result(ready: bool, reason: String, retryable: bool = false) -> Dictionary:
+	return {"ready": ready, "reason": reason, "retryable": retryable}
 
 
 # 唯一的對外入口。呼叫端：var result := await AIService.request(envelope, "agent")

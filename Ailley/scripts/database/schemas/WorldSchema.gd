@@ -11,7 +11,7 @@ static func create(db) -> bool:
 	var sql := """
 	CREATE TABLE IF NOT EXISTS world (
 
-		world_id TEXT PRIMARY KEY,
+		world_id TEXT NOT NULL PRIMARY KEY,
 
 		-- GameClock.day，從 1 起算
 		day INTEGER NOT NULL DEFAULT 1

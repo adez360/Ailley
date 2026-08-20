@@ -7,7 +7,7 @@ static func create(db) -> bool:
 	var memory_sql := """
 	CREATE TABLE IF NOT EXISTS memories (
 
-		memory_id TEXT PRIMARY KEY,
+		memory_id TEXT NOT NULL PRIMARY KEY,
 
 		npc_id TEXT NOT NULL,
 

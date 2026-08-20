@@ -16,6 +16,8 @@ layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 script = ExtResource("1_ekxnf")
 
 [node name="Background" type="ColorRect" parent="."]
@@ -44,6 +46,12 @@ grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/separation = 8
 
+[node name="ContinueButton" type="Button" parent="ButtonsBox"]
+visible = false
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+text = "UI_MENU_CONTINUE"
+
 [node name="StartButton" type="Button" parent="ButtonsBox"]
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
@@ -53,6 +61,14 @@ text = "UI_MENU_START"
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 text = "UI_MENU_CREDITS"
+
+[node name="LoadErrorLabel" type="Label" parent="ButtonsBox"]
+visible = false
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+text = "UI_MENU_LOAD_ERROR"
+horizontal_alignment = 1
+autowrap_mode = 3
 
 [node name="Scrim" type="ColorRect" parent="."]
 visible = false

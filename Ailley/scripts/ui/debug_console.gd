@@ -661,7 +661,14 @@ func _cmd_reflect(args: PackedStringArray) -> void:
 
 	var result := await agent.request_sleep_reflection()
 	if not result["ok"]:
-		_error("反思失敗（可能撞到速率限制或驗證失敗），今天的事留著，下次再試")
+		# queued=true 不是失敗——只是這隻角色剛好已經有一份反思請求在飛，這次
+		# 已經排進 _sleep_reflection_pending，等前一份做完會自動補跑一次，不用
+		# 使用者自己重打指令（CodeRabbit review 抓到：原本跟真正的失敗混在一起
+		# 印同一句錯誤訊息，會讓人誤以為今天的事白費了）
+		if result.get("queued", false):
+			_print("[color=888888]這隻角色已經有一份反思在等回應，這次的請求已經排隊，會在那份做完後自動補跑[/color]")
+		else:
+			_error("反思沒有成功（AI 未啟用／逾時／驗證失敗等），今天的事留著，下次再試")
 		return
 
 	_print("[color=888888]反思完成，當日摘要：%s[/color]" % _escape_bbcode(agent.last_reflection_summary))
@@ -741,6 +748,12 @@ func _cmd_load(_args: PackedStringArray) -> void:
 		var character := node as Character
 		var data := SaveService.get_character(character.character_id)
 		if data.is_empty():
+			continue
+		# 跟 main_scene.gd 同一套邊界檢查：character_id 一定要存在、是
+		# String、且跟查詢用的 id 對得上，缺欄位／型別不對／對不上都不套用
+		var stored_id: Variant = data.get("character_id")
+		if not (stored_id is String and stored_id == character.character_id):
+			_error("角色存檔 %s 內容缺少或 character_id 不符（%s），可能已損毀，跳過" % [character.character_id, stored_id])
 			continue
 		character.load_save_data(data)
 		count += 1
@@ -980,7 +993,11 @@ func _cmd_emotion(args: PackedStringArray) -> void:
 	}))
 
 func _cmd_ai(args: PackedStringArray) -> void:
-	AIService.reload_config()
+	# 用等待版：reload_config() 本身刻意不等探測完成（開機時呼叫不能卡住
+	# 遊戲啟動），但這裡是玩家主動下指令要看結果，值得等探測真的做完才印，
+	# 不然十之八九會印出 AI_READY_NOT_CHECKED 這種還沒測完的假象
+	# （CodeRabbit review 抓到）
+	await AIService.reload_config_and_wait()
 	var config: AIConfig = AIService.config
 
 	# config 的 _to_string() 只會吐遮蔽過的金鑰，這裡不另外碰 api_key
@@ -989,6 +1006,19 @@ func _cmd_ai(args: PackedStringArray) -> void:
 	if not config.enabled:
 		_print("[color=ffcc66]%s[/color]" % L10n.tf("CON_AI_DISABLED", {"reason": config.status_reason}))
 		return
+
+	# 就緒狀態逐 provider 印，不是只印 default_provider 一個——地端沒開、
+	# 雲端連得上這種情況，取單一代表值會蓋掉另一邊的資訊（issue #345）
+	for name in config.providers.keys():
+		var readiness: Dictionary = AIService.get_readiness(name)
+		var marker := " (default)" if name == config.default_provider else ""
+		var color := "88ff88" if readiness["ready"] else "ff8888"
+		_print("[color=%s]%s[/color]" % [color, L10n.tf("CON_AI_READY_LINE", {
+			"ready": L10n.t("CON_AI_READY_YES" if readiness["ready"] else "CON_AI_READY_NO"),
+			"name": name,
+			"default_marker": marker,
+			"reason": readiness["reason"],
+		})])
 
 	# 第一個參數是 dialogue 就切成對話政策，其餘參數仍然是探針句
 	var policy := AIService.Policy.SCHEDULED

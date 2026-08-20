@@ -5,6 +5,9 @@ signal time_changed(hour: int, minute: int)
 ## 私有的日計數重開遊戲就歸零，靠它擋的東西（例如每日配額）等於沒擋
 signal day_changed(day: int)
 
+## 生理 tick 週期：Stats 漂移與 conditions 檢查的時間單位（遊戲分鐘）
+const GAME_MINUTES_PER_TICK := 10
+
 @export var seconds_per_game_minute := 1.0
 
 var hour := 8

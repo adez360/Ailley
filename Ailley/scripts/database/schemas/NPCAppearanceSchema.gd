@@ -8,7 +8,7 @@ static func create(db) -> bool:
 	CREATE TABLE IF NOT EXISTS npc_appearance (
 
 		-- 對應NPC
-		npc_id TEXT PRIMARY KEY,
+		npc_id TEXT NOT NULL PRIMARY KEY,
 		-- 髮型
 		hair_id TEXT DEFAULT '',
 		-- 臉型
