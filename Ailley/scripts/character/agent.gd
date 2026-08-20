@@ -1464,6 +1464,22 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 		"drink":
 			if inventory == null or _find_drink_slot().is_empty():
 				return {"success": false, "reason": "背包裡沒有飲品可以喝"}
+		"buy":
+			# 檢查錢夠不夠（需要先找機器查價格）、商品存不存在、背包有沒有空間
+			var place: String = str(params.get("place", ""))
+			var machine := _find_vending_machine_at_place(place)
+			if machine == null:
+				return {"success": false, "reason": "找不到販賣機"}
+			var item_id: String = str(params.get("item_id", ""))
+			var price := machine.get_price(item_id)
+			if price < 0:
+				return {"success": false, "reason": "販賣機裡沒有這個商品"}
+			if inventory == null:
+				return {"success": false, "reason": "背包裡沒有地方放東西"}
+			if inventory.get_money() < price:
+				return {"success": false, "reason": "身上沒有夠的錢"}
+			# 檢查是否有空位或是否可以堆疊（add_item 會幫我們檢查）
+			# 這裡先用樂觀假設，真的失敗讓 buy_from() 退款並傳回原因碼
 		"give":
 			# 《01-2》§1 流程圖①前置檢查點名的例子就是「物品在身上？」——give
 			# 不進②③擲骰（不在 SUCCESS_PARAMS 上），只有這一關硬規則
@@ -1621,6 +1637,16 @@ func _pursue_current_task() -> void:
 	# drink 跟 eat 同一種「呼叫一次就完成」（#163）
 	if current_state == "drink":
 		_pursue_drink_task()
+		return
+
+	# buy 跟 eat／drink 同理：呼叫一次就完成（#340）
+	if current_state == "buy":
+		_pursue_buy_task()
+		return
+
+	# work 是長動作，執行協程會自己跑 5 分鐘，只能呼叫一次（#358）
+	if current_state == "work":
+		_pursue_work_task()
 		return
 
 	if current_place.is_empty():
@@ -1862,6 +1888,112 @@ func _pursue_drink_task() -> void:
 	# 任務不會被馬上接手，得空等到下一次 GameClock time_changed（跟 murmur
 	# 那條同一個問題）
 	_reevaluate()
+
+# work 任務的執行（#358）：長動作，執行協程會自己跑 5 遊戲分鐘。
+# 跟 eat／drink 的差異是需要先走到工作地點，到達後才呼叫 work_at()。
+# 工作開始後 `_working = true`，後續 _pursue_current_task() 會因 is_working()
+# 直接返回，協程會自己監控 5 分鐘、完成時自動收尾（或中途異常中止）。
+# 成功或失敗都不在這裡結束任務——schedule 任務靠 window 自然退場，
+# 失敗時 resolve() 層級也會記錄原因（未來若開放 LLM 選 work 時）
+func _pursue_work_task() -> void:
+	# 檢查是否已到達工作地點
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null or current_place.is_empty() or not anchors.has(current_place):
+		last_action_result = Character.WORK_TARGET_NOT_FOUND
+		push_warning("Agent %s: work 失敗（無法解析地點 %s）" % [character_name, current_place])
+		_current_task = {}
+		current_state = "idle"
+		return
+
+	var target: Vector2 = anchors.resolve(current_place)
+
+	# 還沒到達就先走過去
+	if not _has_arrived_at(target):
+		# 這一趟只起步一次，沒換地點就繼續走（同 _pursue_current_task 的邏輯）
+		if current_place != _pursued_place or not is_moving():
+			_pursued_place = current_place
+			_pursuit_done = false
+			if not move_to(target):
+				push_warning("Agent %s: 走不到工作地點 %s" % [character_name, current_place])
+				_pursuit_done = true
+		return
+
+	# 已到達工作地點，找工作站並執行 work_at()
+	stop_moving()
+	_pursued_place = current_place
+	_pursuit_done = true
+
+	# 找最近的工作站（MVP 只有一個，但用最近的方式向前相容）
+	var workstations: Array = get_tree().get_nodes_in_group("workstations")
+	var nearest_workstation: Workstation = null
+	var nearest_distance := INF
+
+	for ws in workstations:
+		var distance := get_body_position().distance_to(ws.global_position)
+		if distance < nearest_distance:
+			nearest_distance = distance
+			nearest_workstation = ws
+
+	# 呼叫 work_at() 並記錄結果
+	var reason := work_at(nearest_workstation)
+	last_action_result = reason
+
+	if reason != Character.WORK_OK:
+		push_warning("Agent %s: work_at 失敗（%s）" % [character_name, reason])
+		# 工作失敗就收尾任務；成功的話協程會自己管理、完成後呼叫 _on_work_finished()
+		_current_task = {}
+		current_state = "idle"
+		_reevaluate()
+
+# buy 任務的執行（#340）：跟 _pursue_eat_task() 類似「呼叫一次就完成」，但
+# 需要先找到販賣機。販賣機透過 params.place 指定（餐酒館或藥草鋪）
+func _pursue_buy_task() -> void:
+	stop_moving()
+	var proceed := true
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		proceed = result["success"]
+
+	if proceed:
+		# 根據 params.place 找到對應的販賣機
+		var place: String = str(_current_task.get("params", {}).get("place", ""))
+		var machine := _find_vending_machine_at_place(place)
+		var item_id: String = str(_current_task.get("params", {}).get("item_id", ""))
+
+		var reason := buy_from(machine, item_id)
+		last_action_result = reason
+		if reason != Character.BUY_OK:
+			push_warning("Agent %s: buy 失敗（%s）" % [character_name, reason])
+
+	if _current_task.get("source", "") == "llm":
+		_remove_task(_current_task.get("id", ""))
+	_current_task = {}
+	current_place = ""
+	current_state = "idle"
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
+	_reevaluate()
+
+# 根據地點找到對應的販賣機。場景中每台機器都有一個對應的地點：
+# - "tavern" → VendingMachine
+# - "herb_shop" → VendingMachineHerbShop
+# 靠節點名稱來區分，更新日期 2026-08-20
+func _find_vending_machine_at_place(place: String) -> VendingMachine:
+	var machines := get_tree().get_nodes_in_group("vending_machines")
+
+	for machine in machines:
+		if not machine is VendingMachine:
+			continue
+
+		var machine_name: String = machine.name.to_lower()
+		# VendingMachineHerbShop → "herb_shop"，VendingMachine → "tavern"
+		if place == "herb_shop" and machine_name.contains("herb"):
+			return machine
+		elif place == "tavern" and not machine_name.contains("herb"):
+			return machine
+
+	return null
 
 # murmur 任務的執行（#162）：沒有目標、不用移動，講給自己聽當下就結束——不像
 # talk 要追著會動的目標走，也不像 nap／rest 那類要佔滿整段 duration。resolve()

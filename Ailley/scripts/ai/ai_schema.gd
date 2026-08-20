@@ -88,7 +88,7 @@ const ALLOWED_ACTIONS := [
 #
 # drink 是 #163 接上的：跟 eat 同一套「呼叫一次就完成」模式，寫法照抄
 # _pursue_eat_task()（見 agent.gd::_pursue_drink_task()）
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade"]
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -330,6 +330,17 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 			var count_float := float(count_value)
 			if count_float < MIN_GIVE_COUNT or count_float > MAX_GIVE_COUNT:
 				return _fail(ERROR_BAD_SHAPE)
+
+	# buy 動作的 params 驗證（#340）：item_id 跟 place 都是必填字串，
+	# 空字串或非字串在這一層就擋掉
+	if action == "buy":
+		var buy_params: Dictionary = task.get("params", {})
+		var item_id: Variant = buy_params.get("item_id")
+		if not item_id is String or (item_id as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+		var place: Variant = buy_params.get("place")
+		if not place is String or (place as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
 
 	# #268／#290：expires_in_minutes（模型填的相對時長）現在有跟
 	# priority/duration 同一套量級上限，不再只有 is_finite()——
