@@ -343,6 +343,7 @@ func _resolve_generated_id() -> String:
 			return generate_id()
 		else:
 			var existing := read_file.get_as_text().strip_edges()
+			read_file.close()
 			if not existing.is_empty():
 				return existing
 
