@@ -99,7 +99,14 @@ func get_character(id: String) -> Dictionary:
 			personality[key] = float(personality_row[key])
 		data["personality"] = personality
 
-	var plan_rows := DatabaseManager.select("npc_daily_plan", "npc_id = '%s'" % _esc(id))
+	# ORDER BY plan_id：SQLite 不保證沒下 ORDER BY 的查詢結果順序，
+	# today_plan 是有序清單（顯示順序、模型讀到的順序都看它），少排序的話
+	# 每次讀出來的順序可能不一樣，等於每次讀檔都悄悄打亂計畫清單
+	# （CodeRabbit review 抓到）。plan_id 是 AUTOINCREMENT，插入順序＝
+	# 遞增順序，直接排它就對齊寫入時的原始順序
+	var plan_rows := DatabaseManager.select(
+		"npc_daily_plan", "npc_id = '%s' ORDER BY plan_id" % _esc(id)
+	)
 	if not plan_rows.is_empty():
 		var today_plan: Array[Dictionary] = []
 		for row in plan_rows:
@@ -282,8 +289,16 @@ func _replace_relationships(id: String, relationships: Dictionary) -> bool:
 
 
 ## npc_id UNIQUE，跟 _upsert_npc_state() 同一種先查後決定 insert/update 的寫法。
-## personality 已經在 Character.load_save_data()/_is_valid_personality_data()
-## 驗過完整 10 項才會走到這裡（#429 review），這裡不重複驗證，直接信任呼叫端
+##
+## 這裡不驗證 personality 的結構，直接信任呼叫端——不是因為存檔路徑一定會
+## 先經過 Character.load_save_data() 的驗證（正常自動存檔路徑，例如睡醒
+## 觸發的存檔、debug console 的 save 指令，都是直接把 get_save_data() 的
+## 結果餵給 save_character()，不會經過 load_save_data()），而是因為
+## Character.personality 這個欄位本身在記憶體裡永遠保持結構完整：只有三個
+## 地方會寫它——Personality.from_identity()（建構時，10 項齊全）、
+## load_save_data()（已驗證過才覆寫）、睡前反思的 personality_delta 套用
+## （對既有的合法 10 項加總後 clampf，不改變鍵集合）。上一版註解誤把「存檔
+## 路徑會先驗證」當成信任的理由，實際上不成立（CodeRabbit review 抓到）
 func _upsert_npc_personality(id: String, personality: Dictionary) -> bool:
 	var row := {}
 	for key in PERSONALITY_COLUMNS:
