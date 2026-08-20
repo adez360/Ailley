@@ -989,6 +989,16 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	_awaiting_decision = false
 
+	# 這次送出的信封已經把 _fact_lines_summary() 讀到的事實句清空，但等待
+	# 回應期間（真的打網路，數百毫秒到數十秒）可能有新事件（#402／#407 的
+	# spotted／noise_heard）把新的一句排進 _pending_reaction_lines——不管
+	# 這次回應本身是過期世代被丟棄、失敗、還是成功，只要佇列還有東西沒送出，
+	# 就該立刻補問一次，不然這句事實句只能等下一次「剛好」有別的理由觸發
+	# 決策才會被看到，等於這次事件實質上被吃掉。fire-and-forget，不 await：
+	# 呼叫端不需要等這次補問完成才能拿到目前這輪的結果
+	if not _pending_reaction_lines.is_empty():
+		_request_next_decision()
+
 	# 世代編號在 await 期間變了，代表 debug_set_llm_decision() 至少關過一次
 	# 決策開關——不管回應抵達當下旗標是什麼值（就算又被重新打開），這份回應
 	# 都屬於已經作廢的世代，整包淘汰，不套用任何任務或計畫更新。
@@ -1317,7 +1327,14 @@ func load_save_data(data: Dictionary) -> void:
 # llm_decision_enabled 開著時（#402）：不寫死反應，把事件記成事實句排進
 # 下一次決策的 fact_lines，並比照 _on_attacked()／_on_action_interrupted()
 # 立刻問一次模型，讓角色幾乎即時反應——要不要停下來、停多久、要不要說話，
-# 都交給模型的 tasks[] 決定，這裡不再自己 say()／stop_moving()
+# 都交給模型的 tasks[] 決定，這裡不再自己 say()／stop_moving()。
+#
+# 但模型問不到結果時（逾時、驗證失敗、世代被作廢）不能讓角色完全沒反應——
+# 退回寫死的「！」，跟 llm_decision_enabled 關著時同一套 fallback（CodeRabbit
+# review 抓到：原本只看 llm_decision_enabled 決定路徑，問失敗時兩邊 fallback
+# 都被跳過）。`_request_next_decision()` 回傳 `triggered=false` 代表這次只是
+# 排進佇列（已經有一份決策在飛，見它自己的補問機制），不算失敗，不用退回
+# 寫死反應——`triggered=true` 但 `ok=false` 才是真的問過但沒問到結果
 func _on_spotted(other: Character) -> void:
 	if is_in_conversation() or _noticed.has(other.character_id):
 		return
@@ -1333,10 +1350,16 @@ func _on_spotted(other: Character) -> void:
 		_queue_reaction_fact_line(
 			"你第一次注意到 %s，要不要停下來、要不要說些什麼，由你自己決定" % other.character_name
 		)
-		_request_next_decision()
+		var result := await _request_next_decision()
+		if result.get("triggered", false) and not result.get("ok", false):
+			await _react_to_spotted_fallback()
 		return
 
-	# fallback（排程模式，沒有 LLM 可問）：維持原本寫死的「！」反應
+	await _react_to_spotted_fallback()
+
+# 陌生人反應的寫死版本，兩種情況共用：排程模式（沒有 LLM 可問）、以及
+# llm_decision_enabled 開著但這次決策問不到結果
+func _react_to_spotted_fallback() -> void:
 	say(L10n.t("DLG_SURPRISE"))
 	stop_moving()
 
@@ -1357,14 +1380,17 @@ func _on_spotted(other: Character) -> void:
 # 每次都該有反應，不是像陌生人那樣「見過一次就不再驚訝」
 #
 # llm_decision_enabled 開著時（#407）：同 _on_spotted() 的做法，事實句
-# 排隊＋立刻問一次模型，不寫死冒 !?
+# 排隊＋立刻問一次模型，不寫死冒 !?——問不到結果時一樣退回寫死反應，
+# 理由跟 _on_spotted() 的說明相同
 func _on_noise_heard(_source: Character) -> void:
 	if is_in_conversation():
 		return
 
 	if llm_decision_enabled:
 		_queue_reaction_fact_line("你聽到一個聲音，要不要有反應由你自己決定")
-		_request_next_decision()
+		var result := await _request_next_decision()
+		if result.get("triggered", false) and not result.get("ok", false):
+			say(L10n.t("DLG_NOISE_ALERT"))
 		return
 
 	# fallback（排程模式，沒有 LLM 可問）：維持原本寫死的 !? 反應
