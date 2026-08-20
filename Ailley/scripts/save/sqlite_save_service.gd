@@ -7,9 +7,13 @@ class_name SqliteSaveService
 ## 《14》§5 要求兩個實作的資料形狀必須一致——這裡讀寫的 Dictionary 形狀
 ## 對齊的是 JsonSaveService 實際存的內容（Character.get_save_data() /
 ## GameManager.get_world_save_data() 現在真正吐出來的東西），不是《06 資料
-## 欄位對應表》§1 那份完整形狀——後者描述的 identity/hexaco/personality/
-## economy/state.emotion/memory 現在還沒有任何 Character 欄位在產生，接了
-## 也沒有呼叫端能餵資料進來，見 note/技術/存檔.md「現況」與下方「schema 缺口」。
+## 欄位對應表》§1 那份完整形狀——後者描述的 identity/hexaco/economy/
+## state.emotion/memory 現在還沒有任何 Character 欄位在產生，接了也沒有
+## 呼叫端能餵資料進來。**`personality`／`today_plan` 是例外**：#429 起
+## `Character.get_save_data()`／`Agent.get_save_data()` 已經真的產生這兩項，
+## 但這裡（SQLite 這條路線）還沒有對應欄位可以存，是已知落後的缺口，不是
+## 「上游還沒做」——見下方「schema 缺口」與《99》P-52。目前正式線走的是
+## `project.godot` 設定的 `JsonSaveService`，這個缺口不影響現在真的在跑的存檔。
 ##
 ## 缺值一律補預設值，不回傳 null 也不省略 key——少一個 key 跟值是預設值，
 ## 對呼叫端是兩種不同的東西。整包讀寫，不做局部欄位更新（《14》§2.2）。
@@ -304,10 +308,16 @@ func _esc(value: String) -> String:
 ##                      沒有讀寫它——round-trip 之後整段記憶遺失。schema 已有
 ##                      MemorySchema.gd（memories／memory_related_npcs 兩張表），
 ##                      要接上是把既有表接進這裡的四個函式，不是新增 schema
+## personality           Character.get_save_data() 自 #429 起會產生（10 項數值），
+##                      但 npc 表沒有對應欄位可以存，round-trip 之後人格漂移
+##                      （#423 personality_delta 跨天累積的部分）在 SQLite 這條
+##                      路線會遺失。要接上得先加欄位或另開一張表——見《99》P-52
+## today_plan             同上，Agent.get_save_data() 自 #429 起會產生，SQLite
+##                      這條路線沒有對應欄位，見《99》P-52
 ##
 ## 下列是《06》定義、但目前 Character/GameManager 根本沒有在存的欄位——
 ## 不是這裡的 schema 缺口，是上游還沒做，SqliteSaveService 目前故意不接：
 ## identity 的 age/gender/village_id/home_location_id/decision_source/
-## model_name、hexaco_input、personality、economy、
-## state.emotion/conditions/current_goal/today_plan/appointment
+## model_name、hexaco_input、economy、
+## state.emotion/conditions/current_goal/appointment
 ## ===================================================================
