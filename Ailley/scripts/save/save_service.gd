@@ -8,7 +8,7 @@ extends Node
 ## 直接 Parser Error）。子類別改用路徑繼承：
 ## extends "res://scripts/save/save_service.gd"
 ##
-## 呼叫端（角色生成、睡眠反思寫回、debug console 等）一律只呼叫這六個函式，
+## 呼叫端（角色生成、睡眠反思寫回、debug console 等）一律只呼叫這七個函式，
 ## 不直接使用 FileAccess 或任何資料庫 API —— 存取邏輯只能在這個介面的實作裡。
 ##
 ## 兩個實作：
