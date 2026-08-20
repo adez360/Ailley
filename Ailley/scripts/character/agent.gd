@@ -181,6 +181,12 @@ var _active_talk_task_source := ""
 # 發起者完全不知道自己的嘗試消失了
 var _pending_persuade: Dictionary = {}
 
+# 一次性事件（看到陌生人、聽到聲音）排隊要送進下一次決策的事實句
+# （#402／#407，《01-3》§3 事實句機制）。跟 _pending_persuade 不同：
+# 這裡不需要模型回覆特定欄位表態，_fact_lines_summary() 讀到的當下
+# 就直接消化清空，不留到下一輪、也不用等回應來解析
+var _pending_reaction_lines: Array[String] = []
+
 # 正在對陌生人做「！」反應。那 2 秒刻意站著不動，期間不重新起步——
 # GameClock 一個遊戲分鐘就是 1 現實秒，不擋的話 1 秒後就被送回路上，
 # 2 秒的愣住實際上只有 1 秒
@@ -1303,11 +1309,15 @@ func load_save_data(data: Dictionary) -> void:
 				if item is Dictionary:
 					_today_plan.append((item as Dictionary).duplicate(true))
 
-# 第一次看到某個陌生人就停下來愣一下。
+# 第一次看到某個陌生人的反應。
 #
 # 認識的人不算 —— 每天上班都會遇到的同事不會讓人「！」。
-# 判斷放在這裡而不是 Vision 裡：感知回報「看到誰」，要不要有反應是人格與關係的事，
-# 接 LLM 之後這整段會換成「把 visible 放進 context 讓模型決定」
+# 判斷放在這裡而不是 Vision 裡：感知回報「看到誰」，要不要有反應是人格與關係的事。
+#
+# llm_decision_enabled 開著時（#402）：不寫死反應，把事件記成事實句排進
+# 下一次決策的 fact_lines，並比照 _on_attacked()／_on_action_interrupted()
+# 立刻問一次模型，讓角色幾乎即時反應——要不要停下來、停多久、要不要說話，
+# 都交給模型的 tasks[] 決定，這裡不再自己 say()／stop_moving()
 func _on_spotted(other: Character) -> void:
 	if is_in_conversation() or _noticed.has(other.character_id):
 		return
@@ -1319,6 +1329,14 @@ func _on_spotted(other: Character) -> void:
 
 	_push_daily_event("你第一次注意到 %s" % other.character_name)
 
+	if llm_decision_enabled:
+		_queue_reaction_fact_line(
+			"你第一次注意到 %s，要不要停下來、要不要說些什麼，由你自己決定" % other.character_name
+		)
+		_request_next_decision()
+		return
+
+	# fallback（排程模式，沒有 LLM 可問）：維持原本寫死的「！」反應
 	say(L10n.t("DLG_SURPRISE"))
 	stop_moving()
 
@@ -1337,11 +1355,25 @@ func _on_spotted(other: Character) -> void:
 # 範圍內有人發出聲音（見 character.gd 的 make_noise()）。
 # 跟 _on_spotted 不同，這裡不記錄「已經反應過」——聲音是一次性事件，
 # 每次都該有反應，不是像陌生人那樣「見過一次就不再驚訝」
+#
+# llm_decision_enabled 開著時（#407）：同 _on_spotted() 的做法，事實句
+# 排隊＋立刻問一次模型，不寫死冒 !?
 func _on_noise_heard(_source: Character) -> void:
 	if is_in_conversation():
 		return
 
+	if llm_decision_enabled:
+		_queue_reaction_fact_line("你聽到一個聲音，要不要有反應由你自己決定")
+		_request_next_decision()
+		return
+
+	# fallback（排程模式，沒有 LLM 可問）：維持原本寫死的 !? 反應
 	say(L10n.t("DLG_NOISE_ALERT"))
+
+# 把一次性事件（看到陌生人、聽到聲音）排進下一次決策的事實句佇列
+# （#402／#407）。見 _pending_reaction_lines 的欄位說明
+func _queue_reaction_fact_line(line: String) -> void:
+	_pending_reaction_lines.append(line)
 
 ## 回復類動作每遊戲分鐘回多少（目標欄位＋數量，#214）。《07》§2-3 只給相對
 ## 關係——sleep 回復量最大、nap「與睡覺同模組但較低」、rest「小幅回復」——
@@ -2521,9 +2553,16 @@ func try_record_pending_persuade(persuader: String, persuader_id: String, reason
 # 事實句摘要（《01-3》§3）。九條裡本則（#227＋#338）接了七條：persuade
 # 待回應（#227）、社交沉默三級距、目標拖延、首次造訪、連續同一動作失敗。
 # 剩下兩條是搬運相關（正被搬運中／醒來發現位置變了），依賴 haul 執行層，
-# 見 #338 範圍界線
+# 見 #338 範圍界線。
+#
+# _pending_reaction_lines（#402／#407，看到陌生人／聽到聲音的反應）不在
+# 《01-3》§3 那九條清單內，是額外獨立的一次性事件通知——跟下面的
+# _pending_fact_lines 不同，讀到就直接清空，不用等 _request_next_decision()
+# 驗證通過才清：這類事件沒有「這次沒送成功要保留重送」的語意，錯過這次
+# 通知不影響角色狀態，不是必須被看到才行的東西
 func _fact_lines_summary() -> Array[String]:
-	var lines: Array[String] = []
+	var lines: Array[String] = _pending_reaction_lines.duplicate()
+	_pending_reaction_lines.clear()
 
 	# 一次性事件（首次造訪等）。這裡只讀不清——真的被這輪回應消費掉才清，
 	# 由 _request_next_decision() 在回應通過驗證後處理（見那邊
