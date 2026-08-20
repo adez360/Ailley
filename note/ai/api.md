@@ -1227,8 +1227,9 @@ select() 找不到列回傳 []，不是 error；update()/delete() 空 conditions
   拼 query_with_bindings() 的 UPDATE/DELETE，值仍是綁定參數
 ⚠ _table_has_column() 內部查 PRAGMA table_info() 會覆寫 db.query_result，查完會還原成呼叫端
   原本的結果，get_last_result() 不會拿到 PRAGMA 的資料
-沒有重試／backoff：MVP 單一 process 對應單一連線，多 process 搶同一份 game.db
-  目前沒有呼叫端會製造這個情境（無多人連線）
+沒有重試／backoff：MVP 單一 process 對應單一連線，同一 checkout 被多 process
+  搶同一份 DATABASE_PATH（跨 checkout 已靠雜湊隔開）目前沒有呼叫端會製造這個
+  情境（無多人連線）
 → 技術/存檔
 ```
 
