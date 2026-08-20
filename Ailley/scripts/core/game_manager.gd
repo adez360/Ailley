@@ -395,9 +395,14 @@ func deploy_from_library(id: String, as_player: bool = false) -> Character:
 	# 靠這個查表）撈到的永遠是先加進場景那個，新投放的等於白投（實測重現過：
 	# 兩個節點同時掛在 player 分組，查表撈到舊的）
 	if as_player:
-		var old_player := get_tree().get_first_node_in_group("player")
-		if old_player != null:
-			old_player.queue_free()
+		for node in get_tree().get_nodes_in_group("player"):
+			var old_player := node as Character
+			if old_player != null:
+				var old_entry := get_library_entry(old_player.character_id)
+				if not old_entry.is_empty():
+					old_entry["deployed"] = false
+			node.remove_from_group("player")
+			node.queue_free()
 
 	var scene := preload("res://scenes/player.tscn") if as_player else preload("res://scenes/agent.tscn")
 	var character := spawn_character(scene, {
