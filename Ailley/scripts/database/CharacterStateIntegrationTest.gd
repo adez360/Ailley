@@ -275,6 +275,11 @@ func _run() -> void:
 				21.0,
 				float(updated.get("injury", -999.0))
 			)
+	else:
+		_fail(
+			"second_sync",
+			"第二次修改後同步失敗"
+		)
 
 	# -------------------------------------------------
 	# 7. 報告 Inventory 狀態
