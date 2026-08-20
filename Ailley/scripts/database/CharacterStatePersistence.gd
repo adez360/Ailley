@@ -133,6 +133,11 @@ func _sync_all_characters() -> bool:
 		return true
 
 	var success_count := 0
+	# "characters" group 目前只會有 Character 節點（Character._ready() 自己
+	# add_to_group()），as Character 轉型失敗理論上不會發生，但這裡的分母要用
+	# 實際處理過的數量，不是 characters.size()——否則萬一哪天真的混進非
+	# Character 節點，每一隻 Character 都同步成功，還是會回報假失敗
+	var processed_count := 0
 
 	for node in characters:
 
@@ -141,6 +146,8 @@ func _sync_all_characters() -> bool:
 		if character == null:
 			continue
 
+		processed_count += 1
+
 		if _save_character(character):
 			success_count += 1
 
@@ -148,11 +155,11 @@ func _sync_all_characters() -> bool:
 		"[CharacterStatePersistence] 同步完成：%d / %d"
 		% [
 			success_count,
-			characters.size()
+			processed_count
 		]
 	)
 
-	return success_count == characters.size()
+	return success_count == processed_count
 
 
 func _sync_all_characters_periodic() -> void:
