@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-19
+updated: 2026-08-20
 ---
 
 # LLM 串接與 AI 服務層
@@ -306,6 +306,48 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 封頂值——`SAFETY_MAX_TURNS` 只封頂單場對話的輪數，不封頂一天能開幾場對話。
 「有沒有玩家在觀察」的節流判斷，#178 討論過後刻意不做（範圍太大，需要新的
 「是否被觀察」偵測邏輯），留給之後想做更完整方案時另開 issue。
+
+### 每日對話呼叫上限提案（#395）
+
+實測「一場對話平均幾輪」：用本機 `local` provider（Qwen2.5-7B-Instruct-Q4_K_M）
+在 `main.tscn` 直接建立 `Conversation` 節點（繞過 `talk_to()` 的距離判定，
+角色互相傳送到同一點後開始對話），跑 6 場正常結束（`ENDED_BY_SPEAKER`）的
+對話，逐場記下 `_turns.size()`：
+
+| 場次 | 雙方 | 輪數 |
+| --- | --- | --- |
+| 1 | 小滿／阿虎 | 5 |
+| 2 | 阿吉／阿嵐 | 9 |
+| 3 | 小滿／阿虎 | 11（撞到 `SAFETY_MAX_TURNS` 安全閥） |
+| 4 | 阿吉／陳婆 | 4 |
+| 5 | 阿嵐／小滿 | 4 |
+| 6 | 阿吉／小滿 | 9 |
+
+平均 **7.0 輪／場**（n=6，範圍 4–11）。另有 1 場因陳婆當時觸發昏迷送醫治療
+（#347，跟這次量測無關的既有機制）中途被中斷，樣本捨棄不計。跟這份筆記
+上方「已測試過但沒有效果的方向」記錄的退化門檻（6 輪起始退化、10 輪偶爾
+明顯退化）對照：6 場裡有 2 場落在退化區間內才結束，代表軟壓力（`turns_so_far`
+提示模型收尾）目前不夠可靠，`SAFETY_MAX_TURNS` 這道工程安全閥常態性地在
+真的被用到，不是防禦性擺著沒作用。
+
+**提案**：比照現有 `min_interval_sec`／`max_calls_per_game_day`／`dialogue_exempt`
+三個旋鈕的模式，在 `ai_config.json` 新增第四個全域旋鈕
+`max_dialogue_calls_per_game_day`（可設 0＝不限，跟其他三個一致），在
+`AIService.request()` 判斷 `CONVERSATION` policy 時額外檢查
+`_dialogue_calls_today[requester_id]` 是否超過這個值，超過就回傳跟現有冷卻／
+配額檢查一樣的 `{"ok": false, ...}`。**不需要新的降級邏輯**：`next_line()`
+收到 `ok=false` 已經是既有路徑，`conversation.gd::_finish_with_fallback()`
+會自動說一句 `DialogueLines.closing()` 收尾，跟現有 LLM 失敗／逾時的降級
+一模一樣，玩家體感上看不出差異，只是提早收尾。
+
+**建議預設值**：以實測均值 7 輪／場估算，30（約可撐 4 場均值對話，或更多
+場較短的對話）比照 `max_calls_per_game_day` 現行預設 20 略寬——對話是逐輪計費，
+單輪成本遠低於一次完整 `plan`／`reflection` 呼叫，不需要用同一個數字。這個
+數字沒有實際帳單資料佐證，只是這次量測的合理起點，正式上線前建議搭配
+使用者規劃的大規模驗證（#418 附帶的長時間跑法）一併校準。
+
+**範圍界線（沿用 #395 原 issue）**：這裡只給結論與提案，不落地實作——
+新增 `max_dialogue_calls_per_game_day` 旋鈕本身另開 issue。
 
 > [!important] 但 fallback 一定要能終止
 > LLM 失敗／逾時時走 `DialogueLines`，而它**沒有 `end` 訊號**——不特別處理就會
