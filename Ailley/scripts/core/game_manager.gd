@@ -364,7 +364,7 @@ func duplicate_library_entry(id: String) -> Dictionary:
 # 投放：把角色庫的靈魂生成這個世界的肉體副本（《05》§7-2、§7-3）。已投放的
 # 不能重複投放——一份靈魂同時只該有一具肉體，是《05》§7-1「已投放的角色
 # 不可編輯」規則的自然延伸
-func deploy_from_library(id: String) -> Character:
+func deploy_from_library(id: String, as_player: bool = false) -> Character:
 	var entry := get_library_entry(id)
 	if entry.is_empty() or entry.get("deployed", false):
 		return null
@@ -380,7 +380,8 @@ func deploy_from_library(id: String) -> Character:
 	# 借用既有的 identity_assignments 查表機制：spawn_character() 會把節點名
 	# 設成 character_id，Character._ready() 讀 GameManager.get_npc_identity(name)
 	# 組 system_prompt/personality——註冊在這張表下，_ready() 不用改就能撿到
-	# 這隻角色真正的人格資料，而不是撿到空字典、退回沒有人格的最小版 system_prompt
+	# 這隻角色真正的人格資料，而不是撿到空字典、退回沒有人格的最小版 system_prompt。
+	# 化身者（as_player）一樣註冊，六維人格保留當角色履歷/存檔用途（#372）
 	identity_assignments[entry["id"]] = {
 		"character_id": entry["id"],
 		"character_name": entry["character_name"],
@@ -388,15 +389,16 @@ func deploy_from_library(id: String) -> Character:
 		"character": entry["character"],
 	}
 
-	var character := spawn_character(preload("res://scenes/agent.tscn"), {
+	var scene := preload("res://scenes/player.tscn") if as_player else preload("res://scenes/agent.tscn")
+	var character := spawn_character(scene, {
 		"character_id": entry["id"],
 		"character_name": entry["character_name"],
 		"words_to_creator": entry.get("words_to_creator", ""),
 	})
 
-	# decision_source／model_name 是 agent.gd 的 @export 欄位，用 get()/set()
-	# 而不是型別轉型——跟 spawn_character() 判斷 schedule_template 同一種寫法，
-	# 因為這裡收的是泛型 Character
+	# decision_source／model_name 是 agent.gd 的 @export 欄位，player.gd 沒有
+	# 這兩個欄位（Player extends Character，不是 Agent）——get() 對化身者一定
+	# 回傳 null，這個判斷式本來就會自動跳過，不需要另外用 as_player 分支
 	if character.get("decision_source") != null:
 		character.set("decision_source", entry["decision_source"])
 		character.set("model_name", entry["model_name"])
