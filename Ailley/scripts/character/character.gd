@@ -1201,8 +1201,11 @@ func load_save_data(data: Dictionary) -> void:
 		character_id = _resolve_generated_id()
 	if is_inside_tree():
 		_ensure_unique_id()
+	# 空字串不是合法的存檔值——_ready() 一定會把空名稱解析成節點名再存進
+	# get_save_data()，能存出空字串的只有損毀存檔，接受它會讓主控台指令／
+	# UI 找不到或顯示空白名稱，跟型別不對一樣沿用現有值
 	var loaded_name: Variant = data.get("character_name", character_name)
-	character_name = loaded_name if loaded_name is String else character_name
+	character_name = loaded_name if loaded_name is String and not loaded_name.is_empty() else character_name
 
 	# 還原昏迷與治療狀態（用 -1 作為哨兵值表示未進入該狀態，其餘合法值是
 	# GameClock.hour*60+GameClock.minute 那個 [0, 1439] 範圍——只驗證 is int
