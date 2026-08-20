@@ -389,6 +389,16 @@ func deploy_from_library(id: String, as_player: bool = false) -> Character:
 		"character": entry["character"],
 	}
 
+	# 同一時間只該有一個真人操控的身體——main.tscn 設計時期擺的測試用 Player
+	# 節點、或先前已投放的化身角色，都跟即將投放的這隻搶「player」分組，
+	# get_first_node_in_group("player")（hotbar.gd／follow_camera.gd 等一律
+	# 靠這個查表）撈到的永遠是先加進場景那個，新投放的等於白投（實測重現過：
+	# 兩個節點同時掛在 player 分組，查表撈到舊的）
+	if as_player:
+		var old_player := get_tree().get_first_node_in_group("player")
+		if old_player != null:
+			old_player.queue_free()
+
 	var scene := preload("res://scenes/player.tscn") if as_player else preload("res://scenes/agent.tscn")
 	var character := spawn_character(scene, {
 		"character_id": entry["id"],
