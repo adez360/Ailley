@@ -312,7 +312,7 @@ func _note_place_visited(place: String) -> void:
 	if place.is_empty() or _visited_places.has(place):
 		return
 	_visited_places[place] = true
-	_pending_fact_lines.append("你以前沒有來過這裡。")
+	_pending_fact_lines.append("你以前沒有來過「%s」。" % place)
 
 func _track_action_result_for_facts(action: String, success: bool) -> void:
 	if success:
@@ -2234,7 +2234,7 @@ func _fact_lines_summary() -> Array[String]:
 
 	# 連續同一動作失敗
 	if _consecutive_failure_count >= FACT_CONSECUTIVE_FAILURE_THRESHOLD:
-		lines.append("這件事你已經連續搞砸三次了。")
+		lines.append("你已經連續三次沒能完成「%s」。" % _consecutive_failure_action)
 
 	return lines
 

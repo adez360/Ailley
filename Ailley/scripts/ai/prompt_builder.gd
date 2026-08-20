@@ -330,7 +330,13 @@ static func _physical_label(value: float, labels: Array) -> String:
 			return labels[i]
 	return labels[4]
 
+## injury 是事件累積型（預設 0，靠外部事件推高，見 Stats.SPEC 的說明），
+## 0 代表「完全沒受傷」——五級距表最低那格「輕微擦傷」本身就是傷勢的一種，
+## 拿它形容 0 會讓 prompt 同時暗示「有 injured condition」跟「沒有」，
+## 這裡先特判成中性標籤，不進五級距表（CodeRabbit review 抓到）
 static func _physical_entry(value: float, key: String) -> Dictionary:
+	if key == "injury" and value <= 0.0:
+		return {"value": 0, "label": "沒有受傷"}
 	return {"value": roundi(value), "label": _physical_label(value, PHYSICAL_LABELS[key])}
 
 ## 生理 8 項換算成「數值＋中文形容詞」（《99》P-07，《01-3》§1「數值一定要附
