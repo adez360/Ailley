@@ -1464,6 +1464,22 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 		"drink":
 			if inventory == null or _find_drink_slot().is_empty():
 				return {"success": false, "reason": "背包裡沒有飲品可以喝"}
+		"buy":
+			# 檢查錢夠不夠（需要先找機器查價格）、商品存不存在、背包有沒有空間
+			var place: String = str(params.get("place", ""))
+			var machine := _find_vending_machine_at_place(place)
+			if machine == null:
+				return {"success": false, "reason": "找不到販賣機"}
+			var item_id: String = str(params.get("item_id", ""))
+			var price := machine.get_price(item_id)
+			if price < 0:
+				return {"success": false, "reason": "販賣機裡沒有這個商品"}
+			if inventory == null:
+				return {"success": false, "reason": "背包裡沒有地方放東西"}
+			if inventory.get_money() < price:
+				return {"success": false, "reason": "身上沒有夠的錢"}
+			# 檢查是否有空位或是否可以堆疊（add_item 會幫我們檢查）
+			# 這裡先用樂觀假設，真的失敗讓 buy_from() 退款並傳回原因碼
 		"give":
 			# 《01-2》§1 流程圖①前置檢查點名的例子就是「物品在身上？」——give
 			# 不進②③擲骰（不在 SUCCESS_PARAMS 上），只有這一關硬規則
@@ -1621,6 +1637,11 @@ func _pursue_current_task() -> void:
 	# drink 跟 eat 同一種「呼叫一次就完成」（#163）
 	if current_state == "drink":
 		_pursue_drink_task()
+		return
+
+	# buy 跟 eat／drink 同理：呼叫一次就完成（#340）
+	if current_state == "buy":
+		_pursue_buy_task()
 		return
 
 	if current_place.is_empty():
@@ -1860,6 +1881,55 @@ func _pursue_drink_task() -> void:
 	# CodeRabbit review：_request_next_decision() 只有在非同步回應回來後才會
 	# 重新仲裁，不立刻補一次 _reevaluate() 的話，等回應期間排程或 fallback
 	# 任務不會被馬上接手，得空等到下一次 GameClock time_changed（跟 murmur
+
+# buy 任務的執行（#340）：跟 _pursue_eat_task() 類似「呼叫一次就完成」，但
+# 需要先找到販賣機。販賣機透過 params.place 指定（餐酒館或藥草鋪）
+func _pursue_buy_task() -> void:
+	stop_moving()
+	var proceed := true
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		proceed = result["success"]
+
+	if proceed:
+		# 根據 params.place 找到對應的販賣機
+		var place: String = str(_current_task.get("params", {}).get("place", ""))
+		var machine := _find_vending_machine_at_place(place)
+		var item_id: String = str(_current_task.get("params", {}).get("item_id", ""))
+
+		var reason := buy_from(machine, item_id)
+		last_action_result = reason
+		if reason != Character.BUY_OK:
+			push_warning("Agent %s: buy 失敗（%s）" % [character_name, reason])
+
+	if _current_task.get("source", "") == "llm":
+		_remove_task(_current_task.get("id", ""))
+	_current_task = {}
+	current_place = ""
+	current_state = "idle"
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
+
+# 根據地點找到對應的販賣機。場景中每台機器都有一個對應的地點：
+# - "tavern" → VendingMachine
+# - "herb_shop" → VendingMachineHerbShop
+# 靠節點名稱來區分，更新日期 2026-08-20
+func _find_vending_machine_at_place(place: String) -> VendingMachine:
+	var machines := get_tree().get_nodes_in_group("vending_machines")
+
+	for machine in machines:
+		if not machine is VendingMachine:
+			continue
+
+		var machine_name: String = machine.name.to_lower()
+		# VendingMachineHerbShop → "herb_shop"，VendingMachine → "tavern"
+		if place == "herb_shop" and machine_name.contains("herb"):
+			return machine
+		elif place == "tavern" and not machine_name.contains("herb"):
+			return machine
+
+	return null
 	# 那條同一個問題）
 	_reevaluate()
 
