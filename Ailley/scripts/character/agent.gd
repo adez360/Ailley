@@ -921,6 +921,8 @@ func _push_llm_tasks(tasks: Array[Dictionary], response: Dictionary) -> int:
 		var params: Dictionary = task.get("params", {})
 		var dedup_key: String = str(task.get("action", "")) + "|" \
 			+ str(params.get("target", params.get("place", "")))
+		if task.get("action", "") == "buy":
+			dedup_key += "|" + str(params.get("item_id", ""))
 
 		# dedup：同一個 action+target/place 新的覆蓋舊的，不並存兩筆——
 		# 見 [[行程佇列與任務仲裁]]「池子的守則」，沒有這條的話被搭話幾次
@@ -931,6 +933,8 @@ func _push_llm_tasks(tasks: Array[Dictionary], response: Dictionary) -> int:
 			var existing_params: Dictionary = _tasks[i].get("params", {})
 			var existing_key: String = str(_tasks[i].get("action", "")) + "|" \
 				+ str(existing_params.get("target", existing_params.get("place", "")))
+			if _tasks[i].get("action", "") == "buy":
+				existing_key += "|" + str(existing_params.get("item_id", ""))
 			if existing_key == dedup_key:
 				_tasks.remove_at(i)
 
@@ -1938,17 +1942,42 @@ func _pursue_work_task() -> void:
 	var reason := work_at(nearest_workstation)
 	last_action_result = reason
 
+	if reason == Character.WORK_OCCUPIED:
+		# 工作站已被佔用：保留目前的 schedule work 任務，不清掉也不呼叫 _reevaluate()。
+		# 讓下一個時間事件觸發重試，避免頻繁的同步重評估導致遊戲無回應
+		push_warning("Agent %s: work_at 失敗（工作站被佔用）" % [character_name])
+		return
+
 	if reason != Character.WORK_OK:
 		push_warning("Agent %s: work_at 失敗（%s）" % [character_name, reason])
-		# 工作失敗就收尾任務；成功的話協程會自己管理、完成後呼叫 _on_work_finished()
+		# 其他失敗原因：清掉任務並等待決策
 		_current_task = {}
 		current_state = "idle"
-		_reevaluate()
+		if llm_decision_enabled and not _awaiting_decision:
+			_request_next_decision(_today_plan_needs_new_goal())
 
-# buy 任務的執行（#340）：跟 _pursue_eat_task() 類似「呼叫一次就完成」，但
-# 需要先找到販賣機。販賣機透過 params.place 指定（餐酒館或藥草鋪）
+# buy 任務的執行（#340）：先找到販賣機並移動到其位置，再呼叫 buy_from()。
+# 販賣機透過 params.place 指定（餐酒館或藥草鋪）
 func _pursue_buy_task() -> void:
+	var place: String = str(_current_task.get("params", {}).get("place", ""))
+	var machine := _find_vending_machine_at_place(place)
+
+	# 還沒到達就先走過去
+	if not _has_arrived_at(machine.global_position if machine else Vector2.ZERO):
+		if current_place != _pursued_place or not is_moving():
+			_pursued_place = current_place
+			_pursuit_done = false
+			var target: Vector2 = machine.global_position if machine else Vector2.ZERO
+			if not move_to(target):
+				push_warning("Agent %s: 走不到販賣機 %s" % [character_name, place])
+				_pursuit_done = true
+		return
+
+	# 已到達販賣機位置，執行購買
 	stop_moving()
+	_pursued_place = current_place
+	_pursuit_done = true
+
 	var proceed := true
 	if _current_task.get("source", "") == "llm":
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
@@ -1956,11 +1985,7 @@ func _pursue_buy_task() -> void:
 		proceed = result["success"]
 
 	if proceed:
-		# 根據 params.place 找到對應的販賣機
-		var place: String = str(_current_task.get("params", {}).get("place", ""))
-		var machine := _find_vending_machine_at_place(place)
 		var item_id: String = str(_current_task.get("params", {}).get("item_id", ""))
-
 		var reason := buy_from(machine, item_id)
 		last_action_result = reason
 		if reason != Character.BUY_OK:
