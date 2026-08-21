@@ -15,8 +15,8 @@ extends Control
 ##                       is_world_data_valid() 通過才顯示）
 ##       StartButton / CreditsButton
 ##       LoadErrorLabel（預設隱藏，只有「存檔存在但讀不出來或格式不完整」時才顯示）
-##     Scrim（ColorRect，全螢幕半透明，預設隱藏；點空白處關閉銘謝子畫面，
-##            做法跟 status_panel.gd／各面板的「點空白處或按 Esc 關閉」一致）
+##     Scrim（ColorRect，全螢幕半透明，預設隱藏；點面板外關閉銘謝子畫面，
+##            做法跟 status_panel.gd／各面板的「點面板外或按 Esc 關閉」一致）
 ##       CreditsPanel（Setting menu.png 九宮格，樣式沿用 status_panel.gd）
 ##         TitleBg / TitleLabel
 ##         VBox
@@ -41,10 +41,11 @@ func _ready() -> void:
 	start_button.pressed.connect(_on_start_pressed)
 	credits_button.pressed.connect(_on_credits_pressed)
 	scrim.gui_input.connect(_on_scrim_gui_input)
+	start_button.grab_focus()
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if scrim.visible and event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+	if scrim.visible and event.is_action_pressed("ui_cancel"):
 		_close_credits()
 		get_viewport().set_input_as_handled()
 
@@ -90,15 +91,33 @@ func _on_start_pressed() -> void:
 
 func _on_credits_pressed() -> void:
 	scrim.show()
+	# CreditsPanel 沒有可聚焦的控制項，ButtonsBox 底下的按鈕卻還留著
+	# FOCUS_ALL——純鍵盤玩家開著銘謝時按 Tab 還是能切回去，按 Enter 就會在
+	# 面板還開著的情況下直接開始/繼續遊戲。銘謝開著時先把按鈕摘出焦點鏈，
+	# 關閉時在 _close_credits() 復原。continue_button 隱藏時 Godot 的焦點
+	# 導覽本來就會跳過它，這裡一併處理不用另外判斷 visible
+	credits_button.release_focus()
+	continue_button.focus_mode = Control.FOCUS_NONE
+	start_button.focus_mode = Control.FOCUS_NONE
+	credits_button.focus_mode = Control.FOCUS_NONE
 
 
-# Scrim 蓋滿全螢幕，CreditsPanel 疊在它上面。CreditsPanel（以及它底下的
-# TitleBg/TitleLabel/VBox 的 Label 群）mouse_filter 都是預設值 STOP，
-# 點面板內部的事件會被那些節點自己吃掉、不會傳到這裡——收到代表點在面板外。
+# Scrim 蓋滿全螢幕，CreditsPanel 疊在它上面。CreditsPanel 底下的 TitleBg 有
+# 明確覆寫 mouse_filter=IGNORE 只是純裝飾；TitleLabel 跟 VBox 底下的 Label 群
+# 沒覆寫，走 Godot 4 的 Label 預設值 IGNORE，點擊穿過它們；VBox（VBoxContainer）
+# 沒覆寫則走 Container 預設值 PASS——PASS 一樣會把事件繼續往上送，最後落到
+# CreditsPanel 本體（Panel 預設 STOP）才真正被吃掉，不會傳到這裡，收到代表
+# 點在面板外。只認滑鼠左鍵：event 也包含滾輪 tick（合成的 button pressed
+# 事件）與右鍵/中鍵，不過濾 button_index 的話滾一下滑鼠滾輪就會把面板關掉，
+# 跟 status_panel.gd 的 _input() 用同一個判斷式對齊。
 func _on_scrim_gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		_close_credits()
 
 
 func _close_credits() -> void:
 	scrim.hide()
+	continue_button.focus_mode = Control.FOCUS_ALL
+	start_button.focus_mode = Control.FOCUS_ALL
+	credits_button.focus_mode = Control.FOCUS_ALL
+	credits_button.grab_focus()
