@@ -74,6 +74,8 @@ var character_library: Array[Dictionary] = []
 func _ready():
 	load_npc_data()
 	load_character_templates()
+	# 跨遊戲日自動存檔（#359），見下方 _on_day_changed_autosave() 的時序說明
+	GameClock.day_changed.connect(_on_day_changed_autosave)
 
 # 讀取NPC行程
 func load_npc_data():
@@ -472,6 +474,75 @@ func get_world_save_data() -> Dictionary:
 		# 會連已經寫出去的這包也跟著變
 		"character_library": character_library.duplicate(true),
 	}
+
+# 存下目前世界裡每個角色 + 這個世界本身，回傳結果供呼叫端自行決定怎麼呈現
+# ——debug console 的 save 指令（#21）、跨遊戲日自動存檔、離開遊戲時的自動存檔
+# （#359）都走這裡，避免「存哪些東西、順序為何」在三個呼叫端各自維護一份、
+# 之後改一處忘了改另一處
+func save_all() -> Dictionary:
+	var character_count := 0
+	var character_failures: Array[String] = []
+	for node in get_tree().get_nodes_in_group("characters"):
+		var character := node as Character
+		if SaveService.save_character(character.character_id, character.get_save_data()):
+			character_count += 1
+		else:
+			character_failures.append(character.character_name)
+
+	return {
+		"character_count": character_count,
+		"character_failures": character_failures,
+		"world_ok": SaveService.save_world(DEFAULT_WORLD_ID, get_world_save_data()),
+	}
+
+# 場上一個角色都沒有代表現在停在主選單，不是真的在玩——GameClock 是 autoload，
+# 換回主選單也不會停止跑動，day_changed／WM_CLOSE_REQUEST 兩條自動存檔路徑都要
+# 擋這個情況，否則會拿一份空的世界狀態去蓋掉玩家還沒讀進來、原本有效的存檔
+func _has_active_game_session() -> bool:
+	return not get_tree().get_nodes_in_group("characters").is_empty()
+
+# 跨遊戲日自動存檔（#359 拍板：存檔時機是每遊戲日結束時＋離開遊戲時）。用
+# call_deferred 而不是在這裡直接存，是因為記憶衰減（memory.gd::_on_day_changed
+# 的 decay_all()）也掛在同一個 GameClock.day_changed 上——同一次 emit() 裡，
+# 各個 handler 依連線順序同步執行，GameManager 是 autoload、_ready() 比場上
+# 角色的 memory 元件更早跑，連線順序早不代表執行順序也該早。deferred call
+# 排在這次訊號廣播的所有同步 handler 都跑完之後才執行，不管連線順序是誰先誰後
+# 都能保證存到的是衰減「之後」的結算狀態，不是半結算狀態。
+#
+# 睡眠反思（agent.gd::request_sleep_reflection()）不是掛在這個訊號上，而是
+# 角色自己進入 sleep 狀態時各自觸發、且是不等待的 fire-and-forget 非同步 AI
+# 呼叫——deferred call 這招只能確保「同一顆呼叫堆疊內的同步工作」都做完，
+# 換不到「還在飛的網路請求」。若某個角色剛好在跨日當下反思還沒回來，這次
+# 存檔會存到反思套用前的 personality_delta／today_plan，算已知殘留限制，
+# 不在這則 issue 範圍內解決（見 note/技術/存檔.md）
+func _on_day_changed_autosave(_day: int) -> void:
+	call_deferred("_autosave_on_day_change")
+
+func _autosave_on_day_change() -> void:
+	if not _has_active_game_session():
+		return
+	var result := save_all()
+	for character_name in result["character_failures"]:
+		push_error("跨日自動存檔失敗：%s" % character_name)
+	if not result["world_ok"]:
+		push_error("跨日自動存檔失敗：世界 %s" % DEFAULT_WORLD_ID)
+
+# 離開遊戲時存檔（#359）。要接得到這個通知，project settings 的
+# application/config/auto_accept_quit 要先設為 false（見
+# note/技術/存檔.md），否則 Godot 預設關窗會直接結束，這裡完全收不到
+# NOTIFICATION_WM_CLOSE_REQUEST。存檔（不論成功與否）之後都要自己呼叫
+# get_tree().quit()——設 auto_accept_quit=false 之後引擎不會再自動關閉，
+# 不呼叫的話關閉按鈕會變得完全沒反應
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_WM_CLOSE_REQUEST:
+		return
+	if _has_active_game_session():
+		var result := save_all()
+		for character_name in result["character_failures"]:
+			push_error("離開遊戲存檔失敗：%s" % character_name)
+		if not result["world_ok"]:
+			push_error("離開遊戲存檔失敗：世界 %s" % DEFAULT_WORLD_ID)
+	get_tree().quit()
 
 # data 缺欄位一律用預設值補，不當成錯誤（跟 character.gd 同一條規則）。
 # 場景裡目前找到的角色直接套用；存檔裡有記載但場景沒有的角色會被重新生成
