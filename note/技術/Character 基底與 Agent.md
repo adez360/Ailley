@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-20
+updated: 2026-08-21
 ---
 
 # Character 基底與 Agent
@@ -95,6 +95,15 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 存好的 `character_id`（走第一層就結束，不會落到這裡），要嘛是一次性測試用途，
 沒有「跨場次是同一隻」的需求，仍會呼叫到基底 `_resolve_generated_id()`
 再由基底實作執行 `generate_id()`。
+
+`_resolve_generated_id()` 只顧首次生成／讀檔，沒顧到 `_ensure_unique_id()`
+事後把 `character_id` 換掉的情況（讀進壞掉的存檔、撞到場上已有的角色）——
+換掉的結果不會自動回頭同步進 `player_id.txt`，下次開遊戲讀到的還是那組已經
+被撞掉的舊 id。補一個同樣可覆寫的 hook `_on_id_changed(new_id)`（基底預設
+no-op），`_ensure_unique_id()` 換掉 `character_id` 後呼叫它；`player.gd`
+覆寫它，跟 `_resolve_generated_id()` 共用同一段寫檔／錯誤處理邏輯
+（抽成 `_write_player_id_file()`）。沒有額外持久化的子類別（Agent／動態生成
+角色）不用覆寫，撞號換掉就換掉（issue #438）。
 
 > [!important] 為什麼 `schedule_template` 不共用 `character_id`
 > 它是「用哪份資料」不是「我是誰」。id 既然是全遊戲唯一身分，

@@ -321,6 +321,14 @@ static func generate_id() -> String:
 func _resolve_generated_id() -> String:
 	return generate_id()
 
+# character_id 被 _ensure_unique_id() 換掉時呼叫，預設 no-op。Player 覆寫這個
+# hook 把新 id 同步寫回 _resolve_generated_id() 額外持久化的檔案，不然下次
+# _resolve_generated_id() 還是讀到那組已經被撞掉、不再代表這個 Player 的
+# 舊 id（issue #438）——沒有額外持久化的子類別（Agent／動態生成角色）沒有
+# 檔案要同步，撞號換掉就換掉
+func _on_id_changed(_new_id: String) -> void:
+	pass
+
 # 撞 id 的兩隻會共用同一份關係與記憶（relationships.gd 拿 id 當 key），
 # 所以這裡換掉一個，而不是印完錯誤照樣讓兩隻共用。
 # 生成的 id 不會撞，會走到這裡的是場景裡手寫重複，或日後讀進壞掉的存檔
@@ -332,6 +340,7 @@ func _ensure_unique_id() -> void:
 		push_error("Character id 重複：%s 已被 %s 用掉，%s 改用 %s" % [
 			taken, holder.name, name, character_id
 		])
+		_on_id_changed(character_id)
 		holder = _find_id_holder(character_id)
 
 # 佔用這個 id 的節點，沒人用回 null。回節點而不是 bool 是為了讓訊息講得出
