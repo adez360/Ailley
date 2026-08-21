@@ -989,15 +989,7 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	_awaiting_decision = false
 
-	# 這次送出的信封已經把 _fact_lines_summary() 讀到的事實句清空，但等待
-	# 回應期間（真的打網路，數百毫秒到數十秒）可能有新事件（#402／#407 的
-	# spotted／noise_heard）把新的一句排進 _pending_reaction_lines——不管
-	# 這次回應本身是過期世代被丟棄、失敗、還是成功，只要佇列還有東西沒送出，
-	# 就該立刻補問一次，不然這句事實句只能等下一次「剛好」有別的理由觸發
-	# 決策才會被看到，等於這次事件實質上被吃掉。fire-and-forget，不 await：
-	# 呼叫端不需要等這次補問完成才能拿到目前這輪的結果
-	if not _pending_reaction_lines.is_empty():
-		_request_next_decision()
+	var final_result: Dictionary
 
 	# 世代編號在 await 期間變了，代表 debug_set_llm_decision() 至少關過一次
 	# 決策開關——不管回應抵達當下旗標是什麼值（就算又被重新打開），這份回應
@@ -1007,80 +999,102 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	if my_generation != _decision_generation:
 		if my_plan_update_epoch == _plan_update_epoch:
 			_plan_update_requested = had_plan_update_requested
-		return {"ok": false, "triggered": true}
+		final_result = {"ok": false, "triggered": true}
+	elif not result["ok"]:
+		final_result = {"ok": false, "triggered": true}
+	else:
+		var data: Dictionary = result["data"]
 
-	if not result["ok"]:
-		return {"ok": false, "triggered": true}
+		# 這輪回應真的通過驗證、確定會被套用，才消費快照下來的一次性事實句數量
+		# ——只砍前面 fact_lines_sent_count 筆，等待期間新增的（在陣列後段）
+		# 留著給下一輪
+		if fact_lines_sent_count > 0:
+			_pending_fact_lines = _pending_fact_lines.slice(fact_lines_sent_count)
 
-	var data: Dictionary = result["data"]
+		# reasoning／inner_monologue 印出來給人排查，跟 _trigger_village_ai() 的
+		# print() 除錯模式一致；不進遊戲內 UI。決策準不準沒有系統性驗證，
+		# 目前只能肉眼看這兩個欄位判斷合不合理
+		print("[llm_decision] %s reasoning: %s" % [character_name, data.get("reasoning", "")])
+		print("[llm_decision] %s inner_monologue: %s" % [character_name, data.get("inner_monologue", "")])
 
-	# 這輪回應真的通過驗證、確定會被套用，才消費快照下來的一次性事實句數量——
-	# 只砍前面 fact_lines_sent_count 筆，等待期間新增的（在陣列後段）留著給
-	# 下一輪
-	if fact_lines_sent_count > 0:
-		_pending_fact_lines = _pending_fact_lines.slice(fact_lines_sent_count)
+		var tasks_added := _push_llm_tasks(data["tasks"], data)
 
-	# reasoning／inner_monologue 印出來給人排查，跟 _trigger_village_ai() 的
-	# print() 除錯模式一致；不進遊戲內 UI。決策準不準沒有系統性驗證，
-	# 目前只能肉眼看這兩個欄位判斷合不合理
-	print("[llm_decision] %s reasoning: %s" % [character_name, data.get("reasoning", "")])
-	print("[llm_decision] %s inner_monologue: %s" % [character_name, data.get("inner_monologue", "")])
+		# emotion（#351）：每次決策都必填，validate_tasks() 已經驗證過 type／
+		# intensity 合法，這裡直接套用，不再二次判斷——AI 自己宣告的內在狀態，
+		# 引擎不覆寫、不打折扣。stability／grudge 帶這隻角色自己的人格值——不帶
+		# 的話 set_emotion() 會退回中性值 50.0，讓《02》§1-4 的持續時間公式對
+		# 每個角色都算出同一個結果，人格再怎麼極端也不影響情緒撐多久
+		# （CodeRabbit review 抓到）
+		var emotion_data: Dictionary = data.get("emotion", {})
+		set_emotion(
+			emotion_data.get("type", "neutral"), emotion_data.get("intensity", 0), "",
+			personality.get("stability", 50.0), personality.get("grudge", 50.0)
+		)
 
-	var tasks_added := _push_llm_tasks(data["tasks"], data)
+		# current_goal（#352）：模型完全沒填這欄位（current_goal_provided=false）
+		# 就維持原樣不動，跟 update_plan 的「整份取代」不同，這是「有意思表示才
+		# 動」的單一標籤。有填的話分兩種：空字串代表模型明確判斷這個目標已完成
+		# 或不再追蹤，清空並停止目標拖延事實句的計時；非空字串才是真的設定/換
+		# 目標（CodeRabbit review 抓到：原本「沒填」跟「填空字串」都被當「沒
+		# 更新」，目標永遠沒有清除路徑，拖延事實句會無限期一直觸發下去）
+		if data.get("current_goal_provided", false):
+			var new_goal: String = data.get("current_goal", "")
+			if new_goal.is_empty():
+				current_goal = ""
+				_goal_set_minute = -1
+			elif new_goal != current_goal:
+				current_goal = new_goal
+				# 目標拖延事實句的計時基準（#338）：只在目標真的換了內容才重新
+				# 起算，模型原樣重申同一個目標不算「重新設定」，不然這句事實句
+				# 永遠不會累積
+				_goal_set_minute = _now_minutes()
 
-	# emotion（#351）：每次決策都必填，validate_tasks() 已經驗證過 type／
-	# intensity 合法，這裡直接套用，不再二次判斷——AI 自己宣告的內在狀態，
-	# 引擎不覆寫、不打折扣。stability／grudge 帶這隻角色自己的人格值——不帶
-	# 的話 set_emotion() 會退回中性值 50.0，讓《02》§1-4 的持續時間公式對
-	# 每個角色都算出同一個結果，人格再怎麼極端也不影響情緒撐多久
-	# （CodeRabbit review 抓到）
-	var emotion_data: Dictionary = data.get("emotion", {})
-	set_emotion(
-		emotion_data.get("type", "neutral"), emotion_data.get("intensity", 0), "",
-		personality.get("stability", 50.0), personality.get("grudge", 50.0)
-	)
+		# 不管這輪有沒有拿到 update_plan 許可，模型都可能問「下次讓我改」——記
+		# 下來，下一次不管是哪個理由觸發 _request_next_decision() 都會兌現
+		if data.get("request_plan_update", false):
+			_plan_update_requested = true
 
-	# current_goal（#352）：模型完全沒填這欄位（current_goal_provided=false）
-	# 就維持原樣不動，跟 update_plan 的「整份取代」不同，這是「有意思表示才
-	# 動」的單一標籤。有填的話分兩種：空字串代表模型明確判斷這個目標已完成或
-	# 不再追蹤，清空並停止目標拖延事實句的計時；非空字串才是真的設定/換目標
-	# （CodeRabbit review 抓到：原本「沒填」跟「填空字串」都被當「沒更新」，
-	# 目標永遠沒有清除路徑，拖延事實句會無限期一直觸發下去）
-	if data.get("current_goal_provided", false):
-		var new_goal: String = data.get("current_goal", "")
-		if new_goal.is_empty():
-			current_goal = ""
-			_goal_set_minute = -1
-		elif new_goal != current_goal:
-			current_goal = new_goal
-			# 目標拖延事實句的計時基準（#338）：只在目標真的換了內容才重新起算，
-			# 模型原樣重申同一個目標不算「重新設定」，不然這句事實句永遠不會累積
-			_goal_set_minute = _now_minutes()
+		# null 代表這次沒有 update_plan（不管是沒許可、還是有許可但模型選擇不
+		# 用）；空陣列 [] 是模型明確給的合法值（today_plan 清空），兩者不可
+		# 混淆，見 AISchema.validate_tasks() 用 null 分辨「沒提供」與「提供了
+		# 空陣列」
+		var update_plan: Variant = data.get("update_plan")
+		if update_plan != null:
+			_apply_today_plan(update_plan)
 
-	# 不管這輪有沒有拿到 update_plan 許可，模型都可能問「下次讓我改」——記
-	# 下來，下一次不管是哪個理由觸發 _request_next_decision() 都會兌現
-	if data.get("request_plan_update", false):
-		_plan_update_requested = true
+		if had_pending_persuade:
+			_resolve_pending_persuade(data)
 
-	# null 代表這次沒有 update_plan（不管是沒許可、還是有許可但模型選擇不用）；
-	# 空陣列 [] 是模型明確給的合法值（today_plan 清空），兩者不可混淆，見
-	# AISchema.validate_tasks() 用 null 分辨「沒提供」與「提供了空陣列」
-	var update_plan: Variant = data.get("update_plan")
-	if update_plan != null:
-		_apply_today_plan(update_plan)
+		_reevaluate()
 
-	if had_pending_persuade:
-		_resolve_pending_persuade(data)
+		final_result = {
+			"ok": true,
+			"triggered": true,
+			"reasoning": data.get("reasoning", ""),
+			"inner_monologue": data.get("inner_monologue", ""),
+			"tasks_added": tasks_added,
+		}
 
-	_reevaluate()
+	# 這次送出的信封已經把 _fact_lines_summary() 讀到的事實句清空，但等待
+	# 回應期間（真的打網路，數百毫秒到數十秒）可能有新事件（#402／#407 的
+	# spotted／noise_heard）把新的一句排進 _pending_reaction_lines——不管
+	# 這次回應本身是過期世代被丟棄、失敗、還是成功，只要佇列還有東西沒送出，
+	# 就該立刻補問一次，不然這句事實句只能等下一次「剛好」有別的理由觸發
+	# 決策才會被看到，等於這次事件實質上被吃掉。fire-and-forget，不 await：
+	# 呼叫端不需要等這次補問完成才能拿到目前這輪的結果。
+	#
+	# 要放在這裡（所有分支都處理完、_resolve_pending_persuade() 也清空過
+	# _pending_persuade 之後），不能放在 await 剛結束就立刻補——補發的請求
+	# （fire-and-forget，會立刻同步執行到它自己的第一個 await 點）會在原本
+	# 這輪還沒真正把 _pending_persuade 解析掉之前就搶先讀到同一筆記錄，兩輪
+	# 各自認定「這輪有待回應的說服」、各自問一次模型，等原本這輪稍後才真的
+	# 清空 _pending_persuade，補發那輪的回應到達時會讀到空字典，若那輪也判斷
+	# persuaded=true，會用空白內容（reason 空字串等）誤寫一筆記憶（CodeRabbit
+	# review，PR #433）
+	if not _pending_reaction_lines.is_empty():
+		_request_next_decision()
 
-	return {
-		"ok": true,
-		"triggered": true,
-		"reasoning": data.get("reasoning", ""),
-		"inner_monologue": data.get("inner_monologue", ""),
-		"tasks_added": tasks_added,
-	}
+	return final_result
 
 ## update_plan 回應整份取代 _today_plan，不是逐筆增刪改——四個開放時機語意上
 ## 都是「重寫」，不需要模型追蹤既有項目的 id 才能局部編輯，形狀跟驗證都簡單
