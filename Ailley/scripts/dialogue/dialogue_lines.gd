@@ -47,16 +47,6 @@ static func reply(stats: Stats, _turn: int) -> String:
 static func closing() -> String:
 	return L10n.t("DLG_CLOSING_NEUTRAL")
 
-## 對話結束時 NPC 頭上飄的道別提示（issue #207），跟 closing() 不是同一件事：
-## closing() 是 LLM 逾時/驗證失敗 fallback 才會講的那句台詞，這句是**不管
-## 什麼結束原因**（正常結束／走遠／被打斷）都會顯示的系統提示，讓玩家清楚
-## 看到「這場對話結束了」。刻意不走 L10n／locale/game.csv——這台機器的
-## locale CSV 匯入曾經卡過（見 debug_console.gd 同類理由的註解），這句是
-## 系統提示不是要送進 LLM payload 的內容，跟 AI_THINKING_TEXT（"…"）同一種
-## 處理，之後真的要在地化再改成 L10n.t()，呼叫端不用跟著改
-static func farewell() -> String:
-	return "掰啦"
-
 ## murmur（自語，#162）的內容層。跟 reply() 同一套「依角色數值挑句子」邏輯，
 ## 但語氣是講給自己聽，不是講給對話對象聽——murmur 沒有 Conversation、沒有
 ## 聽者，用 reply() 那組面向對象的句子（「今天天氣還行」）會很奇怪

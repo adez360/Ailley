@@ -160,14 +160,6 @@ func _finish(reason: String) -> void:
 		if is_instance_valid(character):
 			character.exit_conversation()
 
-	# 系統提示，不管什麼結束原因都要讓玩家看到「這場結束了」（issue #207）。
-	# 放在 exit_conversation() 迴圈之後：玩家這時候若正在等待輪到自己，
-	# exit_conversation() 已經同步觸發 next_line() 解除 listener 頭上的
-	# 「？」常駐提示，這裡的 say() 才不會被那個常駐狀態擋住
-	for character in [initiator, target]:
-		if is_instance_valid(character):
-			character.say(DialogueLines.farewell())
-
 	finished.emit(reason)
 
 func _apply_rewards() -> void:

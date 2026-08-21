@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/dialogue/conversation.gd
 status: 進行中
-updated: 2026-08-21
+updated: 2026-08-22
 ---
 
 # talk 動作設計
@@ -218,17 +218,12 @@ Enter 開啟／送出，Esc 取消。不在對話中就是單純冒一句氣泡�
 > `conversation.gd::_finish_with_fallback()` 同一種顧慮，`await` 讓出控制權
 > 的這段期間 `listener` 理論上可能已經離開場景。
 
-> [!important] 對話結束時，NPC 頭上顯示「掰啦」
-> 不管是正常結束、走遠散場、被打斷、還是 LLM fallback 收尾，`conversation.gd`
-> 全部匯流到 `_finish()` 一個地方（單一出口）。`_finish()` 在
-> `exit_conversation()` 那圈跑完之後，對雙方各呼叫一次
-> `character.say(DialogueLines.farewell())`——放在迴圈之後是因為玩家若正在
-> 等待輪到自己，`exit_conversation()` 已經同步觸發上面那條 `release_hold()`，
-> 這裡的 `say()` 才不會被常駐狀態擋住。`DialogueLines.farewell()` 跟
-> `closing()` 不是同一件事：`closing()` 是 LLM fallback 才會講的台詞，
-> `farewell()` 是任何結束原因都會顯示的系統提示。刻意不走 `L10n`／
-> `locale/game.csv`——這句是系統提示不是要送進 LLM payload 的對話內容，
-> 之後真的要在地化，改 `farewell()` 內部就好，呼叫端不用動。
+> [!note] 對話結束不會有引擎代講的道別台詞
+> `conversation.gd::_finish()` 不管什麼結束原因（正常結束／走遠／被打斷／
+> fallback）都只做 `exit_conversation()`，不會幫任何一方講話——引擎只提供
+> 「跟誰講完話了」這個客觀事實（`agent.gd::exit_conversation()` 寫進
+> `_daily_events`，見《00》原則二：引擎給事件不給情緒），角色要不要道別、
+> 用什麼語氣，是 AI 自己下一輪決定的事，不是系統畫面台詞。
 
 > [!note] 這是接 LLM 的入口
 > 目前輸入只是讓玩家自己的角色說話，或是送進對話輪次；沒有額外的語意
