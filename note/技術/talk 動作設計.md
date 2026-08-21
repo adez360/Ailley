@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/dialogue/conversation.gd
 status: 進行中
-updated: 2026-08-17
+updated: 2026-08-21
 ---
 
 # talk 動作設計
@@ -81,8 +81,9 @@ updated: 2026-08-17
 關係是「對某個人」而不是「角色自己的數值」，所以獨立成 `Relationships`，
 key 用對方的 `character_id` 而不是 name —— name 會改，用它當 key 等於改名即失憶。
 每筆存成 Dictionary 而不是單一浮點數：欄位是 `trust`／`met_count`／
-`appearance_cache` 三項（規格《01》3-1、《99》P-08），之後要加最後見面時間、
-印象標籤也一樣不用改結構。
+`appearance_cache` 三項（規格《01》3-1、《99》P-08），之後要加最後見面時間
+（見 #497）、印象標籤也一樣不用改結構；外觀異動偵測（`appearance_cache`
+目前只是快取，沒有比對邏輯）見 #498。
 
 好感、熟悉、虧欠不是引擎欄位：沒有任何公式讀過它們（《00》原則三），
 那三件事交給《03》記憶系統自己記、自己判斷、自己演。
