@@ -54,10 +54,6 @@ const WORK_PAYMENT := 50
 
 const BUY_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE 一樣的距離門檻，2 格
 
-## 力竭恢復門檻（#364）。stamina ≤ 0 觸發 exhausted，stamina > 此值時自動解除。
-## 待 #361 調校 ACTION_RECOVERY 的實際值後重新調整
-const EXHAUSTION_RECOVERY_THRESHOLD := 50.0
-
 ## buy_from() 的失敗原因碼，形狀比照 TALK_*／WORK_*。除了這五個，buy_from()
 ## 還會**原樣轉傳** Inventory 自己的原因碼（`NOT_ENOUGH`、`NO_SPACE`），
 ## 不在這裡重新取名——沒有必要跟 Inventory 的字典再對一次照
@@ -408,7 +404,6 @@ func _on_game_minute(_hour: int, _minute: int) -> void:
 	# 昏迷與治療檢查每遊戲分鐘執行（與 GameClock.time_changed 同步）
 	_update_incapacitation()
 	_update_treatment()
-	_update_exhausted_condition()
 
 	# 情緒與其他 condition 在全局分鐘邊界執行（tick 機制，與 Stats 漂移同步）
 	if _minute % GameClock.GAME_MINUTES_PER_TICK == 0:
@@ -513,6 +508,7 @@ func _update_conditions() -> void:
 	_set_condition(CONDITION_DRUNK, stats.get_value("alcohol") > 30.0)
 	_set_condition(CONDITION_STARVING, stats.get_value("satiety") < 10.0)
 	_set_condition(CONDITION_DEHYDRATED, stats.get_value("hydration") < 10.0)
+	_set_condition(CONDITION_EXHAUSTED, stats.get_value("stamina") <= 0.0)
 	_set_condition(CONDITION_SLEEPY, stats.get_value("wakefulness") < 15.0)
 	_set_condition(CONDITION_FILTHY, stats.get_value("hygiene") < 20.0)
 
@@ -529,21 +525,6 @@ func _update_conditions() -> void:
 	if has_condition(CONDITION_DEHYDRATED):
 		stats.add("health", -1.0)
 	stats.injury_decay_paused = has_condition(CONDITION_BLEEDING)
-
-## exhausted 的觸發與解除邏輯（#364）。不同於其他生理衍生狀態的簡單門檻，
-## exhausted 需要一個恢復門檻（stamina <= 0 時觸發，stamina > 門檻時解除）。
-## 門檻值待 #361 調校後調整
-func _update_exhausted_condition() -> void:
-	if stats == null:
-		return
-	var stamina := stats.get_value("stamina")
-
-	# 觸發：stamina 歸零且尚未 exhausted
-	if stamina <= 0.0 and not has_condition(CONDITION_EXHAUSTED):
-		_set_condition(CONDITION_EXHAUSTED, true)
-	# 解除：stamina 恢復到門檻且已經 exhausted
-	elif stamina > EXHAUSTION_RECOVERY_THRESHOLD and has_condition(CONDITION_EXHAUSTED):
-		_set_condition(CONDITION_EXHAUSTED, false)
 
 ## 開始昏迷（health ≤ 0 觸發）。記錄開始時間，30 分鐘內若無人搬走則自動傳送藥草鋪
 ## （《99》P-27，搬走邏輯依賴 #161 haul/struggle）
@@ -655,7 +636,7 @@ func _complete_treatment() -> void:
 		stats.set_value("alcohol", 0.0)		# 清除酒精
 		stats.set_value("satiety", 50.0)	# 恢復飽食度
 		stats.set_value("hydration", 50.0)	# 恢復水分
-		stats.set_value("stamina", EXHAUSTION_RECOVERY_THRESHOLD + 1.0)	# 恢復體力，超過力竭恢復門檻
+		stats.set_value("stamina", 50.0)	# 恢復體力
 		stats.set_value("wakefulness", 50.0)	# 恢復清醒度
 		stats.set_value("hygiene", 50.0)	# 恢復衛生
 
@@ -1284,7 +1265,6 @@ func get_save_data() -> Dictionary:
 		# 性格漂移不該因為重開就被重置回建角當下的原始值——跟 today_plan「跨天
 		# 承諾不該憑空消失」同一個道理（見 note/技術/存檔.md）
 		"personality": personality.duplicate(true),
-		"is_exhausted": has_condition(CONDITION_EXHAUSTED),
 	}
 
 	if stats != null:
@@ -1342,14 +1322,6 @@ func load_save_data(data: Dictionary) -> void:
 		stats.load_save_data(data["stats"])
 	if relationships != null and data.get("relationships", null) is Dictionary:
 		relationships.load_save_data(data["relationships"])
-
-	# 獨立還原力竭狀態（不依賴 stats 存在，處理沒有 Stats 節點的角色，也處理
-	# stamina = 1-50 這種邊界情況）。新存檔有 is_exhausted 欄位則直接還原，
-	# 舊存檔沒有這個欄位、但有 stats 可用時才由 stamina 推斷
-	if data.has("is_exhausted"):
-		_set_condition(CONDITION_EXHAUSTED, data["is_exhausted"])
-	elif stats != null:
-		_update_exhausted_condition()
 
 	# 沒有存檔資料時維持 _ready() 已經由 Personality.from_identity() 組好的值，
 	# 不清空——跟 stats／relationships 同一個理由，personality 不是每次都
