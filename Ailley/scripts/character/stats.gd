@@ -40,9 +40,6 @@ const SPEC := {
 	"alcohol": {"label": "STAT_ALCOHOL", "drift": 3.0, "toward": 0.0, "start": 0.0, "is_need": false, "place": ""},
 	"health": {"label": "STAT_HEALTH", "drift": 0.0, "toward": 100.0, "start": 100.0, "is_need": false, "place": ""},
 	"injury": {"label": "STAT_INJURY", "drift": 0.5, "toward": 0.0, "start": 0.0, "is_need": false, "place": ""},
-	"social": {"label": "STAT_SOCIAL", "drift": 0.5, "toward": 0.0, "start": 100.0, "is_need": true, "place": "pavilion"},
-	"fun": {"label": "STAT_FUN", "drift": 0.2, "toward": 0.0, "start": 100.0, "is_need": true, "place": "pavilion"},
-	"mood": {"label": "STAT_MOOD", "drift": 0.5, "toward": 50.0, "start": 50.0, "is_need": false, "place": ""},
 }
 
 var values := {}
