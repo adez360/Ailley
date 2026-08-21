@@ -13,7 +13,9 @@ static func create(db) -> bool:
 
 		npc_id TEXT NOT NULL,
 
-		content TEXT NOT NULL,
+		-- 字數上限 40（2026-08-20 拍板，見《規格書 09》§4-5／issue #368）
+		content TEXT NOT NULL
+			CHECK (LENGTH(content) <= 40),
 
 
 		created_at TEXT NOT NULL
