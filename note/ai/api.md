@@ -441,9 +441,6 @@ hygiene      清潔     0.5    0       70     ✗        ""
 alcohol      酒精濃度 3.0    0       0      ✗        ""
 health       生命值   0.0    100     100    ✗        ""
 injury       傷勢     0.5    0       0      ✗        ""
-social       社交     0.5    0       100    ✓        square
-fun          娛樂     0.2    0       100    ✓        square
-mood         心情     0.5    50      50     ✗        ""
 
 † 加一項數值 = SPEC 加一列，其餘程式全不用改（含主控台 status 顯示）
 † drift 是每 tick（`GameClock.GAME_MINUTES_PER_TICK`＝10 遊戲分鐘）往 toward 靠近多少，

@@ -32,10 +32,6 @@ const REASON_ENDED_BY_SPEAKER := "ENDED_BY_SPEAKER"
 const REASON_TOO_FAR := "TOO_FAR"
 const REASON_INTERRUPTED := "INTERRUPTED"
 
-# 好好講完一場之後雙方各自的收穫
-const SOCIAL_GAIN := 25.0
-const MOOD_GAIN := 5.0
-
 var initiator: Character
 var target: Character
 
@@ -173,10 +169,6 @@ func _apply_rewards() -> void:
 
 		if not is_instance_valid(character) or not is_instance_valid(other):
 			continue
-
-		if character.stats != null:
-			character.stats.add("social", SOCIAL_GAIN)
-			character.stats.add("mood", MOOD_GAIN)
 
 		# 只記「互動過一次」，不動 trust：《01》3-1 的 trust 只有深度對話
 		# （5 句以上）才 +2，那條判定跟其他 trust 事件一起接線，是各自行動的
