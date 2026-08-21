@@ -22,9 +22,13 @@ const NOTICE_PAUSE := 2.0
 
 ## 決策迴圈開關（#88）：開啟後 LLM 任務完成時會觸發下一次決策請求，
 ## 經 AISchema 驗證後推進 _tasks，跟仲裁器裡其他來源的任務公平競爭。
-## 刻意預設關閉、要逐隻手動開，不是全體 Agent 一起開——
-## [[LLM 串接與 AI 服務層]] 明講過「先從一隻角色開始，不要一次對所有
-## Agent 開放」，這是那條原則的落實
+##
+## @export 預設值維持 false，是場景／存檔沒有其他人設定時的後備值，不代表
+## 「開場一定是排程模式」——main_scene.gd::_apply_startup_ai_state()（#357）
+## 在開場依 AIService 就緒狀態，把場上每隻 Agent 各自實際會用的 provider
+## 準備好了沒查過一輪，就緒就自動打開，不就緒才維持這裡的預設值退回排程模式。
+## debug 主控台的 `ai_decision <name> on/off`（#282）仍然保留，開場批次判斷
+## 錯誤或要單獨測試某隻角色時可以手動覆寫
 @export var llm_decision_enabled := false
 
 ## 佔位欄位：決策來源（《06》decision_source，正式資料結構見 #122）。
@@ -286,6 +290,12 @@ var _reevaluate_pending := false
 ## 才判斷（#155）
 var _provider: DecisionProvider
 
+## 這隻角色實際會打的 provider 名字（給 #357 開場批次查 AIService.get_readiness()
+## 用）。轉呼叫 DecisionProvider.provider_name()，不直接讓外部碰 _provider——
+## 外部只需要知道「這個名字」，不需要整個 DecisionProvider 物件
+func get_provider_name() -> String:
+	return _provider.provider_name()
+
 ## 上一次睡眠反思的當日摘要（《03》§5「當日摘要（一句話）」）。目前只給
 ## debug 用（reflect 指令印出來看），沒有其他呼叫端讀它——先留著這個欄位
 ## 而不是驗證完就丟掉，之後要做《15》UI 的 today_log／摘要面板時才有東西可接，
@@ -521,6 +531,17 @@ func _generate_words_to_creator() -> void:
 	words_to_creator = validated["data"]["words_to_creator"]
 
 
+## #357：這段（訊號連接、第一次 _reevaluate()、世界開場決策請求）曾經意外地
+## 只掛在 rebuild_provider() 底下——PR #280（#122）把 `_provider = _make_provider()`
+## 抽出成獨立函式時，新的 func 宣告插進了原本 _ready() 的中間，副作用是把
+## _ready() 剩下的內容全部劃給了新函式。rebuild_provider() 只給
+## GameManager.deploy_from_library()／存檔還原這兩條動態生成角色的路徑呼叫，
+## 場景裡固定寫死的 NPC（main.tscn 的 Agent 節點）從來不會呼叫它，等於這些
+## NPC 從頭到尾沒有接上 vision.spotted／noise_heard／move_finished／
+## GameClock.time_changed，也沒有觸發過世界開場的第一次決策請求——不是只有
+## llm_decision_enabled 預設 false 這一層問題。修法是搬回 _ready()，讓所有
+## Agent（不分場景固定或動態生成）出生時都走這一段；rebuild_provider() 縮回
+## 它原本的單一職責（見它自己的說明），不重複連接一次訊號
 func _ready() -> void:
 	super()
 	add_to_group("agents")
@@ -531,14 +552,6 @@ func _ready() -> void:
 	# 出生那一刻起算，不是 0——不然剛出生的角色會立刻背著「一整天沒說話」
 	# 的事實句（#338）
 	_last_social_minute = _now_minutes()
-
-## 公開版的「重建 provider」（#122，CodeRabbit review 抓到的時序 bug）。
-## GameManager.deploy_from_library() 會在 add_child()（進而觸發這個節點的
-## _ready()）之後才套用建角面板選的 decision_source／model_name——那時候
-## _provider 已經照預設值（"local"）建好了，角色庫選的來源永遠不會生效。
-## 呼叫端設完那兩個欄位要接著呼叫這個，才會用最終的值重建一次
-func rebuild_provider() -> void:
-	_provider = _make_provider()
 
 	if vision != null:
 		vision.spotted.connect(_on_spotted)
@@ -565,8 +578,27 @@ func rebuild_provider() -> void:
 	# LLM 來源任務時補這一次，避免重進場景（例如換場）時重複發起。
 	# 允許附帶 update_plan：開場 _today_plan 一定是空的，跟「意圖全數完成」
 	# 那個時機（#89 觸發 2）是同一種狀況——沒有計畫，需要一份新的
+	#
+	# 這裡讀到的 llm_decision_enabled 是場景／存檔裡的既有值，還沒被
+	# main_scene.gd 的開場批次套用（那一段在全部角色的 _ready() 都跑完
+	# 之後才執行，見 main_scene.gd::_apply_startup_ai_state()）——所以這一關
+	# 對場景固定 NPC（預設 false）通常不會成立，第一次決策改由開場批次
+	# 直接呼叫 debug_set_llm_decision(true) 觸發，兩邊用同一條路徑
+	# （_request_next_decision()），不重複也不衝突
 	if llm_decision_enabled and not _has_llm_task():
 		_request_next_decision(true)
+
+## 公開版的「重建 provider」（#122，CodeRabbit review 抓到的時序 bug）。
+## GameManager.deploy_from_library() 會在 add_child()（進而觸發這個節點的
+## _ready()）之後才套用建角面板選的 decision_source／model_name——那時候
+## _provider 已經照預設值（"local"）建好了，角色庫選的來源永遠不會生效。
+## 呼叫端設完那兩個欄位要接著呼叫這個，才會用最終的值重建一次。
+##
+## 只重建 provider，不重複 _ready() 已經做過的訊號連接／世界開場決策請求——
+## 那些呼叫端呼叫這個函式之前，add_child() 觸發的 _ready() 早就做過一次了
+## （#357，見 _ready() 上面的說明）
+func rebuild_provider() -> void:
+	_provider = _make_provider()
 
 ## 依 decision_source 建一次決策提供者（#155）。打錯字／空字串一律安靜退回 LocalLLMProvider，
 ## 但寫一行 push_warning 帶原因——跟 _load_schedule() 找不到 assignment 時的處理是同一種
