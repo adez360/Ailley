@@ -64,7 +64,7 @@ Ailley 是由 LLM 驅動的 2D 像素村莊（Godot 4.5.1）。
 - [[api]] —— 所有腳本的公開介面、group、碰撞分層、失敗原因碼、已知陷阱
 - [[changelog]] —— 被推翻的決定與被否決的方案。**筆記庫裡唯一可以寫「原本是什麼」的地方**
 - [[schema-gbnf-vs-prompt-reliability-log]] —— GBNF 強制 vs 純 prompt 約束可靠度測試的歷史彙總報告，供《12》§7.3 引用
-- [[reasoning_cap_experiment/報告]] —— `reasoning` 欄位 100 字 vs 200 字上限對照實驗，實測重複率差 6.6 個百分點且統計顯著，支持維持 `MAX_REASONING_CHARS=100`
+- [[reasoning_cap_experiment/報告]] —— `reasoning` 欄位 100 字 vs 200 字上限對照實驗，單一 500 輪軌跡實測重複率差 6.6 個百分點（描述性觀察，非統計顯著），支持維持 `MAX_REASONING_CHARS=100`
 
 ### 規格書
 
