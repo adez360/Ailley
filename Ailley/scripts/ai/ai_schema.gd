@@ -330,15 +330,17 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 				return _fail(ERROR_BAD_SHAPE)
 
 	# buy 動作的 params 驗證（#340）：item_id 跟 place 都是必填字串，
-	# 空字串或非字串在這一層就擋掉
+	# 空字串或非字串在這一層就擋掉。驗證後將正規化的值寫回 params
 	if action == "buy":
 		var buy_params: Dictionary = task.get("params", {})
 		var item_id: Variant = buy_params.get("item_id")
 		if not item_id is String or (item_id as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
+		buy_params["item_id"] = (item_id as String).strip_edges()
 		var place: Variant = buy_params.get("place")
 		if not place is String or (place as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
+		buy_params["place"] = (place as String).strip_edges()
 
 	# #268／#290：expires_in_minutes（模型填的相對時長）現在有跟
 	# priority/duration 同一套量級上限，不再只有 is_finite()——

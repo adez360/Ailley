@@ -1950,8 +1950,11 @@ func _pursue_work_task() -> void:
 
 	if reason != Character.WORK_OK:
 		push_warning("Agent %s: work_at 失敗（%s）" % [character_name, reason])
-		# 其他失敗原因：清掉任務並等待決策
+		# 其他失敗原因：清掉任務、重置 pursuit state 並等待決策
+		_pursued_place = ""
+		_pursuit_done = false
 		_current_task = {}
+		current_place = ""
 		current_state = "idle"
 		if llm_decision_enabled and not _awaiting_decision:
 			_request_next_decision(_today_plan_needs_new_goal())
@@ -1993,6 +1996,8 @@ func _pursue_buy_task() -> void:
 
 	if _current_task.get("source", "") == "llm":
 		_remove_task(_current_task.get("id", ""))
+	_pursued_place = ""
+	_pursuit_done = false
 	_current_task = {}
 	current_place = ""
 	current_state = "idle"
