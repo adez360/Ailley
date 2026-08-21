@@ -876,7 +876,9 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 	# 比精準對齊網路延遲更重要
 	say(AI_THINKING_TEXT, true)
 
-	var envelope := PromptBuilder.build_dialogue_envelope(self, listener, turns, max_turns)
+	var envelope := PromptBuilder.build_dialogue_envelope(
+		self, listener, turns, max_turns, current_place
+	)
 	var result := await _decide_with_retry(envelope, AIService.Policy.CONVERSATION, AISchema.validate_dialogue)
 	if not result["ok"]:
 		return {"ok": false}
@@ -1071,7 +1073,7 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	var visible: Array[Character] = vision.get_visible_characters() if vision != null else []
 	var envelope := PromptBuilder.build_plan_envelope(
 		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan,
-		_fact_lines_summary(), had_pending_persuade
+		_fact_lines_summary(), had_pending_persuade, current_place
 	)
 	var validator := func(data: Dictionary) -> Dictionary:
 		return AISchema.validate_tasks(data, effective_allow_update_plan, now_minutes)

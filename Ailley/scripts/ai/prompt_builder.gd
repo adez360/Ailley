@@ -259,8 +259,12 @@ static func build_reflection_envelope(character: Character, daily_events: Array[
 
 ## speaker 是要開口的那一方（一定是本機 Agent，玩家的台詞不經過這裡）。
 ## listener 是對話的另一方。turns 是目前為止的逐輪紀錄，形狀見 _turn_entry()。
+## location_id 是 speaker 目前所在地點（呼叫端的 current_place），給
+## _memory_block() 做連結展開篩選用（#360）——listener 本身就是在場角色，
+## 直接算進篩選條件，不用呼叫端額外組一份 present_npc_ids
 static func build_dialogue_envelope(
-	speaker: Character, listener: Character, turns: Array[Dictionary], max_turns: int
+	speaker: Character, listener: Character, turns: Array[Dictionary], max_turns: int,
+	location_id: String = ""
 ) -> Dictionary:
 	return {
 		"system": _system(speaker, DIALOGUE_SYSTEM),
@@ -271,7 +275,9 @@ static func build_dialogue_envelope(
 				"listener": _listener_block(speaker, listener),
 				"turns": turns,
 				"max_turns": max_turns,
-				"memory": _memory_block(speaker),
+				"memory": _memory_block(
+					speaker, [listener.character_id] as Array[String], location_id
+				),
 			},
 		},
 	}
@@ -295,15 +301,21 @@ static func turn_entry(speaker_name: String, text: String) -> Dictionary:
 ## （#227），跟 pool／today_plan 一樣由呼叫端整理好再傳進來，這個檔案不伸進
 ## agent.gd 內部欄位。has_pending_persuade 決定要不要把 persuaded／
 ## importance／valence 這組條件式欄位放進 schema，跟 allow_update_plan
-## 是同一種「文法層面就不存在這個選項」的做法，不是叫模型不要填
+## 是同一種「文法層面就不存在這個選項」的做法，不是叫模型不要填。
+## location_id 是 character 目前所在地點（呼叫端的 current_place），給
+## _memory_block() 做連結展開篩選用（#360）——present_npc_ids 直接從
+## visible 取 character_id，不用呼叫端另外組一份
 static func build_plan_envelope(
 	character: Character, visible: Array[Character], pool: Array[Dictionary],
 	today_plan: Array[Dictionary], allow_update_plan: bool,
-	fact_lines: Array[String] = [], has_pending_persuade: bool = false
+	fact_lines: Array[String] = [], has_pending_persuade: bool = false,
+	location_id: String = ""
 ) -> Dictionary:
 	var visible_block: Array[Dictionary] = []
+	var present_npc_ids: Array[String] = []
 	for other in visible:
 		visible_block.append(_listener_block(character, other))
+		present_npc_ids.append(other.character_id)
 
 	return {
 		"system": _system(character, _plan_system(allow_update_plan, has_pending_persuade)),
@@ -315,7 +327,7 @@ static func build_plan_envelope(
 				"pool": pool,
 				"today_plan": _today_plan_sentence(today_plan),
 				"fact_lines": fact_lines,
-				"memory": _memory_block(character),
+				"memory": _memory_block(character, present_npc_ids, location_id),
 			},
 		},
 		"response_format": AISchema.plan_response_schema(allow_update_plan, has_pending_persuade),
@@ -434,12 +446,18 @@ static func _self_block(character: Character) -> Dictionary:
 		"current_goal": snapshot.get("current_goal", ""),
 	}
 
-## L2（近期）＋ L4（核心）記憶固定全量帶入，不做情境篩選（#169，《99》P-03
-## 方案 A，語意檢索屬完整版才需要）。放進 context 不是 system——system 段要
-## 逐字元不變才能吃到 provider 的 prompt cache，記憶會隨事件變動，放這裡才對。
-## 只帶 content 字串，不帶 valence/importance/decay_value 這些引擎內部欄位——
-## 模型只需要「記得什麼」，不需要知道引擎怎麼替這則記憶打分
-static func _memory_block(character: Character) -> Dictionary:
+## L2（近期）依連結展開篩選、L4（核心）固定全量帶入（#360，《13》§三 MVP-1，
+## 取代原本 L2/L4 全量倒出的方案 A）。L2 只在「related_npcs 跟在場角色有交集」
+## 或「location_id 等於目前所在地點」時才帶入——L4 核心記憶不論情境一律帶入
+## （《03》§3：核心記憶永不遺忘，本來就該常駐）。present_npc_ids／location_id
+## 由呼叫端整理好傳進來（跟 pool／today_plan／fact_lines 同一種做法，這個檔案
+## 不伸進 agent.gd 內部欄位讀 current_place）。放進 context 不是 system——
+## system 段要逐字元不變才能吃到 provider 的 prompt cache，記憶會隨事件變動，
+## 放這裡才對。只帶 content 字串，不帶 valence/importance/decay_value 這些
+## 引擎內部欄位——模型只需要「記得什麼」，不需要知道引擎怎麼替這則記憶打分
+static func _memory_block(
+	character: Character, present_npc_ids: Array[String], location_id: String
+) -> Dictionary:
 	if character.memory == null:
 		return {"recent": [], "core": []}
 
@@ -447,12 +465,25 @@ static func _memory_block(character: Character) -> Dictionary:
 
 	var recent: Array[String] = []
 	for entry in buckets[2]:
+		var related: Array = entry.get("related_npcs", [])
+		var linked_by_npc := false
+		for npc_id in related:
+			if present_npc_ids.has(npc_id):
+				linked_by_npc = true
+				break
+		var linked_by_place: bool = (
+			not location_id.is_empty() and entry.get("location_id", "") == location_id
+		)
+		if not linked_by_npc and not linked_by_place:
+			continue
+
 		recent.append(entry["content"])
 		# 《03》§4-2：被檢索到的記憶補回 decay_value（上限 DECAY_MAX），
 		# 否則這些記憶持續影響對話/決策卻照常衰減、終被刪除（CodeRabbit
 		# PR #200 抓到）。buckets 裡是 entries 的同一個 Dictionary 參照
 		# （get_by_levels 只分桶不複製），mark_retrieved 的改動會回饋回真正
-		# 存著的那一筆。L4 不衰減，不需要標
+		# 存著的那一筆。只對真的被選中帶入的這幾條標記，不是整桶（#360）。
+		# L4 不衰減，不需要標
 		character.memory.mark_retrieved(entry)
 
 	var core: Array[String] = []
