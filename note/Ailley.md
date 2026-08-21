@@ -58,6 +58,7 @@ Ailley 是由 LLM 驅動的 2D 像素村莊（Godot 4.5.1）。
 | [[MVP簡化限制清單]] | MVP 為求簡化砍掉／限制了哪些 AI 自主行為空間，完整版開發參考用 | 進行中 |
 | [[角色庫與投放]] | 動態生成角色的身分系統，官方模板庫 + 投放機制 | 已實作 |
 | [[平行 Worktree 與 Godot MCP]] | 多 worktree 平行跑 issue 時的 godot-ai session 隔離、相依 issue 重造重複的坑 | 現況 |
+| [[persuade 對玩家]] | NPC 對玩家發起 persuade 時的 Y/N 彈窗，跟 #227 LLM 決策路徑的分流、waypoint 導引與記憶效果 | 已實作 |
 
 ### ai
 

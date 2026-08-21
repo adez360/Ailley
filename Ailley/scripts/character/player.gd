@@ -1,3 +1,4 @@
+class_name Player
 extends Character
 
 ## 玩家操作的角色。輸入優先於 A* 自動移動：一按方向鍵就中斷現有路徑。
@@ -325,6 +326,20 @@ func _decide_velocity() -> Vector2:
 func next_line(_listener: Character, _turns: Array[Dictionary], _max_turns: int) -> Dictionary:
 	var resolved: Array = await turn_resolved
 	return {"ok": resolved[1], "line": resolved[0], "end": false}
+
+## NPC 對玩家發起 persuade 時（#305）跳出的 Y/N 彈窗結果。彈窗是
+## scenes/persuade_dialog.tscn 的單一實例（persuade_dialog 群組，跟
+## vending_menu／god_stone_input 同一種「場景裡固定掛一個、用 group 找」
+## 的既有寫法），這裡只負責找到它、把文案丟過去、把結果轉交回呼叫端
+## （agent.gd 的 _ask_player_persuade()）——跟 next_line()／turn_resolved
+## 同一種「玩家的回應來自 UI 事件不是 LLM」的介面設計，呼叫端不用知道
+## 彈窗怎麼畫、怎麼收使用者輸入
+func request_persuade_response(text: String) -> bool:
+	var dialog := get_tree().get_first_node_in_group("persuade_dialog")
+	if dialog == null:
+		push_error("player.gd: 場景裡找不到 persuade_dialog 群組的節點")
+		return false
+	return await dialog.ask(text)
 
 ## Player 沒有 npc_schedule.json 的 identities 項目可查（那份表本來就只給場景裡
 ## 固定的 NPC 用），每次開遊戲都會走到 Character._ready() 的第三層。這裡覆寫

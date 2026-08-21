@@ -1,9 +1,9 @@
-[gd_scene load_steps=16 format=3 uid="uid://wo0a0v2y4gj1"]
+[gd_scene load_steps=17 format=3 uid="uid://wo0a0v2y4gj1"]
 
 [ext_resource type="PackedScene" uid="uid://cyrnw30ddh16r" path="res://scenes/debug_console.tscn" id="1_mphia"]
 [ext_resource type="PackedScene" uid="uid://q38st5oy2nj" path="res://scenes/chat_input.tscn" id="2_0m4u7"]
-[ext_resource type="Script" uid="uid://dm8733qx3w3uk" path="res://scripts/ui/time_label.gd" id="3_apjy4"]
 [ext_resource type="Script" uid="uid://pegp430ck1s5" path="res://scripts/ui/ai_status_label.gd" id="3_aistat"]
+[ext_resource type="Script" uid="uid://dm8733qx3w3uk" path="res://scripts/ui/time_label.gd" id="3_apjy4"]
 [ext_resource type="Script" uid="uid://dej3fk4srven5" path="res://scripts/ui/status_panel.gd" id="4_5n1hp"]
 [ext_resource type="Texture2D" uid="uid://b06f01r4ovc0r" path="res://assets/ui/Setting menu.png" id="5_eld54"]
 [ext_resource type="Script" uid="uid://bghlt4yqp6xrt" path="res://scripts/ui/inventory_panel.gd" id="6_3swnk"]
@@ -12,6 +12,7 @@
 [ext_resource type="PackedScene" uid="uid://xqribn8mdubp" path="res://scenes/character_library.tscn" id="9_5357l"]
 [ext_resource type="Script" uid="uid://djdfer2luq3s5" path="res://scripts/ui/pause.gd" id="10_iypfu"]
 [ext_resource type="PackedScene" uid="uid://d3no1g5djdk2s" path="res://scenes/god_stone_input.tscn" id="11_0m4u7"]
+[ext_resource type="PackedScene" uid="uid://ccx0ctgkyuok1" path="res://scenes/persuade_dialog.tscn" id="13_5n1hp"]
 
 [sub_resource type="StyleBoxTexture" id="StyleBoxTexture_jbj1t"]
 texture = ExtResource("5_eld54")
@@ -317,3 +318,5 @@ columns = 9
 [node name="CharacterLibrary" parent="." instance=ExtResource("9_5357l")]
 
 [node name="GodStoneInput" parent="." instance=ExtResource("11_0m4u7")]
+
+[node name="PersuadeDialog" parent="." instance=ExtResource("13_5n1hp")]

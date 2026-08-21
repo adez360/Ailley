@@ -2635,8 +2635,22 @@ func _pursue_persuade_task() -> void:
 		_finish_task_and_request_next()
 		return
 
-	# 玩家沒有 LLM 決策迴圈，persuaded 這條路徑走不通——見 issue #305。
-	# llm_decision_enabled 關著的 Agent 也一樣走不通：_ready() 一律
+	# 玩家目標：沒有 LLM 決策迴圈，persuaded 這條路徑走不通，改走 Y/N 彈窗
+	# （#305）——不寫入 _pending_persuade，不佔用 llm_decision_enabled 那條
+	# 忙碌拒絕機制（玩家沒有這個狀態）。彈窗本身跟距離無關，但 persuade 一律
+	# 要先走到範圍內才送達（跟上面 talk_range 判斷同一個理由），所以放在
+	# 距離判定之後，位置對齊 agent 目標的送達點
+	if target.is_in_group("player"):
+		stop_moving()
+		var reason: String = str(params.get("reason", ""))
+		var proposed_task: Dictionary = params.get("proposed_task", {})
+		last_action_result = "你試著說服 %s，等他自己想清楚" % target.character_name
+		_track_action_result_for_facts("persuade", true)
+		_persuade_delivered = true
+		_ask_player_persuade(target as Player, reason, proposed_task)
+		return
+
+	# llm_decision_enabled 關著的 Agent 走不通：_ready() 一律
 	# add_to_group("agents")，不管這個旗標開不開（預設就是關），只檢查
 	# 有沒有在 agents 群組擋不住——若放行，_pending_persuade 寫上去之後
 	# 永遠沒有 _request_next_decision() 會被觸發去清掉它（見 llm_decision_enabled
@@ -2777,6 +2791,48 @@ func _describe_task_intent(task: Dictionary) -> String:
 	if not place.is_empty():
 		return "%s（地點：%s）" % [action, place]
 	return action
+
+# 對玩家發起的 persuade（#305）：不寫入 _pending_persuade 走 LLM 決策迴圈，
+# 直接跳玩家自己的 Y/N 彈窗。文案比照 _fact_lines_summary() 對 Agent 目標用的
+# 同一種事實句措辭（「說服者是誰、理由是什麼」），只是這裡是主動彈窗不是
+# 被動注入下一輪 prompt。fire-and-forget：呼叫端（_pursue_persuade_task()）
+# 不 await 這個函式，跟 persuade 本身「送達」與「被不被說動」是兩個時間點
+# 分開的既有設計一致——送達當下就讓任務照 duration 收尾，彈窗的結果晚點
+# 才會回來，兩者不互相卡
+func _ask_player_persuade(player: Player, reason: String, proposed_task: Dictionary) -> void:
+	var text: String
+	if proposed_task.is_empty():
+		text = "%s 試著說服你：%s，你被說動了嗎？" % [character_name, reason]
+	else:
+		text = "%s 試著說服你（%s），希望你能去做「%s」，你被說動了嗎？" % [
+			character_name, reason, _describe_task_intent(proposed_task)
+		]
+
+	var accepted: bool = await player.request_persuade_response(text)
+	if not accepted:
+		return
+
+	# 行動說服：帶地點就用 #415 的 waypoint 導引玩家過去，純粹導引不代替玩家
+	# 行動——玩家沒有任務池，不會被自動執行動作，去不去、中途放不放棄都是
+	# 玩家自己決定。proposed_task 沒有地點（純文字任務）時沒有座標可以導引，
+	# 靜默略過，不是漏做
+	if not proposed_task.is_empty():
+		var place: String = str(proposed_task.get("params", {}).get("place", ""))
+		if place.is_empty():
+			return
+		var anchors := get_tree().get_first_node_in_group("place_anchors")
+		if anchors == null or not anchors.has(place) or player.waypoint_indicator == null:
+			return
+		player.waypoint_indicator.show_waypoint(anchors.resolve(place), Callable(), Callable())
+		return
+
+	# 純思想說服：沿用 #227 對 Agent 目標的效果，寫進被說服者（這裡是玩家）
+	# 的記憶。玩家沒有 LLM 可以像 Agent 那樣自己評 importance／valence
+	# （見 _resolve_pending_persuade() 對應分支），這裡用固定的中等重要度、
+	# 正面傾向頂：玩家已經主動選了「Y」，代表這件事對他來說值得記住、
+	# 感受傾向正面，不是無中生有替他判斷
+	if player.memory != null:
+		player.memory.add_candidate(reason, 50, "positive", [character_id] as Array[String])
 
 # 消化這輪待回應的說服結果（#227）。只在 _request_next_decision() 確認這輪
 # envelope 真的問過模型（見那邊 had_pending_persuade 的說明）才會被呼叫——

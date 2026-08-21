@@ -1,0 +1,49 @@
+[gd_scene load_steps=2 format=3 uid="uid://ccx0ctgkyuok1"]
+
+[ext_resource type="Script" uid="uid://c17kc6lnga5rf" path="res://scripts/ui/persuade_dialog.gd" id="1_adi1o"]
+
+[node name="PersuadeDialog" type="CanvasLayer"]
+script = ExtResource("1_adi1o")
+
+[node name="Panel" type="Panel" parent="."]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -160.0
+offset_top = -60.0
+offset_right = 160.0
+offset_bottom = 60.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="TextLabel" type="Label" parent="Panel"]
+layout_mode = 0
+anchor_right = 1.0
+offset_left = 10.0
+offset_top = 10.0
+offset_right = -10.0
+offset_bottom = 70.0
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="ButtonRow" type="HBoxContainer" parent="Panel"]
+layout_mode = 0
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -70.0
+offset_top = 80.0
+offset_right = 70.0
+offset_bottom = 112.0
+theme_override_constants/separation = 20
+
+[node name="YesButton" type="Button" parent="Panel/ButtonRow"]
+custom_minimum_size = Vector2(60, 32)
+layout_mode = 2
+text = "UI_PERSUADE_YES"
+
+[node name="NoButton" type="Button" parent="Panel/ButtonRow"]
+custom_minimum_size = Vector2(60, 32)
+layout_mode = 2
+text = "UI_PERSUADE_NO"
