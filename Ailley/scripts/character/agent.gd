@@ -1965,13 +1965,28 @@ func _pursue_buy_task() -> void:
 	var place: String = str(_current_task.get("params", {}).get("place", ""))
 	var machine := _find_vending_machine_at_place(place)
 
+	# 找不到販賣機：立即返回失敗
+	if not machine:
+		push_warning("Agent %s: 找不到販賣機 %s" % [character_name, place])
+		_pursued_place = ""
+		_pursuit_done = false
+		_current_task = {}
+		current_place = ""
+		current_state = "idle"
+		last_action_result = Character.BUY_TARGET_NOT_FOUND
+		if _current_task.get("source", "") == "llm":
+			_remove_task(_current_task.get("id", ""))
+		if llm_decision_enabled and not _awaiting_decision:
+			_request_next_decision(_today_plan_needs_new_goal())
+		_reevaluate()
+		return
+
 	# 還沒到達就先走過去
-	if not _has_arrived_at(machine.global_position if machine else Vector2.ZERO):
+	if not _has_arrived_at(machine.global_position):
 		if current_place != _pursued_place or not is_moving():
 			_pursued_place = current_place
 			_pursuit_done = false
-			var target: Vector2 = machine.global_position if machine else Vector2.ZERO
-			if not move_to(target):
+			if not move_to(machine.global_position):
 				push_warning("Agent %s: 走不到販賣機 %s" % [character_name, place])
 				_pursuit_done = true
 		return
