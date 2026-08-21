@@ -125,6 +125,10 @@ var _noticed := {}
 # 與「地點換了要重新起步」
 var _pursued_place := ""
 
+# _on_action_interrupted() 清空 current_place 前存的快照，給 _on_attacked()
+# 讀（CodeRabbit review 抓到，見那兩個函式的說明）
+var _place_before_interrupt := ""
+
 # 這一趟移動已經有結論了（走到了，或 _check_stuck() 放棄了）。
 # 少了它，放棄之後下一次重算又會對同一個走不到的目標重新 move_to()，
 # 變成每秒一次的卡住／放棄迴圈
@@ -301,8 +305,35 @@ var _next_daily_event_id := 0
 
 ## 加一筆今天發生的事。滿了就丟掉最舊的一筆，不是拒絕新的——今天最新發生的
 ## 事沒理由因為緩衝區滿了就進不去，跟 Memory.push_l1() 的 FIFO 取捨一樣
-func _push_daily_event(content: String) -> void:
-	_daily_events.append({"id": _next_daily_event_id, "content": content})
+##
+## related_npcs 是這件事牽涉到誰——客觀事實，在事件發生的當下記下來，睡前
+## 反思寫回 Memory.add_candidate() 時原封不動帶過去（見
+## request_sleep_reflection()），不是引擎替這段記憶加主觀定性（見《00》
+## 原則二）。location_id 不開放呼叫端指定，一律用 current_place——跟
+## get_state_snapshot() 送給 LLM 的 "place" 欄位同一個來源，不另外定義一套
+## 「現在在哪」
+##
+## location_override 給極少數 current_place 當下已經不可信的呼叫端用（目前
+## 只有 _on_attacked()——見那邊的說明）：非 null 時取代 current_place，其餘
+## 呼叫端不用管這個參數（省略即為 null），維持原本「一律用 current_place」的
+## 行為（CodeRabbit review 抓到 force_interrupt() 會搶先把 current_place 清空，
+## 直接讀會拿到空字串）。
+##
+## 一定要用 null 當「沒有指定」的哨兵，不能用空字串——`_place_before_interrupt`
+## 快照下來的值本來就可能合法地是空字串（角色被攻擊當下 current_place 本來就
+## 沒設過），空字串當「沒指定」處理的話，會誤用呼叫這裡當下已經被 _reevaluate()
+## 重新指派的 current_place（可能是完全不相關的新地點），而不是「這件事發生
+## 時真的沒有地點」這個事實（CodeRabbit review 抓到）
+func _push_daily_event(
+	content: String, related_npcs: Array[String] = [], location_override: Variant = null
+) -> void:
+	var location_id: String = current_place if location_override == null else str(location_override)
+	_daily_events.append({
+		"id": _next_daily_event_id,
+		"content": content,
+		"related_npcs": related_npcs,
+		"location_id": location_id,
+	})
 	_next_daily_event_id += 1
 	if _daily_events.size() > DAILY_EVENTS_CAP:
 		_daily_events.pop_front()
@@ -714,7 +745,7 @@ func exit_conversation() -> void:
 	if _conversation != null:
 		var other: Character = _conversation.target if _conversation.initiator == self else _conversation.initiator
 		if other != null:
-			_push_daily_event("你跟 %s 講完話了" % other.character_name)
+			_push_daily_event("你跟 %s 講完話了" % other.character_name, [other.character_id])
 			# 「多久沒說話」事實句的計時基準（#338）
 			_last_social_minute = _now_minutes()
 
@@ -859,9 +890,14 @@ func request_sleep_reflection() -> Dictionary:
 	# #210：validate_reflection() 只驗結構，不驗 id 是不是真的來自這次送出的
 	# events_sent（唯一且存在）。這裡包一層閉包，讓 id 檢查跟結構驗證共用同一條
 	# 「失敗就重試」路徑（_decide_with_retry），不用改動那個共用機制的簽名。
-	var valid_ids := {}
+	#
+	# 用 id 查表存整筆事件，不是只記存不存在——LLM 回應只回 content／
+	# importance／valence，related_npcs／location_id 是引擎自己記的客觀事實
+	# （見 _push_daily_event()），LLM 不會也不該回傳，寫回 Memory.add_candidate()
+	# 時要從這裡原封不動撈回來（#346）
+	var events_by_id := {}
 	for e in events_sent:
-		valid_ids[e["id"]] = true
+		events_by_id[e["id"]] = e
 
 	var validator := func(data: Dictionary) -> Dictionary:
 		var validated: Dictionary = AISchema.validate_reflection(data)
@@ -870,7 +906,7 @@ func request_sleep_reflection() -> Dictionary:
 		var seen_ids := {}
 		for event in validated["data"]["events"]:
 			var event_id = event["id"]
-			if not valid_ids.has(event_id) or seen_ids.has(event_id):
+			if not events_by_id.has(event_id) or seen_ids.has(event_id):
 				return AISchema._fail(AISchema.ERROR_BAD_SHAPE)
 			seen_ids[event_id] = true
 		return validated
@@ -886,7 +922,18 @@ func request_sleep_reflection() -> Dictionary:
 
 	var scored_ids := {}
 	for event in data["events"]:
-		memory.add_candidate(event["content"], event["importance"], event["valence"])
+		var original: Dictionary = events_by_id.get(event["id"], {})
+		# CodeRabbit review：original.get() 回傳型別是 Variant，靠宣告時賦值
+		# 隱式轉成 Array[String] 依賴的是「來源值本身在 runtime 就已經是
+		# Array[String]」這個不對外保證的假設（雖然目前資料流確實如此——
+		# _push_daily_event() 存進 _daily_events 時就是型別化參數，
+		# events_sent := _daily_events.duplicate(true) 深複製也保留 subtype）。
+		# 改用 assign() 不依賴這個隱性假設，來源不管是 untyped 還是 typed
+		# 陣列都能正確轉換，不會在未來資料流改變時悄悄壞掉
+		var related_npcs: Array[String] = []
+		related_npcs.assign(original.get("related_npcs", []))
+		var location_id: String = original.get("location_id", "")
+		memory.add_candidate(event["content"], event["importance"], event["valence"], related_npcs, location_id)
 		scored_ids[event["id"]] = true
 
 	_daily_events = _daily_events.filter(func(e): return not scored_ids.has(e["id"]))
@@ -1218,6 +1265,11 @@ func _on_work_finished() -> void:
 # 做完或判定失敗，只是被打斷，還在池子裡的話下次重新仲裁時值得重新考慮要不要
 # 繼續做（例如原本在走去做別的事，被打斷後可能還是想繼續走過去）
 func _on_action_interrupted() -> void:
+	# 清空前先存一份快照——character.gd::attack() 的呼叫順序是
+	# force_interrupt()（跑到這裡，把 current_place 清空）先於 _on_attacked()
+	# （記事實句），直接讀 current_place 的話 _on_attacked() 永遠拿到空字串
+	# （CodeRabbit review 抓到）
+	_place_before_interrupt = current_place
 	_pursued_place = ""
 	_pursuit_done = false
 	_clear_current_task(false)
@@ -1226,9 +1278,13 @@ func _on_action_interrupted() -> void:
 	_reevaluate()
 
 # 被攻擊記成事實句（純客觀事件，不貼「這很可怕」之類的主觀標籤——見 CLAUDE.md
-# 「遊戲機制規格：AI 自主性自檢」），讓下次決策／睡前反思能讀到發生過這件事
+# 「遊戲機制規格：AI 自主性自檢」），讓下次決策／睡前反思能讀到發生過這件事。
+# 地點用 _on_action_interrupted() 存的快照，不是這裡當下的 current_place——
+# 見 _push_daily_event() 的 location_override 說明
 func _on_attacked(attacker: Character) -> void:
-	_push_daily_event("你被 %s 攻擊了" % attacker.character_name)
+	_push_daily_event(
+		"你被 %s 攻擊了" % attacker.character_name, [attacker.character_id], _place_before_interrupt
+	)
 
 # 基底的快照加上行程表這一段。schedule/current_place/current_state 宣告在這裡，
 # 所以是這裡負責放進去 —— 基底不必去猜誰有行程表
@@ -1317,7 +1373,7 @@ func _on_spotted(other: Character) -> void:
 	if relationships != null and relationships.has_met(other.character_id):
 		return
 
-	_push_daily_event("你第一次注意到 %s" % other.character_name)
+	_push_daily_event("你第一次注意到 %s" % other.character_name, [other.character_id])
 
 	say(L10n.t("DLG_SURPRISE"))
 	stop_moving()
