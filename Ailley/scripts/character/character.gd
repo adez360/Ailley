@@ -1567,3 +1567,26 @@ func _attach_haul(hauler: Character) -> void:
 
 func _detach_haul(hauler: Character) -> void:
 	_hauled_by.erase(hauler)
+
+
+# ---- 長動作檢查點的依附者（issue #336，《02》§3） ----
+
+## 自己進行長動作、觸發固定間隔檢查點時，除了自己還要一併收到檢查點通知的
+## 角色——目前唯一情形是被自己 haul 的目標。檢查點觸發時「搬運者選繼續搬
+## 還是放棄放下、被搬運者選 struggle／shout／idle」是兩件不同的事（見
+## Agent._reevaluate_once()／#337），這裡只負責列出「還有誰要一併通知」。
+##
+## 之後若有類似「一方長時間限制另一方行動」的機制（如 detained），比照這套
+## 模式在這裡加一條，不要各自另兜一套通知管道（《02》§3 明訂）
+func get_checkpoint_dependents() -> Array[Character]:
+	var dependents: Array[Character] = []
+	if _hauling_target != null:
+		dependents.append(_hauling_target)
+	return dependents
+
+## 依附在別人的長動作上時收到的檢查點通知（例如被 haul 時，對方的 haul
+## 檢查點觸發）。基底預設什麼都不做——要不要因此發起自己的決策請求、問什麼
+## 選項，是各自機制的責任（被 haul 時要問 struggle／shout／idle，見 #337；
+## Player 若之後也會被 haul，這裡會是接 UI 提示的地方，不是這裡的責任）
+func on_dependent_checkpoint(_task: Dictionary) -> void:
+	pass
