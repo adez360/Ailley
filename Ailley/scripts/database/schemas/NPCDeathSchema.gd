@@ -70,8 +70,10 @@ static func create(db) -> bool:
 		-- Corpse 屍體
 		-- =================================================
 
-		-- 0 ~ 100，REAL 而非 INTEGER——《09》§3-3 每 tick 累加 0.7，INTEGER 會把
-		-- 小數進度捨掉，讓實際腐壞時間偏離規格（見 #451 CodeRabbit review）
+		-- 0 ~ 100，REAL 而非 INTEGER——《09》§3-4 每 tick 累加 0.7，INTEGER 會把
+		-- 小數進度捨掉，讓實際腐壞時間偏離規格（見 #451 CodeRabbit review）。
+		-- 100 / 0.7 除不盡，寫入前引擎要 clampf(value, 0, 100)，不然某個 tick
+		-- 算出 100.1 會直接撞下面的 CHECK 約束寫入失敗
 		-- 100 = 腐壞完成
 		-- 達 100 且尚未安葬 → 自動建立無名碑
 		corpse_decay REAL NOT NULL DEFAULT 0
