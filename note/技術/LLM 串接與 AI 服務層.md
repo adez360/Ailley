@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-21
+updated: 2026-08-22
 ---
 
 # LLM 串接與 AI 服務層
@@ -649,10 +649,11 @@ JSON Schema → GBNF 的轉換器。
 
 ## 不在這一版（正式線）
 
-- **記憶系統** —— 卡在專案完全沒有存檔機制，記憶無處持久化。`character.gd` 的
-  `signal spoke` 跟 Task 上的 `reasoning`／`inner_monologue`（issue #88）都是
-  日後寫逐字稿/決策脈絡的接點，先鋪路但還沒有東西讀。**這段現況待核對更新**，
-  見 #484（記憶資料結構/生成/注入/持久化幾則 issue 已關閉，這段敘述可能過時）
+- **記憶系統的 SQLite 存檔路徑** —— L1-L4 資料結構、事件→候選記憶生成
+  pipeline、prompt 注入（L2＋L4）、JSON 存檔持久化都已完成（issue
+  #167／#168／#169／#170，細節見 [[記憶與睡眠反思]]、[[存檔]]），但只接了
+  `JsonSaveService`：`SqliteSaveService` 尚未讀寫 `memory` 欄位，SQLite
+  round-trip 會遺失記憶（見 [[存檔]]「SQLite 後端現況」）
 - **交誼區 WebSocket 線** —— 伺服器技術棧尚未決定，見 #476
 - `preconditions` 求值 —— 結構留欄位，v1 一律通過，見 #477
 - 白名單中除 `move_to` / `talk` / `sleep` 外的動作實作——白名單本身已經是
