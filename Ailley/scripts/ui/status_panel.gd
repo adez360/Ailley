@@ -109,7 +109,7 @@ func _make_item_slot() -> TextureRect:
 	return rect
 
 func _unhandled_input(event: InputEvent) -> void:
-	if panel.visible and event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+	if panel.visible and event.is_action_pressed("ui_cancel"):
 		close()
 		get_viewport().set_input_as_handled()
 

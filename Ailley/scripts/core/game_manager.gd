@@ -395,9 +395,14 @@ func deploy_from_library(id: String, as_player: bool = false) -> Character:
 	# 靠這個查表）撈到的永遠是先加進場景那個，新投放的等於白投（實測重現過：
 	# 兩個節點同時掛在 player 分組，查表撈到舊的）
 	if as_player:
-		var old_player := get_tree().get_first_node_in_group("player")
-		if old_player != null:
-			old_player.queue_free()
+		for node in get_tree().get_nodes_in_group("player"):
+			var old_player := node as Character
+			if old_player != null:
+				var old_entry := get_library_entry(old_player.character_id)
+				if not old_entry.is_empty():
+					old_entry["deployed"] = false
+			node.remove_from_group("player")
+			node.queue_free()
 
 	var scene := preload("res://scenes/player.tscn") if as_player else preload("res://scenes/agent.tscn")
 	var character := spawn_character(scene, {
@@ -439,6 +444,9 @@ func get_world_save_data() -> Dictionary:
 		# JSON 沒有 Vector2 型別，存成 [x, y] 而不是直接塞 Vector2：
 		# JSON.stringify() 對它只會呼叫 str()，讀回來的是格式化字串不是座標
 		var entry := {
+			# 場景裡目前找不到這個 character_id 時，apply_world_save_data() 要靠
+			# 這欄決定重新生成該用 agent.tscn 還是 player.tscn（#344）
+			"type": "agent" if character is Agent else "player",
 			"position": [character.global_position.x, character.global_position.y],
 		}
 		# current_place／current_state 只有 Agent（行程仲裁器）才有意義，
@@ -466,10 +474,9 @@ func get_world_save_data() -> Dictionary:
 	}
 
 # data 缺欄位一律用預設值補，不當成錯誤（跟 character.gd 同一條規則）。
-# 只套用場景裡目前找得到的角色——重新生成存檔裡有記載但場景沒有的角色
-# 不在這則骨架範圍內（見 issue #21「不包含 player 加入世界的實際流程」）。
-# character_library 同理：只還原清單本身，"deployed" 為 true 的紀錄不會在這裡
-# 重新生成場上節點——那是另一件事，見 issue #342 範圍界線
+# 場景裡目前找到的角色直接套用；存檔裡有記載但場景沒有的角色會被重新生成
+# 再套用（#344，見 _respawn_character()）——只處理反向情況（場景有、存檔沒有）
+# 一律不動，不主動移除任何節點，留給之後真的需要時再決定
 func apply_world_save_data(data: Dictionary) -> void:
 	GameClock.day = int(data.get("day", GameClock.day))
 	allow_player_join = bool(data.get("allow_player_join", allow_player_join))
@@ -517,8 +524,10 @@ func apply_world_save_data(data: Dictionary) -> void:
 		push_error("apply_world_save_data: characters 不是 Dictionary，跳過角色資料載入")
 		return
 
+	var found_ids := {}
 	for node in get_tree().get_nodes_in_group("characters"):
 		var character := node as Character
+		found_ids[character.character_id] = true
 		var entry = characters.get(character.character_id, {})
 		# 驗證每個 entry 必須是 Dictionary
 		if not entry is Dictionary:
@@ -526,20 +535,84 @@ func apply_world_save_data(data: Dictionary) -> void:
 			continue
 		if entry.is_empty():
 			continue
+		_apply_character_entry(character, entry)
 
-		var pos_array = entry.get("position", [])
-		# 驗證 position 必須是 Array，包含剛好 2 個元素，且都是數字
-		if not pos_array is Array:
-			push_error("apply_world_save_data: %s 的 position 不是 Array，跳過" % character.character_id)
+	# 存檔裡有記載、但場景裡目前沒有對應節點的角色——重新生成（#344）
+	for character_id in characters.keys():
+		if found_ids.has(character_id):
 			continue
-		if pos_array.size() != 2:
-			push_error("apply_world_save_data: %s 的 position 大小不是 2，跳過" % character.character_id)
+		var entry = characters[character_id]
+		if not entry is Dictionary:
+			push_error("apply_world_save_data: %s 的資料不是 Dictionary，跳過" % character_id)
 			continue
-		if not (typeof(pos_array[0]) in [TYPE_INT, TYPE_FLOAT] and typeof(pos_array[1]) in [TYPE_INT, TYPE_FLOAT]):
-			push_error("apply_world_save_data: %s 的 position 元素不是數字，跳過" % character.character_id)
-			continue
-		character.global_position = Vector2(pos_array[0], pos_array[1])
+		_respawn_character(character_id, entry)
 
-		if entry.has("current_place") and character.get("current_place") != null:
-			character.set("current_place", entry.get("current_place", ""))
-			character.set("current_state", entry.get("current_state", "idle"))
+# entry 的 position／current_place／current_state 驗證與套用，既有節點更新
+# 與 _respawn_character() 剛生出來的新節點共用同一套規則
+func _apply_character_entry(character: Character, entry: Dictionary) -> void:
+	var pos_array = entry.get("position", [])
+	# 驗證 position 必須是 Array，包含剛好 2 個元素，且都是數字
+	if not pos_array is Array:
+		push_error("apply_world_save_data: %s 的 position 不是 Array，跳過" % character.character_id)
+		return
+	if pos_array.size() != 2:
+		push_error("apply_world_save_data: %s 的 position 大小不是 2，跳過" % character.character_id)
+		return
+	if not (typeof(pos_array[0]) in [TYPE_INT, TYPE_FLOAT] and typeof(pos_array[1]) in [TYPE_INT, TYPE_FLOAT]):
+		push_error("apply_world_save_data: %s 的 position 元素不是數字，跳過" % character.character_id)
+		return
+	character.global_position = Vector2(pos_array[0], pos_array[1])
+
+	if entry.has("current_place") and character.get("current_place") != null:
+		character.set("current_place", entry.get("current_place", ""))
+		character.set("current_state", entry.get("current_state", "idle"))
+
+# 存檔裡有記載、但場景裡目前沒有對應節點的角色——重新生成後套用存檔資料
+# （#344）。只有角色庫（character_library）還記得住身分的角色會被生出來：
+# npc_schedule.json 那批固定 NPC 是 main.tscn 寫死的節點，本來就不會缺席；
+# player 目前 MVP 也是 main.tscn 固定節點，同樣不會走到這裡——這條路徑
+# 實際只服務「角色庫投放後重開遊戲」這種情況，type 欄位留給以後真的有
+# player 加入世界流程時使用
+func _respawn_character(character_id: String, entry: Dictionary) -> void:
+	var is_agent := str(entry.get("type", "agent")) != "player"
+	var scene: PackedScene = (
+		preload("res://scenes/agent.tscn") if is_agent
+		else preload("res://scenes/player.tscn")
+	)
+
+	if not is_agent:
+		_apply_character_entry(spawn_character(scene, {"character_id": character_id}), entry)
+		return
+
+	var library_entry := get_library_entry(character_id)
+	if library_entry.is_empty():
+		push_warning("apply_world_save_data: %s 不在角色庫，用最小身分重新生成" % character_id)
+		_apply_character_entry(spawn_character(scene, {"character_id": character_id}), entry)
+		return
+
+	# 跟 deploy_from_library() 同一套：identity_assignments 讓 _ready() 撿到
+	# 正確的人格資料，而不是退回沒有人格的最小版 system_prompt
+	identity_assignments[character_id] = {
+		"character_id": character_id,
+		"character_name": library_entry.get("character_name", ""),
+		"hexaco": library_entry.get("hexaco", {}),
+		"character": library_entry.get("character", ""),
+	}
+
+	var character := spawn_character(scene, {
+		"character_id": character_id,
+		"character_name": library_entry.get("character_name", ""),
+		"words_to_creator": library_entry.get("words_to_creator", ""),
+	})
+
+	# decision_source／model_name 是投放後不可改的欄位（《06》），還原時要跟著
+	# 設回去——跟 deploy_from_library() 同一個時序坑：spawn_character() 的
+	# add_child() 已經觸發過 _ready()，_provider 是照 @export 預設值
+	# （"local"）建的，這裡剛套上去的值要重建一次 provider 才會生效
+	if character.get("decision_source") != null:
+		character.set("decision_source", library_entry.get("decision_source", "local"))
+		character.set("model_name", library_entry.get("model_name", ""))
+		if character.has_method("rebuild_provider"):
+			character.rebuild_provider()
+
+	_apply_character_entry(character, entry)
