@@ -101,8 +101,9 @@ static func _migrate_v2_backfill_decay(db) -> bool:
 ## Migration 3：既有資料庫的 memories／npc_appearance／npc_last_action／
 ## npc_occupation 是在對應 *Schema.gd 補上 `NOT NULL PRIMARY KEY` 之前建的，
 ## SQLite 的 CREATE TABLE IF NOT EXISTS 不會回頭改這些舊 table 的欄位定義。
-## 用標準 SQLite「建暫存表 → 複製資料 → 刪舊表 → 暫存表改名」流程逐表重建，
-## 直接呼叫對應 *Schema.create(db) 產生新表結構，不在這裡重複 CREATE TABLE SQL。
+## 用標準 SQLite「舊表改名成暫存表 → 呼叫對應 *Schema.create(db) 建回原名
+## 新結構 → 從暫存表複製資料 → 刪除暫存表」流程逐表重建，不在這裡重複
+## CREATE TABLE SQL。
 ##
 ## 不在這段 transaction 內切換 PRAGMA foreign_keys——SQLite 交易中途不接受
 ## 切換，而且這裡的重建順序（子表先於父表 DROP）本來就不需要暫時關 FK。
@@ -120,6 +121,43 @@ static func _migrate_v3_notnull_primary_keys(db) -> bool:
 	return _migrate_v3_rebuild_memories(db)
 
 
+## ALTER TABLE ... RENAME TO 會把表上的索引一起搬到暫存表，索引名稱不變。
+## SQLite 的索引名稱在資料庫層級唯一，所以暫存表還占著原本的索引名稱時，
+## schema.create(db) 的 CREATE INDEX IF NOT EXISTS 會直接跳過；等暫存表
+## 之後被 DROP，那個索引就跟著消失，新表反而變成沒有索引。schema.create(db)
+## 之前要先把暫存表上的索引清掉，讓索引名稱空出來給新表用。
+## sqlite_autoindex_* 是 PRIMARY KEY 隱含建立的，跟著表本身建立／刪除，
+## 不能也不需要手動 DROP。
+static func _migrate_v3_drop_stale_indexes(db, old_table_name: String) -> bool:
+	if not db.query(
+		"""
+		SELECT name FROM sqlite_master
+		WHERE type = 'index' AND tbl_name = '%s'
+			AND name NOT LIKE 'sqlite_autoindex_%%';
+		""" % old_table_name
+	):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to query indexes on %s: %s"
+			% [old_table_name, db.error_message]
+		)
+		return false
+
+	for row in (db.query_result as Array):
+		var index_name: String = row.get("name", "")
+
+		if index_name.is_empty():
+			continue
+
+		if not db.query("DROP INDEX %s;" % index_name):
+			push_error(
+				"[DatabaseSchema] Migration 3: Failed to drop stale index %s: %s"
+				% [index_name, db.error_message]
+			)
+			return false
+
+	return true
+
+
 ## 沒有其他表外鍵指向的單一表重建：改名成暫存表 → 用 schema.create(db)
 ## 建回原名的新結構 → 把資料從暫存表複製回來 → 刪掉暫存表。
 static func _migrate_v3_rebuild_table(db, table_name: String, schema) -> bool:
@@ -130,6 +168,9 @@ static func _migrate_v3_rebuild_table(db, table_name: String, schema) -> bool:
 			"[DatabaseSchema] Migration 3: Failed to rename %s: %s"
 			% [table_name, db.error_message]
 		)
+		return false
+
+	if not _migrate_v3_drop_stale_indexes(db, old_name):
 		return false
 
 	if not schema.create(db):
@@ -177,6 +218,12 @@ static func _migrate_v3_rebuild_memories(db) -> bool:
 			"[DatabaseSchema] Migration 3: Failed to rename memory_related_npcs: "
 			+ db.error_message
 		)
+		return false
+
+	if not _migrate_v3_drop_stale_indexes(db, "memories__migrate_v3_old"):
+		return false
+
+	if not _migrate_v3_drop_stale_indexes(db, "memory_related_npcs__migrate_v3_old"):
 		return false
 
 	if not MemorySchema.create(db):

@@ -128,6 +128,20 @@ func _run() -> void:
 		"指向不存在 memory_id 的資料竟然插入成功，FK 沒生效"
 	)
 
+	for index_name in ["idx_memories_npc_level", "idx_memories_decay", "idx_memories_npc_day"]:
+		_check(
+			"重建後索引 %s 仍存在且指向 memories" % index_name,
+			_index_exists_on_table(index_name, "memories"),
+			"sqlite_master 查不到 %s 指向 memories 的索引——重建流程把索引弄丟了"
+			% index_name
+		)
+
+	_check(
+		"重建後索引 idx_memory_related_npcs_npc 仍存在且指向 memory_related_npcs",
+		_index_exists_on_table("idx_memory_related_npcs_npc", "memory_related_npcs"),
+		"sqlite_master 查不到 idx_memory_related_npcs_npc 指向 memory_related_npcs 的索引"
+	)
+
 	_finish()
 
 
@@ -160,6 +174,9 @@ func _seed_legacy_schema() -> bool:
 			FOREIGN KEY (npc_id) REFERENCES npc(npc_id) ON DELETE CASCADE,
 			FOREIGN KEY (location_id) REFERENCES location(location_id) ON DELETE SET NULL
 		);
+
+		CREATE INDEX idx_memories_npc_level ON memories(npc_id, level);
+		CREATE INDEX idx_memories_decay ON memories(decay_value);
 		""",
 
 		# --- memory_related_npcs（舊版：memory_id／npc_id 缺 NOT NULL）---
@@ -171,6 +188,8 @@ func _seed_legacy_schema() -> bool:
 			FOREIGN KEY (memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE,
 			FOREIGN KEY (npc_id) REFERENCES npc(npc_id) ON DELETE CASCADE
 		);
+
+		CREATE INDEX idx_memory_related_npcs_npc ON memory_related_npcs(npc_id);
 		""",
 
 		# --- npc_appearance（舊版：npc_id 缺 NOT NULL）---
@@ -379,6 +398,19 @@ func _can_insert_orphan_related_npc() -> bool:
 		"INSERT INTO memory_related_npcs (memory_id, npc_id) VALUES (?, ?);",
 		["__migration_v3_test_nonexistent_memory", NPC_A]
 	)
+
+
+func _index_exists_on_table(index_name: String, table_name: String) -> bool:
+	if not db.query_with_bindings(
+		"""
+		SELECT 1 FROM sqlite_master
+		WHERE type = 'index' AND name = ? AND tbl_name = ?;
+		""",
+		[index_name, table_name]
+	):
+		return false
+
+	return not db.query_result.is_empty()
 
 
 # =====================================================
