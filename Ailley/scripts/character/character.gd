@@ -136,6 +136,37 @@ const ATTACK_TOO_FAR := "TOO_FAR"
 const ATTACK_HEALTH_DELTA := -15.0
 const ATTACK_INJURY_DELTA := 20.0
 
+## 失敗原因碼 → L10n key（issue #180）。上面 TALK_*／WORK_*／BUY_*／EAT_*／
+## DRINK_*／GIVE_*／HAUL_*／ATTACK_* 與 inventory.gd 的 ADD_*／REMOVE_*／
+## USE_*／MONEY_* 本來就是共用同一組扁平字串詞彙（TOO_FAR、TARGET_NOT_FOUND、
+## NO_SPACE…橫跨全部行為，不是各行為各自一組獨立代碼），一張表就夠、不用
+## 按行為分開維護——give／persuade／shout／eat／drink 之後要顯示失敗原因，
+## 直接呼叫 report_action_failure() 就有，不用回來加這張表
+const FAILURE_MESSAGE_KEYS := {
+	"TARGET_NOT_FOUND": "FAIL_TARGET_NOT_FOUND",
+	"TARGET_IS_SELF": "FAIL_TARGET_IS_SELF",
+	"TOO_FAR": "FAIL_TOO_FAR",
+	"TARGET_BUSY": "FAIL_TARGET_BUSY",
+	"TARGET_UNINTERRUPTIBLE": "FAIL_TARGET_UNINTERRUPTIBLE",
+	"TARGET_NOT_VISIBLE": "FAIL_TARGET_NOT_VISIBLE",
+	"OCCUPIED": "FAIL_OCCUPIED",
+	"BUSY": "FAIL_BUSY",
+	"ITEM_NOT_FOUND": "FAIL_ITEM_NOT_FOUND",
+	"NO_INVENTORY": "FAIL_NO_INVENTORY",
+	"NO_FOOD": "FAIL_NO_FOOD",
+	"NO_DRINK": "FAIL_NO_DRINK",
+	"NO_STATS": "FAIL_NO_STATS",
+	"NOT_FOUND": "FAIL_NOT_FOUND",
+	"INVALID_COUNT": "FAIL_INVALID_COUNT",
+	"NOT_CONSUMABLE": "FAIL_NOT_CONSUMABLE",
+	"INVALID_STATS": "FAIL_INVALID_STATS",
+	"INVALID_EFFECT": "FAIL_INVALID_EFFECT",
+	"REMOVE_FAILED": "FAIL_REMOVE_FAILED",
+	"NOT_ENOUGH": "FAIL_NOT_ENOUGH",
+	"INVALID_AMOUNT": "FAIL_INVALID_AMOUNT",
+	"NO_SPACE": "FAIL_NO_SPACE",
+}
+
 ## 滑鼠指到時套在 sprite 上的描邊
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
 
@@ -714,6 +745,22 @@ func say(line: String, interrupt: bool = false) -> void:
 		bubble.clear()
 	bubble.say(line)
 	spoke.emit(line)
+
+## 行為失敗時統一的回報方式（issue #180），取代原本三個呼叫點（player.gd
+## 的 work_at／talk_to、vending_menu.gd 的 buy_from）各自手寫的
+## push_warning——格式收進這裡一次，之後 give／persuade／shout／eat／drink
+## 等動作要回報失敗，呼叫這個就有，不用各自重寫一份。reason 是 OK（空字串）
+## 不該傳進來，呼叫端本來就要先判斷過
+##
+## FAILURE_MESSAGE_KEYS 查不到就直接顯示原始碼——寧可暴露一個沒翻過的
+## 識別字，也不要吞掉錯誤讓玩家完全看不到任何反應，跟在地化系統本身
+## 「key 不存在就顯示 KEY 本身」同一種「看得出來哪裡漏了」的設計
+## （見 note/技術/在地化.md）
+func report_action_failure(action_label: String, reason: String) -> void:
+	push_warning("%s: %s 失敗（%s）" % [character_name, action_label, reason])
+
+	var key: String = FAILURE_MESSAGE_KEYS.get(reason, "")
+	say(L10n.t(key) if not key.is_empty() else reason)
 
 ## 這個角色對話中的下一句話由誰產生、內容是什麼。基底不知道答案——
 ## 本機玩家要等打字（見 player.gd），本機 Agent 要打 AIService（見 agent.gd），

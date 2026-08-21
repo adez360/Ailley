@@ -93,9 +93,9 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	# 附近的可互動物件（工作站、販賣機）與可搭話的人，三邊都先找出來，誰近誰
 	# 先試——但「近」先被「有沒有面向它」篩過一輪，見 _get_interact_candidates()
-	# 的說明。全部對玩家都是靜默失敗，沒有回饋 UI；但失敗原因會印成 warning
-	# （跟 character.gd 的 _check_stuck() 同一種寫法），方便開發時對著
-	# 編輯器 Output/Debugger 面板看，不用另外開主控台查
+	# 的說明。失敗會用 report_action_failure() 統一顯示在自己頭上（issue #180），
+	# 不再是純靜默——同時也還會印成 warning，方便開發時對著編輯器 Output/
+	# Debugger 面板看，不用另外開主控台查
 	var candidates := _get_interact_candidates()
 	var workstation: Workstation = candidates["workstation"]
 	var machine: VendingMachine = candidates["machine"]
@@ -109,7 +109,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		var work_reason := work_at(workstation)
 		if work_reason == WORK_OK:
 			return
-		push_warning("%s: work_at 失敗（%s）" % [character_name, work_reason])
+		if other == null:
+			report_action_failure("work_at", work_reason)
+			return
+		# 工作失敗但旁邊還有人可以搭話——先試搭話，兩邊都失敗才回報，
+		# 不然「工作站被佔用」跟「搭話失敗」會疊成兩則訊息一起蹦出來
+		if talk_to(other) != TALK_OK:
+			report_action_failure("work_at", work_reason)
+		return
 	# 販賣機不是立刻執行動作，是開商品選單——真正的購買發生在
 	# vending_menu.gd 裡點下某一項的時候。vending_menu 理論上一定找得到
 	# （場景裡固定掛著），這裡多防一手是避免場景漏掛的話直接炸掉
@@ -119,7 +126,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	var talk_reason := talk_to(other)
 	if talk_reason != TALK_OK:
-		push_warning("%s: talk_to 失敗（%s）" % [character_name, talk_reason])
+		report_action_failure("talk_to", talk_reason)
 
 # 面向判定的錐角容許值：跟面向方向的內積要 >= 這個值才算「面對著」。
 # 0.5 大約是 ±60 度的錐角——夠寬容得下斜向靠近的誤差，又不會寬到整個
