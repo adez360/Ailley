@@ -516,14 +516,19 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minute
 			return _fail(shape_result["error"])
 		tasks.append(shape_result["data"])
 
-	# reasoning／inner_monologue：跟 validate_dialogue() 的 line 同一種處理
-	# 方式——選填字串，型別錯就整包拒絕，超長截斷不拒絕；缺席時給空字串，
-	# 不是必填欄位（AI 停用時整個 request() 就已經在更早的階段失敗，走不到
-	# 這裡；但拍板：不能因為模型少回這兩個欄位就讓原本合法的 tasks 也一起作廢）
+	# reasoning：#473 CodeRabbit review 抓到——prompt 要求每次先寫 reasoning
+	# 再決定 tasks，但驗證層原本仍把它當選填、缺席時默默填空字串，等於這個
+	# 核心約束在驗證層完全沒被強制，模型可以完全不寫 reasoning 卻照樣通過。
+	# 改成必填：缺席、型別錯、或 strip 後是空字串都整包拒絕（超長仍是截斷不
+	# 拒絕，跟 validate_dialogue() 的 line 同一種寬鬆度）。schema 的
+	# required 同步加 "reasoning"（見 plan_response_schema()），驗證層跟
+	# schema 契約要一致
 	var reasoning: Variant = _validated_optional_line(data, "reasoning", MAX_REASONING_CHARS)
-	if reasoning == null:
+	if reasoning == null or (reasoning as String).is_empty():
 		return _fail(ERROR_BAD_SHAPE)
 
+	# inner_monologue 維持選填——跟 reasoning 不同，這欄沒有對應的驗證層
+	# 強制契約，缺席時給空字串，型別錯才拒絕
 	var inner_monologue: Variant = _validated_optional_line(data, "inner_monologue")
 	if inner_monologue == null:
 		return _fail(ERROR_BAD_SHAPE)
@@ -963,7 +968,7 @@ static func plan_response_schema(allow_update_plan: bool = false, has_pending_pe
 			"schema": {
 				"type": "object",
 				"properties": properties,
-				"required": ["tasks", "emotion"],
+				"required": ["reasoning", "tasks", "emotion"],
 			},
 		},
 	}
