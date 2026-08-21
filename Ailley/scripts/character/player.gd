@@ -348,6 +348,22 @@ func _resolve_generated_id() -> String:
 				return existing
 
 	var id := generate_id()
+	_write_player_id_file(id)
+	return id
+
+## character_id 被 _ensure_unique_id() 換掉時（讀進壞掉的存檔、撞到場上已有
+## 的角色）同步呼叫，把新 id 寫回同一份持久化檔案——不然下次 _resolve_generated_id()
+## 還是讀到那組已經被撞掉的舊 id，若造成碰撞的狀態沒消失，會在下次開遊戲時
+## 再次判定碰撞、再次換新 id，等於每次重開都變（issue #438，違反 #399 想保證的
+## 「跨場次同一組 id」）
+func _on_id_changed(new_id: String) -> void:
+	_write_player_id_file(new_id)
+
+# 寫入 _PLAYER_ID_PATH 的共用邏輯：_resolve_generated_id() 首次生成、
+# _on_id_changed() 撞號換掉後都呼叫這個。失敗只 push_error 不擋呼叫端——
+# 兩個呼叫端都已經拿到可用的 character_id，寫檔只是儘量做到跨場次持久化，
+# 寫不成不影響這一場正常運作
+func _write_player_id_file(id: String) -> void:
 	var dir := _PLAYER_ID_PATH.get_base_dir()
 	if not DirAccess.dir_exists_absolute(dir):
 		DirAccess.make_dir_recursive_absolute(dir)
@@ -359,7 +375,7 @@ func _resolve_generated_id() -> String:
 		push_error("player.gd: 無法寫入 %s（%s），character_id 這次不會跨場次持久化" % [
 			tmp_path, error_string(FileAccess.get_open_error())
 		])
-		return id
+		return
 	file.store_string(id)
 	file.flush()
 	var write_error := file.get_error()
@@ -369,11 +385,10 @@ func _resolve_generated_id() -> String:
 			tmp_path, error_string(write_error)
 		])
 		DirAccess.remove_absolute(tmp_path)
-		return id
+		return
 	var rename_error := DirAccess.rename_absolute(tmp_path, _PLAYER_ID_PATH)
 	if rename_error != OK:
 		push_error("player.gd: 替換 %s 失敗（%s），character_id 這次不會跨場次持久化" % [
 			_PLAYER_ID_PATH, error_string(rename_error)
 		])
 		DirAccess.remove_absolute(tmp_path)
-	return id
