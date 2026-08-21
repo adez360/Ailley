@@ -129,8 +129,8 @@ var _noticed := {}
 # 與「地點換了要重新起步」
 var _pursued_place := ""
 
-# _on_action_interrupted() 清空 current_place 前存的快照，給 _on_attacked()
-# 讀（CodeRabbit review 抓到，見那兩個函式的說明）
+# _on_action_interrupted() 存的即時位置反查快照，給 _on_attacked() 讀
+# （見那兩個函式的說明，#426）
 var _place_before_interrupt := ""
 
 # 這一趟移動已經有結論了（走到了，或 _check_stuck() 放棄了）。
@@ -342,15 +342,16 @@ var _next_daily_event_id := 0
 ## related_npcs 是這件事牽涉到誰——客觀事實，在事件發生的當下記下來，睡前
 ## 反思寫回 Memory.add_candidate() 時原封不動帶過去（見
 ## request_sleep_reflection()），不是引擎替這段記憶加主觀定性（見《00》
-## 原則二）。location_id 不開放呼叫端指定，一律用 current_place——跟
-## get_state_snapshot() 送給 LLM 的 "place" 欄位同一個來源，不另外定義一套
-## 「現在在哪」
+## 原則二）。location_id 預設用 current_place——跟 get_state_snapshot() 送給
+## LLM 的 "place" 欄位同一個來源，不另外定義一套「現在在哪」；指定
+## location_override 時改用覆寫值，見下一段
 ##
-## location_override 給極少數 current_place 當下已經不可信的呼叫端用（目前
-## 只有 _on_attacked()——見那邊的說明）：非 null 時取代 current_place，其餘
-## 呼叫端不用管這個參數（省略即為 null），維持原本「一律用 current_place」的
-## 行為（CodeRabbit review 抓到 force_interrupt() 會搶先把 current_place 清空，
-## 直接讀會拿到空字串）。
+## location_override 給 current_place 當下不可信或不適用的呼叫端用（#426：
+## _on_attacked() 用 _place_before_interrupt 快照的即時位置反查、
+## exit_conversation() 直接呼叫 _resolve_actual_place()——見那兩個函式的
+## 說明）：非 null 時取代 current_place，其餘呼叫端不用管這個參數（省略即為
+## null），維持原本「一律用 current_place」的行為（CodeRabbit review 抓到
+## force_interrupt() 會搶先把 current_place 清空，直接讀會拿到空字串）。
 ##
 ## 一定要用 null 當「沒有指定」的哨兵，不能用空字串——`_place_before_interrupt`
 ## 快照下來的值本來就可能合法地是空字串（角色被攻擊當下 current_place 本來就
@@ -678,6 +679,20 @@ func _is_own_pursuit_target(world_position: Vector2) -> bool:
 		return false
 	return world_position.distance_to(anchors.resolve(current_place)) <= ARRIVE_DISTANCE
 
+# 給事實句（_push_daily_event()）用的即時位置反查（issue #426）：current_place
+# 是目前任務的目的地，不是即時座標——移動中會提早等於目的地，talk／追逐這類
+# 無地點任務更是從頭到尾空字串，記事實句當下若直接沿用會記錯地點。半徑跟
+# TALK_RANGE／WORK_RANGE 等既有互動距離門檻取同一個值（32px，2 格），都在
+# 範圍外就回傳空字串——「在地點之間」是合法值，呼叫端（_push_daily_event()
+# 的 location_override）直接把這個結果原樣傳下去即可
+const ACTUAL_PLACE_RADIUS := 32.0
+
+func _resolve_actual_place() -> String:
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null:
+		return ""
+	return anchors.resolve_from_position(get_body_position(), ACTUAL_PLACE_RADIUS)
+
 # 先問資料檔這隻角色被指派了哪份行程，沒有指派才用場景裡的 @export 後備值。
 # 順序不能反過來：@export 一定有值（agent.tscn 的預設），反過來的話 assignments 永遠不生效
 #
@@ -802,7 +817,12 @@ func exit_conversation() -> void:
 	if _conversation != null:
 		var other: Character = _conversation.target if _conversation.initiator == self else _conversation.initiator
 		if other != null:
-			_push_daily_event("你跟 %s 講完話了" % other.character_name, [other.character_id])
+			# #426：current_place 對指名對話（direct-target talk）從頭到尾是
+			# 空字串（沒有 place 可言），這裡改用即時座標反查——對話結束當下
+			# 兩人就站在彼此旁邊，位置是準的
+			_push_daily_event(
+				"你跟 %s 講完話了" % other.character_name, [other.character_id], _resolve_actual_place()
+			)
 			# 「多久沒說話」事實句的計時基準（#338）
 			_last_social_minute = _now_minutes()
 
@@ -1356,8 +1376,11 @@ func _on_action_interrupted() -> void:
 	# 清空前先存一份快照——character.gd::attack() 的呼叫順序是
 	# force_interrupt()（跑到這裡，把 current_place 清空）先於 _on_attacked()
 	# （記事實句），直接讀 current_place 的話 _on_attacked() 永遠拿到空字串
-	# （CodeRabbit review 抓到）
-	_place_before_interrupt = current_place
+	# （CodeRabbit review 抓到）。#426：改存即時座標反查的結果，不是
+	# current_place 本身——force_interrupt() 這裡 stop_moving() 剛執行完、
+	# 位置還沒被任何東西改變，正是「事情發生當下人真正站在哪」，比
+	# current_place（任務目的地，移動途中被攻擊時還沒走到）準確
+	_place_before_interrupt = _resolve_actual_place()
 	_pursued_place = ""
 	_pursuit_done = false
 	_clear_current_task(false)

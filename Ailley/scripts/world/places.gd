@@ -21,6 +21,25 @@ func resolve(place_name: String) -> Vector2:
 	return marker.global_position
 
 
+# 反向解析（issue #426）：給一個世界座標，回傳它落在哪個地點的錨點半徑內，
+# 都不在的話回傳空字串——「在地點之間」是合法值，不是錯誤，呼叫端不用另外
+# 判斷。跟 resolve() 相反方向，只給事實句這類「記錄當下實際位置」的用途用，
+# 不取代 current_place（那個欄位對「移動任務進行中，目的地是哪」仍然是對的
+# 語意，見 agent.gd 的呼叫端）。多個地點錨點重疊的話回傳最近的一個
+func resolve_from_position(position: Vector2, radius: float) -> String:
+	var nearest_name := ""
+	var nearest_distance := INF
+	for child in get_children():
+		if not (child is Node2D):
+			continue
+		var anchor := child as Node2D
+		var distance: float = position.distance_to(anchor.global_position)
+		if distance <= radius and distance < nearest_distance:
+			nearest_distance = distance
+			nearest_name = child.name
+	return nearest_name
+
+
 # 給主控台指令與 LLM prompt 列可用地點名稱用
 func list() -> PackedStringArray:
 	var names := PackedStringArray()
