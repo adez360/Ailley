@@ -497,6 +497,12 @@ func _end_incapacitation() -> void:
 	if stats != null:
 		stats.set_value("health", 10.0)
 
+	# 被救助：對每個搬運者 trust +15（《01》3-1）
+	if relationships != null:
+		for hauler in _hauled_by:
+			if hauler != null:
+				relationships.add_trust(hauler.character_id, 15.0)
+
 	print_debug("Character %s 昏迷已結束（被搬走）" % character_name)
 
 ## 由搬運動作（#161 haul）調用，標記此角色正在被搬運。
@@ -1075,8 +1081,10 @@ func attack(other: Character) -> String:
 
 ## 被攻擊的收尾鉤子。基底只是掛點——Player 沒有記憶系統可寫，只有 Agent
 ## 需要把這件事記成事實句給下次決策／反思用（見 agent.gd 覆寫）
-func _on_attacked(_attacker: Character) -> void:
-	pass
+func _on_attacked(attacker: Character) -> void:
+	# 被攻擊：trust -50（《01》3-1）
+	if attacker != null and relationships != null:
+		relationships.add_trust(attacker.character_id, -50.0)
 
 ## 強制中斷目前行動，不徵詢 interruptible／能不能被搭話打斷——跟仲裁器的
 ## 「搶占」判斷是兩回事，這裡是外部事件硬性發生（被攻擊等，《02》§3「立即

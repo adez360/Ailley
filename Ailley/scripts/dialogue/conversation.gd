@@ -178,8 +178,8 @@ func _apply_rewards() -> void:
 			character.stats.add("social", SOCIAL_GAIN)
 			character.stats.add("mood", MOOD_GAIN)
 
-		# 只記「互動過一次」，不動 trust：《01》3-1 的 trust 只有深度對話
-		# （5 句以上）才 +2，那條判定跟其他 trust 事件一起接線，是各自行動的
-		# issue，不在關係資料結構這則裡
 		if character.relationships != null:
 			character.relationships.note_meeting(other.character_id)
+			# 深度對話：5 句以上 trust +2（《01》3-1）
+			if _turns.size() >= 5:
+				character.relationships.add_trust(other.character_id, 2.0)
