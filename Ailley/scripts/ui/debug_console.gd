@@ -744,22 +744,18 @@ func _cmd_embody(args: PackedStringArray) -> void:
 	if not listed:
 		_error("embody <id>（角色庫沒有未投放的角色，先用 charnew 建一個）")
 
-# save   存下目前世界裡每個角色 + 這個世界本身。驗證 SaveService 的讀寫
-# 進出點確實接得起來（#21）——真正該在什麼時機自動存檔（睡前等）是後續 issue
+# save   存下目前世界裡每個角色 + 這個世界本身。實際存哪些東西走
+# GameManager.save_all()（#359），跟跨遊戲日／離開遊戲的自動存檔共用同一套邏輯
 func _cmd_save(_args: PackedStringArray) -> void:
-	var count := 0
-	for node in get_tree().get_nodes_in_group("characters"):
-		var character := node as Character
-		if SaveService.save_character(character.character_id, character.get_save_data()):
-			count += 1
-		else:
-			_error("存檔失敗：%s" % character.character_name)
+	var result := GameManager.save_all()
+	for character_name in result["character_failures"]:
+		_error("存檔失敗：%s" % character_name)
 
-	if not SaveService.save_world(GameManager.DEFAULT_WORLD_ID, GameManager.get_world_save_data()):
+	if not result["world_ok"]:
 		_error("世界存檔失敗：%s" % GameManager.DEFAULT_WORLD_ID)
 		return
 
-	_print("[color=88ff88]已存檔[/color]  %d 個角色 + 世界 %s" % [count, GameManager.DEFAULT_WORLD_ID])
+	_print("[color=88ff88]已存檔[/color]  %d 個角色 + 世界 %s" % [result["character_count"], GameManager.DEFAULT_WORLD_ID])
 
 # load   讀回世界本身 + 場景裡目前每個角色各自的存檔。只套用場景裡找得到的
 # 角色——存檔裡有記載但場景沒有的角色不會被生出來，那是 player 加入世界

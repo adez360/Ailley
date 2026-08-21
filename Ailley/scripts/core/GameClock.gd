@@ -12,7 +12,8 @@ const GAME_MINUTES_PER_TICK := 10
 
 var hour := 8
 var minute := 0
-## 第幾個遊戲日，從 1 起算。要寫進世界存檔才能跨場次接續，那還沒做
+## 第幾個遊戲日，從 1 起算。跟著 get_world_save_data()／apply_world_save_data()
+## 一起存讀，可以跨場次接續（#19）
 var day := 1
 var _timer := 0.0
 
