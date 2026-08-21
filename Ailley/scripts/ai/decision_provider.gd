@@ -26,3 +26,11 @@ func decide(envelope: Dictionary, requester_id: String, policy: AIService.Policy
 ## 呼叫端（agent.gd._decide_with_retry()）用這個值決定要試幾次，不用自己判斷「這是哪種來源」
 func max_validation_retries() -> int:
 	return 0
+
+
+## 這個 provider 實際會用哪個 AIConfig.Provider 名字打請求（#357）。開場要決定
+## 「這隻角色的 provider 就緒了沒」時，問的是這個，不是 AIConfig.default_provider——
+## 那是設定檔的預設值，跟這隻角色 decision_source／model_name 解析出來的實際
+## provider 完全可能是兩個不同的東西
+func provider_name() -> String:
+	return _provider_name

@@ -33,15 +33,15 @@ func _run() -> void:
 	var agent := _find_test_agent()
 
 	if agent == null:
-		push_error(
-			"[WashHygieneIntegrationTest] 場景中找不到 Agent。"
-			+ "請在正常遊戲場景執行本測試，不要在空白測試場景執行。"
+		_fail(
+			"Agent",
+			"場景中找不到 Agent。請在正常遊戲場景執行本測試，不要在空白測試場景執行。"
 		)
 		_finish()
 		return
 
 	if agent.stats == null:
-		push_error("[WashHygieneIntegrationTest] Agent 沒有 Stats。")
+		_fail("Agent.stats", "Agent 沒有 Stats。")
 		_finish()
 		return
 
@@ -110,10 +110,10 @@ func _run() -> void:
 					"預期 %.1f，實際 %.1f" % [expected, actual]
 				)
 
-		if recovery.get("stat", "") != "hygiene":
+		if hygiene_recovery.get("stat", "") != "hygiene":
 			_fail(
 				"ACTION_RECOVERY[\"wash\"].stat",
-				"目標欄位是 %s，不是 hygiene" % recovery.get("stat", "")
+				"目標欄位是 %s，不是 hygiene" % hygiene_recovery.get("stat", "")
 			)
 		else:
 			_pass("ACTION_RECOVERY[\"wash\"].stat == hygiene")

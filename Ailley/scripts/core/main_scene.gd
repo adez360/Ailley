@@ -1,0 +1,154 @@
+extends Node
+
+## main.tscn 根節點腳本。issue #343：開場讀檔的實際套用時機。
+##
+## GameManager.continue_requested 由主選單「繼續遊戲」按鈕設定，這裡是唯一
+## 讀取並清除它的地方。子節點（Player/Agent 等）的 _ready() 在這個節點的
+## _ready() 之前就跑完（Godot 由下而上呼叫 _ready），所以這裡執行時
+## get_tree().get_nodes_in_group("characters") 已經拿得到場上全部角色。
+##
+## 套用邏輯直接對齊 debug_console.gd 的 _cmd_load()（#21 驗證過的讀檔進出點），
+## 差別是這裡額外用 SaveService.has_world()/has_character() 分辨「本來就沒有
+## 存檔」（正常新角色，不是錯誤）跟「存過但讀不出來」（存檔損毀，要 push_error
+## 讓人看得到，不能悄悄退回預設值卻不留痕跡）。
+
+
+const MAIN_MENU_SCENE := "res://scenes/main_menu.tscn"
+
+
+func _ready() -> void:
+	if GameManager.continue_requested:
+		GameManager.continue_requested = false
+		if not _apply_continue():
+			# 讀檔失敗已經 change_scene_to_file() 切去主選單——這個節點跟場上
+			# 角色都要被換掉了，不該再繼續跑開場 AI 狀態套用（CodeRabbit review
+			# 抓到：原本這裡沒有提前 return，_apply_startup_ai_state() 還是會
+			# 對已經要被丟棄的場景做 get_nodes_in_group("agents") 之類的操作）
+			return
+
+	_apply_startup_ai_state()
+
+
+## #357：開場依 AIService 就緒狀態決定要不要自動打開場上 Agent 的
+## llm_decision_enabled，並在 HUD 上寫一次「AI 決策中」／「排程模式（原因：…）」
+## 的常駐指示——排程村莊跟真的在跑決策的村莊畫面上很像，沒有這個指示要盯
+## 很久才會發現兩者其實不一樣。
+##
+## 只在開場探測一次、套用一次，不做背景輪詢：provider 連線狀態中途改變
+## （例如玩到一半才把 llama-server 開起來）不在這裡的範圍，那種情況的
+## 既有救援手段是 debug 主控台的 `ai`（手動重測）／`ai_decision`（手動逐隻開）。
+##
+## 逐隻查 agent.get_provider_name() 各自的 readiness，不是隨便查一個全域值——
+## 不同 Agent 的 decision_source／model_name 可能解析到不同的 provider，
+## 一隻壞掉不該連累其他隻。
+##
+## 要開啟的 Agent 呼叫 debug_set_llm_decision(true) 但不逐隻 await——
+## AIService 的節點池＋佇列（POOL_SIZE=3，FIFO）本來就會把超出池子的請求
+## 排隊處理，這裡不用自己手動錯開；逐隻 await 反而會把 5 隻角色的第一次
+## 決策強制序列化，開場等待時間從一次 3-4 秒的網路延遲被拖成 5 次疊加
+func _apply_startup_ai_state() -> void:
+	await AIService.await_readiness_settled()
+
+	# await 期間場景可能已被換掉（例如讀檔失敗改跳主選單）——這個節點連同
+	# 場上 Agent 都不再有效，get_tree() 這時候會回傳 null，繼續往下會直接
+	# 噴 null 存取錯誤（CodeRabbit review 抓到，PR #467）
+	if not is_inside_tree():
+		return
+
+	var agents := get_tree().get_nodes_in_group("agents")
+	var ready_count := 0
+	# 用字典去重收集所有「沒就緒」的原因，不是只留最後一隻的——不同 Agent
+	# 可能因為不同原因沒就緒（例如一隻 provider 查無此名、另一隻是連線逾時），
+	# 開發期指示器要能一次看出全部原因，不能只看到最後蓋掉前面的那個
+	# （CodeRabbit review 抓到，PR #467）
+	var fallback_reasons := {}
+	var ready_agents: Array[Agent] = []
+	for node in agents:
+		var agent := node as Agent
+		if agent == null:
+			continue
+		var readiness := AIService.get_readiness(agent.get_provider_name())
+		var agent_ready := bool(readiness.get("ready", false))
+		if agent_ready:
+			ready_count += 1
+			ready_agents.append(agent)
+		else:
+			fallback_reasons[str(readiness.get("reason", ""))] = true
+			agent.debug_set_llm_decision(false)
+
+	# 場景固定 NPC 若沒有預先生成好 words_to_creator，Agent._ready() 開場會
+	# fire-and-forget 補打一次（見 agent.gd::_generate_words_to_creator()），
+	# 佔用的是跟這裡即將發起的首次 plan decision 同一個 requester_id、同一個
+	# min_interval_sec 冷卻池。兩者間隔通常遠小於冷卻秒數，若不等冷卻結束就
+	# 送出，首次決策會被 ERROR_RATE_LIMITED 同步擋下——這不是真的網路 I/O，
+	# 沒有東西可 await，_decide_with_retry() 也不重試這個錯誤（它只重試
+	# parse/validate 失敗，見它自己的說明），決策迴圈因此靜默卡住，要等
+	# 下一次仲裁才會補上。這裡一次等最大值，不逐隻等——全部 Agent 的
+	# words_to_creator 都在開場幾乎同一時間打出去，個別冷卻剩餘時間差異
+	# 可忽略（CodeRabbit review 抓到，PR #467）
+	var max_cooldown := 0.0
+	for agent in ready_agents:
+		var usage := AIService.get_usage(agent.character_id)
+		max_cooldown = maxf(max_cooldown, float(usage.get("cooldown_left", 0.0)))
+	if max_cooldown > 0.0:
+		await get_tree().create_timer(max_cooldown).timeout
+
+	# 等待期間場景可能已被換掉，跟上面 await_readiness_settled() 之後的
+	# 同一種防呆（CodeRabbit review 抓到，PR #467）
+	if not is_inside_tree():
+		return
+
+	for agent in ready_agents:
+		agent.debug_set_llm_decision(true)
+
+	if agents.is_empty():
+		return
+
+	var status_label := get_node_or_null("PersistentUI/HUD/AIStatusLabel")
+	if status_label == null:
+		return
+
+	status_label.set_status(ready_count, agents.size(), "、".join(fallback_reasons.keys()))
+
+
+## 回傳這次讀檔是否成功套用。false 時已經呼叫 change_scene_to_file() 切去
+## 主選單——呼叫端（_ready()）要跟著提前 return，不能繼續對正要被換掉的場景
+## 做任何操作（CodeRabbit review 抓到，PR #467）
+func _apply_continue() -> bool:
+	if not SaveService.has_world(GameManager.DEFAULT_WORLD_ID):
+		push_error("main_scene: continue_requested 但世界存檔 %s 不存在，返回主選單" % GameManager.DEFAULT_WORLD_ID)
+		GameManager.continue_load_failed = true
+		get_tree().change_scene_to_file(MAIN_MENU_SCENE)
+		return false
+
+	var world_data := SaveService.get_world(GameManager.DEFAULT_WORLD_ID)
+	if not SaveService.is_world_data_valid(world_data):
+		push_error("main_scene: 世界存檔 %s 讀取失敗或格式不完整（可能已損毀），返回主選單" % GameManager.DEFAULT_WORLD_ID)
+		GameManager.continue_load_failed = true
+		get_tree().change_scene_to_file(MAIN_MENU_SCENE)
+		return false
+	GameManager.apply_world_save_data(world_data)
+
+	for node in get_tree().get_nodes_in_group("characters"):
+		var character := node as Character
+		if not SaveService.has_character(character.character_id):
+			continue # 這個角色本身還沒存過（例如存檔當時場上沒有它），不是錯誤
+
+		var data := SaveService.get_character(character.character_id)
+		if data.is_empty():
+			push_error("main_scene: 角色存檔 %s（%s）讀取失敗（存在但無法解析，可能已損毀），該角色維持預設狀態" % [character.character_id, character.character_name])
+			continue
+
+		# character_id 一定要存在、是 String、且跟查詢用的 id 對得上——
+		# get_save_data() 永遠會寫入這個欄位，缺欄位／型別不對／對不上
+		# 都代表存檔內容跟檔名認定的角色不是同一個（可能已損毀或被誤覆蓋），
+		# 套用下去 load_save_data() 會直接把場上角色的 id 改掉，跟世界存檔
+		# 已套用的位置／關係對不起來
+		var stored_id: Variant = data.get("character_id")
+		if not (stored_id is String and stored_id == character.character_id):
+			push_error("main_scene: 角色存檔 %s（%s）內容缺少或 character_id 不符（%s），可能已損毀，該角色維持預設狀態" % [character.character_id, character.character_name, stored_id])
+			continue
+
+		character.load_save_data(data)
+
+	return true

@@ -1,7 +1,8 @@
 extends "res://scripts/save/save_service.gd"
 class_name SqliteSaveService
 
-## SaveService 的 SQLite 實作，走 DatabaseManager autoload 存取 user://game.db。
+## SaveService 的 SQLite 實作，走 DatabaseManager autoload 存取
+## DatabaseManager.DATABASE_PATH。
 ## 介面定義見 note/規格書/14_存檔資料存取層規格書.md §2。
 ##
 ## 《14》§5 要求兩個實作的資料形狀必須一致——這裡讀寫的 Dictionary 形狀
@@ -52,6 +53,14 @@ const STATE_DEFAULTS := {
 	"satiety": 100.0, "hydration": 80.0, "stamina": 80.0, "wakefulness": 90.0,
 	"hygiene": 70.0, "alcohol": 0.0, "health": 100.0, "injury": 0.0,
 }
+
+
+## 查 npc_state 而不是 npc：npc 這一列在角色 _ready() 掛進場景、還沒真的
+## save_character() 過的時候就可能已經存在（見「schema 缺口」對 npc 表的
+## 說明），查 npc 會把「場上有這隻角色」誤判成「這隻角色存過檔」。npc_state
+## 只有 save_character() 才會寫，是這裡要的「真的存過」訊號
+func has_character(id: String) -> bool:
+	return not DatabaseManager.select("npc_state", "npc_id = '%s'" % _esc(id)).is_empty()
 
 
 ## 讀一個角色的完整資料，找不到回傳空 Dictionary
@@ -167,6 +176,10 @@ func save_character(id: String, data: Dictionary) -> bool:
 	# 因為交易還在跑而失敗，之後所有存檔都會跟著壞掉
 	DatabaseManager.rollback_transaction()
 	return false
+
+
+func has_world(id: String) -> bool:
+	return not DatabaseManager.select("world", "world_id = '%s'" % _esc(id)).is_empty()
 
 
 ## 讀一個世界的完整資料
@@ -414,10 +427,13 @@ func _esc(value: String) -> String:
 ##                      沒有讀寫它——round-trip 之後整段記憶遺失。schema 已有
 ##                      MemorySchema.gd（memories／memory_related_npcs 兩張表），
 ##                      要接上是把既有表接進這裡的四個函式，不是新增 schema
-## world 沒有            get_world_save_data() 存的 character_library（玩家自建
-## character_library    角色庫，#342）沒有對應欄位——world schema 沒有這欄，
-##                      get_world()/save_world() 也沒讀寫。round-trip 之後
-##                      角色庫會變空清單。JsonSaveService（目前使用中）不受影響
+## world 沒有 type／     get_world_save_data()（#344）多存的角色 type
+## character_library    （agent／player）跟 character_library（#342）都沒有
+##                      對應欄位——world／world_character_state schema 沒有
+##                      這兩欄，get_world()/save_world() 也沒讀寫。round-trip
+##                      之後 character_library 會變空清單，缺席角色重生只能
+##                      預設當 Agent、遺失角色庫身分。JsonSaveService（目前
+##                      使用中）不受影響
 ##
 ## 下列是《06》定義、但目前 Character/GameManager 根本沒有在存的欄位——
 ## 不是這裡的 schema 缺口，是上游還沒做，SqliteSaveService 目前故意不接：

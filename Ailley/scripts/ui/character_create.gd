@@ -117,6 +117,12 @@ var _decision_source := "human"
 var _model_dropdown: OptionButton
 var _model_name := ""
 var _model_hint: Label
+var _decision_source_container: Control
+
+## true 時面板走化身者模式：決策來源分頁對玩家沒有意義，見 _refresh_all()。
+## 目前唯一的入口是 open(as_player=true)，還沒有任何按鈕會傳這個值——
+## UI 上「由我操控」的選項本身待後續視覺任務接上（issue #371）
+var _embodiment_mode := false
 
 var _style_buttons: Array[Button] = []
 var _style_selected := -1
@@ -148,28 +154,32 @@ func _notification(what: int) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not visible:
 		return
-	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+	if event.is_action_pressed("ui_cancel"):
 		close()
 		get_viewport().set_input_as_handled()
 
 
 ## 建立新角色。上一次編輯／建立留下的欄位一律清空，這個面板沒有「暫存草稿」
-## 的語意——見 close()
-func open() -> void:
+## 的語意——見 close()。as_player=true 是化身者模式（issue #372）：決策來源
+## 對玩家沒有意義，_refresh_all() 會把那個區塊藏起來
+func open(as_player: bool = false) -> void:
 	_editing_id = ""
 	_reset_fields()
+	_embodiment_mode = as_player
 	_refresh_all()
 	visible = true
 
 ## 把角色庫既有的一筆（呼叫端保證是未投放者，規格書 05 §7-1）灌回面板欄位。
 ## 找不到就安靜地什麼都不做——呼叫端（角色庫首頁）給的 id 應該永遠有效，
-## 找不到代表上一輪操作已經把它刪了，不是這裡該報錯的情況
+## 找不到代表上一輪操作已經把它刪了，不是這裡該報錯的情況。編輯一律走
+## AI 角色模式（沒有 as_player 參數）——化身者是否可編輯不在這則範圍內
 func edit(id: String) -> void:
 	var entry := GameManager.get_library_entry(id)
 	if entry.is_empty():
 		return
 	_editing_id = id
 	_load_entry(entry)
+	_embodiment_mode = false
 	_refresh_all()
 	visible = true
 
@@ -365,6 +375,7 @@ func _build_tab_basic() -> Control:
 func _decision_source_block() -> Control:
 	var block := VBoxContainer.new()
 	block.add_theme_constant_override("separation", 4)
+	_decision_source_container = block
 
 	var label_row := HBoxContainer.new()
 	label_row.add_child(_fixed_label("UI_CC_SOURCE", BARK, LABEL_W))
@@ -649,6 +660,7 @@ func _refresh_all() -> void:
 	_refresh_source_buttons()
 	_refresh_model_dropdown()
 	_refresh_style_buttons()
+	_decision_source_container.visible = not _embodiment_mode
 
 func _deployed_count() -> int:
 	var n := 0

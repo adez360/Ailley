@@ -42,6 +42,8 @@ var passed := 0
 var failed := 0
 var skipped := 0
 
+const INVENTORY_SYNC_TIMEOUT_FRAMES := 60
+
 
 func _ready() -> void:
 	call_deferred("_run")
@@ -53,7 +55,18 @@ func _run() -> void:
 	print("[InventoryPurchaseIntegrationTest] START")
 	print("=====================================================")
 
-	while not DatabaseManager.is_ready:
+	var ready_wait_frames := 0
+	const READY_WAIT_TIMEOUT_FRAMES := 300
+
+	while not DatabaseManager.is_seeded:
+		ready_wait_frames += 1
+		if ready_wait_frames > READY_WAIT_TIMEOUT_FRAMES:
+			_fail(
+				"DatabaseManager.is_seeded",
+				"等待逾時（%d frames），資料庫可能初始化失敗" % READY_WAIT_TIMEOUT_FRAMES
+			)
+			_finish()
+			return
 		await get_tree().process_frame
 
 	var character := _find_player()
@@ -158,10 +171,14 @@ func _run() -> void:
 	_print_inventory(character)
 
 	# -------------------------------------------------
-	# 3. 等 changed / Persistence 完成一個 frame
+	# 3. 等 changed / Persistence 完成
+	#
+	# CharacterStatePersistence 用 call_deferred() 排程寫入，
+	# 不保證落在固定幀數內完成，所以用 poll 等到真的存完，
+	# 不要用猜測的 await frame 次數。
 	# -------------------------------------------------
 
-	await get_tree().process_frame
+	await _wait_for_inventory_sync()
 
 	# -------------------------------------------------
 	# 4. 直接讀 SQLite
@@ -197,30 +214,28 @@ func _run() -> void:
 			]
 		)
 
-	if _db_has_item(
-		db_rows,
-		"bread"
-	):
+	var db_bread_count := _db_count_item(db_rows, "bread")
+
+	if db_bread_count == bread_after:
 		_pass(
-			"SQLite bread"
+			"SQLite bread 數量"
 		)
 	else:
 		_fail(
-			"SQLite bread",
-			"runtime 有 bread，但 npc_inventory 找不到。"
+			"SQLite bread 數量",
+			"runtime %d，npc_inventory %d" % [bread_after, db_bread_count]
 		)
 
-	if _db_has_item(
-		db_rows,
-		"water"
-	):
+	var db_water_count := _db_count_item(db_rows, "water")
+
+	if db_water_count == water_after:
 		_pass(
-			"SQLite water"
+			"SQLite water 數量"
 		)
 	else:
 		_fail(
-			"SQLite water",
-			"runtime 有 water，但 npc_inventory 找不到。"
+			"SQLite water 數量",
+			"runtime %d，npc_inventory %d" % [water_after, db_water_count]
 		)
 
 	# -------------------------------------------------
@@ -298,7 +313,10 @@ func _run() -> void:
 
 		_print_inventory(character)
 
-		await get_tree().process_frame
+		var runtime_bread_after_purchase := character.inventory.count_item("bread")
+		var runtime_water_after_purchase := character.inventory.count_item("water")
+
+		await _wait_for_inventory_sync()
 
 		var purchase_rows := DatabaseManager.select(
 			"npc_inventory",
@@ -328,24 +346,27 @@ func _run() -> void:
 				]
 			)
 
-		# 驗證購買後的資料
+		# 驗證購買後的資料：跟購買完成當下的 runtime 數量逐項比對，
+		# 不只看「有沒有這個 item_id」，避免漏寫入的 diff 被掩蓋
 		var purchased_bread_count := _db_count_item(purchase_rows, "bread")
 		var purchased_water_count := _db_count_item(purchase_rows, "water")
 
-		if purchased_bread_count >= 1:
+		if purchased_bread_count == runtime_bread_after_purchase:
 			_pass("購買後 SQLite bread 數量")
 		else:
 			_fail(
 				"購買後 SQLite bread",
-				"預期至少 1，實際 %d" % purchased_bread_count
+				"runtime %d，npc_inventory %d"
+				% [runtime_bread_after_purchase, purchased_bread_count]
 			)
 
-		if purchased_water_count >= 1:
+		if purchased_water_count == runtime_water_after_purchase:
 			_pass("購買後 SQLite water 數量")
 		else:
 			_fail(
 				"購買後 SQLite water",
-				"預期至少 1，實際 %d" % purchased_water_count
+				"runtime %d，npc_inventory %d"
+				% [runtime_water_after_purchase, purchased_water_count]
 			)
 
 	# -------------------------------------------------
@@ -440,23 +461,6 @@ func _print_inventory(
 	)
 
 
-func _db_has_item(
-	rows: Array,
-	item_id: String
-) -> bool:
-
-	for row in rows:
-		if str(
-			row.get(
-				"item_id",
-				""
-			)
-		) == item_id:
-			return true
-
-	return false
-
-
 func _db_count_item(
 	rows: Array,
 	item_id: String
@@ -496,6 +500,44 @@ func _skip(
 ) -> void:
 	skipped += 1
 	print("[SKIP] %s: %s" % [label, message])
+
+
+## 等到 CharacterStatePersistence 的 deferred inventory SAVE 真正跑完，
+## 而不是賭固定幀數——call_deferred() 何時真正執行不保證落在單一幀內，
+## 單次 await process_frame 可能在 SAVE 完成前就繼續，讓後面的 SELECT
+## 斷言間歇性失敗。逾時時明確呼叫 _fail()——原本想讓後面的 SELECT 斷言
+## 自然失敗，但 _cleanup_test_data() 這條路徑逾時後不會再做任何斷言，
+## 且 _run() 的購買後斷言只檢查「至少一筆」，逾時後可能被同一張表裡
+## 舊資料矇混過去，兩者都不保證逾時會被觀察到。
+func _wait_for_inventory_sync() -> void:
+
+	var persistence := DatabaseManager.get_node_or_null(
+		"CharacterStatePersistence"
+	)
+
+	if persistence == null or not persistence.has_method("has_pending_inventory_sync"):
+		_fail(
+			"CharacterStatePersistence 不存在",
+			"找不到 CharacterStatePersistence node 或缺少 "
+			+ "has_pending_inventory_sync()，無法確認 inventory 是否已同步"
+		)
+		return
+
+	var frames := 0
+
+	while (
+		persistence.has_pending_inventory_sync()
+		and frames < INVENTORY_SYNC_TIMEOUT_FRAMES
+	):
+		await get_tree().process_frame
+		frames += 1
+
+	if persistence.has_pending_inventory_sync():
+		_fail(
+			"庫存同步逾時",
+			"等待 %d frame 後 CharacterStatePersistence 仍有未完成的 inventory sync"
+			% INVENTORY_SYNC_TIMEOUT_FRAMES
+		)
 
 
 func _finish() -> void:
@@ -557,7 +599,7 @@ func _cleanup_test_data(
 		character.inventory.spend(money_current - money_before)
 
 	# 等待 persistence 完成
-	await get_tree().process_frame
+	await _wait_for_inventory_sync()
 
 	print(
 		"[TEST] 測試資料已清理：bread=%d->%d water=%d->%d money=%d->%d"
