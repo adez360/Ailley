@@ -1163,7 +1163,7 @@ func _reevaluate_once() -> void:
 	if llm_decision_enabled and not _awaiting_decision \
 			and _current_task.get("source", "") == "llm" \
 			and _current_task.get("id", "") != _active_talk_task_id \
-			and now_minutes - _current_task_started_at >= int(_effective_action_duration(_current_task.get("duration", 0.0))):
+			and now_minutes - _current_task_started_at >= int(ceil(_effective_action_duration(_current_task.get("duration", 0.0)))):
 		# 做完的那筆要先離開池子。llm 任務沒有 window，不像 schedule 靠時間窗
 		# 自然退場——留著的話它會用原本的分數繼續參加下一輪算分，被重新選中，
 		# 變成同一件事做完又做。_current_task 是同一個 Dictionary 的參照，
