@@ -330,6 +330,15 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 提示模型收尾）目前不夠可靠，`SAFETY_MAX_TURNS` 這道工程安全閥常態性地在
 真的被用到，不是防禦性擺著沒作用。
 
+> [!warning] 「撞到安全閥」是這次量測當下人工肉眼觀察記錄的，不是程式自動分類（CodeRabbit review 抓到）
+> `conversation.gd::_run()` 目前對「說話者自己回 `end=true` 收尾」與「耗盡
+> `SAFETY_MAX_TURNS` 被強制截斷」發的是同一個 `ENDED_BY_SPEAKER`，表格裡第 3
+> 場「撞到安全閥」的註記，是量測當下盯著跑、親眼數到第 11 輪被截斷才記下來
+> 的，程式本身讀不出這個區別。要讓這個量測能被重複驗證、不用再人工盯場，
+> `_run()` 要先分出獨立的 termination reason（例如安全閥截斷另給
+> `SAFETY_TRUNCATED`），這是另一件事，不在這則研究範圍內，這裡先誠實記錄
+> 這個方法論限制
+
 **提案**：比照現有 `min_interval_sec`／`max_calls_per_game_day`／`dialogue_exempt`
 三個旋鈕的模式，在 `ai_config.json` 新增第四個全域旋鈕
 `max_dialogue_calls_per_game_day`（可設 0＝不限，跟其他三個一致），在
@@ -339,12 +348,27 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 收到 `ok=false` 已經是既有路徑，`conversation.gd::_finish_with_fallback()`
 會自動說一句 `DialogueLines.closing()` 收尾，跟現有 LLM 失敗／逾時的降級
 一模一樣，玩家體感上看不出差異，只是提早收尾。
+>
+> [!important] 這個旋鈕只在 `dialogue_exempt=true` 時才有意義（CodeRabbit review 抓到）
+> `_is_exempt(policy)` 只有 `policy == CONVERSATION and dialogue_exempt` 才成立；
+> `dialogue_exempt=false` 時 `CONVERSATION` 請求走的是一般 `_calls_today` 路徑，
+> `_dialogue_calls_today` 永遠是 0，這個新旋鈕檢查的計數器形同虛設。但這不是
+> 疏漏要補一個獨立計數器——`dialogue_exempt=false` 代表玩家已經選擇讓對話呼叫
+> 吃現有的 `max_calls_per_game_day`（跟 plan／reflection 共用同一份配額），
+> 這種設定下對話本來就已經被管控，不需要疊加第二層限制。這個旋鈕要解決的
+> 缺口只存在於 `dialogue_exempt=true`（對話完全豁免既有限制）的情境，範圍要
+> 這樣講清楚，不是無條件對兩種設定都生效
 
-**建議預設值**：以實測均值 7 輪／場估算，30（約可撐 4 場均值對話，或更多
-場較短的對話）比照 `max_calls_per_game_day` 現行預設 20 略寬——對話是逐輪計費，
-單輪成本遠低於一次完整 `plan`／`reflection` 呼叫，不需要用同一個數字。這個
-數字沒有實際帳單資料佐證，只是這次量測的合理起點，正式上線前建議搭配
-使用者規劃的大規模驗證（#418 附帶的長時間跑法）一併校準。
+**建議預設值**：這次記的樣本是 `_turns.size()`（對話輪數），不是真正的
+`AIService.request()` 呼叫次數——每場開頭的 `DialogueLines.opening()` 不打
+LLM，7.0 輪／場實際對應約 **6.0 次呼叫／場**（CodeRabbit review 抓到；這次
+樣本全是 NPC 對 NPC，不涉及玩家回合那個額外的不打 LLM 因素）。以這個口徑
+重算，30 次約可撐 **5 場**均值對話，不是 4 場；比照 `max_calls_per_game_day`
+現行預設 20 略寬——對話是逐輪計費，單輪成本遠低於一次完整 `plan`／`reflection`
+呼叫，不需要用同一個數字。這個數字沒有實際帳單資料佐證，也沒有把驗證失敗
+重試（`_decide_with_retry()`）算進去，只是這次量測的合理起點，正式上線前
+建議搭配使用者規劃的大規模驗證（#418 附帶的長時間跑法）一併校準，逐場記錄
+真正的 `AIService.request()` 次數，不是輪數。
 
 **範圍界線（沿用 #395 原 issue）**：這裡只給結論與提案，不落地實作——
 新增 `max_dialogue_calls_per_game_day` 旋鈕本身另開 issue。
