@@ -7,7 +7,7 @@ extends CanvasLayer
 ## 雷達圖——素材與繪圖元件都還沒有，MVP 用一行文字摘要代替，跟 status_panel.gd
 ## 的 StatsBox／hotbar.gd 同一種「資料變動時動態長出 Row、不在場景裡手排」寫法。
 ##
-## 跟建角面板一樣獨立 CanvasLayer，open()/close()，Esc 關閉。「＋」按鈕與
+## 跟建角面板一樣獨立 CanvasLayer，open()/close()，按 ui_cancel 關閉。「＋」按鈕與
 ## 「編輯」都是切去建角面板（用 group 找到它，兩個面板不用互相持節點參照），
 ## 這裡自己則隱藏，不疊在建角面板上面。
 

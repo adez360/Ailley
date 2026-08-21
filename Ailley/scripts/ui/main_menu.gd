@@ -16,7 +16,7 @@ extends Control
 ##       StartButton / CreditsButton
 ##       LoadErrorLabel（預設隱藏，只有「存檔存在但讀不出來或格式不完整」時才顯示）
 ##     Scrim（ColorRect，全螢幕半透明，預設隱藏；點面板外關閉銘謝子畫面，
-##            做法跟 status_panel.gd／各面板的「點面板外或按 Esc 關閉」一致）
+##            做法跟 status_panel.gd／各面板的「點面板外或按 ui_cancel 關閉」一致）
 ##       CreditsPanel（Setting menu.png 九宮格，樣式沿用 status_panel.gd）
 ##         TitleBg / TitleLabel
 ##         VBox
