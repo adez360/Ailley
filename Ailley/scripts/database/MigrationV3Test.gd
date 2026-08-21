@@ -216,6 +216,18 @@ func _run_column_shape_mismatch_test() -> void:
 		"initialize() 回傳 true——欄位對不上卻放行了 SELECT *"
 	)
 
+	_check(
+		"中止後 user_version 保持在 2（transaction 整批回滾，不是半套）",
+		_get_user_version() == 2,
+		"got %d, expected 2 —— ROLLBACK 沒有把 user_version 復原" % _get_user_version()
+	)
+
+	_check(
+		"中止後 npc_appearance 舊資料仍在原表（不是被重建到一半留下空表）",
+		_column_shape_mismatch_row_survived(),
+		"npc_appearance 裡查不到 seed 時插入的 hair_id='test_hair'——ROLLBACK 沒有還原重建動作"
+	)
+
 	db.close_db()
 	db = null
 	_delete_test_db()
@@ -474,6 +486,18 @@ func _can_insert_orphan_related_npc() -> bool:
 		"INSERT INTO memory_related_npcs (memory_id, npc_id) VALUES (?, ?);",
 		["__migration_v3_test_nonexistent_memory", NPC_A]
 	)
+
+
+func _column_shape_mismatch_row_survived() -> bool:
+	if not db.query_with_bindings(
+		"SELECT hair_id FROM npc_appearance WHERE npc_id = ?;", [NPC_A]
+	):
+		return false
+
+	if db.query_result.is_empty():
+		return false
+
+	return db.query_result[0].get("hair_id", "") == "test_hair"
 
 
 func _index_exists_on_table(index_name: String, table_name: String) -> bool:
