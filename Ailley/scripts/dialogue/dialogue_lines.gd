@@ -41,16 +41,6 @@ static func reply(stats: Stats, _turn: int) -> String:
 				return L10n.t("DLG_NEED_HYDRATION")
 			"wakefulness":
 				return L10n.t("DLG_NEED_WAKEFULNESS")
-			"social":
-				return L10n.t("DLG_NEED_SOCIAL")
-			"fun":
-				return L10n.t("DLG_NEED_FUN")
-
-	var mood := stats.get_value("mood")
-	if mood >= 70.0:
-		return L10n.t("DLG_MOOD_HIGH")
-	if mood <= 30.0:
-		return L10n.t("DLG_MOOD_LOW")
 
 	return L10n.t("DLG_REPLY_NEUTRAL")
 
@@ -67,17 +57,11 @@ static func murmur(stats: Stats) -> String:
 		match lowest:
 			"satiety":
 				return L10n.t("DLG_MURMUR_HUNGER")
-			"energy":
-				return L10n.t("DLG_MURMUR_ENERGY")
-			"social":
-				return L10n.t("DLG_MURMUR_SOCIAL")
-			"fun":
-				return L10n.t("DLG_MURMUR_FUN")
-
-	var mood := stats.get_value("mood")
-	if mood >= 70.0:
-		return L10n.t("DLG_MURMUR_MOOD_HIGH")
-	if mood <= 30.0:
-		return L10n.t("DLG_MURMUR_MOOD_LOW")
+			"hydration":
+				return L10n.t("DLG_MURMUR_HYDRATION")
+			"stamina":
+				return L10n.t("DLG_MURMUR_STAMINA")
+			"wakefulness":
+				return L10n.t("DLG_MURMUR_WAKEFULNESS")
 
 	return L10n.t("DLG_MURMUR_NEUTRAL")
