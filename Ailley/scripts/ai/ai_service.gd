@@ -160,6 +160,16 @@ func reload_config_and_wait() -> void:
 		await readiness_batch_finished
 
 
+## _ready() 已經在飛的那一批探測做完就回來，不像 reload_config_and_wait()
+## 那樣重新觸發一整批新的 /models 請求（#357：main_scene.gd 開場只需要等
+## 一次「_ready() 那批」的結果，不需要為了等待就多打一輪重複的網路請求）。
+## 沒有任何一批在飛（探測已經做完，或 config 沒啟用因而從沒開始過）時
+## 立刻回，不會卡住
+func await_readiness_settled() -> void:
+	while _pending_readiness_count.has(_readiness_generation):
+		await readiness_batch_finished
+
+
 # 給 #357／debug 主控台查某個 provider 就不就緒。**只有空字串會退回
 # default_provider**，跟 AIConfig.get_provider() 同一個規則——名字打錯要讓
 # 呼叫端看見「查無此 provider」，不是靜默給錯的狀態
