@@ -1091,7 +1091,12 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	# 清空 _pending_persuade，補發那輪的回應到達時會讀到空字典，若那輪也判斷
 	# persuaded=true，會用空白內容（reason 空字串等）誤寫一筆記憶（CodeRabbit
 	# review，PR #433）
-	if not _pending_reaction_lines.is_empty():
+	#
+	# 還要檢查 llm_decision_enabled：這一輪在途時如果被 debug_set_llm_decision(false)
+	# 關掉，原本這輪的回應會因世代過期被丟棄（走 final_result 的過期分支），
+	# 但 _pending_reaction_lines 不會因此變空——不額外檢查旗標的話，決策已經
+	# 被關掉了還是會補送一次多餘的請求，白白消耗配額（CodeRabbit review，PR #433）
+	if llm_decision_enabled and not _pending_reaction_lines.is_empty():
 		_request_next_decision()
 
 	return final_result
