@@ -1745,6 +1745,11 @@ func _reevaluate_once() -> void:
 			continue
 		if _reevaluate_excluded_ids.has(task.get("id", "")):
 			continue
+		# 排程任務這個時間窗內已知會失敗，退避到窗期結束（issue #505，見
+		# _mark_schedule_retry_backoff()）——不跳過的話同一個失敗的排程任務
+		# 每個遊戲分鐘都會被選回來重試一次，是這則 issue 要修的洗版問題本身
+		if now_minutes < int(task.get("_retry_blocked_until", -1)):
+			continue
 
 		var score := _score(task, now)
 		if score > best_score:
@@ -2341,6 +2346,7 @@ func _pursue_eat_task() -> void:
 		last_action_result = reason
 		if reason != Character.EAT_OK:
 			push_warning("Agent %s: eat 失敗（%s）" % [character_name, reason])
+			_mark_schedule_retry_backoff(_current_task)
 		else:
 			var food_name := ItemDatabase.get_display_name(food_item)
 			_push_daily_event("你吃了%s。" % food_name)
@@ -2387,6 +2393,7 @@ func _pursue_drink_task() -> void:
 		last_action_result = reason
 		if reason != Character.DRINK_OK:
 			push_warning("Agent %s: drink 失敗（%s）" % [character_name, reason])
+			_mark_schedule_retry_backoff(_current_task)
 		else:
 			var drink_name := ItemDatabase.get_display_name(drink_item)
 			_push_daily_event("你喝了%s。" % drink_name)
@@ -3055,6 +3062,41 @@ func _in_window(window: Dictionary, now: String) -> bool:
 
 func _now_minutes() -> int:
 	return GameClock.day * 1440 + GameClock.hour * 60 + GameClock.minute
+
+# 排程任務失敗退避（issue #505）：算出這個 window 下一次結束的絕對分鐘數
+# （跟 _now_minutes() 同一個基準：day * 1440 + hour * 60 + minute）。用「今天
+# 開始」＋window.end 的時分算出候選值，已經過了（跨午夜的 window，或現在
+# 剛好卡在結束那一分鐘）就再加一天——保證回傳的是「現在之後最近一次的
+# window 結束時刻」，不是任意一個過去的結束時刻
+func _window_end_minutes(window: Dictionary, now_minutes: int) -> int:
+	var end_parts: PackedStringArray = str(window.get("end", "")).split(":")
+	var end_of_day := int(end_parts[0]) * 60 + int(end_parts[1])
+	var today_start := (now_minutes / 1440) * 1440
+	var end_minutes := today_start + end_of_day
+	if end_minutes <= now_minutes:
+		end_minutes += 1440
+	return end_minutes
+
+# 排程來源的任務這個時間窗內已知會失敗（issue #505）：記下窗期結束的絕對
+# 分鐘數，掛在 task 這個 Dictionary 物件本身（跟 _tasks 池子裡是同一個參照，
+# 不是複本）。eat／drink 這類「呼叫一次就完成」的動作每次執行完不管成敗都
+# 會 _clear_current_task()，所以真正擋下「每個遊戲分鐘重試」的是
+# _reevaluate_once() 選任務時看到這個標記就跳過該候選——task 這個 Dictionary
+# 還在 _tasks 池子裡、標記還留著，不會在下一分鐘又被選回來，交給次高分的
+# 候選或乾脆沒有候選（角色站著不動，直到窗期結束）。下一個時間窗（例如明天
+# 同一個 window）now_minutes 自然超過這個值，不用另外清除標記。
+#
+# 只對 schedule 來源、且有 window 的任務生效——llm 來源失敗直接 _remove_task()
+# 離開池子，不需要退避；沒有 window 的排程任務（目前 npc_schedule.json 沒有
+# 這種案例，見 _tasks_from_schedule_json() 的說明）沒有窗期終點可以退避到，
+# 先不處理，等真的出現這種案例再補
+func _mark_schedule_retry_backoff(task: Dictionary) -> void:
+	if task.get("source", "") != "schedule":
+		return
+	var window: Variant = task.get("window")
+	if window == null:
+		return
+	task["_retry_blocked_until"] = _window_end_minutes(window, _now_minutes())
 
 ## Debug 用：回傳候選池每一筆的分數拆項跟目前有沒有在窗內／是不是執行中——
 ## debug_console.gd 的 tasks 指令用這個顯示。不直接碰底線開頭的內部欄位，
