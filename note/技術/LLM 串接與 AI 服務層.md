@@ -177,7 +177,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
   "self": {
     "id": "agent", "name": "小明",
     "stats": {"satiety": 42.0, "hydration": 65.0, "stamina": 70.0, "wakefulness": 88.0, "hygiene": 60.0, "alcohol": 0.0, "health": 100.0, "injury": 0.0, "social": 12.0, "fun": 60.0, "mood": 55.0},
-    "time": {"hour": 9, "minute": 30},
+    "time": {"day": 3, "hour": 9, "minute": 30},
     "place": "farm",
     "current_action": "work"
   },
