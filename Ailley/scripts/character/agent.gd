@@ -2635,33 +2635,24 @@ func _pursue_persuade_task() -> void:
 		_finish_task_and_request_next()
 		return
 
-	# 玩家目標：沒有 LLM 決策迴圈，persuaded 這條路徑走不通，改走 Y/N 彈窗
-	# （#305）——不寫入 _pending_persuade，不佔用 llm_decision_enabled 那條
-	# 忙碌拒絕機制（玩家沒有這個狀態）。彈窗本身跟距離無關，但 persuade 一律
-	# 要先走到範圍內才送達（跟上面 talk_range 判斷同一個理由），所以放在
-	# 距離判定之後，位置對齊 agent 目標的送達點
-	if target.is_in_group("player"):
-		stop_moving()
-		var reason: String = str(params.get("reason", ""))
-		var proposed_task: Dictionary = params.get("proposed_task", {})
-		last_action_result = "你試著說服 %s，等他自己想清楚" % target.character_name
-		_track_action_result_for_facts("persuade", true)
-		_persuade_delivered = true
-		_ask_player_persuade(target as Player, reason, proposed_task)
-		return
-
-	# llm_decision_enabled 關著的 Agent 走不通：_ready() 一律
-	# add_to_group("agents")，不管這個旗標開不開（預設就是關），只檢查
-	# 有沒有在 agents 群組擋不住——若放行，_pending_persuade 寫上去之後
+	# 玩家目標永遠可以嘗試說服（Y/N 彈窗，#305），不像 Agent 目標需要
+	# llm_decision_enabled 這種能力門檻——那個門檻只對 Agent 目標有意義，玩家
+	# 沒有「決策迴圈關著」這種狀態。llm_decision_enabled 關著的 Agent 走不通：
+	# _ready() 一律 add_to_group("agents")，不管這個旗標開不開（預設就是關），
+	# 只檢查有沒有在 agents 群組擋不住——若放行，_pending_persuade 寫上去之後
 	# 永遠沒有 _request_next_decision() 會被觸發去清掉它（見 llm_decision_enabled
 	# 關閉時「沒有任務做完就重新決策那條路徑」的既有說明），這筆待回應記錄會
 	# 卡死，之後任何人都說服不了這個目標（忙碌拒絕永遠擋著）
-	if not (target.is_in_group("agents") and (target as Agent).llm_decision_enabled):
+	var target_is_player := target.is_in_group("player")
+	if not target_is_player and not (target.is_in_group("agents") and (target as Agent).llm_decision_enabled):
 		last_action_result = "這個人好像沒辦法被說服"
 		_track_action_result_for_facts("persuade", false)
 		_finish_task_and_request_next()
 		return
 
+	# 距離判定跟 Agent 目標共用同一套——玩家目標一樣要先走到範圍內才算送達
+	# （CodeRabbit review 抓到：原本玩家分支在這之前就直接開彈窗，NPC 隔著
+	# 半張地圖也能對玩家彈窗，沒有真的「靠近才能說話」）
 	var distance := get_body_position().distance_to(target.get_body_position())
 	if distance > TALK_RANGE:
 		# 走不到跟 give 一樣只警告不放棄——但沒有「對方暫時忙碌」這種值得
@@ -2689,6 +2680,17 @@ func _pursue_persuade_task() -> void:
 	stop_moving()
 	var reason: String = str(params.get("reason", ""))
 	var proposed_task: Dictionary = params.get("proposed_task", {})
+
+	# 玩家目標：範圍判定通過，改走 Y/N 彈窗（#305），不寫入 _pending_persuade
+	# 走 LLM 決策迴圈（玩家沒有）。fire-and-forget：不 await，讓這筆任務照
+	# 固定 duration 收尾，彈窗的結果晚點才回來，兩者互不卡住
+	if target_is_player:
+		last_action_result = "你試著說服 %s，等他自己想清楚" % target.character_name
+		_track_action_result_for_facts("persuade", true)
+		_persuade_delivered = true
+		_ask_player_persuade(target as Player, reason, proposed_task)
+		return
+
 	var recorded: bool = (target as Agent).try_record_pending_persuade(character_name, character_id, reason, proposed_task)
 	if recorded:
 		last_action_result = "你試著說服 %s，等他自己想清楚" % target.character_name

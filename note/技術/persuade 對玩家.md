@@ -15,7 +15,7 @@ NPC 對玩家發起 `persuade` 時的 Y/N 彈窗流程（issue #305）。依賴 
 
 ## 為什麼不是 `_pending_persuade` 那條路
 
-#227 的核心機制是「待回應事實句注入下一輪決策，被說服者的模型自己輸出
+Issue #227 的核心機制是「待回應事實句注入下一輪決策，被說服者的模型自己輸出
 `persuaded`」——這條路徑假設目標有 LLM 決策迴圈。玩家沒有：玩家的行動來自
 真人操作，不經過 `_request_next_decision()`。`agent.gd::_pursue_persuade_task()`
 因此在送達判定通過、確認距離足夠後就分兩條路：目標在 `player` 群組走這裡
