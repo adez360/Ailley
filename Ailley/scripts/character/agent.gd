@@ -923,7 +923,15 @@ func request_sleep_reflection() -> Dictionary:
 	var scored_ids := {}
 	for event in data["events"]:
 		var original: Dictionary = events_by_id.get(event["id"], {})
-		var related_npcs: Array[String] = original.get("related_npcs", [])
+		# CodeRabbit review：original.get() 回傳型別是 Variant，靠宣告時賦值
+		# 隱式轉成 Array[String] 依賴的是「來源值本身在 runtime 就已經是
+		# Array[String]」這個不對外保證的假設（雖然目前資料流確實如此——
+		# _push_daily_event() 存進 _daily_events 時就是型別化參數，
+		# events_sent := _daily_events.duplicate(true) 深複製也保留 subtype）。
+		# 改用 assign() 不依賴這個隱性假設，來源不管是 untyped 還是 typed
+		# 陣列都能正確轉換，不會在未來資料流改變時悄悄壞掉
+		var related_npcs: Array[String] = []
+		related_npcs.assign(original.get("related_npcs", []))
 		var location_id: String = original.get("location_id", "")
 		memory.add_candidate(event["content"], event["importance"], event["valence"], related_npcs, location_id)
 		scored_ids[event["id"]] = true
