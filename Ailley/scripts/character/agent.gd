@@ -285,6 +285,15 @@ var _pending_save_retry := false
 var _reevaluating := false
 var _reevaluate_pending := false
 
+## 同一次最外層 _reevaluate() 呼叫內，已經被挑過又收尾的任務 id（#456
+## CodeRabbit review 抓到）：schedule 來源的任務收尾後不移出 _tasks（見
+## _pursue_eat_task() 等處註解），若收尾當下立刻呼叫的 _reevaluate() 在
+## window 還沒結束時把同一筆分數最高的任務原地重選回來，會在這次呼叫的
+## while 迴圈裡卡成同步無窮迴圈（例如沒食物時 eat 一直失敗、一直被選回來）。
+## 只在最外層呼叫開頭清空（見 _reevaluate()），下一次真正的 tick 觸發時
+## 自然重置，不影響「下個 tick 再試一次」的正常重試節奏
+var _reevaluate_excluded_ids: Dictionary = {}
+
 ## 這隻角色的決策來源，出生時決定一次，之後所有決策/對話呼叫都透過它——
 ## 跟《06》「decision_source／model_name 投放後不可改」的規則一致，不做成每次呼叫
 ## 才判斷（#155）
@@ -389,6 +398,8 @@ func _on_day_changed(_day: int) -> void:
 ## 任務用 place）
 func _clear_current_task(ok: bool, target_override: String = "") -> void:
 	_log_task_ended(_current_task, ok, target_override)
+	if not _current_task.is_empty():
+		_reevaluate_excluded_ids[_current_task.get("id", "")] = true
 	_current_task = {}
 	current_place = ""
 	current_state = "idle"
@@ -1622,6 +1633,7 @@ func _reevaluate() -> void:
 		_reevaluate_pending = true
 		return
 
+	_reevaluate_excluded_ids.clear()
 	_reevaluating = true
 	_reevaluate_pending = true
 	while _reevaluate_pending:
@@ -1720,6 +1732,8 @@ func _reevaluate_once() -> void:
 
 	for task in _tasks:
 		if not _in_window_or_unwindowed(task, now):
+			continue
+		if _reevaluate_excluded_ids.has(task.get("id", "")):
 			continue
 
 		var score := _score(task, now)
@@ -2333,6 +2347,11 @@ func _pursue_eat_task() -> void:
 	_clear_current_task(last_action_result == Character.EAT_OK, food_item)
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
+	# CodeRabbit review：_request_next_decision() 只有在非同步回應回來後才會
+	# 重新仲裁，不立刻補一次 _reevaluate() 的話，等回應期間排程或 fallback
+	# 任務不會被馬上接手，得空等到下一次 GameClock time_changed（跟 drink／
+	# murmur 同一個問題）
+	_reevaluate()
 
 # drink 任務的執行（#163）：跟 _pursue_eat_task() 完全同一種形狀，只是換
 # 呼叫 drink() 而不是 eat()。沒有共用一份程式碼是因為兩者要各自轉傳不同的
@@ -2358,9 +2377,11 @@ func _pursue_drink_task() -> void:
 
 	if _current_task.get("source", "") == "llm":
 		_remove_task(_current_task.get("id", ""))
-	_current_task = {}
-	current_place = ""
-	current_state = "idle"
+	# #456 CodeRabbit review：改用跟 _pursue_eat_task() 一樣的共用收尾 helper——
+	# 手動清空漏記 today_log（drink 做完的事不會出現在每日摘要），也漏了
+	# _reevaluate_excluded_ids 之外沒問題但重複造輪子。_clear_current_task()
+	# 已經把兩件事都做了（見它的宣告與 _reevaluate_excluded_ids 宣告註解）
+	_clear_current_task(last_action_result == Character.DRINK_OK)
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
 	# CodeRabbit review：_request_next_decision() 只有在非同步回應回來後才會
