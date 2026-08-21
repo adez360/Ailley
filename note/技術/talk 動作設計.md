@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/dialogue/conversation.gd
 status: 進行中
-updated: 2026-08-17
+updated: 2026-08-21
 ---
 
 # talk 動作設計
@@ -64,6 +64,14 @@ updated: 2026-08-17
 > 混在一起的話 AI 會把「正常講完」當成「動作失敗」而反覆重試。
 >
 > 這條之後套用到所有動作：**正常終止與失敗是兩種東西**。
+
+> [!note] 這些碼是橫跨全部行為的共用詞彙，翻成人話見 [[在地化]]
+> `TARGET_NOT_FOUND`／`TOO_FAR` 這類碼不是 `talk` 專屬——`work`／`buy`／
+> `eat`／`drink`／`give`／`haul`／`attack` 用的是同一組扁平字串（見
+> `character.gd` 開頭那些 `*_OK`／`*_TOO_FAR`… 常數）。`Character.
+> report_action_failure(action_label, reason)`（issue #180）把碼翻成
+> `FAIL_*` 的可讀訊息、顯示在角色自己的 Bubble，同一張表全部行為共用，
+> 不用每個動作各自維護一份對照。
 
 ## 數值系統做成資料驅動
 
@@ -184,6 +192,5 @@ Enter 開啟／送出，Esc 取消，送出後呼叫 `player.say()`，走的是�
 - **Agent 對 Agent**：`talk <a> <b>` 指令可以觸發，但「誰先開口、誰決定結束」
   的規則要等 LLM 版一起做，見 [[LLM 串接與 AI 服務層]]
 
-- 搭話失敗對玩家是靜默的（沒有回饋 UI），只有主控台印得出原因碼
 - 兩個氣泡同時顯示會互相遮擋（`z_index` 相同）。真實對話是輪流講，很少同時出現
 - 記憶寫入 —— 記憶系統還沒做，目前只留掛勾

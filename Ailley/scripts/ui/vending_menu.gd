@@ -83,8 +83,6 @@ func _buy(item_id: String) -> void:
 	if _machine == null or _buyer == null:
 		return
 
-	# 失敗原因印成 warning，跟 player.gd 的 work_at()／talk_to() 同一套做法——
-	# 沒有回饋 UI，開著編輯器玩才看得到為什麼買不成
 	var reason := _buyer.buy_from(_machine, item_id)
 	if reason != Character.BUY_OK:
-		push_warning("%s: buy_from 失敗（%s）" % [_buyer.character_name, reason])
+		_buyer.report_action_failure("buy_from", reason)
