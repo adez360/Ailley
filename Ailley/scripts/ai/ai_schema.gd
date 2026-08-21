@@ -859,6 +859,31 @@ static func words_to_creator_choice_schema() -> Dictionary:
 	}
 
 
+# 長動作固定間隔檢查點（issue #336，《02》§3）：跟 validate_words_to_creator_choice()
+# 同一種純布林是非題驗證——問的是「要不要繼續」，不是重新規劃整批 tasks
+static func validate_checkpoint(data: Dictionary) -> Dictionary:
+	if not data.has("continue") or not data["continue"] is bool:
+		return _fail(ERROR_BAD_SHAPE)
+
+	return _ok({"continue": data["continue"]})
+
+
+static func checkpoint_response_schema() -> Dictionary:
+	return {
+		"type": "json_schema",
+		"json_schema": {
+			"name": "checkpoint_response",
+			"schema": {
+				"type": "object",
+				"properties": {
+					"continue": {"type": "boolean"},
+				},
+				"required": ["continue"],
+			},
+		},
+	}
+
+
 # 選填字串欄位的共用驗證：缺席回空字串、型別錯回 null（呼叫端用 null 判斷失敗，
 # 因為合法值本身可以是空字串，不能拿空字串當失敗信號）、超長截斷不拒絕。
 # validate_dialogue() 的 line 沒有共用這個，因為它是必填且不可為空，跟這裡
