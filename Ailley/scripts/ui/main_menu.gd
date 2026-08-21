@@ -46,15 +46,23 @@ func _on_start_pressed() -> void:
 
 func _on_credits_pressed() -> void:
 	scrim.show()
+	# CreditsPanel 沒有可聚焦的控制項，StartButton/CreditsButton 卻還留著
+	# FOCUS_ALL——純鍵盤玩家開著銘謝時按 Tab 還是能切回 StartButton，
+	# 按 Enter 就會在面板還開著的情況下直接開始遊戲。銘謝開著時先把兩顆
+	# 按鈕摘出焦點鏈，關閉時在 _close_credits() 復原。
+	credits_button.release_focus()
+	start_button.focus_mode = Control.FOCUS_NONE
+	credits_button.focus_mode = Control.FOCUS_NONE
 
 
 # Scrim 蓋滿全螢幕，CreditsPanel 疊在它上面。CreditsPanel 底下的 TitleBg 有
-# 明確覆寫 mouse_filter=IGNORE 只是純裝飾；TitleLabel/VBox 的 Label 群沒覆寫，
-# 走 Godot 4 的 Label/Container 預設值 IGNORE，點擊會穿過它們，落到 CreditsPanel
-# 本體（Panel 預設 STOP）才被吃掉——不會傳到這裡，收到代表點在面板外。
-# 只認滑鼠左鍵：event 也包含滾輪 tick（合成的 button pressed 事件）與右鍵/中鍵，
-# 不過濾 button_index 的話滾一下滑鼠滾輪就會把面板關掉，跟 status_panel.gd
-# 的 _input() 用同一個判斷式對齊。
+# 明確覆寫 mouse_filter=IGNORE 只是純裝飾；TitleLabel 跟 VBox 底下的 Label 群
+# 沒覆寫，走 Godot 4 的 Label 預設值 IGNORE，點擊穿過它們；VBox（VBoxContainer）
+# 沒覆寫則走 Container 預設值 PASS——PASS 一樣會把事件繼續往上送，最後落到
+# CreditsPanel 本體（Panel 預設 STOP）才真正被吃掉，不會傳到這裡，收到代表
+# 點在面板外。只認滑鼠左鍵：event 也包含滾輪 tick（合成的 button pressed
+# 事件）與右鍵/中鍵，不過濾 button_index 的話滾一下滑鼠滾輪就會把面板關掉，
+# 跟 status_panel.gd 的 _input() 用同一個判斷式對齊。
 func _on_scrim_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		_close_credits()
@@ -62,3 +70,6 @@ func _on_scrim_gui_input(event: InputEvent) -> void:
 
 func _close_credits() -> void:
 	scrim.hide()
+	start_button.focus_mode = Control.FOCUS_ALL
+	credits_button.focus_mode = Control.FOCUS_ALL
+	credits_button.grab_focus()
