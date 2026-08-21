@@ -514,8 +514,9 @@ func _has_active_game_session() -> bool:
 # 呼叫——deferred call 這招只能確保「同一顆呼叫堆疊內的同步工作」都做完，
 # 換不到「還在飛的網路請求」。所以真正存檔前另外呼叫
 # _wait_for_sleep_reflections_to_settle()，靠 Agent.is_sleep_reflection_settled()
-# 把場上角色的反思都等到套用完成（#468），不管連線順序是誰先誰後都能保證存到
-# 的是反思「之後」的狀態，不是套用前的半殘留狀態（見 note/技術/存檔.md）
+# 把場上角色的反思都等到套用完成（#468），不管連線順序是誰先誰後，在未逾時的
+# 情況下都能保證存到的是反思「之後」的狀態；逾時則依下方規則放棄等待、照樣
+# 存檔（見 note/技術/存檔.md）
 func _on_day_changed_autosave(_day: int) -> void:
 	call_deferred("_autosave_on_day_change")
 
@@ -530,6 +531,8 @@ func _autosave_on_day_change() -> void:
 	if not _has_active_game_session():
 		return
 	await _wait_for_sleep_reflections_to_settle()
+	if not _has_active_game_session():
+		return
 	var result := save_all()
 	for character_name in result["character_failures"]:
 		push_error("跨日自動存檔失敗：%s" % character_name)
