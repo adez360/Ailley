@@ -378,9 +378,13 @@ static func initialize(db) -> bool:
 		MemorySchema,
 
 		# NPC Death
-		NPCDeathSchema,
+		# 死亡狀態（is_dead/death_cause/last_words 等）與 grave_highlights
+		# 已拍板走 JSON（見 note/技術/存檔.md「墓碑欄位」），對應的
+		# NPCDeathSchema／GraveHighlightSchema 是 #124 骨架階段留下、沒有
+		# 任何呼叫端讀寫的死碼，見《99》P-50，已移除。GraveSchema 仍保留——
+		# grave_epitaphs 的 grave_id 外鍵指向 grave(grave_id)，epitaphs
+		# 這張表需要一個父表才能寫入資料，不是死碼
 		GraveSchema,
-		GraveHighlightSchema,
 		GraveEpitaphSchema,
 
 		# Item
