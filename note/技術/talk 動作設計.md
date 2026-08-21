@@ -220,9 +220,10 @@ Enter 開啟／送出，Esc 取消。不在對話中就是單純冒一句氣泡�
 
 > [!note] 對話結束不會有引擎代講的道別台詞
 > `conversation.gd::_finish()` 不管什麼結束原因（正常結束／走遠／被打斷／
-> fallback）都只做 `exit_conversation()`，不會幫任何一方講話——引擎只提供
-> 「跟誰講完話了」這個客觀事實（`agent.gd::exit_conversation()` 寫進
-> `_daily_events`，見《00》原則二：引擎給事件不給情緒），角色要不要道別、
+> fallback）都不補道別台詞——`exit_conversation()` 迴圈跑完就結束，不會幫
+> 任何一方講話。引擎只提供「跟誰講完話了」這個客觀事實
+> （`agent.gd::exit_conversation()` 寫進 `_daily_events`，見
+> [[00_設計原則與架構#原則二：引擎只給事件，不給情緒]]），角色要不要道別、
 > 用什麼語氣，是 AI 自己下一輪決定的事，不是系統畫面台詞。
 
 > [!note] 這是接 LLM 的入口
