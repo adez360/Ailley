@@ -7,7 +7,9 @@ extends Node
 ## 既有資料庫（缺 NOT NULL 主鍵約束）的 memories／memory_related_npcs／
 ## npc_appearance／npc_last_action／npc_occupation，跑過
 ## DatabaseSchema.initialize() 之後主鍵補上 NOT NULL、原有資料保留、
-## 外鍵仍然生效。
+## 外鍵仍然生效、重建後索引沒有跟著暫存表一起消失。另外驗證欄位形狀跟
+## 現行 schema 對不上（不只缺 NOT NULL）的既有資料庫，migration 會中止
+## 而不是用 SELECT * 靜默複製到錯的欄位。
 ##
 ## 使用方式：
 ## 1. 將本檔放到：
@@ -22,10 +24,12 @@ extends Node
 ## - 不使用 DatabaseManager 的正式資料庫（DATABASE_PATH），自己開一條獨立
 ##   的 SQLite 連線指向暫存檔，模擬「舊版程式碼建出來的資料庫」，測試結束
 ##   立刻刪除，不影響任何人的存檔。
-## - 手刻的「舊版」CREATE TABLE 欄位順序照抄現行 *Schema.gd，只故意省略
-##   主鍵欄位的 NOT NULL——重現 #446 描述的既有資料庫欄位定義。欄位順序
-##   要跟現行 schema 一致，因為 migration 用 `INSERT INTO x SELECT * FROM
-##   x_old` 是按欄位順序複製，順序對不上會複製到錯的欄位。
+## - 主要情境手刻的「舊版」CREATE TABLE 欄位順序照抄現行 *Schema.gd，只故意
+##   省略主鍵欄位的 NOT NULL——重現 #446 描述的既有資料庫欄位定義，這是
+##   migration 3 保證會修好的情形。另外 _run_column_shape_mismatch_test()
+##   刻意用一張欄位形狀對不上現行 schema 的 npc_appearance，驗證這種超出
+##   migration 3 範圍的既有資料庫會讓 migration 中止，不會被 SELECT *
+##   靜默複製到錯的欄位。
 ## =====================================================
 
 
@@ -142,7 +146,79 @@ func _run() -> void:
 		"sqlite_master 查不到 idx_memory_related_npcs_npc 指向 memory_related_npcs 的索引"
 	)
 
+	_run_column_shape_mismatch_test()
+
 	_finish()
+
+
+## 欄位形狀對不上時，migration 要中止而不是用 SELECT * 靜默複製到錯的欄位。
+## 用一張缺 NOT NULL、且多一個現行 schema 沒有的欄位的 npc_appearance
+## 模擬「不只缺 NOT NULL，欄位定義也對不上」的既有資料庫——這種情形超出
+## migration 3 的範圍，DatabaseSchema.initialize() 要回傳 false 讓
+## transaction 整批回滾，不是猜欄位怎麼對應。
+func _run_column_shape_mismatch_test() -> void:
+	if db != null:
+		db.close_db()
+		db = null
+
+	_delete_test_db()
+
+	db = SQLite.new()
+	db.path = TEST_DB_PATH
+	db.foreign_keys = true
+
+	if not db.open_db():
+		_fail("column_shape_mismatch/open_db", db.error_message)
+		return
+
+	var statements := [
+		"CREATE TABLE npc (npc_id TEXT PRIMARY KEY);",
+
+		# --- npc_appearance（舊版：缺 NOT NULL，且多一個現行 schema 沒有的欄位）---
+		"""
+		CREATE TABLE npc_appearance (
+			npc_id TEXT PRIMARY KEY,
+			legacy_extra_column TEXT DEFAULT '',
+			hair_id TEXT DEFAULT '',
+			face_id TEXT DEFAULT '',
+			clothes_id TEXT DEFAULT '',
+			decoration1_id TEXT DEFAULT '',
+			decoration2_id TEXT DEFAULT '',
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (npc_id) REFERENCES npc(npc_id) ON DELETE CASCADE
+		);
+		"""
+	]
+
+	for sql in statements:
+		if not db.query(sql):
+			_fail("column_shape_mismatch/seed", db.error_message)
+			return
+
+	if not db.query_with_bindings("INSERT INTO npc (npc_id) VALUES (?);", [NPC_A]):
+		_fail("column_shape_mismatch/seed npc", db.error_message)
+		return
+
+	if not db.query_with_bindings(
+		"INSERT INTO npc_appearance (npc_id, hair_id) VALUES (?, ?);",
+		[NPC_A, "test_hair"]
+	):
+		_fail("column_shape_mismatch/seed npc_appearance", db.error_message)
+		return
+
+	if not db.query("PRAGMA user_version = 2;"):
+		_fail("column_shape_mismatch/set user_version", db.error_message)
+		return
+
+	_check(
+		"欄位形狀對不上現行 schema 時 migration 中止（不是靜默 SELECT * 複製到錯欄位）",
+		not DatabaseSchema.initialize(db),
+		"initialize() 回傳 true——欄位對不上卻放行了 SELECT *"
+	)
+
+	db.close_db()
+	db = null
+	_delete_test_db()
 
 
 # =====================================================

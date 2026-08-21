@@ -158,6 +158,51 @@ static func _migrate_v3_drop_stale_indexes(db, old_table_name: String) -> bool:
 	return true
 
 
+## INSERT INTO x SELECT * FROM x_old 按欄位順序（不是名稱）複製。這個
+## migration 只保證修好「既有資料庫僅缺 NOT NULL、其餘欄位定義跟現在
+## 的 *Schema.gd 一致」這種情形——如果暫存表的欄位數剛好跟新表一樣，
+## 但順序或語意不同（例如更早期的 schema 版本），SELECT * 會靜默把
+## 資料複製到錯的欄位，不會報錯。INSERT 之前比對兩邊 PRAGMA table_info
+## 的欄位名稱與順序，兜不起來就直接中止（呼叫端 ROLLBACK），不嘗試猜
+## 欄位怎麼對應——這種既有資料庫已經超出這個 migration 的範圍，需要另外
+## 判斷怎麼處理。
+static func _migrate_v3_verify_column_shape(db, old_name: String, new_name: String) -> bool:
+	if not db.query("PRAGMA table_info(%s);" % old_name):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to read columns of %s: %s"
+			% [old_name, db.error_message]
+		)
+		return false
+
+	var old_columns: Array = (db.query_result as Array).map(
+		func(row): return row.get("name", "")
+	)
+
+	if not db.query("PRAGMA table_info(%s);" % new_name):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to read columns of %s: %s"
+			% [new_name, db.error_message]
+		)
+		return false
+
+	var new_columns: Array = (db.query_result as Array).map(
+		func(row): return row.get("name", "")
+	)
+
+	if old_columns == new_columns:
+		return true
+
+	push_error(
+		(
+			"[DatabaseSchema] Migration 3: %s column shape doesn't match current "
+			+ "schema (old=%s, new=%s) — refusing to copy data positionally with "
+			+ "SELECT *. This existing database predates a schema change beyond "
+			+ "the NOT NULL primary key fix this migration handles."
+		) % [old_name, old_columns, new_columns]
+	)
+	return false
+
+
 ## 沒有其他表外鍵指向的單一表重建：改名成暫存表 → 用 schema.create(db)
 ## 建回原名的新結構 → 把資料從暫存表複製回來 → 刪掉暫存表。
 static func _migrate_v3_rebuild_table(db, table_name: String, schema) -> bool:
@@ -178,6 +223,9 @@ static func _migrate_v3_rebuild_table(db, table_name: String, schema) -> bool:
 			"[DatabaseSchema] Migration 3: Failed to recreate %s: %s"
 			% [table_name, db.error_message]
 		)
+		return false
+
+	if not _migrate_v3_verify_column_shape(db, old_name, table_name):
 		return false
 
 	if not db.query("INSERT INTO %s SELECT * FROM %s;" % [table_name, old_name]):
@@ -233,11 +281,19 @@ static func _migrate_v3_rebuild_memories(db) -> bool:
 		)
 		return false
 
+	if not _migrate_v3_verify_column_shape(db, "memories__migrate_v3_old", "memories"):
+		return false
+
 	if not db.query("INSERT INTO memories SELECT * FROM memories__migrate_v3_old;"):
 		push_error(
 			"[DatabaseSchema] Migration 3: Failed to copy data into memories: "
 			+ db.error_message
 		)
+		return false
+
+	if not _migrate_v3_verify_column_shape(
+		db, "memory_related_npcs__migrate_v3_old", "memory_related_npcs"
+	):
 		return false
 
 	if not db.query(
