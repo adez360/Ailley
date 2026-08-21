@@ -342,9 +342,12 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 > `SAFETY_TRUNCATED`），這是另一件事，不在這則研究範圍內，這裡先誠實記錄
 > 這個方法論限制
 
-**提案**：比照現有 `min_interval_sec`／`max_calls_per_game_day`／`dialogue_exempt`
-三個旋鈕的模式，在 `ai_config.json` 新增第四個全域旋鈕
-`max_dialogue_calls_per_game_day`（可設 0＝不限，跟其他三個一致），在
+**提案**：比照現有 `min_interval_sec`／`max_calls_per_game_day` 這兩個數值型
+旋鈕的模式，在 `ai_config.json` 新增第三個數值型全域旋鈕
+`max_dialogue_calls_per_game_day`（可設 0＝不限，跟前兩者一致）。
+`dialogue_exempt` 是布林豁免開關，不是數值上限，不適用「0＝不限」——
+它只控制 `CONVERSATION` policy 是否豁免既有的 `min_interval_sec`／
+`max_calls_per_game_day` 檢查，跟這個新旋鈕各自獨立、互不影響。在
 `AIService.request()` 判斷 `CONVERSATION` policy 時額外檢查
 `_dialogue_calls_today[requester_id]` **達到或超過**這個值（`count >=
 max_dialogue_calls_per_game_day`，不是 `>`——跟既有
