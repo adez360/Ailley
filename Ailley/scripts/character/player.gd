@@ -108,7 +108,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		var work_reason := work_at(workstation)
 		if work_reason == WORK_OK:
 			return
-		report_action_failure("work_at", work_reason)
+		if other == null:
+			report_action_failure("work_at", work_reason)
+			return
+		# 工作失敗但旁邊還有人可以搭話——先試搭話，兩邊都失敗才回報，
+		# 不然「工作站被佔用」跟「搭話失敗」會疊成兩則訊息一起蹦出來
+		if talk_to(other) != TALK_OK:
+			report_action_failure("work_at", work_reason)
+		return
 	# 販賣機不是立刻執行動作，是開商品選單——真正的購買發生在
 	# vending_menu.gd 裡點下某一項的時候。vending_menu 理論上一定找得到
 	# （場景裡固定掛著），這裡多防一手是避免場景漏掛的話直接炸掉
