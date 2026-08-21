@@ -61,6 +61,15 @@ static func _compute_database_path() -> String:
 var db: SQLite
 var is_ready := false
 
+## select()／select_where() 回傳空 Array 時，這個角色是「查詢真的失敗」
+## 還是「查詢成功、只是沒有符合的資料列」無法從回傳值本身分辨——兩者都是
+## `[]`。呼叫端（尤其是 has_character()／has_world() 這種把 is_empty() 當
+## 存在判斷用的地方）需要分辨時，緊接著呼叫後檢查這個旗標。只有 select()／
+## select_where() 會寫它；insert()／update()／delete() 有自己的 bool 回傳值，
+## 不受影響。單一 Godot process 對應單一 db 連線，沒有並行呼叫，
+## 呼叫完立刻檢查不會被別的查詢蓋掉（issue #439）
+var last_query_failed := false
+
 ## is_ready 只代表「連線與 schema 都開好，CRUD 可以用」——DatabaseSeeder
 ## 自己就要靠 CRUD 才能把基礎資料寫進去，所以不能拿 is_ready 當作「seed
 ## 已完成」的訊號。呼叫端需要「基礎資料真的補齊了嗎」這個答案時
@@ -234,6 +243,7 @@ func select(
 ) -> Array:
 
 	if not _require_ready():
+		last_query_failed = true
 		return []
 
 
@@ -284,9 +294,11 @@ func select(
 			]
 		)
 
+		last_query_failed = true
 		return []
 
 
+	last_query_failed = false
 	return db.query_result
 
 
@@ -307,6 +319,7 @@ func select_where(
 ) -> Array:
 
 	if not _require_ready():
+		last_query_failed = true
 		return []
 
 
@@ -358,9 +371,11 @@ func select_where(
 			]
 		)
 
+		last_query_failed = true
 		return []
 
 
+	last_query_failed = false
 	return db.query_result
 
 
