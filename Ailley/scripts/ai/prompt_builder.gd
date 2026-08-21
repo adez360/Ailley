@@ -102,8 +102,9 @@ const PLAN_SYSTEM_TAIL_TEMPLATE := """
 "expires_in_minutes" is optional: how many game minutes from now this task should still be worth doing before it's no longer relevant (e.g. an appointment you're setting up for later today). It must be an integer between %d and %d. Omit it for tasks you intend to act on right away.
 "emotion" is required every time — it's the only inner state you get to declare yourself. Set "type" to whichever of these fits best right now: %s (use "neutral" if nothing stands out), and "intensity" (0-100) to how strong it is. Base it on your personality and what just happened to you, not on some neutral default. Do not include a duration — how long it lasts is not yours to decide.
 "current_goal" is optional: a short label (a few words, not a sentence) for the one thing you most want to accomplish right now. Omit it if nothing's changed since last time. Once you've accomplished it, or it's no longer something you're pursuing, send an empty string "" to clear it — don't just stop mentioning it, since omitting the field only means "no change."
+"reasoning" must be written first, before you decide on "tasks" — think it through here, then decide, not the other way around. In at most %d characters, walk through: what's the biggest problem right now, what options could address it, which one you're picking, and why — a complete cause-and-effect chain (e.g. "A isn't working, so I need B"), not a list of every option you considered.
 Reply with JSON only, no prose, no code fence:
-{"reasoning": "<why you decided this, brief>",
+{"reasoning": "<problem, options, choice, why — one causal chain, %d chars max>",
  "inner_monologue": "<what this character is thinking right now, first person>",
  "request_plan_update": <true if you want the chance to rewrite today_plan next time, else false>,
  "emotion": {"type": "<one of the 8 listed emotions>", "intensity": 50},
@@ -135,6 +136,7 @@ static func _plan_system_tail() -> String:
 		int(AISchema.MAX_TASK_DURATION),
 		AISchema.MIN_EXPIRES_IN_MINUTES, AISchema.MAX_EXPIRES_IN_MINUTES,
 		", ".join(Character.EMOTION_TYPES),
+		int(AISchema.MAX_REASONING_CHARS), int(AISchema.MAX_REASONING_CHARS),
 	]
 
 ## 動作清單用 AISchema.IMPLEMENTED_ACTIONS 動態組（#341），不是 ALLOWED_ACTIONS——

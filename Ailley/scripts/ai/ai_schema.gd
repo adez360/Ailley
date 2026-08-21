@@ -244,6 +244,12 @@ static func parse_completion(response: Dictionary) -> Dictionary:
 # 拍板了就該把沒選的那條路刪掉，不是留著兩條都能過
 const MAX_LINE_CHARS := 200
 
+## plan 回應的 reasoning 專用上限，不沿用 MAX_LINE_CHARS（#418）。poc_village_sim
+## 量到的效果來自「100 字上限 ＋ 強制因果鏈結構」這個組合，兩者是一起測的，
+## 不是分開驗證——直接沿用 200 會是跟 POC 原始驗證不同的變動，效果未驗證。
+## 100 字是上限不是底限：逼模型精簡寫完一條因果鏈，不是逼它湊字數
+const MAX_REASONING_CHARS := 100
+
 static func validate_dialogue(data: Dictionary) -> Dictionary:
 	if not data.has("line") or not data["line"] is String:
 		return _fail(ERROR_BAD_SHAPE)
@@ -510,14 +516,19 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minute
 			return _fail(shape_result["error"])
 		tasks.append(shape_result["data"])
 
-	# reasoning／inner_monologue：跟 validate_dialogue() 的 line 同一種處理
-	# 方式——選填字串，型別錯就整包拒絕，超長截斷不拒絕；缺席時給空字串，
-	# 不是必填欄位（AI 停用時整個 request() 就已經在更早的階段失敗，走不到
-	# 這裡；但拍板：不能因為模型少回這兩個欄位就讓原本合法的 tasks 也一起作廢）
-	var reasoning: Variant = _validated_optional_line(data, "reasoning")
-	if reasoning == null:
+	# reasoning：#473 CodeRabbit review 抓到——prompt 要求每次先寫 reasoning
+	# 再決定 tasks，但驗證層原本仍把它當選填、缺席時默默填空字串，等於這個
+	# 核心約束在驗證層完全沒被強制，模型可以完全不寫 reasoning 卻照樣通過。
+	# 改成必填：缺席、型別錯、或 strip 後是空字串都整包拒絕（超長仍是截斷不
+	# 拒絕，跟 validate_dialogue() 的 line 同一種寬鬆度）。schema 的
+	# required 同步加 "reasoning"（見 plan_response_schema()），驗證層跟
+	# schema 契約要一致
+	var reasoning: Variant = _validated_optional_line(data, "reasoning", MAX_REASONING_CHARS)
+	if reasoning == null or (reasoning as String).is_empty():
 		return _fail(ERROR_BAD_SHAPE)
 
+	# inner_monologue 維持選填——跟 reasoning 不同，這欄沒有對應的驗證層
+	# 強制契約，缺席時給空字串，型別錯才拒絕
 	var inner_monologue: Variant = _validated_optional_line(data, "inner_monologue")
 	if inner_monologue == null:
 		return _fail(ERROR_BAD_SHAPE)
@@ -852,14 +863,14 @@ static func words_to_creator_choice_schema() -> Dictionary:
 # 因為合法值本身可以是空字串，不能拿空字串當失敗信號）、超長截斷不拒絕。
 # validate_dialogue() 的 line 沒有共用這個，因為它是必填且不可為空，跟這裡
 # 「可以不存在、可以是空字串」的語意不一樣，硬共用只會讓兩邊的條件互相繞
-static func _validated_optional_line(data: Dictionary, key: String) -> Variant:
+static func _validated_optional_line(data: Dictionary, key: String, max_chars: int = MAX_LINE_CHARS) -> Variant:
 	if not data.has(key):
 		return ""
 	if not data[key] is String:
 		return null
 	var text: String = (data[key] as String).strip_edges()
-	if text.length() > MAX_LINE_CHARS:
-		text = text.substr(0, MAX_LINE_CHARS)
+	if text.length() > max_chars:
+		text = text.substr(0, max_chars)
 	return text
 
 
@@ -892,7 +903,7 @@ static func _validated_optional_line(data: Dictionary, key: String) -> Variant:
 # 多一個判斷維度，見 issue #227 討論串
 static func plan_response_schema(allow_update_plan: bool = false, has_pending_persuade: bool = false) -> Dictionary:
 	var properties := {
-		"reasoning": {"type": "string"},
+		"reasoning": {"type": "string", "maxLength": MAX_REASONING_CHARS},
 		"inner_monologue": {"type": "string"},
 		"request_plan_update": {"type": "boolean"},
 		# emotion（#351，《02》§1-3 規則 1）：每次決策都必填，不是條件式欄位——
@@ -957,7 +968,7 @@ static func plan_response_schema(allow_update_plan: bool = false, has_pending_pe
 			"schema": {
 				"type": "object",
 				"properties": properties,
-				"required": ["tasks", "emotion"],
+				"required": ["reasoning", "tasks", "emotion"],
 			},
 		},
 	}
