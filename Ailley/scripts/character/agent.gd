@@ -2184,6 +2184,15 @@ func _select(task: Dictionary, now_minutes: int, outgoing_ok: bool = true) -> vo
 	_current_task_started_at = now_minutes
 	current_place = str(task.get("params", {}).get("place", ""))
 	current_state = str(task.get("action", ""))
+
+	# #428：只記 llm 來源的動作切換，給 #418 重複率量測用——schedule 來源
+	# 本來就設計成會重複（例如每天固定去上班），混進去會稀釋掉真正想量的東西
+	# （已拍板）。_select() 是仲裁器唯一真正把 _current_task 換成新任務的地方
+	# （_consider_switch() 所有分支最終都收斂到這裡才呼叫，且已經在呼叫端
+	# 排除掉 best.id == _current_task.id 的情況），呼叫到這裡就代表真的換了
+	# 一筆不同的任務，不用再另外判斷「是不是真的換了」
+	if task.get("source", "") == "llm":
+		_record_action_history(current_state)
 	# resolve() 現在只在 _pursue_talk_task() 裡對 talk 任務呼叫——換成別的
 	# 動作（move_to/sleep 等）時沒有人會再寫入 last_action_result，舊任務
 	# 留下的失敗原因會一直卡著，讓 LLM 看到跟目前任務無關的過期訊息。這裡
@@ -2206,6 +2215,20 @@ func _select(task: Dictionary, now_minutes: int, outgoing_ok: bool = true) -> vo
 	# 整個跳過 move_to()（CodeRabbit review 抓到）
 	_buy_pursuit_task_id = ""
 	_buy_pursuit_target = Vector2.ZERO
+
+# 記一筆 llm 來源的動作切換（#428）。append-only，失敗不影響遊戲進行——
+# 這是給之後分析用的資料，不是遊戲狀態，寫不進去只印警告，不擋仲裁器
+# 換任務。game_minute 跟 _push_today_log() 的 "minute" 欄位同一個換算方式，
+# 兩處都是「當天第幾分鐘」，方便之後對照
+func _record_action_history(action: String) -> void:
+	var inserted := DatabaseManager.insert("npc_action_history", {
+		"npc_id": character_id,
+		"game_day": GameClock.day,
+		"game_minute": GameClock.hour * 60 + GameClock.minute,
+		"action": action,
+	})
+	if not inserted:
+		push_warning("Agent %s: npc_action_history 寫入失敗，這筆動作切換記錄遺失" % character_name)
 
 # 力竭狀態下強制休息（#364）。exhausted 激活時選不了別的動作，只能 rest
 # 直到 stamina 恢復到門檻為止。_reevaluate_once() 檢查到 exhausted 時呼叫
