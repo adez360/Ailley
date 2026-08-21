@@ -49,9 +49,19 @@ func _ready() -> void:
 func _apply_startup_ai_state() -> void:
 	await AIService.await_readiness_settled()
 
+	# await 期間場景可能已被換掉（例如讀檔失敗改跳主選單）——這個節點連同
+	# 場上 Agent 都不再有效，get_tree() 這時候會回傳 null，繼續往下會直接
+	# 噴 null 存取錯誤（CodeRabbit review 抓到，PR #467）
+	if not is_inside_tree():
+		return
+
 	var agents := get_tree().get_nodes_in_group("agents")
 	var ready_count := 0
-	var fallback_reason := ""
+	# 用字典去重收集所有「沒就緒」的原因，不是只留最後一隻的——不同 Agent
+	# 可能因為不同原因沒就緒（例如一隻 provider 查無此名、另一隻是連線逾時），
+	# 開發期指示器要能一次看出全部原因，不能只看到最後蓋掉前面的那個
+	# （CodeRabbit review 抓到，PR #467）
+	var fallback_reasons := {}
 	for node in agents:
 		var agent := node as Agent
 		if agent == null:
@@ -61,7 +71,7 @@ func _apply_startup_ai_state() -> void:
 		if agent_ready:
 			ready_count += 1
 		else:
-			fallback_reason = str(readiness.get("reason", ""))
+			fallback_reasons[str(readiness.get("reason", ""))] = true
 		agent.debug_set_llm_decision(agent_ready)
 
 	if agents.is_empty():
@@ -71,7 +81,7 @@ func _apply_startup_ai_state() -> void:
 	if status_label == null:
 		return
 
-	status_label.set_status(ready_count, agents.size(), fallback_reason)
+	status_label.set_status(ready_count, agents.size(), "、".join(fallback_reasons.keys()))
 
 
 ## 回傳這次讀檔是否成功套用。false 時已經呼叫 change_scene_to_file() 切去
