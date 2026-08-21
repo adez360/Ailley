@@ -142,12 +142,11 @@ static func _migrate_v3_drop_stale_indexes(db, old_table_name: String) -> bool:
 		)
 		return false
 
-	for row in (db.query_result as Array):
-		var index_name: String = row.get("name", "")
+	var index_names: Array = (db.query_result as Array).map(
+		func(row): return row.get("name", "")
+	).filter(func(name: String): return not name.is_empty())
 
-		if index_name.is_empty():
-			continue
-
+	for index_name in index_names:
 		if not db.query("DROP INDEX %s;" % index_name):
 			push_error(
 				"[DatabaseSchema] Migration 3: Failed to drop stale index %s: %s"
