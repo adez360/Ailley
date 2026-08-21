@@ -352,6 +352,7 @@ static func initialize(db) -> bool:
 		NPCGoalSchema,
 		NPCDailyPlanSchema,
 		NPCLastActionSchema,
+		NPCActionHistorySchema,
 
 		# NPC Memory
 		MemorySchema,
