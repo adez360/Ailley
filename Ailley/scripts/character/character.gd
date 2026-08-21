@@ -89,12 +89,18 @@ const DRINK_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 hydr
 
 ## 各飲品 item_id 喝下去回復多少 hydration。抄《規格書 08》§3-2「口渴回復」欄位
 ## 取絕對值，理由跟 EAT_SATIETY_RECOVERY 一樣（改名前 thirst 越低越好，
-## P-32 改成 hydration 越高越好之後方向反過來、數字不變）。ale 喝下去也會
-## 加 alcohol，那條線是 #165 的範圍，這裡先不接
+## P-32 改成 hydration 越高越好之後方向反過來、數字不變）
 const DRINK_HYDRATION_RECOVERY := {
 	"water": 40.0,
 	"ale": 20.0,
 	"spirit": 10.0,
+}
+
+## 含酒精飲品喝下去加多少 alcohol，抄《規格書 08》§3-2「alcohol」欄位（#165）。
+## 查不到（例如 water）就是 0，同一種「保守回 0」規則跟 EAT_SATIETY_RECOVERY 一樣
+const DRINK_ALCOHOL_RECOVERY := {
+	"ale": 25.0,
+	"spirit": 45.0,
 }
 
 const GIVE_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE 一樣的距離門檻，2 格
@@ -957,6 +963,7 @@ func drink() -> String:
 		return DRINK_NO_DRINK
 
 	stats.add("hydration", DRINK_HYDRATION_RECOVERY.get(item_id, 0.0))
+	stats.add("alcohol", DRINK_ALCOHOL_RECOVERY.get(item_id, 0.0))
 	return DRINK_OK
 
 
