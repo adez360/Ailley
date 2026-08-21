@@ -432,12 +432,12 @@ func _get_condition_display_name(type: String) -> String:
 		_:
 			return type
 
-func _set_condition(type: String, present: bool) -> void:
+func _set_condition(type: String, present: bool, record_event: bool = true) -> void:
 	var had := has_condition(type)
 	if present and not had:
 		conditions.append({"type": type, "turns_left": -1})
 		# 记录进入新状态的事件
-		if is_in_group("agents"):
+		if record_event and is_in_group("agents"):
 			var condition_name := _get_condition_display_name(type)
 			(self as Agent)._push_daily_event("你開始%s。" % condition_name)
 	elif not present and had:
@@ -1250,7 +1250,7 @@ func load_save_data(data: Dictionary) -> void:
 	# 治療與昏迷互斥（見 _send_to_herb_shop_for_treatment()），治療中的存檔優先還原成治療狀態，
 	# 不重建 CONDITION_INCAPACITATED；只有「昏迷中但還沒送醫」才需要重建
 	if _incapacitation_start_minute != -1 and _treatment_start_minute == -1:
-		_set_condition(CONDITION_INCAPACITATED, true)
+		_set_condition(CONDITION_INCAPACITATED, true, false)
 
 	# is Dictionary 而不是只看 has()——壞掉的存檔把 stats/relationships 存成
 	# 別的型別時，直接把值傳給下面兩個型別化參數的函式會是執行期型別錯誤，
