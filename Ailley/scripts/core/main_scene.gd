@@ -19,7 +19,12 @@ const MAIN_MENU_SCENE := "res://scenes/main_menu.tscn"
 func _ready() -> void:
 	if GameManager.continue_requested:
 		GameManager.continue_requested = false
-		_apply_continue()
+		if not _apply_continue():
+			# 讀檔失敗已經 change_scene_to_file() 切去主選單——這個節點跟場上
+			# 角色都要被換掉了，不該再繼續跑開場 AI 狀態套用（CodeRabbit review
+			# 抓到：原本這裡沒有提前 return，_apply_startup_ai_state() 還是會
+			# 對已經要被丟棄的場景做 get_nodes_in_group("agents") 之類的操作）
+			return
 
 	_apply_startup_ai_state()
 
@@ -66,28 +71,25 @@ func _apply_startup_ai_state() -> void:
 	if status_label == null:
 		return
 
-	if ready_count == agents.size():
-		status_label.set_status(true, "")
-	else:
-		# 混合場面（例如某隻角色的 model_name 指到一個壞掉的 provider）沒有
-		# 單一個「就緒與否」，指示牌走保守那邊——只要有一隻沒開，就整體標成
-		# 排程模式，理由取第一個沒就緒的原因當代表
-		status_label.set_status(false, fallback_reason)
+	status_label.set_status(ready_count, agents.size(), fallback_reason)
 
 
-func _apply_continue() -> void:
+## 回傳這次讀檔是否成功套用。false 時已經呼叫 change_scene_to_file() 切去
+## 主選單——呼叫端（_ready()）要跟著提前 return，不能繼續對正要被換掉的場景
+## 做任何操作（CodeRabbit review 抓到，PR #467）
+func _apply_continue() -> bool:
 	if not SaveService.has_world(GameManager.DEFAULT_WORLD_ID):
 		push_error("main_scene: continue_requested 但世界存檔 %s 不存在，返回主選單" % GameManager.DEFAULT_WORLD_ID)
 		GameManager.continue_load_failed = true
 		get_tree().change_scene_to_file(MAIN_MENU_SCENE)
-		return
+		return false
 
 	var world_data := SaveService.get_world(GameManager.DEFAULT_WORLD_ID)
 	if not SaveService.is_world_data_valid(world_data):
 		push_error("main_scene: 世界存檔 %s 讀取失敗或格式不完整（可能已損毀），返回主選單" % GameManager.DEFAULT_WORLD_ID)
 		GameManager.continue_load_failed = true
 		get_tree().change_scene_to_file(MAIN_MENU_SCENE)
-		return
+		return false
 	GameManager.apply_world_save_data(world_data)
 
 	for node in get_tree().get_nodes_in_group("characters"):
@@ -111,3 +113,5 @@ func _apply_continue() -> void:
 			continue
 
 		character.load_save_data(data)
+
+	return true

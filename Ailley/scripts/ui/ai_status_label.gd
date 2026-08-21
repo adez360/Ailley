@@ -10,13 +10,23 @@ extends Label
 ## 一套建置判斷。
 
 const COLOR_READY := Color(0.4, 1.0, 0.4)
+const COLOR_PARTIAL := Color(1.0, 0.55, 0.2)
 const COLOR_SCHEDULE := Color(1.0, 0.8, 0.3)
 
 
-func set_status(ai_ready: bool, reason: String) -> void:
-	if ai_ready:
+## ready_count／total_count 是這輪開場探測後，場上總共有幾隻 Agent、其中幾隻
+## provider 就緒。三種狀態：全部就緒、部分就緒（混合場面，例如某隻角色的
+## model_name 指到一個壞掉的 provider）、全部排程——混合場面不能只用
+## true/false 表示，不然玩家會看到「排程模式」卻有幾隻角色其實在跑真的決策，
+## 或反過來看到「AI 決策中」卻有幾隻其實是排程 fallback（CodeRabbit review
+## 抓到，PR #467）。reason 只在有角色沒就緒時才有意義，全部就緒時忽略
+func set_status(ready_count: int, total_count: int, reason: String) -> void:
+	if ready_count == total_count:
 		text = "AI 決策中"
 		modulate = COLOR_READY
-	else:
+	elif ready_count == 0:
 		text = "排程模式（原因：%s）" % reason
 		modulate = COLOR_SCHEDULE
+	else:
+		text = "AI 決策中（%d／%d，其餘排程模式，原因：%s）" % [ready_count, total_count, reason]
+		modulate = COLOR_PARTIAL
