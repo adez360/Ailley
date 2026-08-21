@@ -30,7 +30,10 @@ func resolve_from_position(position: Vector2, radius: float) -> String:
 	var nearest_name := ""
 	var nearest_distance := INF
 	for child in get_children():
-		var distance: float = position.distance_to((child as Node2D).global_position)
+		if not (child is Node2D):
+			continue
+		var anchor := child as Node2D
+		var distance: float = position.distance_to(anchor.global_position)
 		if distance <= radius and distance < nearest_distance:
 			nearest_distance = distance
 			nearest_name = child.name

@@ -342,9 +342,9 @@ var _next_daily_event_id := 0
 ## related_npcs 是這件事牽涉到誰——客觀事實，在事件發生的當下記下來，睡前
 ## 反思寫回 Memory.add_candidate() 時原封不動帶過去（見
 ## request_sleep_reflection()），不是引擎替這段記憶加主觀定性（見《00》
-## 原則二）。location_id 不開放呼叫端指定，一律用 current_place——跟
-## get_state_snapshot() 送給 LLM 的 "place" 欄位同一個來源，不另外定義一套
-## 「現在在哪」
+## 原則二）。location_id 預設用 current_place——跟 get_state_snapshot() 送給
+## LLM 的 "place" 欄位同一個來源，不另外定義一套「現在在哪」；指定
+## location_override 時改用覆寫值，見下一段
 ##
 ## location_override 給 current_place 當下不可信或不適用的呼叫端用（#426：
 ## _on_attacked() 用 _place_before_interrupt 快照的即時位置反查、
