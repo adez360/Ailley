@@ -43,6 +43,15 @@ const DEFAULT_TIMEOUT := 10.0
 const DEFAULT_MIN_INTERVAL_SEC := 30.0
 const DEFAULT_MAX_CALLS_PER_GAME_DAY := 20
 
+## 對話輪次自己的每日呼叫上限，只在 dialogue_exempt=true 時才有意義——
+## dialogue_exempt=true 讓 CONVERSATION 完全豁免上面兩條限制，沒有這個旋鈕
+## 的話一場對話可以無限輪講下去，成本無上限。0＝不限，跟前兩者同一套慣例。
+## 30 是 #395 研究的建議起點（本機 Qwen2.5-7B，6 場對話樣本，換算單一角色
+## 約可撐 10 場均值對話），不是精算值，見《LLM 串接與 AI 服務層》「每日對話
+## 呼叫上限提案」一節。dialogue_exempt=false 時這個旋鈕形同虛設——那種設定下
+## 對話呼叫已經走一般 max_calls_per_game_day 路徑，不需要疊加第二層限制
+const DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY := 30
+
 ## 對話輪次要不要豁免上面兩條限制。預設豁免 ——
 ## MIN_INTERVAL_SEC 是為「行程重排」訂的，而對話輪次是秒級間隔，
 ## 套上去會從第二輪起全部回 rate_limited，等於對話根本接不起來。
@@ -110,7 +119,7 @@ class Provider extends RefCounted:
 	# 給 debug 主控台印一行摘要。冷卻／每日配額／對話豁免是全域設定，不屬於
 	# 這個 provider 自己，由呼叫端（AIConfig）傳進來，不是這個類別自己存的——
 	# 這樣同一份全域設定印在每個 provider 底下時保證一致，不會各自維護一份
-	func summary(cooldown_sec: float, daily: int, dialogue_exempt: bool) -> String:
+	func summary(cooldown_sec: float, daily: int, dialogue_exempt: bool, max_dialogue: int) -> String:
 		return L10n.tf("AI_CONFIG_SUMMARY", {
 			"enabled": valid,
 			"base_url": base_url,
@@ -120,6 +129,7 @@ class Provider extends RefCounted:
 			"cooldown": "%.0f" % cooldown_sec,
 			"daily": daily,
 			"exempt": dialogue_exempt,
+			"max_dialogue": max_dialogue,
 		})
 
 
@@ -131,6 +141,7 @@ var providers := {}					# 名字 -> Provider
 var min_interval_sec := DEFAULT_MIN_INTERVAL_SEC
 var max_calls_per_game_day := DEFAULT_MAX_CALLS_PER_GAME_DAY
 var dialogue_exempt := DEFAULT_DIALOGUE_EXEMPT
+var max_dialogue_calls_per_game_day := DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY
 
 
 # 讀不到就回一個 enabled = false 的設定物件，呼叫端不必自己判斷檔案在不在
@@ -170,6 +181,9 @@ func _apply(data: Dictionary) -> void:
 	min_interval_sec = maxf(0.0, float(data.get("min_interval_sec", DEFAULT_MIN_INTERVAL_SEC)))
 	max_calls_per_game_day = maxi(0, int(data.get("max_calls_per_game_day", DEFAULT_MAX_CALLS_PER_GAME_DAY)))
 	dialogue_exempt = bool(data.get("dialogue_exempt", DEFAULT_DIALOGUE_EXEMPT))
+	max_dialogue_calls_per_game_day = maxi(0, int(
+		data.get("max_dialogue_calls_per_game_day", DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY)
+	))
 
 	default_provider = str(data.get("default_provider", "")).strip_edges()
 
@@ -291,7 +305,9 @@ func _to_string() -> String:
 		var provider: Provider = providers[provider_name]
 		var marker := " (default)" if provider_name == default_provider else ""
 		lines.append("%s%s: %s" % [
-			provider_name, marker, provider.summary(min_interval_sec, max_calls_per_game_day, dialogue_exempt)
+			provider_name, marker, provider.summary(
+				min_interval_sec, max_calls_per_game_day, dialogue_exempt, max_dialogue_calls_per_game_day
+			)
 		])
 
 	if lines.is_empty():

@@ -1076,6 +1076,7 @@ func _cmd_ai(args: PackedStringArray) -> void:
 		"calls": usage["calls_today"],
 		"max": usage["max_calls"],
 		"dialogue": usage["dialogue_today"],
+		"max_dialogue": usage["max_dialogue"],
 		"exempt": L10n.t("CON_AI_EXEMPT" if usage["dialogue_exempt"] else "CON_AI_NOT_EXEMPT"),
 		"cooldown": "%.0f" % usage["cooldown_left"],
 		"queued": usage["queued"],

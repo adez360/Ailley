@@ -301,13 +301,15 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 的對話多半已經不值得再付費續下去。記憶注入上線後每輪 payload 都會變大，
 退化點可能提前，屆時應針對現在的逐輪架構重新實測。
 
-**仍未解決**：對話呼叫本身豁免每遊戲日的呼叫上限（`CONVERSATION` policy，見
-`ai/api.md`／規格書《13》§5），走獨立的 `_dialogue_calls_today` 計數但沒有自己的
-封頂值——`SAFETY_MAX_TURNS` 只封頂單場對話的輪數，不封頂一天能開幾場對話。
-「有沒有玩家在觀察」的節流判斷，#178 討論過後刻意不做（範圍太大，需要新的
-「是否被觀察」偵測邏輯），留給之後想做更完整方案時另開 issue。
+對話呼叫（`CONVERSATION` policy）豁免 `min_interval_sec`／`max_calls_per_game_day`
+這兩條限制時，另外走 `max_dialogue_calls_per_game_day` 這個獨立旋鈕封頂
+（#434，落地見下一節）——`SAFETY_MAX_TURNS` 封頂的是單場對話的輪數，這個旋鈕
+封頂的是一天能開幾場對話／講幾輪，兩者互補不重疊。`dialogue_exempt=false` 時
+對話呼叫改走一般 `max_calls_per_game_day` 路徑，這個旋鈕形同虛設（不需要，見
+下一節說明）。「有沒有玩家在觀察」的節流判斷，#178 討論過後刻意不做（範圍太大，
+需要新的「是否被觀察」偵測邏輯），留給之後想做更完整方案時另開 issue。
 
-### 每日對話呼叫上限提案（#395）
+### 每日對話呼叫上限（#395／#434）
 
 實測「一場對話平均幾輪」：用本機 `local` provider（Qwen2.5-7B-Instruct-Q4_K_M）
 在 `main.tscn` 直接建立 `Conversation` 節點（繞過 `talk_to()` 的距離判定，
@@ -347,20 +349,20 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 > `SAFETY_TRUNCATED`），這是另一件事，不在這則研究範圍內，這裡先誠實記錄
 > 這個方法論限制
 
-**提案**：比照現有 `min_interval_sec`／`max_calls_per_game_day` 這兩個數值型
-旋鈕的模式，在 `ai_config.json` 新增第三個數值型全域旋鈕
-`max_dialogue_calls_per_game_day`（可設 0＝不限，跟前兩者一致）。
+**實作**：比照既有 `min_interval_sec`／`max_calls_per_game_day` 這兩個數值型
+旋鈕的模式，`ai_config.json` 有第三個數值型全域旋鈕
+`max_dialogue_calls_per_game_day`（可設 0＝不限，跟前兩者一致，預設 30）。
 `dialogue_exempt` 是布林豁免開關，不是數值上限，不適用「0＝不限」——
 它只控制 `CONVERSATION` policy 是否豁免既有的 `min_interval_sec`／
-`max_calls_per_game_day` 檢查，跟這個新旋鈕各自獨立、互不影響。在
-`AIService.request()` 判斷 `CONVERSATION` policy 時額外檢查
+`max_calls_per_game_day` 檢查，跟這個旋鈕各自獨立、互不影響。
+`AIService._check_rate_limit()` 判斷 `CONVERSATION` policy 且豁免成立時額外檢查
 `_dialogue_calls_today[requester_id]` **達到或超過**這個值（`count >=
 max_dialogue_calls_per_game_day`，不是 `>`——跟既有
 `_check_rate_limit()` 對 `max_calls_per_game_day` 的判斷式一致，
 `count > max` 會讓計數剛好等於上限那一次仍被放行），達到就回傳跟現有
-冷卻／配額檢查一樣的 `{"ok": false, ...}`。**不需要新的降級邏輯**：
-`next_line()` 收到 `ok=false` 已經是既有路徑，
-`conversation.gd::_finish_with_fallback()` 會自動說一句
+冷卻／配額檢查一樣的 `{"ok": false, ...}`。**沒有額外的降級邏輯**：
+`next_line()` 收到 `ok=false` 走既有路徑，
+`conversation.gd::_finish_with_fallback()` 自動說一句
 `DialogueLines.closing()` 收尾，跟現有 LLM 失敗／逾時的降級一模一樣，
 玩家體感上看不出差異，只是提早收尾。
 >
@@ -374,7 +376,7 @@ max_dialogue_calls_per_game_day`，不是 `>`——跟既有
 > 缺口只存在於 `dialogue_exempt=true`（對話完全豁免既有限制）的情境，範圍要
 > 這樣講清楚，不是無條件對兩種設定都生效
 
-**建議預設值**：這次記的樣本是 `_turns.size()`（對話輪數），不是真正的
+**預設值 30 的依據**：這次記的樣本是 `_turns.size()`（對話輪數），不是真正的
 `AIService.request()` 呼叫次數——每場開頭的 `DialogueLines.opening()` 不打
 LLM，7.0 輪／場扣掉這句開場白，實際是雙方合計約 **6.0 次呼叫／場**（這次
 樣本全是 NPC 對 NPC，不涉及玩家回合那個額外的不打 LLM 因素）。
@@ -396,13 +398,9 @@ LLM，7.0 輪／場扣掉這句開場白，實際是雙方合計約 **6.0 次呼
 > 次數／成本比這次的粗算更高，「30」這個數字在兩者都還沒實測之前只能算
 > 這次量測給出的一個起點，不是已經校準過的建議值
 
-正式上線前建議搭配使用者規劃的大規模驗證（#418 附帶的長時間跑法）一併校準，
-逐場記錄真正的 `AIService.request()` 次數（依 per-角色 scope 分開記）、
-payload 隨對話輪次成長的實際大小、以及驗證失敗重試的發生率，這三項都還沒有
-數據支持這次「30」的建議。
-
-**範圍界線（沿用 #395 原 issue）**：這裡只給結論與提案，不落地實作——
-新增 `max_dialogue_calls_per_game_day` 旋鈕本身另開 issue。
+正式上線前建議搭配大規模驗證一併校準，逐場記錄真正的 `AIService.request()`
+次數（依 per-角色 scope 分開記）、payload 隨對話輪次成長的實際大小、以及
+驗證失敗重試的發生率，這三項都還沒有數據支持目前「30」這個預設值。
 
 > [!important] 但 fallback 一定要能終止
 > LLM 失敗／逾時時走 `DialogueLines`，而它**沒有 `end` 訊號**——不特別處理就會
