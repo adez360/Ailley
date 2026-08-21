@@ -501,17 +501,6 @@ func apply_world_save_data(data: Dictionary) -> void:
 	else:
 		push_error("apply_world_save_data: character_library 不是 Array，跳過角色庫載入")
 
-	var library_data = data.get("character_library", [])
-	if library_data is Array:
-		character_library.clear()
-		for entry in library_data:
-			if entry is Dictionary and not str(entry.get("id", "")).is_empty():
-				character_library.append(entry)
-			else:
-				push_error("apply_world_save_data: character_library 有一筆紀錄不是 Dictionary 或缺少 id，跳過")
-	else:
-		push_error("apply_world_save_data: character_library 不是 Array，跳過角色庫載入")
-
 	var characters = data.get("characters", {})
 	# 驗證 characters 必須是 Dictionary，不是就跳過整個角色載入流程
 	if not characters is Dictionary:
