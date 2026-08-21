@@ -62,6 +62,7 @@ func _apply_startup_ai_state() -> void:
 	# 開發期指示器要能一次看出全部原因，不能只看到最後蓋掉前面的那個
 	# （CodeRabbit review 抓到，PR #467）
 	var fallback_reasons := {}
+	var ready_agents: Array[Agent] = []
 	for node in agents:
 		var agent := node as Agent
 		if agent == null:
@@ -70,9 +71,35 @@ func _apply_startup_ai_state() -> void:
 		var agent_ready := bool(readiness.get("ready", false))
 		if agent_ready:
 			ready_count += 1
+			ready_agents.append(agent)
 		else:
 			fallback_reasons[str(readiness.get("reason", ""))] = true
-		agent.debug_set_llm_decision(agent_ready)
+			agent.debug_set_llm_decision(false)
+
+	# 場景固定 NPC 若沒有預先生成好 words_to_creator，Agent._ready() 開場會
+	# fire-and-forget 補打一次（見 agent.gd::_generate_words_to_creator()），
+	# 佔用的是跟這裡即將發起的首次 plan decision 同一個 requester_id、同一個
+	# min_interval_sec 冷卻池。兩者間隔通常遠小於冷卻秒數，若不等冷卻結束就
+	# 送出，首次決策會被 ERROR_RATE_LIMITED 同步擋下——這不是真的網路 I/O，
+	# 沒有東西可 await，_decide_with_retry() 也不重試這個錯誤（它只重試
+	# parse/validate 失敗，見它自己的說明），決策迴圈因此靜默卡住，要等
+	# 下一次仲裁才會補上。這裡一次等最大值，不逐隻等——全部 Agent 的
+	# words_to_creator 都在開場幾乎同一時間打出去，個別冷卻剩餘時間差異
+	# 可忽略（CodeRabbit review 抓到，PR #467）
+	var max_cooldown := 0.0
+	for agent in ready_agents:
+		var usage := AIService.get_usage(agent.character_id)
+		max_cooldown = maxf(max_cooldown, float(usage.get("cooldown_left", 0.0)))
+	if max_cooldown > 0.0:
+		await get_tree().create_timer(max_cooldown).timeout
+
+	# 等待期間場景可能已被換掉，跟上面 await_readiness_settled() 之後的
+	# 同一種防呆（CodeRabbit review 抓到，PR #467）
+	if not is_inside_tree():
+		return
+
+	for agent in ready_agents:
+		agent.debug_set_llm_decision(true)
 
 	if agents.is_empty():
 		return
