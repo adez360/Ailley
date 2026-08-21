@@ -110,10 +110,10 @@ func _run() -> void:
 					"預期 %.1f，實際 %.1f" % [expected, actual]
 				)
 
-		if recovery.get("stat", "") != "hygiene":
+		if hygiene_recovery.get("stat", "") != "hygiene":
 			_fail(
 				"ACTION_RECOVERY[\"wash\"].stat",
-				"目標欄位是 %s，不是 hygiene" % recovery.get("stat", "")
+				"目標欄位是 %s，不是 hygiene" % hygiene_recovery.get("stat", "")
 			)
 		else:
 			_pass("ACTION_RECOVERY[\"wash\"].stat == hygiene")
