@@ -520,11 +520,15 @@ func _has_active_game_session() -> bool:
 func _on_day_changed_autosave(_day: int) -> void:
 	call_deferred("_autosave_on_day_change")
 
-# #468：反思本身受 AIService 自己的 DEFAULT_TIMEOUT（10 秒）＋RETRY_LIMIT
-# （1 次重試）上限，撞期補跑（_sleep_reflection_pending）最壞情況再疊一輪。
-# 這裡不無限等——抓一個寬鬆但有限的窗口，逾時就放棄等待、照樣存檔：存到的是
-# 反思套用前的狀態，跟完全不等的舊行為一樣，不會比現在更差，只是把「等得到」
-# 的大多數情況從已知殘留限制裡拿掉
+# #468：30 秒是抓寬的 best-effort 窗口，不是精確算出的完整最壞情況上限——
+# AIService.RETRY_LIMIT（1 次重試）只套用在逾時以外的可重試錯誤，逾時本身
+# 不重試（見 ai_service.gd::_interpret()）；provider.timeout 可能被設定檔
+# 覆寫，不保證等於 DEFAULT_TIMEOUT（10 秒）；_decide_with_retry() 的驗證
+# 重試（provider.max_validation_retries()）與撞期補跑
+# （_sleep_reflection_pending）都可能讓實際等待時間超過這個窗口。這裡不
+# 無限等——逾時就放棄等待、照樣存檔：存到的是反思套用前的狀態，跟完全不等
+# 的舊行為一樣，不會比現在更差，只是把「等得到」的大多數情況從已知殘留
+# 限制裡拿掉
 const SLEEP_REFLECTION_WAIT_TIMEOUT_SEC := 30.0
 
 func _autosave_on_day_change() -> void:
