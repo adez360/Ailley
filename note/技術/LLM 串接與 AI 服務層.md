@@ -311,17 +311,17 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 
 實測「一場對話平均幾輪」：用本機 `local` provider（Qwen2.5-7B-Instruct-Q4_K_M）
 在 `main.tscn` 直接建立 `Conversation` 節點（繞過 `talk_to()` 的距離判定，
-角色互相傳送到同一點後開始對話），跑 6 場正常結束（`ENDED_BY_SPEAKER`）的
-對話，逐場記下 `_turns.size()`：
+角色互相傳送到同一點後開始對話），跑 **6 場對話樣本**，逐場記下 `_turns.size()`
+與收尾類型：
 
-| 場次 | 雙方 | 輪數 |
-| --- | --- | --- |
-| 1 | 小滿／阿虎 | 5 |
-| 2 | 阿吉／阿嵐 | 9 |
-| 3 | 小滿／阿虎 | 11（撞到 `SAFETY_MAX_TURNS` 安全閥） |
-| 4 | 阿吉／陳婆 | 4 |
-| 5 | 阿嵐／小滿 | 4 |
-| 6 | 阿吉／小滿 | 9 |
+| 場次 | 雙方 | 輪數 | 收尾類型 |
+| --- | --- | --- | --- |
+| 1 | 小滿／阿虎 | 5 | 正常收尾（`end=true`） |
+| 2 | 阿吉／阿嵐 | 9 | 正常收尾（`end=true`） |
+| 3 | 小滿／阿虎 | 11 | 撞到 `SAFETY_MAX_TURNS` 安全閥截斷 |
+| 4 | 阿吉／陳婆 | 4 | 正常收尾（`end=true`） |
+| 5 | 阿嵐／小滿 | 4 | 正常收尾（`end=true`） |
+| 6 | 阿吉／小滿 | 9 | 正常收尾（`end=true`） |
 
 平均 **7.0 輪／場**（n=6，範圍 4–11）。另有 1 場因陳婆當時觸發昏迷送醫治療
 （#347，跟這次量測無關的既有機制）中途被中斷，樣本捨棄不計。跟這份筆記
@@ -346,11 +346,15 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 三個旋鈕的模式，在 `ai_config.json` 新增第四個全域旋鈕
 `max_dialogue_calls_per_game_day`（可設 0＝不限，跟其他三個一致），在
 `AIService.request()` 判斷 `CONVERSATION` policy 時額外檢查
-`_dialogue_calls_today[requester_id]` 是否超過這個值，超過就回傳跟現有冷卻／
-配額檢查一樣的 `{"ok": false, ...}`。**不需要新的降級邏輯**：`next_line()`
-收到 `ok=false` 已經是既有路徑，`conversation.gd::_finish_with_fallback()`
-會自動說一句 `DialogueLines.closing()` 收尾，跟現有 LLM 失敗／逾時的降級
-一模一樣，玩家體感上看不出差異，只是提早收尾。
+`_dialogue_calls_today[requester_id]` **達到或超過**這個值（`count >=
+max_dialogue_calls_per_game_day`，不是 `>`——跟既有
+`_check_rate_limit()` 對 `max_calls_per_game_day` 的判斷式一致，
+`count > max` 會讓計數剛好等於上限那一次仍被放行），達到就回傳跟現有
+冷卻／配額檢查一樣的 `{"ok": false, ...}`。**不需要新的降級邏輯**：
+`next_line()` 收到 `ok=false` 已經是既有路徑，
+`conversation.gd::_finish_with_fallback()` 會自動說一句
+`DialogueLines.closing()` 收尾，跟現有 LLM 失敗／逾時的降級一模一樣，
+玩家體感上看不出差異，只是提早收尾。
 >
 > [!important] 這個旋鈕只在 `dialogue_exempt=true` 時才有意義（CodeRabbit review 抓到）
 > `_is_exempt(policy)` 只有 `policy == CONVERSATION and dialogue_exempt` 才成立；
