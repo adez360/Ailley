@@ -221,6 +221,14 @@ var _sleep_reflection_pending := false
 func is_decision_in_flight() -> bool:
 	return _awaiting_decision
 
+## 給 game_manager.gd 的跨日自動存檔（#468）判斷要不要等這隻角色。回傳 false
+## 代表反思還在飛（_sleep_reflection_in_flight），或雖然剛做完但撞期時記了一次
+## 補跑（_sleep_reflection_pending，見 _finish_sleep_reflection_request()）——
+## 兩種情況都代表這次反思的 personality_delta／today_plan 還沒真正套用完成，
+## 現在存檔會存到反思之前的狀態
+func is_sleep_reflection_settled() -> bool:
+	return not _sleep_reflection_in_flight and not _sleep_reflection_pending
+
 # 決策請求的世代編號。debug_set_llm_decision() 每次改變 llm_decision_enabled
 # 就遞增一次——單純檢查「回應抵達當下的旗標值」不夠：等待期間若先關閉、
 # 回應抵達前又重新開啟，旗標值會跟請求剛送出時一樣是 true，但那份回應早就

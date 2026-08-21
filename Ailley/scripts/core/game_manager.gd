@@ -512,20 +512,51 @@ func _has_active_game_session() -> bool:
 # 睡眠反思（agent.gd::request_sleep_reflection()）不是掛在這個訊號上，而是
 # 角色自己進入 sleep 狀態時各自觸發、且是不等待的 fire-and-forget 非同步 AI
 # 呼叫——deferred call 這招只能確保「同一顆呼叫堆疊內的同步工作」都做完，
-# 換不到「還在飛的網路請求」。若某個角色剛好在跨日當下反思還沒回來，這次
-# 存檔會存到反思套用前的 personality_delta／today_plan，算已知殘留限制，
-# 不在這則 issue 範圍內解決（見 note/技術/存檔.md）
+# 換不到「還在飛的網路請求」。所以真正存檔前另外呼叫
+# _wait_for_sleep_reflections_to_settle()，靠 Agent.is_sleep_reflection_settled()
+# 把場上角色的反思都等到套用完成（#468），不管連線順序是誰先誰後都能保證存到
+# 的是反思「之後」的狀態，不是套用前的半殘留狀態（見 note/技術/存檔.md）
 func _on_day_changed_autosave(_day: int) -> void:
 	call_deferred("_autosave_on_day_change")
+
+# #468：反思本身受 AIService 自己的 DEFAULT_TIMEOUT（10 秒）＋RETRY_LIMIT
+# （1 次重試）上限，撞期補跑（_sleep_reflection_pending）最壞情況再疊一輪。
+# 這裡不無限等——抓一個寬鬆但有限的窗口，逾時就放棄等待、照樣存檔：存到的是
+# 反思套用前的狀態，跟完全不等的舊行為一樣，不會比現在更差，只是把「等得到」
+# 的大多數情況從已知殘留限制裡拿掉
+const SLEEP_REFLECTION_WAIT_TIMEOUT_SEC := 30.0
 
 func _autosave_on_day_change() -> void:
 	if not _has_active_game_session():
 		return
+	await _wait_for_sleep_reflections_to_settle()
 	var result := save_all()
 	for character_name in result["character_failures"]:
 		push_error("跨日自動存檔失敗：%s" % character_name)
 	if not result["world_ok"]:
 		push_error("跨日自動存檔失敗：世界 %s" % DEFAULT_WORLD_ID)
+
+# 只有 Agent 有睡眠反思（Player 沒有 request_sleep_reflection()），逐幀輪詢
+# 而不是額外接訊號——反思本身已經用 _sleep_reflection_in_flight／
+# _sleep_reflection_pending 兩個旗標完整表達狀態，process_frame 輪詢比另開一組
+# 「反思完成」訊號＋在等待期間可能中途離場的角色收/退訂邏輯簡單
+func _wait_for_sleep_reflections_to_settle() -> void:
+	var deadline_msec := Time.get_ticks_msec() + int(SLEEP_REFLECTION_WAIT_TIMEOUT_SEC * 1000.0)
+	while true:
+		var pending_names: Array[String] = []
+		for node in get_tree().get_nodes_in_group("characters"):
+			var agent := node as Agent
+			if agent != null and not agent.is_sleep_reflection_settled():
+				pending_names.append(agent.character_name)
+		if pending_names.is_empty():
+			return
+		if Time.get_ticks_msec() >= deadline_msec:
+			push_warning(
+				"跨日自動存檔：等待睡眠反思逾時（%.0f 秒），以下角色的反思可能還沒套用就存檔了：%s"
+				% [SLEEP_REFLECTION_WAIT_TIMEOUT_SEC, ", ".join(pending_names)]
+			)
+			return
+		await get_tree().process_frame
 
 # 離開遊戲時存檔（#359）。要接得到這個通知，project settings 的
 # application/config/auto_accept_quit 要先設為 false（見
