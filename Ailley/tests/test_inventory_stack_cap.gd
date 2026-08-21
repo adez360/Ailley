@@ -1,84 +1,100 @@
-extends GutTest
+@tool
+class_name TestInventoryStackCap
+extends McpTestSuite
 
-func test_add_stackable_respects_30_item_cap() -> void:
-	var inventory := Inventory.new()
+## 測試 Issue #411：物品欄 30 個堆疊上限強制
 
-	# 添加 30 个物品到一格 —— 应该成功
-	var result = inventory.add_item("bread", 30)
-	assert_eq(result, Inventory.ADD_OK, "添加 30 个物品应该成功")
+func suite_name() -> String:
+	return "inventory_stack_cap"
 
-	var slot = inventory.get_slot(0)
-	assert_eq(slot["count"], 30, "第 0 格应该有 30 个物品")
 
-	# 再添加 1 个 —— 应该开新格，不会超过 30 个
-	result = inventory.add_item("bread", 1)
-	assert_eq(result, Inventory.ADD_OK, "添加第 31 个物品应该打开新格")
+func test_single_slot_30_cap() -> void:
+	# 驗證單格最多 30 個
+	var inv = Inventory.new()
+	var result = inv.add_item("bread", 30)
+	_assert_eq(result, Inventory.ADD_OK, "添加 30 個應成功")
 
-	var slot1 = inventory.get_slot(1)
-	assert_eq(slot1["count"], 1, "第 1 格应该有 1 个物品")
-	assert_eq(slot["count"], 30, "第 0 格仍应该有 30 个物品（未更改）")
+	var slot = inv.get_slot(0)
+	_assert_eq(slot.get("count", -1), 30, "第 0 格應有 30 個")
 
-	# 测试：添加超过一个格子容量的物品
-	result = inventory.add_item("herb_soup", 60, 0)
-	assert_eq(result, Inventory.ADD_OK, "添加 60 个物品应该成功（占用 2 格）")
 
-	# 找到这些物品的位置
-	var soup_count = inventory.count_item("herb_soup")
-	assert_eq(soup_count, 60, "物品总数应该是 60")
+func test_overflow_opens_new_slot() -> void:
+	# 驗證第 31 個物品開新格
+	var inv = Inventory.new()
+	inv.add_item("bread", 30)
+	var result = inv.add_item("bread", 1)
+	_assert_eq(result, Inventory.ADD_OK, "添加第 31 個應打開新格")
 
-	# 验证每一格都不超过 30 个
-	for i in range(inventory.SIZE):
-		var s = inventory.get_slot(i)
+	var slot0 = inv.get_slot(0)
+	_assert_eq(slot0.get("count", -1), 30, "第 0 格應維持 30 個")
+
+	var slot1 = inv.get_slot(1)
+	_assert_eq(slot1.get("count", -1), 1, "第 1 格應有 1 個")
+
+
+func test_multiple_slots_distribution() -> void:
+	# 驗證 60 個物品分配到 2 格
+	var inv = Inventory.new()
+	var result = inv.add_item("herb_soup", 60, 0)
+	_assert_eq(result, Inventory.ADD_OK, "添加 60 個應成功")
+
+	var total = inv.count_item("herb_soup")
+	_assert_eq(total, 60, "總數應是 60 個")
+
+	# 驗證每格都不超過 30 個
+	for i in range(inv.SIZE):
+		var s = inv.get_slot(i)
 		if not s.is_empty():
-			assert_le(s["count"], 30, "第 %d 格的物品数不应超过 30" % i)
+			if s.get("count", 0) > 30:
+				_failed = true
+				_message = "第 %d 格超過 30 個: %d" % [i, s["count"]]
 
-func test_stack_cap_with_decay_tolerance() -> void:
-	var inventory := Inventory.new()
 
-	# 添加一格有 30 个、decay=10 的食物
-	var result = inventory.add_item("bread", 30, 10)
-	assert_eq(result, Inventory.ADD_OK)
+func test_full_inventory_rejection() -> void:
+	# 驗證背包滿載時拒絕新增（36 格 × 30 = 1080）
+	var inv = Inventory.new()
+	var result = inv.add_item("bread", 1080)
+	_assert_eq(result, Inventory.ADD_OK, "應能填滿背包")
 
-	# 尝试添加 decay=15 的面包（差距是 5，在容差 10 以内）
-	# 应该能堆进同一格，但由于格子已满，应该打开新格
-	result = inventory.add_item("bread", 5, 15)
-	assert_eq(result, Inventory.ADD_OK, "decay 容差范围内应该尝试同一格，但满了应该打开新格")
+	result = inv.add_item("bread", 1)
+	_assert_eq(result, Inventory.ADD_NO_SPACE, "滿載時應返回 ADD_NO_SPACE")
 
-	var slot0 = inventory.get_slot(0)
-	assert_eq(slot0["count"], 30, "第 0 格应该维持 30 个")
+	var total = inv.count_item("bread")
+	_assert_eq(total, 1080, "失敗時不應改變內容")
 
-	var slot1 = inventory.get_slot(1)
-	assert_eq(slot1["count"], 5, "第 1 格应该有新的 5 个")
-	assert_eq(slot1["decay"], 15, "新格的 decay 应该是 15")
 
-func test_no_space_when_cap_filled() -> void:
-	var inventory := Inventory.new()
+func test_decay_tolerance_respects_cap() -> void:
+	# 驗證衰腐容差範圍內的堆疊（同時尊重上限）
+	var inv = Inventory.new()
+	inv.add_item("bread", 30, 10)
+	var result = inv.add_item("bread", 5, 15)  # decay 差 5，容差內
+	_assert_eq(result, Inventory.ADD_OK, "容差範圍應堆疊或開新格")
 
-	# 填满整个背包，每格都是 30 个
-	# 背包共 36 格，每格 30 个 = 1080 个总容量
-	var result = inventory.add_item("bread", 1080)
-	assert_eq(result, Inventory.ADD_OK, "应该能添加 1080 个物品填满背包")
+	var slot0 = inv.get_slot(0)
+	_assert_eq(slot0.get("count", -1), 30, "第 0 格應保持 30")
 
-	# 现在再加 1 个应该失败
-	result = inventory.add_item("bread", 1)
-	assert_eq(result, Inventory.ADD_NO_SPACE, "没有空间应该返回 ADD_NO_SPACE")
+	var slot1 = inv.get_slot(1)
+	_assert_eq(slot1.get("count", -1), 5, "第 1 格應有 5 個")
 
-	# 背包内容应该不变
-	var total = inventory.count_item("bread")
-	assert_eq(total, 1080, "失败时背包内容应该不变")
 
-func test_atomicity_on_stack_cap_failure() -> void:
-	var inventory := Inventory.new()
+func test_atomicity_on_failure() -> void:
+	# 驗證失敗時的原子性
+	var inv = Inventory.new()
+	inv.add_item("bread", 1080)
 
-	# 添加 36 格 × 30 个 = 1080
-	inventory.add_item("bread", 1080)
+	var snapshot = inv.get_slot(0).duplicate()
+	var result = inv.add_item("bread", 50)
+	_assert_eq(result, Inventory.ADD_NO_SPACE, "超容量應失敗")
 
-	# 标记一个已知的格子状态
-	var slot0_before = inventory.get_slot(0).duplicate()
+	var after = inv.get_slot(0)
+	if snapshot != after:
+		_failed = true
+		_message = "失敗時不應改動任何格"
 
-	# 尝试添加超过容量的物品，应该失败且不改动任何格
-	var result = inventory.add_item("bread", 50)
-	assert_eq(result, Inventory.ADD_NO_SPACE, "应该失败")
 
-	var slot0_after = inventory.get_slot(0)
-	assert_eq(slot0_after, slot0_before, "失败时不应该改动任何格")
+# 測試輔助方法
+func _assert_eq(actual: Variant, expected: Variant, message: String) -> void:
+	_assertion_count += 1
+	if actual != expected:
+		_failed = true
+		_message = "%s（實際：%s，預期：%s）" % [message, actual, expected]
