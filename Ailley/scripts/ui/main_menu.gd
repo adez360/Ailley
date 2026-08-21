@@ -2,15 +2,19 @@ class_name MainMenu
 extends Control
 
 ## 遊戲開場的第一顆場景（issue #295：原本 run/main_scene 直接開進 main.tscn，
-## 沒有任何前置流程）。目前只有兩個入口：開始遊戲、銘謝（第三方授權）。
-## 具體文案、按鈕位置、排版留給前端組決定，這裡先把結構跟行為做出來。
+## 沒有任何前置流程）。入口：開始遊戲、繼續遊戲（issue #343，有存檔才顯示）、
+## 銘謝（第三方授權）。具體文案、按鈕位置、排版留給前端組決定，這裡先把結構
+## 跟行為做出來。
 ##
 ## 場景結構是這份腳本的合約：
 ##   Control（本腳本）
 ##     Background（ColorRect，全螢幕）
 ##     TitleLabel（遊戲名稱，不走翻譯 key——專有名詞）
 ##     ButtonsBox（VBoxContainer，置中）
+##       ContinueButton（預設隱藏，只有 SaveService.has_world() 為 true 且
+##                       is_world_data_valid() 通過才顯示）
 ##       StartButton / CreditsButton
+##       LoadErrorLabel（預設隱藏，只有「存檔存在但讀不出來或格式不完整」時才顯示）
 ##     Scrim（ColorRect，全螢幕半透明，預設隱藏；點面板外關閉銘謝子畫面，
 ##            做法跟 status_panel.gd／各面板的「點面板外或按 Esc 關閉」一致）
 ##       CreditsPanel（Setting menu.png 九宮格，樣式沿用 status_panel.gd）
@@ -21,13 +25,19 @@ extends Control
 
 const MAIN_SCENE := "res://scenes/main.tscn"
 
+@onready var continue_button: Button = $ButtonsBox/ContinueButton
 @onready var start_button: Button = $ButtonsBox/StartButton
 @onready var credits_button: Button = $ButtonsBox/CreditsButton
+@onready var load_error_label: Label = $ButtonsBox/LoadErrorLabel
 @onready var scrim: ColorRect = $Scrim
 
 
 func _ready() -> void:
 	scrim.hide()
+	load_error_label.hide()
+	_refresh_continue_button()
+
+	continue_button.pressed.connect(_on_continue_pressed)
 	start_button.pressed.connect(_on_start_pressed)
 	credits_button.pressed.connect(_on_credits_pressed)
 	scrim.gui_input.connect(_on_scrim_gui_input)
@@ -40,17 +50,54 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
+## has_world()==true 但 is_world_data_valid() 沒過：存檔存在但解析失敗或
+## 巢狀欄位格式不完整（損毀／格式錯誤），不能讓玩家以為自己從沒存過檔——
+## 藏起 ContinueButton 的同時要顯示明確的失敗訊息，不能悄悄只留新遊戲選項
+## （見 issue #343 範圍）
+##
+## GameManager.continue_load_failed 覆蓋另一種情況：這裡檢查時存檔還在，
+## 玩家按下繼續遊戲之後，main_scene.gd 轉場套用時才發現存檔消失或讀不出來
+## ——這時 has_world()/is_world_data_valid() 現在重新檢查會查到「不存在」，
+## 跟「本來就沒存過」是同一個結果，沒有這個旗標會誤判成後者、悄悄只顯示
+## StartButton。優先權比下面兩個檢查高，且是一次性的，讀過一次要立刻清掉
+func _refresh_continue_button() -> void:
+	if GameManager.continue_load_failed:
+		GameManager.continue_load_failed = false
+		continue_button.hide()
+		load_error_label.show()
+		return
+
+	if not SaveService.has_world(GameManager.DEFAULT_WORLD_ID):
+		continue_button.hide()
+		return
+
+	if not SaveService.is_world_data_valid(SaveService.get_world(GameManager.DEFAULT_WORLD_ID)):
+		continue_button.hide()
+		load_error_label.show()
+		return
+
+	continue_button.show()
+
+
+func _on_continue_pressed() -> void:
+	GameManager.continue_requested = true
+	get_tree().change_scene_to_file(MAIN_SCENE)
+
+
 func _on_start_pressed() -> void:
+	GameManager.continue_requested = false
 	get_tree().change_scene_to_file(MAIN_SCENE)
 
 
 func _on_credits_pressed() -> void:
 	scrim.show()
-	# CreditsPanel 沒有可聚焦的控制項，StartButton/CreditsButton 卻還留著
-	# FOCUS_ALL——純鍵盤玩家開著銘謝時按 Tab 還是能切回 StartButton，
-	# 按 Enter 就會在面板還開著的情況下直接開始遊戲。銘謝開著時先把兩顆
-	# 按鈕摘出焦點鏈，關閉時在 _close_credits() 復原。
+	# CreditsPanel 沒有可聚焦的控制項，ButtonsBox 底下的按鈕卻還留著
+	# FOCUS_ALL——純鍵盤玩家開著銘謝時按 Tab 還是能切回去，按 Enter 就會在
+	# 面板還開著的情況下直接開始/繼續遊戲。銘謝開著時先把按鈕摘出焦點鏈，
+	# 關閉時在 _close_credits() 復原。continue_button 隱藏時 Godot 的焦點
+	# 導覽本來就會跳過它，這裡一併處理不用另外判斷 visible
 	credits_button.release_focus()
+	continue_button.focus_mode = Control.FOCUS_NONE
 	start_button.focus_mode = Control.FOCUS_NONE
 	credits_button.focus_mode = Control.FOCUS_NONE
 
@@ -70,6 +117,7 @@ func _on_scrim_gui_input(event: InputEvent) -> void:
 
 func _close_credits() -> void:
 	scrim.hide()
+	continue_button.focus_mode = Control.FOCUS_ALL
 	start_button.focus_mode = Control.FOCUS_ALL
 	credits_button.focus_mode = Control.FOCUS_ALL
 	credits_button.grab_focus()

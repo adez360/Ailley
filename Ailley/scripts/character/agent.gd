@@ -125,6 +125,10 @@ var _noticed := {}
 # 與「地點換了要重新起步」
 var _pursued_place := ""
 
+# _on_action_interrupted() 清空 current_place 前存的快照，給 _on_attacked()
+# 讀（CodeRabbit review 抓到，見那兩個函式的說明）
+var _place_before_interrupt := ""
+
 # 這一趟移動已經有結論了（走到了，或 _check_stuck() 放棄了）。
 # 少了它，放棄之後下一次重算又會對同一個走不到的目標重新 move_to()，
 # 變成每秒一次的卡住／放棄迴圈
@@ -180,6 +184,12 @@ var _active_talk_task_source := ""
 # try_record_pending_persuade()），不覆蓋、不排隊，避免舊記錄被靜默蓋掉、
 # 發起者完全不知道自己的嘗試消失了
 var _pending_persuade: Dictionary = {}
+
+# 一次性事件（看到陌生人、聽到聲音）排隊要送進下一次決策的事實句
+# （#402／#407，《01-3》§3 事實句機制）。跟 _pending_persuade 不同：
+# 這裡不需要模型回覆特定欄位表態，_fact_lines_summary() 讀到的當下
+# 就直接消化清空，不留到下一輪、也不用等回應來解析
+var _pending_reaction_lines: Array[String] = []
 
 # 正在對陌生人做「！」反應。那 2 秒刻意站著不動，期間不重新起步——
 # GameClock 一個遊戲分鐘就是 1 現實秒，不擋的話 1 秒後就被送回路上，
@@ -301,8 +311,35 @@ var _next_daily_event_id := 0
 
 ## 加一筆今天發生的事。滿了就丟掉最舊的一筆，不是拒絕新的——今天最新發生的
 ## 事沒理由因為緩衝區滿了就進不去，跟 Memory.push_l1() 的 FIFO 取捨一樣
-func _push_daily_event(content: String) -> void:
-	_daily_events.append({"id": _next_daily_event_id, "content": content})
+##
+## related_npcs 是這件事牽涉到誰——客觀事實，在事件發生的當下記下來，睡前
+## 反思寫回 Memory.add_candidate() 時原封不動帶過去（見
+## request_sleep_reflection()），不是引擎替這段記憶加主觀定性（見《00》
+## 原則二）。location_id 不開放呼叫端指定，一律用 current_place——跟
+## get_state_snapshot() 送給 LLM 的 "place" 欄位同一個來源，不另外定義一套
+## 「現在在哪」
+##
+## location_override 給極少數 current_place 當下已經不可信的呼叫端用（目前
+## 只有 _on_attacked()——見那邊的說明）：非 null 時取代 current_place，其餘
+## 呼叫端不用管這個參數（省略即為 null），維持原本「一律用 current_place」的
+## 行為（CodeRabbit review 抓到 force_interrupt() 會搶先把 current_place 清空，
+## 直接讀會拿到空字串）。
+##
+## 一定要用 null 當「沒有指定」的哨兵，不能用空字串——`_place_before_interrupt`
+## 快照下來的值本來就可能合法地是空字串（角色被攻擊當下 current_place 本來就
+## 沒設過），空字串當「沒指定」處理的話，會誤用呼叫這裡當下已經被 _reevaluate()
+## 重新指派的 current_place（可能是完全不相關的新地點），而不是「這件事發生
+## 時真的沒有地點」這個事實（CodeRabbit review 抓到）
+func _push_daily_event(
+	content: String, related_npcs: Array[String] = [], location_override: Variant = null
+) -> void:
+	var location_id: String = current_place if location_override == null else str(location_override)
+	_daily_events.append({
+		"id": _next_daily_event_id,
+		"content": content,
+		"related_npcs": related_npcs,
+		"location_id": location_id,
+	})
 	_next_daily_event_id += 1
 	if _daily_events.size() > DAILY_EVENTS_CAP:
 		_daily_events.pop_front()
@@ -714,7 +751,7 @@ func exit_conversation() -> void:
 	if _conversation != null:
 		var other: Character = _conversation.target if _conversation.initiator == self else _conversation.initiator
 		if other != null:
-			_push_daily_event("你跟 %s 講完話了" % other.character_name)
+			_push_daily_event("你跟 %s 講完話了" % other.character_name, [other.character_id])
 			# 「多久沒說話」事實句的計時基準（#338）
 			_last_social_minute = _now_minutes()
 
@@ -859,9 +896,14 @@ func request_sleep_reflection() -> Dictionary:
 	# #210：validate_reflection() 只驗結構，不驗 id 是不是真的來自這次送出的
 	# events_sent（唯一且存在）。這裡包一層閉包，讓 id 檢查跟結構驗證共用同一條
 	# 「失敗就重試」路徑（_decide_with_retry），不用改動那個共用機制的簽名。
-	var valid_ids := {}
+	#
+	# 用 id 查表存整筆事件，不是只記存不存在——LLM 回應只回 content／
+	# importance／valence，related_npcs／location_id 是引擎自己記的客觀事實
+	# （見 _push_daily_event()），LLM 不會也不該回傳，寫回 Memory.add_candidate()
+	# 時要從這裡原封不動撈回來（#346）
+	var events_by_id := {}
 	for e in events_sent:
-		valid_ids[e["id"]] = true
+		events_by_id[e["id"]] = e
 
 	var validator := func(data: Dictionary) -> Dictionary:
 		var validated: Dictionary = AISchema.validate_reflection(data)
@@ -870,7 +912,7 @@ func request_sleep_reflection() -> Dictionary:
 		var seen_ids := {}
 		for event in validated["data"]["events"]:
 			var event_id = event["id"]
-			if not valid_ids.has(event_id) or seen_ids.has(event_id):
+			if not events_by_id.has(event_id) or seen_ids.has(event_id):
 				return AISchema._fail(AISchema.ERROR_BAD_SHAPE)
 			seen_ids[event_id] = true
 		return validated
@@ -886,7 +928,18 @@ func request_sleep_reflection() -> Dictionary:
 
 	var scored_ids := {}
 	for event in data["events"]:
-		memory.add_candidate(event["content"], event["importance"], event["valence"])
+		var original: Dictionary = events_by_id.get(event["id"], {})
+		# CodeRabbit review：original.get() 回傳型別是 Variant，靠宣告時賦值
+		# 隱式轉成 Array[String] 依賴的是「來源值本身在 runtime 就已經是
+		# Array[String]」這個不對外保證的假設（雖然目前資料流確實如此——
+		# _push_daily_event() 存進 _daily_events 時就是型別化參數，
+		# events_sent := _daily_events.duplicate(true) 深複製也保留 subtype）。
+		# 改用 assign() 不依賴這個隱性假設，來源不管是 untyped 還是 typed
+		# 陣列都能正確轉換，不會在未來資料流改變時悄悄壞掉
+		var related_npcs: Array[String] = []
+		related_npcs.assign(original.get("related_npcs", []))
+		var location_id: String = original.get("location_id", "")
+		memory.add_candidate(event["content"], event["importance"], event["valence"], related_npcs, location_id)
 		scored_ids[event["id"]] = true
 
 	_daily_events = _daily_events.filter(func(e): return not scored_ids.has(e["id"]))
@@ -983,6 +1036,8 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	_awaiting_decision = false
 
+	var final_result: Dictionary
+
 	# 世代編號在 await 期間變了，代表 debug_set_llm_decision() 至少關過一次
 	# 決策開關——不管回應抵達當下旗標是什麼值（就算又被重新打開），這份回應
 	# 都屬於已經作廢的世代，整包淘汰，不套用任何任務或計畫更新。
@@ -991,80 +1046,107 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	if my_generation != _decision_generation:
 		if my_plan_update_epoch == _plan_update_epoch:
 			_plan_update_requested = had_plan_update_requested
-		return {"ok": false, "triggered": true}
+		final_result = {"ok": false, "triggered": true}
+	elif not result["ok"]:
+		final_result = {"ok": false, "triggered": true}
+	else:
+		var data: Dictionary = result["data"]
 
-	if not result["ok"]:
-		return {"ok": false, "triggered": true}
+		# 這輪回應真的通過驗證、確定會被套用，才消費快照下來的一次性事實句數量
+		# ——只砍前面 fact_lines_sent_count 筆，等待期間新增的（在陣列後段）
+		# 留著給下一輪
+		if fact_lines_sent_count > 0:
+			_pending_fact_lines = _pending_fact_lines.slice(fact_lines_sent_count)
 
-	var data: Dictionary = result["data"]
+		# reasoning／inner_monologue 印出來給人排查，跟 _trigger_village_ai() 的
+		# print() 除錯模式一致；不進遊戲內 UI。決策準不準沒有系統性驗證，
+		# 目前只能肉眼看這兩個欄位判斷合不合理
+		print("[llm_decision] %s reasoning: %s" % [character_name, data.get("reasoning", "")])
+		print("[llm_decision] %s inner_monologue: %s" % [character_name, data.get("inner_monologue", "")])
 
-	# 這輪回應真的通過驗證、確定會被套用，才消費快照下來的一次性事實句數量——
-	# 只砍前面 fact_lines_sent_count 筆，等待期間新增的（在陣列後段）留著給
-	# 下一輪
-	if fact_lines_sent_count > 0:
-		_pending_fact_lines = _pending_fact_lines.slice(fact_lines_sent_count)
+		var tasks_added := _push_llm_tasks(data["tasks"], data)
 
-	# reasoning／inner_monologue 印出來給人排查，跟 _trigger_village_ai() 的
-	# print() 除錯模式一致；不進遊戲內 UI。決策準不準沒有系統性驗證，
-	# 目前只能肉眼看這兩個欄位判斷合不合理
-	print("[llm_decision] %s reasoning: %s" % [character_name, data.get("reasoning", "")])
-	print("[llm_decision] %s inner_monologue: %s" % [character_name, data.get("inner_monologue", "")])
+		# emotion（#351）：每次決策都必填，validate_tasks() 已經驗證過 type／
+		# intensity 合法，這裡直接套用，不再二次判斷——AI 自己宣告的內在狀態，
+		# 引擎不覆寫、不打折扣。stability／grudge 帶這隻角色自己的人格值——不帶
+		# 的話 set_emotion() 會退回中性值 50.0，讓《02》§1-4 的持續時間公式對
+		# 每個角色都算出同一個結果，人格再怎麼極端也不影響情緒撐多久
+		# （CodeRabbit review 抓到）
+		var emotion_data: Dictionary = data.get("emotion", {})
+		set_emotion(
+			emotion_data.get("type", "neutral"), emotion_data.get("intensity", 0), "",
+			personality.get("stability", 50.0), personality.get("grudge", 50.0)
+		)
 
-	var tasks_added := _push_llm_tasks(data["tasks"], data)
+		# current_goal（#352）：模型完全沒填這欄位（current_goal_provided=false）
+		# 就維持原樣不動，跟 update_plan 的「整份取代」不同，這是「有意思表示才
+		# 動」的單一標籤。有填的話分兩種：空字串代表模型明確判斷這個目標已完成
+		# 或不再追蹤，清空並停止目標拖延事實句的計時；非空字串才是真的設定/換
+		# 目標（CodeRabbit review 抓到：原本「沒填」跟「填空字串」都被當「沒
+		# 更新」，目標永遠沒有清除路徑，拖延事實句會無限期一直觸發下去）
+		if data.get("current_goal_provided", false):
+			var new_goal: String = data.get("current_goal", "")
+			if new_goal.is_empty():
+				current_goal = ""
+				_goal_set_minute = -1
+			elif new_goal != current_goal:
+				current_goal = new_goal
+				# 目標拖延事實句的計時基準（#338）：只在目標真的換了內容才重新
+				# 起算，模型原樣重申同一個目標不算「重新設定」，不然這句事實句
+				# 永遠不會累積
+				_goal_set_minute = _now_minutes()
 
-	# emotion（#351）：每次決策都必填，validate_tasks() 已經驗證過 type／
-	# intensity 合法，這裡直接套用，不再二次判斷——AI 自己宣告的內在狀態，
-	# 引擎不覆寫、不打折扣。stability／grudge 帶這隻角色自己的人格值——不帶
-	# 的話 set_emotion() 會退回中性值 50.0，讓《02》§1-4 的持續時間公式對
-	# 每個角色都算出同一個結果，人格再怎麼極端也不影響情緒撐多久
-	# （CodeRabbit review 抓到）
-	var emotion_data: Dictionary = data.get("emotion", {})
-	set_emotion(
-		emotion_data.get("type", "neutral"), emotion_data.get("intensity", 0), "",
-		personality.get("stability", 50.0), personality.get("grudge", 50.0)
-	)
+		# 不管這輪有沒有拿到 update_plan 許可，模型都可能問「下次讓我改」——記
+		# 下來，下一次不管是哪個理由觸發 _request_next_decision() 都會兌現
+		if data.get("request_plan_update", false):
+			_plan_update_requested = true
 
-	# current_goal（#352）：模型完全沒填這欄位（current_goal_provided=false）
-	# 就維持原樣不動，跟 update_plan 的「整份取代」不同，這是「有意思表示才
-	# 動」的單一標籤。有填的話分兩種：空字串代表模型明確判斷這個目標已完成或
-	# 不再追蹤，清空並停止目標拖延事實句的計時；非空字串才是真的設定/換目標
-	# （CodeRabbit review 抓到：原本「沒填」跟「填空字串」都被當「沒更新」，
-	# 目標永遠沒有清除路徑，拖延事實句會無限期一直觸發下去）
-	if data.get("current_goal_provided", false):
-		var new_goal: String = data.get("current_goal", "")
-		if new_goal.is_empty():
-			current_goal = ""
-			_goal_set_minute = -1
-		elif new_goal != current_goal:
-			current_goal = new_goal
-			# 目標拖延事實句的計時基準（#338）：只在目標真的換了內容才重新起算，
-			# 模型原樣重申同一個目標不算「重新設定」，不然這句事實句永遠不會累積
-			_goal_set_minute = _now_minutes()
+		# null 代表這次沒有 update_plan（不管是沒許可、還是有許可但模型選擇不
+		# 用）；空陣列 [] 是模型明確給的合法值（today_plan 清空），兩者不可
+		# 混淆，見 AISchema.validate_tasks() 用 null 分辨「沒提供」與「提供了
+		# 空陣列」
+		var update_plan: Variant = data.get("update_plan")
+		if update_plan != null:
+			_apply_today_plan(update_plan)
 
-	# 不管這輪有沒有拿到 update_plan 許可，模型都可能問「下次讓我改」——記
-	# 下來，下一次不管是哪個理由觸發 _request_next_decision() 都會兌現
-	if data.get("request_plan_update", false):
-		_plan_update_requested = true
+		if had_pending_persuade:
+			_resolve_pending_persuade(data)
 
-	# null 代表這次沒有 update_plan（不管是沒許可、還是有許可但模型選擇不用）；
-	# 空陣列 [] 是模型明確給的合法值（today_plan 清空），兩者不可混淆，見
-	# AISchema.validate_tasks() 用 null 分辨「沒提供」與「提供了空陣列」
-	var update_plan: Variant = data.get("update_plan")
-	if update_plan != null:
-		_apply_today_plan(update_plan)
+		_reevaluate()
 
-	if had_pending_persuade:
-		_resolve_pending_persuade(data)
+		final_result = {
+			"ok": true,
+			"triggered": true,
+			"reasoning": data.get("reasoning", ""),
+			"inner_monologue": data.get("inner_monologue", ""),
+			"tasks_added": tasks_added,
+		}
 
-	_reevaluate()
+	# 這次送出的信封已經把 _fact_lines_summary() 讀到的事實句清空，但等待
+	# 回應期間（真的打網路，數百毫秒到數十秒）可能有新事件（#402／#407 的
+	# spotted／noise_heard）把新的一句排進 _pending_reaction_lines——不管
+	# 這次回應本身是過期世代被丟棄、失敗、還是成功，只要佇列還有東西沒送出，
+	# 就該立刻補問一次，不然這句事實句只能等下一次「剛好」有別的理由觸發
+	# 決策才會被看到，等於這次事件實質上被吃掉。fire-and-forget，不 await：
+	# 呼叫端不需要等這次補問完成才能拿到目前這輪的結果。
+	#
+	# 要放在這裡（所有分支都處理完、_resolve_pending_persuade() 也清空過
+	# _pending_persuade 之後），不能放在 await 剛結束就立刻補——補發的請求
+	# （fire-and-forget，會立刻同步執行到它自己的第一個 await 點）會在原本
+	# 這輪還沒真正把 _pending_persuade 解析掉之前就搶先讀到同一筆記錄，兩輪
+	# 各自認定「這輪有待回應的說服」、各自問一次模型，等原本這輪稍後才真的
+	# 清空 _pending_persuade，補發那輪的回應到達時會讀到空字典，若那輪也判斷
+	# persuaded=true，會用空白內容（reason 空字串等）誤寫一筆記憶（CodeRabbit
+	# review，PR #433）
+	#
+	# 還要檢查 llm_decision_enabled：這一輪在途時如果被 debug_set_llm_decision(false)
+	# 關掉，原本這輪的回應會因世代過期被丟棄（走 final_result 的過期分支），
+	# 但 _pending_reaction_lines 不會因此變空——不額外檢查旗標的話，決策已經
+	# 被關掉了還是會補送一次多餘的請求，白白消耗配額（CodeRabbit review，PR #433）
+	if llm_decision_enabled and not _pending_reaction_lines.is_empty():
+		_request_next_decision()
 
-	return {
-		"ok": true,
-		"triggered": true,
-		"reasoning": data.get("reasoning", ""),
-		"inner_monologue": data.get("inner_monologue", ""),
-		"tasks_added": tasks_added,
-	}
+	return final_result
 
 ## update_plan 回應整份取代 _today_plan，不是逐筆增刪改——四個開放時機語意上
 ## 都是「重寫」，不需要模型追蹤既有項目的 id 才能局部編輯，形狀跟驗證都簡單
@@ -1218,6 +1300,11 @@ func _on_work_finished() -> void:
 # 做完或判定失敗，只是被打斷，還在池子裡的話下次重新仲裁時值得重新考慮要不要
 # 繼續做（例如原本在走去做別的事，被打斷後可能還是想繼續走過去）
 func _on_action_interrupted() -> void:
+	# 清空前先存一份快照——character.gd::attack() 的呼叫順序是
+	# force_interrupt()（跑到這裡，把 current_place 清空）先於 _on_attacked()
+	# （記事實句），直接讀 current_place 的話 _on_attacked() 永遠拿到空字串
+	# （CodeRabbit review 抓到）
+	_place_before_interrupt = current_place
 	_pursued_place = ""
 	_pursuit_done = false
 	_clear_current_task(false)
@@ -1226,9 +1313,13 @@ func _on_action_interrupted() -> void:
 	_reevaluate()
 
 # 被攻擊記成事實句（純客觀事件，不貼「這很可怕」之類的主觀標籤——見 CLAUDE.md
-# 「遊戲機制規格：AI 自主性自檢」），讓下次決策／睡前反思能讀到發生過這件事
+# 「遊戲機制規格：AI 自主性自檢」），讓下次決策／睡前反思能讀到發生過這件事。
+# 地點用 _on_action_interrupted() 存的快照，不是這裡當下的 current_place——
+# 見 _push_daily_event() 的 location_override 說明
 func _on_attacked(attacker: Character) -> void:
-	_push_daily_event("你被 %s 攻擊了" % attacker.character_name)
+	_push_daily_event(
+		"你被 %s 攻擊了" % attacker.character_name, [attacker.character_id], _place_before_interrupt
+	)
 
 # 基底的快照加上行程表這一段。schedule/current_place/current_state 宣告在這裡，
 # 所以是這裡負責放進去 —— 基底不必去猜誰有行程表
@@ -1303,11 +1394,22 @@ func load_save_data(data: Dictionary) -> void:
 				if item is Dictionary:
 					_today_plan.append((item as Dictionary).duplicate(true))
 
-# 第一次看到某個陌生人就停下來愣一下。
+# 第一次看到某個陌生人的反應。
 #
 # 認識的人不算 —— 每天上班都會遇到的同事不會讓人「！」。
-# 判斷放在這裡而不是 Vision 裡：感知回報「看到誰」，要不要有反應是人格與關係的事，
-# 接 LLM 之後這整段會換成「把 visible 放進 context 讓模型決定」
+# 判斷放在這裡而不是 Vision 裡：感知回報「看到誰」，要不要有反應是人格與關係的事。
+#
+# llm_decision_enabled 開著時（#402）：不寫死反應，把事件記成事實句排進
+# 下一次決策的 fact_lines，並比照 _on_attacked()／_on_action_interrupted()
+# 立刻問一次模型，讓角色幾乎即時反應——要不要停下來、停多久、要不要說話，
+# 都交給模型的 tasks[] 決定，這裡不再自己 say()／stop_moving()。
+#
+# 但模型問不到結果時（逾時、驗證失敗、世代被作廢）不能讓角色完全沒反應——
+# 退回寫死的「！」，跟 llm_decision_enabled 關著時同一套 fallback（CodeRabbit
+# review 抓到：原本只看 llm_decision_enabled 決定路徑，問失敗時兩邊 fallback
+# 都被跳過）。`_request_next_decision()` 回傳 `triggered=false` 代表這次只是
+# 排進佇列（已經有一份決策在飛，見它自己的補問機制），不算失敗，不用退回
+# 寫死反應——`triggered=true` 但 `ok=false` 才是真的問過但沒問到結果
 func _on_spotted(other: Character) -> void:
 	if is_in_conversation() or _noticed.has(other.character_id):
 		return
@@ -1317,8 +1419,22 @@ func _on_spotted(other: Character) -> void:
 	if relationships != null and relationships.has_met(other.character_id):
 		return
 
-	_push_daily_event("你第一次注意到 %s" % other.character_name)
+	_push_daily_event("你第一次注意到 %s" % other.character_name, [other.character_id])
 
+	if llm_decision_enabled:
+		_queue_reaction_fact_line(
+			"你第一次注意到 %s，要不要停下來、要不要說些什麼，由你自己決定" % other.character_name
+		)
+		var result := await _request_next_decision()
+		if result.get("triggered", false) and not result.get("ok", false):
+			await _react_to_spotted_fallback()
+		return
+
+	await _react_to_spotted_fallback()
+
+# 陌生人反應的寫死版本，兩種情況共用：排程模式（沒有 LLM 可問）、以及
+# llm_decision_enabled 開著但這次決策問不到結果
+func _react_to_spotted_fallback() -> void:
 	say(L10n.t("DLG_SURPRISE"))
 	stop_moving()
 
@@ -1337,11 +1453,28 @@ func _on_spotted(other: Character) -> void:
 # 範圍內有人發出聲音（見 character.gd 的 make_noise()）。
 # 跟 _on_spotted 不同，這裡不記錄「已經反應過」——聲音是一次性事件，
 # 每次都該有反應，不是像陌生人那樣「見過一次就不再驚訝」
+#
+# llm_decision_enabled 開著時（#407）：同 _on_spotted() 的做法，事實句
+# 排隊＋立刻問一次模型，不寫死冒 !?——問不到結果時一樣退回寫死反應，
+# 理由跟 _on_spotted() 的說明相同
 func _on_noise_heard(_source: Character) -> void:
 	if is_in_conversation():
 		return
 
+	if llm_decision_enabled:
+		_queue_reaction_fact_line("你聽到一個聲音，要不要有反應由你自己決定")
+		var result := await _request_next_decision()
+		if result.get("triggered", false) and not result.get("ok", false):
+			say(L10n.t("DLG_NOISE_ALERT"))
+		return
+
+	# fallback（排程模式，沒有 LLM 可問）：維持原本寫死的 !? 反應
 	say(L10n.t("DLG_NOISE_ALERT"))
+
+# 把一次性事件（看到陌生人、聽到聲音）排進下一次決策的事實句佇列
+# （#402／#407）。見 _pending_reaction_lines 的欄位說明
+func _queue_reaction_fact_line(line: String) -> void:
+	_pending_reaction_lines.append(line)
 
 ## 回復類動作每遊戲分鐘回多少（目標欄位＋數量，#214）。《07》§2-3 只給相對
 ## 關係——sleep 回復量最大、nap「與睡覺同模組但較低」、rest「小幅回復」——
@@ -2521,9 +2654,16 @@ func try_record_pending_persuade(persuader: String, persuader_id: String, reason
 # 事實句摘要（《01-3》§3）。九條裡本則（#227＋#338）接了七條：persuade
 # 待回應（#227）、社交沉默三級距、目標拖延、首次造訪、連續同一動作失敗。
 # 剩下兩條是搬運相關（正被搬運中／醒來發現位置變了），依賴 haul 執行層，
-# 見 #338 範圍界線
+# 見 #338 範圍界線。
+#
+# _pending_reaction_lines（#402／#407，看到陌生人／聽到聲音的反應）不在
+# 《01-3》§3 那九條清單內，是額外獨立的一次性事件通知——跟下面的
+# _pending_fact_lines 不同，讀到就直接清空，不用等 _request_next_decision()
+# 驗證通過才清：這類事件沒有「這次沒送成功要保留重送」的語意，錯過這次
+# 通知不影響角色狀態，不是必須被看到才行的東西
 func _fact_lines_summary() -> Array[String]:
-	var lines: Array[String] = []
+	var lines: Array[String] = _pending_reaction_lines.duplicate()
+	_pending_reaction_lines.clear()
 
 	# 一次性事件（首次造訪等）。這裡只讀不清——真的被這輪回應消費掉才清，
 	# 由 _request_next_decision() 在回應通過驗證後處理（見那邊
