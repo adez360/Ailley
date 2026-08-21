@@ -13,7 +13,11 @@ static func create(db) -> bool:
 
 		npc_id TEXT NOT NULL,
 
-		-- 字數上限 40（2026-08-20 拍板，見《規格書 09》§4-5／issue #368）
+		-- 字數上限 40（2026-08-20 拍板，見《規格書 09》§4-5／issue #368）。
+		-- LENGTH() 以 Unicode code point 計數（組合字元、emoji ZWJ 序列各自算
+		-- 一個），跟 chat_input.gd／god_stone_input.gd 既有的
+		-- LineEdit.max_length 同一套規則——之後悼詞輸入端沿用同一元件
+		-- 即可維持一致，不需要另外換算或加轉換層。
 		content TEXT NOT NULL
 			CHECK (LENGTH(content) <= 40),
 
