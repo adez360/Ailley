@@ -1,8 +1,9 @@
-[gd_scene load_steps=15 format=3 uid="uid://wo0a0v2y4gj1"]
+[gd_scene load_steps=16 format=3 uid="uid://wo0a0v2y4gj1"]
 
 [ext_resource type="PackedScene" uid="uid://cyrnw30ddh16r" path="res://scenes/debug_console.tscn" id="1_mphia"]
 [ext_resource type="PackedScene" uid="uid://q38st5oy2nj" path="res://scenes/chat_input.tscn" id="2_0m4u7"]
 [ext_resource type="Script" uid="uid://dm8733qx3w3uk" path="res://scripts/ui/time_label.gd" id="3_apjy4"]
+[ext_resource type="Script" uid="uid://pegp430ck1s5" path="res://scripts/ui/ai_status_label.gd" id="3_aistat"]
 [ext_resource type="Script" uid="uid://dej3fk4srven5" path="res://scripts/ui/status_panel.gd" id="4_5n1hp"]
 [ext_resource type="Texture2D" uid="uid://b06f01r4ovc0r" path="res://assets/ui/Setting menu.png" id="5_eld54"]
 [ext_resource type="Script" uid="uid://bghlt4yqp6xrt" path="res://scripts/ui/inventory_panel.gd" id="6_3swnk"]
@@ -75,6 +76,15 @@ offset_right = 5.0
 offset_bottom = 25.0
 theme_type_variation = &"HUDLabel"
 script = ExtResource("3_apjy4")
+
+[node name="AIStatusLabel" type="Label" parent="HUD"]
+offset_left = 4.0
+offset_top = 26.0
+offset_right = 200.0
+offset_bottom = 49.0
+theme_type_variation = &"HUDLabel"
+text = "排程模式（原因：尚未檢查）"
+script = ExtResource("3_aistat")
 
 [node name="StatusPanel" type="CanvasLayer" parent="."]
 script = ExtResource("4_5n1hp")
