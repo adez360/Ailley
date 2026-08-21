@@ -1,4 +1,4 @@
-[gd_scene load_steps=39 format=3 uid="uid://v21qv1icuh5m"]
+[gd_scene load_steps=41 format=3 uid="uid://v21qv1icuh5m"]
 
 [ext_resource type="Script" uid="uid://oen8wb64hv4w" path="res://scripts/character/player.gd" id="1_mbysm"]
 [ext_resource type="Texture2D" uid="uid://pcq7ouq5pyt8" path="res://assets/characters/16x16 Idle-Sheet.png" id="2_cl37t"]
@@ -11,6 +11,7 @@
 [ext_resource type="Script" uid="uid://cebdk6kq4c7ip" path="res://scripts/ui/work_progress.gd" id="9_ur7pv"]
 [ext_resource type="Script" uid="uid://t6axa01hiamc" path="res://scripts/ui/money_popup.gd" id="10_y4r1p"]
 [ext_resource type="Script" uid="uid://l3boughq0c6q" path="res://scripts/character/memory.gd" id="11_d2wvv"]
+[ext_resource type="Script" uid="uid://dprecikypmnvi" path="res://scripts/ui/waypoint_indicator.gd" id="12_3v2ag"]
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_bolw2"]
 atlas = ExtResource("2_cl37t")
@@ -290,3 +291,11 @@ collision_mask = 4
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="InteractArea"]
 shape = SubResource("CircleShape2D_y4r1p")
+
+[node name="WaypointIndicator" type="Node2D" parent="."]
+position = Vector2(0, -14)
+script = ExtResource("12_3v2ag")
+
+[node name="Arrow" type="Polygon2D" parent="WaypointIndicator"]
+color = Color(0.909, 0.698, 0.235, 1)
+polygon = PackedVector2Array(10, 0, -4, -5, -4, 5)
