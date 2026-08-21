@@ -34,7 +34,7 @@ extends RefCounted
 ## CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
-const CURRENT_VERSION := 3
+const CURRENT_VERSION := 4
 
 
 ## 版本落後時依序套用的變更，每個 entry：
@@ -57,6 +57,11 @@ const MIGRATIONS: Array[Dictionary] = [
 		"version": 3,
 		"name": "Rebuild memories/npc_appearance/npc_last_action/npc_occupation with NOT NULL primary keys",
 		"apply": Callable(DatabaseSchema, "_migrate_v3_notnull_primary_keys")
+	},
+	{
+		"version": 4,
+		"name": "Add grave_epitaphs.content length CHECK (issue #382)",
+		"apply": Callable(DatabaseSchema, "_migrate_v4_epitaph_length_check")
 	}
 ]
 
@@ -319,6 +324,22 @@ static func _migrate_v3_rebuild_memories(db) -> bool:
 		return false
 
 	return true
+
+
+## Migration 4：`grave_epitaphs.content` 補上 `CHECK (LENGTH(content) <= 40)`
+## （issue #368／#382 拍板悼詞字數上限）。SQLite 不支援用 ALTER TABLE 補
+## CHECK 約束，只能整張表重建；`grave_epitaphs` 目前沒有任何呼叫端在寫
+## （死亡系統還沒實作，見 note/技術/存檔.md「墓碑欄位」一節），DROP 後直接
+## 用 GraveEpitaphSchema.create() 照最新定義重建即可，不需要搬既有資料。
+static func _migrate_v4_epitaph_length_check(db) -> bool:
+	if not db.query("DROP TABLE IF EXISTS grave_epitaphs;"):
+		push_error(
+			"[DatabaseSchema] Migration 4: Failed to drop grave_epitaphs: "
+			+ db.error_message
+		)
+		return false
+
+	return GraveEpitaphSchema.create(db)
 
 
 static func initialize(db) -> bool:
