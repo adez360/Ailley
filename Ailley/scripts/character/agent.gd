@@ -2668,11 +2668,15 @@ func _resolve_pending_persuade(data: Dictionary) -> void:
 
 	var persuader: String = str(pending.get("persuader", ""))
 	var persuaded: bool = data.get("persuaded", false)
+	var persuader_related: Array[String] = []
+	var persuader_id_for_event: String = str(pending.get("persuader_id", ""))
+	if not persuader_id_for_event.is_empty():
+		persuader_related.append(persuader_id_for_event)
 
 	if persuaded:
-		_push_daily_event("你被%s說服了。" % persuader)
+		_push_daily_event("你被%s說服了。" % persuader, persuader_related)
 	else:
-		_push_daily_event("你拒絕了%s的勸說。" % persuader)
+		_push_daily_event("你拒絕了%s的勸說。" % persuader, persuader_related)
 
 	if not persuaded:
 		return
