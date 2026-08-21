@@ -3,6 +3,7 @@
 [ext_resource type="Script" uid="uid://c17kc6lnga5rf" path="res://scripts/ui/persuade_dialog.gd" id="1_adi1o"]
 
 [node name="PersuadeDialog" type="CanvasLayer"]
+layer = 20
 script = ExtResource("1_adi1o")
 
 [node name="Panel" type="Panel" parent="."]
