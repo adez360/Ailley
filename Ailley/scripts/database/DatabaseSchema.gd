@@ -34,7 +34,7 @@ extends RefCounted
 ## CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
-const CURRENT_VERSION := 2
+const CURRENT_VERSION := 3
 
 
 ## 版本落後時依序套用的變更，每個 entry：
@@ -52,6 +52,11 @@ const MIGRATIONS: Array[Dictionary] = [
 		"version": 2,
 		"name": "Backfill water.is_perishable and ale.decay_rate",
 		"apply": Callable(DatabaseSchema, "_migrate_v2_backfill_decay")
+	},
+	{
+		"version": 3,
+		"name": "Rebuild memories/npc_appearance/npc_last_action/npc_occupation with NOT NULL primary keys",
+		"apply": Callable(DatabaseSchema, "_migrate_v3_notnull_primary_keys")
 	}
 ]
 
@@ -86,6 +91,127 @@ static func _migrate_v2_backfill_decay(db) -> bool:
 	if not db.query(ale_sql):
 		push_error(
 			"[DatabaseSchema] Migration 2: Failed to update ale.decay_rate: "
+			+ db.error_message
+		)
+		return false
+
+	return true
+
+
+## Migration 3：既有資料庫的 memories／npc_appearance／npc_last_action／
+## npc_occupation 是在對應 *Schema.gd 補上 `NOT NULL PRIMARY KEY` 之前建的，
+## SQLite 的 CREATE TABLE IF NOT EXISTS 不會回頭改這些舊 table 的欄位定義。
+## 用標準 SQLite「建暫存表 → 複製資料 → 刪舊表 → 暫存表改名」流程逐表重建，
+## 直接呼叫對應 *Schema.create(db) 產生新表結構，不在這裡重複 CREATE TABLE SQL。
+##
+## 不在這段 transaction 內切換 PRAGMA foreign_keys——SQLite 交易中途不接受
+## 切換，而且這裡的重建順序（子表先於父表 DROP）本來就不需要暫時關 FK。
+static func _migrate_v3_notnull_primary_keys(db) -> bool:
+	var single_table_schemas := [
+		{"table": "npc_appearance", "schema": NPCAppearanceSchema},
+		{"table": "npc_last_action", "schema": NPCLastActionSchema},
+		{"table": "npc_occupation", "schema": NPCOccupationSchema}
+	]
+
+	for entry in single_table_schemas:
+		if not _migrate_v3_rebuild_table(db, entry["table"], entry["schema"]):
+			return false
+
+	return _migrate_v3_rebuild_memories(db)
+
+
+## 沒有其他表外鍵指向的單一表重建：改名成暫存表 → 用 schema.create(db)
+## 建回原名的新結構 → 把資料從暫存表複製回來 → 刪掉暫存表。
+static func _migrate_v3_rebuild_table(db, table_name: String, schema) -> bool:
+	var old_name := table_name + "__migrate_v3_old"
+
+	if not db.query("ALTER TABLE %s RENAME TO %s;" % [table_name, old_name]):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to rename %s: %s"
+			% [table_name, db.error_message]
+		)
+		return false
+
+	if not schema.create(db):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to recreate %s: %s"
+			% [table_name, db.error_message]
+		)
+		return false
+
+	if not db.query("INSERT INTO %s SELECT * FROM %s;" % [table_name, old_name]):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to copy data into %s: %s"
+			% [table_name, db.error_message]
+		)
+		return false
+
+	if not db.query("DROP TABLE %s;" % old_name):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to drop %s: %s"
+			% [old_name, db.error_message]
+		)
+		return false
+
+	return true
+
+
+## memories／memory_related_npcs 兩張表要一起重建：memory_related_npcs
+## 外鍵指向 memories(memory_id)，改名 memories 時 SQLite 會把這個外鍵定義
+## 自動改指向暫存表名，所以 memory_related_npcs 也要同步重建，
+## 讓它的外鍵在刪暫存表之前先恢復指向新的 memories。
+## 兩個暫存表都建好、資料複製完，才依「子表先、父表後」的順序 DROP——
+## 這個順序本身就避免了 DROP 觸發 FK cascade 波及對方。
+static func _migrate_v3_rebuild_memories(db) -> bool:
+	if not db.query("ALTER TABLE memories RENAME TO memories__migrate_v3_old;"):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to rename memories: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query(
+		"ALTER TABLE memory_related_npcs RENAME TO memory_related_npcs__migrate_v3_old;"
+	):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to rename memory_related_npcs: "
+			+ db.error_message
+		)
+		return false
+
+	if not MemorySchema.create(db):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to recreate memories/memory_related_npcs: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query("INSERT INTO memories SELECT * FROM memories__migrate_v3_old;"):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to copy data into memories: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query(
+		"INSERT INTO memory_related_npcs SELECT * FROM memory_related_npcs__migrate_v3_old;"
+	):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to copy data into memory_related_npcs: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query("DROP TABLE memory_related_npcs__migrate_v3_old;"):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to drop memory_related_npcs__migrate_v3_old: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query("DROP TABLE memories__migrate_v3_old;"):
+		push_error(
+			"[DatabaseSchema] Migration 3: Failed to drop memories__migrate_v3_old: "
 			+ db.error_message
 		)
 		return false
