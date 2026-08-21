@@ -409,10 +409,37 @@ func has_condition(type: String) -> bool:
 			return true
 	return false
 
+func _get_condition_display_name(type: String) -> String:
+	match type:
+		CONDITION_INJURED:
+			return "受傷"
+		CONDITION_BLEEDING:
+			return "流血"
+		CONDITION_DRUNK:
+			return "醉酒"
+		CONDITION_STARVING:
+			return "饑餓"
+		CONDITION_DEHYDRATED:
+			return "缺水"
+		CONDITION_EXHAUSTED:
+			return "疲勞"
+		CONDITION_SLEEPY:
+			return "困倦"
+		CONDITION_FILTHY:
+			return "骯髒"
+		CONDITION_INCAPACITATED:
+			return "昏迷"
+		_:
+			return type
+
 func _set_condition(type: String, present: bool) -> void:
 	var had := has_condition(type)
 	if present and not had:
 		conditions.append({"type": type, "turns_left": -1})
+		# 记录进入新状态的事件
+		if is_in_group("agents"):
+			var condition_name := _get_condition_display_name(type)
+			(self as Agent)._push_daily_event("你開始%s。" % condition_name)
 	elif not present and had:
 		conditions = conditions.filter(func(c): return c["type"] != type)
 
@@ -1486,6 +1513,12 @@ func start_haul(target: Character) -> String:
 	_hauling_target = target
 	_speed_multiplier = HAUL_SPEED_MULTIPLIER
 	target.set_being_carried(true)		# #271: 通知昏迷機制
+
+	if is_in_group("agents"):
+		(self as Agent)._push_daily_event("你搬運了%s。" % target.character_name, [target.character_id])
+	if target.is_in_group("agents"):
+		(target as Agent)._push_daily_event("你被%s搬運了。" % character_name, [character_id])
+
 	return HAUL_OK
 
 func stop_haul() -> void:
@@ -1495,6 +1528,10 @@ func stop_haul() -> void:
 		# 雙人搬運時（《99》P-27 #8），其中一人放手不該讓另一人還在搬的目標被標記成沒人搬
 		if not target.is_being_hauled():
 			target.set_being_carried(false)		# #271: 通知昏迷機制
+			if is_in_group("agents"):
+				(self as Agent)._push_daily_event("你放開了%s。" % target.character_name, [target.character_id])
+			if target.is_in_group("agents"):
+				(target as Agent)._push_daily_event("你掙脫了搬運。")
 		_hauling_target = null
 	_speed_multiplier = 1.0
 

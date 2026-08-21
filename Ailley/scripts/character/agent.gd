@@ -2208,6 +2208,9 @@ func _pursue_eat_task() -> void:
 		last_action_result = reason
 		if reason != Character.EAT_OK:
 			push_warning("Agent %s: eat 失敗（%s）" % [character_name, reason])
+		else:
+			var food_name := ItemDatabase.get_display_name(food_item)
+			_push_daily_event("你吃了%s。" % food_name)
 		# 連續失敗事實句涵蓋所有實際執行的動作，不分來源——跟 talk 的既有規則
 		# 一致（CodeRabbit review 抓到：原本只計 llm 來源，talk 卻不分來源，
 		# 兩套契約不一致，schedule／llm 交錯時計數會被錯誤重設或漏算）
@@ -2239,11 +2242,16 @@ func _pursue_drink_task() -> void:
 		if not proceed:
 			_track_action_result_for_facts("drink", false)
 
+	var drink_item := ""
 	if proceed:
+		drink_item = str(_find_drink_slot().get("item_id", ""))
 		var reason := drink()
 		last_action_result = reason
 		if reason != Character.DRINK_OK:
 			push_warning("Agent %s: drink 失敗（%s）" % [character_name, reason])
+		else:
+			var drink_name := ItemDatabase.get_display_name(drink_item)
+			_push_daily_event("你喝了%s。" % drink_name)
 		# 不分來源都記——理由同 _pursue_eat_task()
 		_track_action_result_for_facts("drink", reason == Character.DRINK_OK)
 
@@ -2384,6 +2392,13 @@ func _pursue_give_task() -> void:
 	var give_failure := give_to(target, item_id, count)
 	last_action_result = _give_failure_message(give_failure)
 	_track_action_result_for_facts("give", give_failure == Character.GIVE_OK)
+
+	if give_failure == Character.GIVE_OK:
+		var item_name := ItemDatabase.get_display_name(item_id)
+		_push_daily_event("你把%s給了%s。" % [item_name, target.character_name], [target.character_id])
+		if target.is_in_group("agents"):
+			(target as Agent)._push_daily_event("你收到了%s的%s。" % [character_name, item_name], [character_id])
+
 	_finish_task_and_request_next()
 
 # give_to() 失敗原因碼轉中文，格式跟 _failure_reason() 一致——《01-2》§5
@@ -2651,7 +2666,15 @@ func _resolve_pending_persuade(data: Dictionary) -> void:
 	var pending := _pending_persuade
 	_pending_persuade = {}
 
-	if not data.get("persuaded", false):
+	var persuader: String = str(pending.get("persuader", ""))
+	var persuaded: bool = data.get("persuaded", false)
+
+	if persuaded:
+		_push_daily_event("你被%s說服了。" % persuader)
+	else:
+		_push_daily_event("你拒絕了%s的勸說。" % persuader)
+
+	if not persuaded:
 		return
 
 	var proposed_task: Dictionary = pending.get("proposed_task", {})
