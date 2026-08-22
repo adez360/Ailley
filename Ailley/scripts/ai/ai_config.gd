@@ -178,7 +178,17 @@ static func _write_default_config() -> bool:
 	file.close()
 	if not write_ok:
 		push_error("AIConfig: 寫入預設設定檔 %s 失敗" % CONFIG_PATH)
-		DirAccess.remove_absolute(CONFIG_PATH)
+		# remove_absolute() 回傳 Error，忽略它的話清理也失敗時（例如檔案被
+		# 其他行程鎖住）會留下寫壞的部分內容，下次啟動 file_exists() 判定
+		# 「有檔案」，改去解析出 AI_STATUS_BAD_JSON，而不是停在「檔案不存在」
+		# 該有的 disabled 狀態——記下來至少能在 log 裡看到清理本身也失敗了
+		# （CodeRabbit review 抓到）
+		var remove_err := DirAccess.remove_absolute(CONFIG_PATH)
+		if remove_err != OK:
+			push_error(
+				"AIConfig: 清理寫壞的 %s 失敗（錯誤碼 %d），下次啟動可能誤判成 AI_STATUS_BAD_JSON"
+				% [CONFIG_PATH, remove_err]
+			)
 		return false
 	return true
 
