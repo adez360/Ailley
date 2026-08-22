@@ -466,6 +466,8 @@ func get_world_save_data() -> Dictionary:
 
 	return {
 		"day": GameClock.day,
+		"hour": GameClock.hour,
+		"minute": GameClock.minute,
 		"allow_player_join": allow_player_join,
 		"embodied_character_id": player_node.character_id if player_node != null else "",
 		"characters": characters,
@@ -588,6 +590,8 @@ func _notification(what: int) -> void:
 # 一律不動，不主動移除任何節點，留給之後真的需要時再決定
 func apply_world_save_data(data: Dictionary) -> void:
 	GameClock.day = int(data.get("day", GameClock.day))
+	GameClock.hour = int(data.get("hour", GameClock.hour))
+	GameClock.minute = int(data.get("minute", GameClock.minute))
 	allow_player_join = bool(data.get("allow_player_join", allow_player_join))
 	# 缺欄位代表「這份存檔沒有記錄化身角色」（SQLite 的 world 表目前還沒有這個
 	# 欄位、或是 #373 之前存的舊 JSON 存檔），不能沿用 GameManager 目前記憶體裡
