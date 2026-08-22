@@ -1979,6 +1979,13 @@ func _pursue_buy_task() -> void:
 	# 還沒到達就先走過去
 	if not _has_arrived_at(machine.global_position):
 		if _buy_pursuit_task_id == buy_task_id and (is_moving() or _pursuit_done):
+			# _pursuit_done 除了 move_to() 立即失敗會設，_on_move_finished(false)
+			# 這個非同步的尋徑失敗回呼也會設——原本這裡直接 return，llm 任務會
+			# 卡在這個守衛出不去，永遠記錄不到失敗結果、也不會請求下一次決策
+			# （CodeRabbit review 抓到，sibling PR #441 同一套邏輯）
+			if _pursuit_done and _current_task.get("source", "") == "llm":
+				last_action_result = "走不到販賣機，無法購買"
+				_finish_task_and_request_next()
 			return
 		_buy_pursuit_task_id = buy_task_id
 		_pursued_place = current_place
