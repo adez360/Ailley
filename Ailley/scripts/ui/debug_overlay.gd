@@ -26,6 +26,13 @@ var layers := {
 
 
 func _ready() -> void:
+	# 正式建置關閉（issue #356）。唯一的呼叫端是 debug_console.gd 的 debug
+	# 指令，主控台自己已經在正式建置整個關掉，這裡不加入 group 是防禦性的
+	# 第二道——之後任何地方誤用 get_first_node_in_group("debug_overlay") 都會
+	# 拿到 null，不會意外把疊圖叫出來
+	if not OS.is_debug_build():
+		return
+
 	add_to_group("debug_overlay")
 	set_process(false)
 

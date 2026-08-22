@@ -19,6 +19,15 @@ var _history_index := 0
 
 
 func _ready() -> void:
+	# 正式建置完全關閉，不留任何手勢/參數可以叫回來（issue #356）：這裡的指令
+	# 能存讀檔、開關角色的 LLM 決策迴圈、直接送 LLM 探針請求（真的打雲端 API），
+	# 誤按都是實際後果，不是單純介面問題。set_process_input(false) 讓 _input()
+	# 整個不會被引擎呼叫，比在 _input() 裡面判斷更早關掉，也不用另外建
+	# _commands 表
+	if not OS.is_debug_build():
+		set_process_input(false)
+		return
+
 	# 一個指令的 run／usage／help 放同一列，help 留空代表不列進 `help` 指令的輸出
 	# （目前只有 help 自己是這樣）。順序就是 `help` 印出來的順序。
 	_commands = {
