@@ -1317,6 +1317,7 @@ func _on_action_interrupted() -> void:
 # 地點用 _on_action_interrupted() 存的快照，不是這裡當下的 current_place——
 # 見 _push_daily_event() 的 location_override 說明
 func _on_attacked(attacker: Character) -> void:
+	super._on_attacked(attacker)
 	_push_daily_event(
 		"你被 %s 攻擊了" % attacker.character_name, [attacker.character_id], _place_before_interrupt
 	)

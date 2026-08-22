@@ -497,10 +497,14 @@ func _end_incapacitation() -> void:
 	if stats != null:
 		stats.set_value("health", 10.0)
 
-	# 被救助：對每個搬運者 trust +15（《01》3-1）
+	# 被救助：對每個搬運者 trust +15（《01》3-1）。搬運者只會被 stop_haul()
+	# 從 _hauled_by 移除，沒有 _exit_tree() 清理時，搬運者若被 queue_free()
+	# 直接砍掉，_hauled_by 會留著已釋放的殘留參照——!= null 擋不住這個，
+	# 已釋放的 Object 不會自動變成 null，要用 is_instance_valid()
+	# （CodeRabbit review 抓到）
 	if relationships != null:
 		for hauler in _hauled_by:
-			if hauler != null:
+			if is_instance_valid(hauler):
 				relationships.add_trust(hauler.character_id, 15.0)
 
 	print_debug("Character %s 昏迷已結束（被搬走）" % character_name)
@@ -1512,3 +1516,9 @@ func _attach_haul(hauler: Character) -> void:
 
 func _detach_haul(hauler: Character) -> void:
 	_hauled_by.erase(hauler)
+
+## 離開場景樹前放掉正在搬的目標——GameManager 可以直接對角色呼叫
+## queue_free()，不經過 stop_haul()。少了這個鉤子，目標的 _hauled_by
+## 會留著這個即將消失的搬運者的殘留參照（CodeRabbit review 抓到）
+func _exit_tree() -> void:
+	stop_haul()
