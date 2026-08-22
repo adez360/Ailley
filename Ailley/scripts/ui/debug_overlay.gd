@@ -26,6 +26,11 @@ var layers := {
 
 
 func _ready() -> void:
+	# set_process(false) 要在 build guard 之前、對兩種建置都生效（CodeRabbit
+	# review 抓到）：腳本定義了 _process() 就預設會被引擎打開，正式建置提早
+	# return 的話這行永遠不會跑到，變成每幀白白呼叫 queue_redraw()
+	set_process(false)
+
 	# 正式建置關閉（issue #356）。唯一的呼叫端是 debug_console.gd 的 debug
 	# 指令，主控台自己已經在正式建置整個關掉，這裡不加入 group 是防禦性的
 	# 第二道——之後任何地方誤用 get_first_node_in_group("debug_overlay") 都會
@@ -34,7 +39,6 @@ func _ready() -> void:
 		return
 
 	add_to_group("debug_overlay")
-	set_process(false)
 
 # 路徑每幀都在變，開著的時候就持續重畫；全關就不要浪費每幀
 func _process(_delta: float) -> void:

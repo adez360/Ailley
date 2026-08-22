@@ -25,6 +25,11 @@ func _ready() -> void:
 	# 整個不會被引擎呼叫，比在 _input() 裡面判斷更早關掉，也不用另外建
 	# _commands 表
 	if not OS.is_debug_build():
+		# _set_open(false) 是必要的一步，不是保險：debug_console.tscn 的 Root
+		# 沒設 visible = false，預設就是 true（CodeRabbit review 抓到）。
+		# 只關 _input() 只擋得住鍵盤開關，Root 本身還是會顯示在畫面上、
+		# 還是會吃 GUI 事件——兩者都要關才是真的關掉
+		_set_open(false)
 		set_process_input(false)
 		return
 
