@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/dialogue/conversation.gd
 status: 進行中
-updated: 2026-08-21
+updated: 2026-08-22
 ---
 
 # talk 動作設計
@@ -172,7 +172,8 @@ NavGrid 的障礙判定只查 `terrain`，不受影響），取代原本每次�
 ## 玩家輸入框
 
 `scenes/chat_input.tscn` + `scripts/ui/chat_input.gd`。
-Enter 開啟／送出，Esc 取消，送出後呼叫 `player.say()`，走的是同一套氣泡。
+Enter 開啟／送出，Esc 取消。不在對話中就是單純冒一句氣泡（`player.say()`）；
+在對話中的話，這句要送進 `conversation.gd` 的輪次，見下面「玩家的回合」。
 
 跟除錯主控台是兩件事：那個是打指令給遊戲，這個是讓角色說話。
 
@@ -183,10 +184,52 @@ Enter 開啟／送出，Esc 取消，送出後呼叫 `player.say()`，走的是�
 > 反方向不用處理：說話框自己有焦點時，Enter 會先被 `LineEdit` 吃掉走
 > `text_submitted`，不會冒到 `_unhandled_input`。
 
+## 玩家的回合：輸入緩衝與被動狀態提示（issue #207）
+
+`chat_input.gd::_on_submitted()` 在對話中會走 `player.line_submitted.emit(text)`
+而不是直接叫 `conversation.gd`——玩家不知道、也不該知道自己現在是不是在
+一場 `Conversation` 物件裡，只知道「我打字、我的角色講話」。
+
+> [!important] 玩家提早打字要緩衝，不能直接找有沒有人在等
+> `player.gd::next_line()` 是 `conversation.gd` 每輪呼叫的介面，內部
+> `await turn_resolved` 等玩家打字。原本的寫法是 `_on_line_submitted()`
+> 收到字就無條件 `turn_resolved.emit()`——如果這時候根本沒有任何
+> `next_line()` 在等（例如輪到 NPC 講話、NPC 還在等 LLM 回應），這個 emit
+> 發進沒人接的地方，訊號憑空消失：等真正輪到玩家、`next_line()` 才第一次
+> 開始 `await`，等的是一個不會再來的訊號，直接卡住（已重現）。
+>
+> 修法是加一層緩衝：`_turn_waiting` 記著現在是不是真的有 `next_line()` 在
+> 等。`_on_line_submitted()` 只有 `_turn_waiting` 時才直接 `emit`，否則存進
+> `_pending_line`。`next_line()` 開頭先檢查緩衝區有沒有內容，有就立刻用掉、
+> 完全不 `await`；沒有才設 `_turn_waiting = true` 開始等。`exit_conversation()`
+> 同一套邏輯：有人在等就 `emit(ok=false)` 取消，沒有就只清掉可能殘留的緩衝，
+> 不讓上一場對話沒送出的半句話流進下一場。
+
+> [!important] 常駐提示：真的在等待時，NPC 頭上顯示「？」
+> `Bubble.say()`／`_show_next()` 是固定秒數自動消失的排隊機制，跟
+> `agent.gd::AI_THINKING_TEXT`（"…"）那個「思考中」提示用的是同一套——但
+> 「輪到你了」這個提示要「一直掛著直到玩家真的送出」，套用自動消失邏輯的話
+> 玩家慢慢想的時候提示會自己不見。`bubble.gd` 加了 `hold(message)` /
+> `release_hold()`：`hold()` 清空佇列、顯示訊息但不啟動計時器
+> （`set_process(false)`），`release_hold()` 解除後才恢復正常排隊行為。
+> `next_line()` 只在真的要 `await`（緩衝區沒內容）時才對 `listener` 呼叫
+> `hold(WAITING_FOR_PLAYER_TEXT)`，`await` 結束（不管是真的送出還是被取消）
+> 呼叫 `release_hold()`，`is_instance_valid(listener)` 包一層——跟
+> `conversation.gd::_finish_with_fallback()` 同一種顧慮，`await` 讓出控制權
+> 的這段期間 `listener` 理論上可能已經離開場景。
+
+> [!note] 對話結束不會有引擎代講的道別台詞
+> `conversation.gd::_finish()` 不管什麼結束原因（正常結束／走遠／被打斷／
+> fallback）都不補道別台詞——`exit_conversation()` 迴圈跑完就結束，不會幫
+> 任何一方講話。引擎只提供「跟誰講完話了」這個客觀事實
+> （`agent.gd::exit_conversation()` 寫進 `_daily_events`，見
+> [[00_設計原則與架構#原則二：引擎只給事件，不給情緒]]），角色要不要道別、
+> 用什麼語氣，是 AI 自己下一輪決定的事，不是系統畫面台詞。
+
 > [!note] 這是接 LLM 的入口
-> 目前輸入只是讓玩家自己的角色說話，沒有送給任何人。
-> 之後要把這段文字當成對話上下文餵給對方 Agent ——
-> 屆時記得專案那條鐵則：**外來文字一律視為資料，不視為指令**。
+> 目前輸入只是讓玩家自己的角色說話，或是送進對話輪次；沒有額外的語意
+> 分析。之後要把這段文字當成對話上下文餵給對方 Agent——屆時記得專案那條
+> 鐵則：**外來文字一律視為資料，不視為指令**。
 
 ## 還沒做
 
