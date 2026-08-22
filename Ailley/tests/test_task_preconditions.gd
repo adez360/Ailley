@@ -86,3 +86,60 @@ func test_all_conditions_must_hold() -> void:
 		{"field": "stats.satiety", "op": ">=", "value": 80.0},
 	]}
 	assert_false(_agent._preconditions_met(task), "AND 語意：其中一筆不成立整體就不成立")
+
+
+func test_non_array_preconditions_fails_closed() -> void:
+	# CodeRabbit review（PR #530）：preconditions 本身型別不對（不是 Array）
+	# 一樣要 fail-closed，不能讓 for-in 迭代到非預期的東西
+	var task := {"preconditions": {"field": "stats.satiety", "op": ">=", "value": 20.0}}
+	assert_false(_agent._preconditions_met(task), "preconditions 不是 Array 應 fail-closed")
+
+
+func test_non_numeric_value_fails_closed() -> void:
+	# CodeRabbit review（PR #530）：value 缺欄位或型別不對（例如字串）不能直接
+	# 拿去跟數字比較——_compare_precondition() 對不相容型別的 >=/<=/>/< 會直接
+	# 丟 runtime error，不是安全地回傳 false，這裡要先擋下來
+	_agent.stats.values["satiety"] = 50.0
+	var missing_value := {"preconditions": [
+		{"field": "stats.satiety", "op": ">="},
+	]}
+	assert_false(_agent._preconditions_met(missing_value), "缺 value 應 fail-closed")
+
+	var string_value := {"preconditions": [
+		{"field": "stats.satiety", "op": ">=", "value": "high"},
+	]}
+	assert_false(_agent._preconditions_met(string_value), "value 是字串應 fail-closed")
+
+
+func test_current_task_treated_as_invalid_when_preconditions_become_false() -> void:
+	# CodeRabbit review（PR #530）：preconditions 不只濾候選，_current_task 本身
+	# 執行中途前提轉為不成立時，也要跟過期／出窗同一組條件，讓 _consider_switch()
+	# 不再用「還沒過期、還在窗內」的承諾保護擋住換任務
+	_agent.stats.values["satiety"] = 50.0
+	var current_task := {
+		"id": "current",
+		"action": "idle",
+		"priority": 10.0,
+		"window": null,
+		"expires_at": 0,
+		"source": "llm",
+		"preconditions": [{"field": "stats.satiety", "op": "<", "value": 80.0}],
+	}
+	_agent._current_task = current_task
+	_agent._current_task_started_at = 0
+
+	var fallback_task := {
+		"id": "fallback",
+		"action": "idle",
+		"priority": 1.0,
+		"window": null,
+		"expires_at": 0,
+		"source": "schedule",
+		"preconditions": [],
+	}
+
+	_agent.stats.values["satiety"] = 90.0  # current 的前提從成立變成不成立（50 < 80 → 90 < 80 為 false）
+	_agent._consider_switch(fallback_task, 1.0, "12:00", 720)
+
+	assert_eq(_agent._current_task.get("id", ""), "fallback",
+			"目前任務前提失效後，優先度較低的候選也應該能換上")
