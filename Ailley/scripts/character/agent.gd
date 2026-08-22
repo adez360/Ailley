@@ -130,6 +130,13 @@ var _pursuit_done := false
 # 同一類問題，見上面 _give_pursuit_stuck_ticks 的說明）
 var _buy_pursuit_target := Vector2.ZERO
 
+# 用來判斷「這筆追逐是不是同一筆 buy 任務」——不能沿用 current_place 比對，
+# 因為販賣機不是 place 錨點，兩筆不同的 buy 任務可能落在同一個 place
+# 字串（例如都在餐酒館買不同品項），甚至上一筆非 buy 任務（例如剛做完
+# work）留下的 _pursued_place 也可能剛好等於這筆的 place，導致誤判成
+# 「已經處理過」而整個跳過 move_to()（CodeRabbit review 抓到）
+var _buy_pursuit_task_id := ""
+
 # talk 任務用的卡住偵測（#90）。目標是會動的角色，每次重算都要重新
 # move_to()，不能沿用上面 _pursued_place／_pursuit_done 那套「地點沒換就不
 # 重下指令」的節流——但這也表示不能靠 Character._stuck_timer：那個計時器在
@@ -1027,6 +1034,7 @@ func _task_pool_summary() -> Array[Dictionary]:
 			"action": task.get("action", ""),
 			"place": params.get("place", ""),
 			"target": params.get("target", ""),
+			"item_id": params.get("item_id", ""),
 			"source": task.get("source", ""),
 		})
 	return summary
@@ -1984,6 +1992,7 @@ func _pursue_work_task() -> void:
 # buy 任務的執行（#340）：先找到販賣機並移動到其位置，再呼叫 buy_from()。
 # 販賣機透過 params.place 指定（餐酒館或藥草鋪）
 func _pursue_buy_task() -> void:
+	var buy_task_id: String = str(_current_task.get("id", ""))
 	var place: String = str(_current_task.get("params", {}).get("place", ""))
 	var machine := _find_vending_machine_at_place(place)
 
@@ -2013,10 +2022,12 @@ func _pursue_buy_task() -> void:
 
 	# 還沒到達就先走過去
 	if not _has_arrived_at(machine.global_position):
-		# 同 _pursue_work_task() 的收斂邏輯：已有結論就不要重試
+		# 同 _pursue_work_task() 的收斂邏輯：已有結論就不要重試——但這裡要比對
+		# 任務 id 而不是 current_place，理由見 _buy_pursuit_task_id 的說明
 		# （CodeRabbit review 抓到）
-		if current_place == _pursued_place and (is_moving() or _pursuit_done):
+		if _buy_pursuit_task_id == buy_task_id and (is_moving() or _pursuit_done):
 			return
+		_buy_pursuit_task_id = buy_task_id
 		_pursued_place = current_place
 		_pursuit_done = false
 		_buy_pursuit_target = machine.global_position
