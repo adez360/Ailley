@@ -1795,6 +1795,8 @@ func _reevaluate_once() -> void:
 			continue
 		if _reevaluate_excluded_ids.has(task.get("id", "")):
 			continue
+		if not _preconditions_met(task):
+			continue
 
 		var score := _score(task, now)
 		if score > best_score:
@@ -3099,6 +3101,83 @@ func _is_expired(task: Dictionary, now_minutes: int) -> bool:
 	var expires_at: int = task.get("expires_at", 0)
 	return expires_at > 0 and expires_at <= now_minutes
 
+# preconditions 是 AND 陣列：任一筆比對失敗，這個候選整個被濾掉、不進分數
+# 比較——跟 window／expires_at 兩道既有濾網並排在同一個候選迴圈裡（見
+# _reevaluate_once()），不是額外開一條路徑。目前沒有任何呼叫端會產出非空的
+# preconditions（schedule／llm 建構都固定填 []，見 issue #477），這裡先把
+# 「求值關卡」蓋好，之後真的有東西要卡條件時直接填欄位就生效，不用再改
+# 仲裁邏輯本身。前提不成立目前不留失敗紀錄、不觸發 LLM 重排——這跟「動作
+# 失敗」（見 [[行程佇列與任務仲裁]]「中斷之後怎麼辦」）是不同語意：候選在
+# 選中之前就被這裡濾掉，角色從沒試過、也就沒有「失敗」這件事可記，等真的
+# 有 preconditions 非空的任務出現、且產品面需要這個訊號時再另開範圍評估
+func _preconditions_met(task: Dictionary) -> bool:
+	for cond in task.get("preconditions", []):
+		if not (cond is Dictionary):
+			push_warning("Agent: precondition 格式錯誤（非 Dictionary），視為不成立：%s" % [cond])
+			return false
+		var actual = _resolve_precondition_field(cond, task)
+		if actual == null:
+			push_warning("Agent: precondition 欄位無法解析，視為不成立：%s" % [cond])
+			return false
+		if not _compare_precondition(cond.get("op", ""), actual, cond.get("value")):
+			return false
+	return true
+
+# 欄位只認兩種命名空間，寫成 "<namespace>.<key>"：
+# - "stats.<key>"：key 要在 Stats.SPEC 裡才算數，錯字視為無法解析（Stats.get_value()
+#   本身對不存在的 key 靜默回 0.0，這裡不能直接沿用，否則錯字會被誤判成「數值 0」
+#   剛好卡過某些條件）
+# - "relations.<key>"：key 只認 trust／met_count；target 沒填時退回
+#   task.params.target——最常見的用法是卡「對現在這個任務的對象」，不用每筆
+#   precondition 都重複寫一次 id
+func _resolve_precondition_field(cond: Dictionary, task: Dictionary) -> Variant:
+	var field: String = cond.get("field", "")
+	var parts := field.split(".", true, 1)
+	if parts.size() != 2:
+		return null
+
+	match parts[0]:
+		"stats":
+			if stats == null or not Stats.SPEC.has(parts[1]):
+				return null
+			return stats.get_value(parts[1])
+		"relations":
+			if relationships == null:
+				return null
+			var target: String = cond.get("target", "")
+			if target.is_empty():
+				var params: Dictionary = task.get("params", {})
+				target = String(params.get("target", ""))
+			if target.is_empty():
+				return null
+			match parts[1]:
+				"trust":
+					return relationships.get_trust(target)
+				"met_count":
+					return relationships.get_met_count(target)
+				_:
+					return null
+		_:
+			return null
+
+func _compare_precondition(op: String, actual: Variant, expected: Variant) -> bool:
+	match op:
+		">=":
+			return actual >= expected
+		"<=":
+			return actual <= expected
+		">":
+			return actual > expected
+		"<":
+			return actual < expected
+		"==":
+			return actual == expected
+		"!=":
+			return actual != expected
+		_:
+			push_warning("Agent: precondition 用了不認得的比較運算 %s" % [op])
+			return false
+
 func _in_window_or_unwindowed(task: Dictionary, now: String) -> bool:
 	var window = task.get("window")
 	if window == null:
@@ -3129,6 +3208,7 @@ func get_task_debug_info() -> Array[Dictionary]:
 			"task": task,
 			"is_current": not _current_task.is_empty() and task["id"] == _current_task["id"],
 			"in_window": _in_window_or_unwindowed(task, now),
+			"preconditions_met": _preconditions_met(task),
 			"score": {
 				"base": float(task.get("priority", 0.0)),
 				"time": _time_bonus(task, now),
