@@ -130,6 +130,14 @@ var _pursuit_done := false
 # 同一類問題，見上面 _give_pursuit_stuck_ticks 的說明）
 var _buy_pursuit_target := Vector2.ZERO
 
+# buy 追逐守衛原本比對 current_place 是否等於 _pursued_place，但 place 只是
+# 字串（例如 "tavern"），跟具體要不要重下 move_to() 無關——前一筆完全不同的
+# 任務（例如在同一個 place 完成的 work）也可能留下同樣的 current_place／
+# _pursued_place／_pursuit_done=true，讓新的 buy 任務被誤判成「已經追過、
+# 不用再試」，直接跳過 move_to()，角色站著不動也買不到東西。改成比對任務
+# 自己的 id，只有同一筆 buy 任務才共用收斂狀態（CodeRabbit review 抓到）
+var _buy_pursuit_task_id := ""
+
 # talk 任務用的卡住偵測（#90）。目標是會動的角色，每次重算都要重新
 # move_to()，不能沿用上面 _pursued_place／_pursuit_done 那套「地點沒換就不
 # 重下指令」的節流——但這也表示不能靠 Character._stuck_timer：那個計時器在
@@ -1031,6 +1039,7 @@ func _task_pool_summary() -> Array[Dictionary]:
 			"action": task.get("action", ""),
 			"place": params.get("place", ""),
 			"target": params.get("target", ""),
+			"item_id": params.get("item_id", ""),
 			"source": task.get("source", ""),
 		})
 	return summary
@@ -1934,6 +1943,7 @@ func _find_vending_machine_at_place(place: String) -> VendingMachine:
 # params.place 就形同虛設（CodeRabbit review 抓到）。移動收斂邏輯跟
 # _pursue_work_task() 同一套
 func _pursue_buy_task() -> void:
+	var buy_task_id: String = str(_current_task.get("id", ""))
 	var place: String = str(_current_task.get("params", {}).get("place", ""))
 	var machine := _find_vending_machine_at_place(place)
 
@@ -1941,6 +1951,9 @@ func _pursue_buy_task() -> void:
 	if not machine:
 		push_warning("Agent %s: 找不到販賣機 %s" % [character_name, place])
 		last_action_result = Character.BUY_TARGET_NOT_FOUND
+		# 清掉任務前先停下——不然角色若正走去先前目標，會帶著已失效的
+		# 路徑繼續走（CodeRabbit review 抓到）
+		stop_moving()
 		_pursued_place = ""
 		_pursuit_done = false
 		# 要先讀 source／id 再清空 _current_task，不然兩個 get() 只會讀到
@@ -1959,8 +1972,9 @@ func _pursue_buy_task() -> void:
 
 	# 還沒到達就先走過去
 	if not _has_arrived_at(machine.global_position):
-		if current_place == _pursued_place and (is_moving() or _pursuit_done):
+		if _buy_pursuit_task_id == buy_task_id and (is_moving() or _pursuit_done):
 			return
+		_buy_pursuit_task_id = buy_task_id
 		_pursued_place = current_place
 		_pursuit_done = false
 		_buy_pursuit_target = machine.global_position
@@ -2008,7 +2022,14 @@ func _pursue_work_task() -> void:
 	if anchors == null or current_place.is_empty() or not anchors.has(current_place):
 		last_action_result = Character.WORK_TARGET_NOT_FOUND
 		push_warning("Agent %s: work 失敗（無法解析地點 %s）" % [character_name, current_place])
+		# 完整重設追逐狀態，不然下一筆任務可能沿用舊路徑，或被追逐節流
+		# 誤判成已經處理過；current_place 沒清空也會讓下一輪仲裁跟 prompt
+		# context 誤以為角色還在一個查無此地的地點（CodeRabbit review 抓到）
+		stop_moving()
+		_pursued_place = ""
+		_pursuit_done = false
 		_current_task = {}
+		current_place = ""
 		current_state = "idle"
 		return
 
