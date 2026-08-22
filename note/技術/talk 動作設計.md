@@ -89,21 +89,44 @@ updated: 2026-08-22
 關係是「對某個人」而不是「角色自己的數值」，所以獨立成 `Relationships`，
 key 用對方的 `character_id` 而不是 name —— name 會改，用它當 key 等於改名即失憶。
 每筆存成 Dictionary 而不是單一浮點數：欄位是 `trust`／`met_count`／
-`appearance_cache`（規格《01》3-1、《99》P-08），之後要加最後見面時間
-（見 #497）、印象標籤也一樣不用改結構。
+`appearance_cache`（規格《01》3-1、《99》P-08）／`appearance_state`（#498，
+見下方外觀異動偵測），之後要加最後見面時間（見 #497）、印象標籤也一樣不用
+改結構。
 
-外觀異動偵測（#498 拍板）：`appearance_cache` 目前是自由文字快取、從沒有任何
-呼叫端寫入過。拍板方向是結構化欄位——`appearance_cache` 改存
-`{injured: bool, filthy: bool}`，直接讀 `character.gd` 既有的
-`CONDITION_INJURED`／`CONDITION_FILTHY`（門檻沿用《02》既有拍板值，不新增
-任何欄位或門檻）。見面時跟快取的舊快照逐欄位比對，跨過門檻的欄位各自透過
-既有《01-3》§3 事實句機制發一句事實句（跟「看到陌生人」同一條路徑），只描述
-客觀跨過了什麼、不判斷嚴重程度、不推測心理狀態，比對後更新快照。連帶修正
-P-08 #3 的舊決定（原本假設「動態變化已經由 conditions 走其他管道傳遞」，
-查證後那條管道從沒被建過——`_listener_block()` 從未攜帶對方的
+外觀異動偵測（#498 拍板）：`appearance_cache`（自由文字、初次相遇的外觀描述，
+P-08 已拍板但從沒有任何呼叫端寫入過）繼續維持原樣不動，這次新增一個獨立欄位
+`appearance_state: {injured: bool, filthy: bool}`，直接讀 `character.gd` 既有
+的 `CONDITION_INJURED`／`CONDITION_FILTHY`（門檻沿用《02》既有拍板值，不新增
+任何欄位或門檻）。兩個欄位語意不同、不合併：`appearance_cache` 是「這個人
+長什麼樣子」的一次性靜態描述，`appearance_state` 是「跟上次見到比，動態狀態
+有沒有變」的比對快照。見面時跟 `appearance_state` 快取的舊快照逐欄位比對，
+跨過門檻的欄位各自透過既有《01-3》§3 事實句機制發一句事實句（跟「看到陌生
+人」同一條路徑）：
+
+| 轉變 | 事實句 |
+| --- | --- |
+| `injured` false→true | 「TAMMY 身上有傷。」 |
+| `injured` true→false | 「TAMMY 身上已經沒有傷了。」 |
+| `filthy` false→true | 「TAMMY 現在看起來不乾淨，跟你上次見到不一樣。」 |
+| `filthy` true→false | 「TAMMY 現在看起來乾淨了，跟你上次見到不一樣。」 |
+
+只描述布林值本身翻成中文的客觀狀態，不加程度／恢復過程等額外語氣詞（CodeRabbit
+review 抓到：「髒兮兮」「乾淨多了」「傷已經好了」這幾種措辭帶了布林快照本身
+證明不了的程度或病程語意，跟「不判斷嚴重程度」的原則衝突，改成上表這種純
+狀態陳述）。比對後更新快照。
+
+> [!important] 沒有舊快照時只建立 baseline，不發事實句（CodeRabbit review 抓到）
+> 第一次見到這個人（或快照因任何原因缺失／無效）時，沒有「上次」可比較——
+> 這種情況只把目前的 `injured`／`filthy` 存進快照當 baseline，不產生任何事實句。
+> 不能把「沒有舊快照」當成「舊值是 false」處理，否則初次見面時若對方剛好
+> `injured = true`，會被誤判成「false→true」而發出「有異動」的事實句，
+> 但其實這是這個人第一次被觀察到的既有狀態，不是變化。
+
+連帶修正 P-08 #3 的舊決定（原本假設「動態變化已經由 conditions 走其他管道
+傳遞」，查證後那條管道從沒被建過——`_listener_block()` 從未攜帶對方的
 `conditions`），詳見《99》P-08。不含 `appearance[]`（髮型／衣著／配件）比對，
-那組資料卡在 P-38、目前一律是空陣列，等落地後另開 issue。觸發時機（掛在
-Vision 首次注意到還是 `note_meeting()`）留給實作 issue 決定。
+那組資料卡在《99》P-38、目前一律是空陣列，等落地後另開 issue。觸發時機（掛
+在 Vision 首次注意到還是 `note_meeting()`）留給實作 issue 決定。
 
 好感、熟悉、虧欠不是引擎欄位：沒有任何公式讀過它們（《00》原則三），
 那三件事交給《03》記憶系統自己記、自己判斷、自己演。
