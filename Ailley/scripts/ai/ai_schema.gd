@@ -342,10 +342,8 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 		var place: Variant = buy_params.get("place")
 		if not place is String or (place as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
-		# 只驗證去除前後空白後是不是空字串，但寫回 params 的仍是原始值——
-		# " tavern " 這種帶空白的合法輸入會通過驗證，後續卻對不上
-		# _find_vending_machine_at_place()／VendingMachine.get_price() 的
-		# 精確字串比對而找不到販賣機／物品（CodeRabbit review 抓到）
+		# 驗證通過後，把 item_id 與 place 去除前後空白的值寫回 params，
+		# 確保後續販賣機查找與商品查價使用同一組正規化字串。
 		buy_params["item_id"] = (item_id as String).strip_edges()
 		buy_params["place"] = (place as String).strip_edges()
 
