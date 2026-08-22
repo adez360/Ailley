@@ -8,7 +8,7 @@ script = ExtResource("1_ow0i4")
 
 [node name="Box" type="NinePatchRect" parent="."]
 texture = ExtResource("2_ow0i4")
-region_rect = Rect2(6.065604, 6.3701286, 38.97128, 37.284065)
+region_rect = Rect2(7, 7, 37, 36)
 patch_margin_left = 10
 patch_margin_top = 9
 patch_margin_right = 11
