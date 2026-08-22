@@ -2337,12 +2337,15 @@ func get_current_task_elapsed_minutes() -> int:
 const DEBUG_TASK_PRIORITY := 999.0
 
 func debug_push_task(action: String, params: Dictionary, duration: float) -> void:
+	# expires_at 是安全網，不能比完成判定（_reevaluate_once() 用
+	# _effective_action_duration() 算的有效時長）先到期——不然 sleepy 狀態
+	# 下這筆任務會在真正做完前就被過期清除迴圈提前拿掉（CodeRabbit review 抓到）
 	var tasks: Array[Dictionary] = [{
 		"action": action,
 		"params": params,
 		"priority": DEBUG_TASK_PRIORITY,
 		"duration": duration,
-		"expires_at": _now_minutes() + int(duration),
+		"expires_at": _now_minutes() + int(ceil(_effective_action_duration(duration))),
 	}]
 	_push_llm_tasks(tasks, {})
 	_reevaluate()
