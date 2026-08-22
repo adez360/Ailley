@@ -133,13 +133,78 @@ var max_calls_per_game_day := DEFAULT_MAX_CALLS_PER_GAME_DAY
 var dialogue_exempt := DEFAULT_DIALOGUE_EXEMPT
 
 
+# 內建 sidecar 的本機連線預設值（《16》§2.2 決定隨安裝包附上的 llama-server，
+# 固定跑在這個位址與埠號）。寫死在這裡，不讀 ai_config.example.json——範本檔
+# 同時示範 openrouter 這個玩家要自己填金鑰的 provider，不能整包照抄當預設值，
+# 這裡只需要「local」那一段
+const _DEFAULT_LOCAL_BASE_URL := "http://127.0.0.1:8080/v1"
+const _DEFAULT_LOCAL_MODEL := "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+
+
+# 首次啟動、`user://` 還沒有設定檔時自動寫一份指向內建 sidecar 的預設值
+# （《16 打包與發布規格書》§2.3），玩家不用手動抄 ai_config.example.json。
+# 雲端 provider（OpenRouter token）不在自動產生範圍內——那需要玩家自己的金鑰，
+# 沒有預設值可以填。回傳寫入是否成功；呼叫端失敗時退回原本「檔案不存在」的
+# disabled 狀態，不當硬錯誤
+static func _write_default_config() -> bool:
+	var default_data := {
+		"enabled": true,
+		"default_provider": "local",
+		"providers": {
+			"local": {
+				"base_url": _DEFAULT_LOCAL_BASE_URL,
+				"api_key": "",
+				"model": _DEFAULT_LOCAL_MODEL,
+				"timeout": DEFAULT_TIMEOUT,
+				"supports_json_schema": true,
+				"format_guaranteed": true
+			}
+		},
+		"min_interval_sec": DEFAULT_MIN_INTERVAL_SEC,
+		"max_calls_per_game_day": DEFAULT_MAX_CALLS_PER_GAME_DAY,
+		"dialogue_exempt": DEFAULT_DIALOGUE_EXEMPT
+	}
+
+	var file := FileAccess.open(CONFIG_PATH, FileAccess.WRITE)
+	if file == null:
+		push_error("AIConfig: 無法建立預設設定檔 %s（錯誤碼 %d）" % [CONFIG_PATH, FileAccess.get_open_error()])
+		return false
+
+	# store_string() 回傳 bool，忽略它的話寫入失敗（例如磁碟滿）時仍會回傳
+	# true，留下一份寫壞的 CONFIG_PATH——下次 load_from_user() 檢查
+	# file_exists() 會判定「有檔案」，改去解析出 AI_STATUS_BAD_JSON，而不是
+	# 停在原本「檔案不存在」該有的 disabled 狀態（CodeRabbit review 抓到）
+	var write_ok := file.store_string(JSON.stringify(default_data, "\t"))
+	file.close()
+	if not write_ok:
+		push_error("AIConfig: 寫入預設設定檔 %s 失敗" % CONFIG_PATH)
+		# remove_absolute() 回傳 Error，忽略它的話清理也失敗時（例如檔案被
+		# 其他行程鎖住）會留下寫壞的部分內容，下次啟動 file_exists() 判定
+		# 「有檔案」，改去解析出 AI_STATUS_BAD_JSON，而不是停在「檔案不存在」
+		# 該有的 disabled 狀態——記下來至少能在 log 裡看到清理本身也失敗了
+		# （CodeRabbit review 抓到）
+		var remove_err := DirAccess.remove_absolute(CONFIG_PATH)
+		if remove_err != OK:
+			push_error(
+				"AIConfig: 清理寫壞的 %s 失敗（錯誤碼 %d），下次啟動可能誤判成 AI_STATUS_BAD_JSON"
+				% [CONFIG_PATH, remove_err]
+			)
+		return false
+	return true
+
+
 # 讀不到就回一個 enabled = false 的設定物件，呼叫端不必自己判斷檔案在不在
 static func load_from_user() -> AIConfig:
 	var config := AIConfig.new()
 
 	if not FileAccess.file_exists(CONFIG_PATH):
-		config.status_reason = L10n.tf("AI_STATUS_NO_FILE", {"path": CONFIG_PATH, "example": EXAMPLE_PATH})
-		return config
+		# 首次啟動自動產生一份指向內建 sidecar（127.0.0.1 本機連線）的設定檔
+		# （《16 打包與發布規格書》§2.3）——寫不出去（例如 user:// 沒有寫入權限）
+		# 不當硬錯誤，退回原本「檔案不存在」的 disabled 狀態，遊戲照樣能跑，
+		# 只是要玩家自己抄範本
+		if not _write_default_config():
+			config.status_reason = L10n.tf("AI_STATUS_NO_FILE", {"path": CONFIG_PATH, "example": EXAMPLE_PATH})
+			return config
 
 	var file := FileAccess.open(CONFIG_PATH, FileAccess.READ)
 	if file == null:
