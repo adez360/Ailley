@@ -135,6 +135,12 @@ var current_state := "idle"
 # 沒有這張表的話，走出視野再走回來就會再驚訝一次
 var _noticed := {}
 
+# 這一場已經對誰觸發過跟丟反應（#405，CodeRabbit review 抓到）。跟 _noticed
+# 不同的是：同一個陌生人只要還沒正式認識，可能反覆進出視野很多次（走近又
+# 走遠），每次 lost 都觸發事實句＋決策請求會變成洗版與 LLM 呼叫量爆增——
+# 沒有這張表的話，_on_lost() 會對同一個人的每一次「跟丟」都重複反應
+var _lost_reacted := {}
+
 # 上一次真的呼叫 move_to()（或判定「已經到了」「走不到」）的地點。
 # _pursue_current_task() 每個遊戲分鐘都會跑，靠這個分辨「還在處理同一個地點」
 # 與「地點換了要重新起步」
@@ -1569,10 +1575,14 @@ func _react_to_spotted_fallback() -> void:
 # 視野裡跟丟某個陌生人（issue #405）。
 #
 # 只對還沒正式認識的人處理——認識的人（has_met()）本來就會頻繁進出視野
-# （同事下班走遠、朋友轉身），每次都排事實句會洗版；陌生人跟丟則呼應
-# _on_spotted() 已經在關注的「第一次注意到」情境，數量上跟 spotted 同一個
-# 量級，不會爆量。_noticed 不在這裡清除——見 note/技術/視覺感測.md 已驗證的
-# 「走出視野再走回來不會重複驚訝」，跟丟不代表要重新觸發陌生人反應。
+# （同事下班走遠、朋友轉身），每次都排事實句會洗版。
+#
+# _lost_reacted 只讓每個陌生人觸發一次跟丟反應（CodeRabbit review 抓到）：
+# 還沒正式認識的人在正式認識之前可能反覆進出視野很多次（走近又走遠），
+# 沒有這張表的話每次 lost 都會排事實句＋問一次模型，量級遠超過 spotted
+# （spotted 有 _noticed 擋住重複驚訝，這裡原本沒有對應的擋）。
+# _noticed 不在這裡清除——見 note/技術/視覺感測.md 已驗證的「走出視野再走
+# 回來不會重複驚訝」，跟丟不代表要重新觸發陌生人反應。
 #
 # 不像 _on_spotted／_on_noise_heard 有寫死的 fallback 台詞可退——「跟丟了」
 # 沒有通用的驚呼可以套，schedule 模式（llm_decision_enabled 關著）就不處理，
@@ -1584,6 +1594,9 @@ func _on_lost(other: Character) -> void:
 		return
 	if not llm_decision_enabled:
 		return
+	if _lost_reacted.has(other.character_id):
+		return
+	_lost_reacted[other.character_id] = true
 
 	_queue_reaction_fact_line("你看不到 %s 了，要不要有反應由你自己決定" % other.character_name)
 	await _request_next_decision()
