@@ -139,6 +139,16 @@ review 抓到：「髒兮兮」「乾淨多了」「傷已經好了」這幾種�
 那組資料卡在《99》P-38、目前一律是空陣列，等落地後另開 issue。觸發時機（掛
 在 Vision 首次注意到還是 `note_meeting()`）留給實作 issue 決定。
 
+> [!note] 存檔路徑跟 `appearance_cache` 相同，不是新流程（CodeRabbit review 抓到）
+> `appearance_state` 是同一筆 `relations` 記錄裡的欄位，跟 `appearance_cache`
+> 一樣要接上 `NPCRelationsSchema.gd`（多一欄）與 `sqlite_save_service.gd` 的
+> `get_character()`／`save_character()`（`relations_appearance_cache` 那兩處
+> 讀寫的旁邊）——這是既有欄位新增的既定模式，不是這次要另外設計一套新的存檔
+> 流程。讀到沒有這個欄位的舊存檔（欄位不存在）時，直接套用上面的「沒有
+> baseline」規則：不當成任何合法值，只在下次見面時重新建立 baseline，不會
+> 因為讀不到欄位而報錯或誤判成異動。具體的 schema migration 寫法留給實作
+> issue。
+
 好感、熟悉、虧欠不是引擎欄位：沒有任何公式讀過它們（《00》原則三），
 那三件事交給《03》記憶系統自己記、自己判斷、自己演。
 
