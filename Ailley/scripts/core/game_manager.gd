@@ -590,8 +590,19 @@ func _notification(what: int) -> void:
 # 一律不動，不主動移除任何節點，留給之後真的需要時再決定
 func apply_world_save_data(data: Dictionary) -> void:
 	GameClock.day = int(data.get("day", GameClock.day))
-	GameClock.hour = int(data.get("hour", GameClock.hour))
-	GameClock.minute = int(data.get("minute", GameClock.minute))
+	# 存檔損毀／手改可能塞進超出時鐘實際範圍的值（例如 hour: 99）——GameClock._process()
+	# 本身只會遞增到 24/60 就回捲，從沒檢查過賦值當下的範圍，讀檔這裡守住，不合法就
+	# 保留目前值並 push_error，跟下面 position 的驗證同一種規則
+	var raw_hour = data.get("hour", GameClock.hour)
+	if (typeof(raw_hour) == TYPE_INT or typeof(raw_hour) == TYPE_FLOAT) and int(raw_hour) >= 0 and int(raw_hour) < 24:
+		GameClock.hour = int(raw_hour)
+	else:
+		push_error("apply_world_save_data: hour 不是 0-23 範圍內的數字，保留目前值")
+	var raw_minute = data.get("minute", GameClock.minute)
+	if (typeof(raw_minute) == TYPE_INT or typeof(raw_minute) == TYPE_FLOAT) and int(raw_minute) >= 0 and int(raw_minute) < 60:
+		GameClock.minute = int(raw_minute)
+	else:
+		push_error("apply_world_save_data: minute 不是 0-59 範圍內的數字，保留目前值")
 	allow_player_join = bool(data.get("allow_player_join", allow_player_join))
 	# 缺欄位代表「這份存檔沒有記錄化身角色」（SQLite 的 world 表目前還沒有這個
 	# 欄位、或是 #373 之前存的舊 JSON 存檔），不能沿用 GameManager 目前記憶體裡
