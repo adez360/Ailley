@@ -510,10 +510,15 @@ func _end_incapacitation() -> void:
 	print_debug("Character %s 昏迷已結束（被搬走）" % character_name)
 
 ## 由搬運動作（#161 haul）調用，標記此角色正在被搬運。
-## 若該角色昏迷，搬運會立即結束昏迷計時器（《99》P-27）
+## 若該角色昏迷，搬運會立即結束昏迷（《99》P-27）——不能只設旗標等下一次
+## _update_incapacitation()（每遊戲分鐘才跑一次）才處理：stop_haul() 若搶在
+## 下一個 time_changed 之前執行，_is_being_carried 會被重設回 false，
+## _end_incapacitation() 永遠不會被呼叫到，角色維持昏迷、也拿不到 health
+## 恢復與搬運者 trust 獎勵（CodeRabbit review 抓到）
 func set_being_carried(is_carried: bool) -> void:
 	if is_carried and has_condition(CONDITION_INCAPACITATED):
 		_is_being_carried = true
+		_end_incapacitation()
 	elif not is_carried:
 		_is_being_carried = false
 
