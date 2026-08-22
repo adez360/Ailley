@@ -1738,7 +1738,7 @@ func _reevaluate_once() -> void:
 	if llm_decision_enabled and not _awaiting_decision \
 			and _current_task.get("source", "") == "llm" \
 			and _current_task.get("id", "") != _active_talk_task_id \
-			and now_minutes - _current_task_started_at >= int(_current_task.get("duration", 0.0)):
+			and now_minutes - _current_task_started_at >= int(ceil(_effective_action_duration(_current_task.get("duration", 0.0)))):
 		# 做完的那筆要先離開池子。llm 任務沒有 window，不像 schedule 靠時間窗
 		# 自然退場——留著的話它會用原本的分數繼續參加下一輪算分，被重新選中，
 		# 變成同一件事做完又做。_current_task 是同一個 Dictionary 的參照，
@@ -1935,24 +1935,26 @@ func _roll_success(action: String, character: Character, environment_risk: float
 	var injury_term := -character.stats.get_value("injury") * 0.004
 	var alcohol_term := -maxf(0.0, character.stats.get_value("alcohol") - 30.0) * 0.005
 	var stamina_term := (stamina - 50.0) * 0.002
+	var wakefulness: float = character.stats.get_value("wakefulness")
+	var sleepy_term := -maxf(0.0, 15.0 - wakefulness) * 0.012
 	var chance: float = params["base"] \
 		+ trait_value * float(params["coef"]) \
-		+ stamina_term + injury_term + alcohol_term - environment_risk
+		+ stamina_term + injury_term + alcohol_term + sleepy_term - environment_risk
 	chance = clampf(chance, 0.05, 0.95)
 
 	var success := randf() < chance
 	if success:
 		return {"success": true, "reason": ""}
-	return {"success": false, "reason": _failure_reason(injury_term, alcohol_term, stamina_term, environment_risk)}
+	return {"success": false, "reason": _failure_reason(injury_term, alcohol_term, stamina_term, sleepy_term, environment_risk)}
 
 ## 《01-2》§5：失敗原因要具體到 AI 能調整策略，不能給一句放諸四海皆準的
 ## 「運氣不好」——找出扣最多分的修正項，講出具體理由。四個修正項全部
 ## 是負值或 0（environment_risk 本身以正值代表風險，取負號比較），取最負
 ## 的那個當主因；都沒扣分時才是真的手氣不好
-func _failure_reason(injury_term: float, alcohol_term: float, stamina_term: float, environment_risk: float) -> String:
+func _failure_reason(injury_term: float, alcohol_term: float, stamina_term: float, sleepy_term: float, environment_risk: float) -> String:
 	var worst := "luck"
 	var worst_value := 0.0
-	for pair in [["injury", injury_term], ["alcohol", alcohol_term], ["stamina", stamina_term], ["environment", -environment_risk]]:
+	for pair in [["injury", injury_term], ["alcohol", alcohol_term], ["stamina", stamina_term], ["sleepy", sleepy_term], ["environment", -environment_risk]]:
 		if float(pair[1]) < worst_value:
 			worst_value = pair[1]
 			worst = pair[0]
@@ -1964,10 +1966,19 @@ func _failure_reason(injury_term: float, alcohol_term: float, stamina_term: floa
 			return "喝多了，手腳不聽使喚"
 		"stamina":
 			return "體力撐不住，中途沒了力氣"
+		"sleepy":
+			return "太睏了，沒辦法集中精神"
 		"environment":
 			return "現場條件不利，沒能成功"
 		_:
 			return "手氣不好，這次沒抓到訣竅"
+
+## 計算動作的有效 duration，考慮 sleepy 狀態下的時長倍率
+func _effective_action_duration(base_duration: float) -> float:
+	var duration := base_duration
+	if has_condition(CONDITION_SLEEPY):
+		duration *= 1.15
+	return duration
 
 ## 環境風險由呼叫端依動作/情境算好傳入（正值代表風險，數字越大成功率扣越多）。
 ## SUCCESS_PARAMS 目前沒有動作會走到這裡，之後接動作時（例如 steal 的目擊者
@@ -3146,12 +3157,15 @@ func get_current_task_elapsed_minutes() -> int:
 const DEBUG_TASK_PRIORITY := 999.0
 
 func debug_push_task(action: String, params: Dictionary, duration: float) -> void:
+	# expires_at 是安全網，不能比完成判定（_reevaluate_once() 用
+	# _effective_action_duration() 算的有效時長）先到期——不然 sleepy 狀態
+	# 下這筆任務會在真正做完前就被過期清除迴圈提前拿掉（CodeRabbit review 抓到）
 	var tasks: Array[Dictionary] = [{
 		"action": action,
 		"params": params,
 		"priority": DEBUG_TASK_PRIORITY,
 		"duration": duration,
-		"expires_at": _now_minutes() + int(duration),
+		"expires_at": _now_minutes() + int(ceil(_effective_action_duration(duration))),
 	}]
 	_push_llm_tasks(tasks, {})
 	_reevaluate()
