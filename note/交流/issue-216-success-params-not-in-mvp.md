@@ -55,6 +55,6 @@ date: 2026-08-20
 
 ## 相關檔案
 
-- `scripts/character/agent.gd`：`SUCCESS_PARAMS`、`_roll_success()` 定義
-- `scripts/ai/ai_schema.gd`：`IMPLEMENTED_ACTIONS` 定義
+- `Ailley/scripts/character/agent.gd`：`SUCCESS_PARAMS`、`_roll_success()` 定義
+- `Ailley/scripts/ai/ai_schema.gd`：`IMPLEMENTED_ACTIONS` 定義
 - `note/規格書/01-2_行為判定規則.md`：§3 行為參數表
