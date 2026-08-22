@@ -34,6 +34,10 @@ const MAX_RADIUS_TILES := 20
 ## 0.2 秒足以讓「轉角遇到人」看起來仍是即時的
 const CHECK_INTERVAL := 0.2
 
+## 面向判定的錐角容許值：跟面向方向的內積要 >= 這個值才算「面對著」。
+## 0.5 大約是 ±60 度的錐角——沿用 player.gd 的同一個值保持一致
+const FACING_DOT_THRESHOLD := 0.5
+
 @export var radius_tiles := 5:
 	set(value):
 		radius_tiles = clampi(value, MIN_RADIUS_TILES, MAX_RADIUS_TILES)
@@ -141,9 +145,18 @@ func _refresh_visible() -> void:
 
 	_visible = current
 
+# 目標是不是在視野錐體內。用面向方向與目標方向的點積判定
+func _is_facing(target_pos: Vector2) -> bool:
+	var to_target := target_pos - _character.get_body_position()
+	if to_target == Vector2.ZERO:
+		return true
+	return _character.get_facing_direction().dot(to_target.normalized()) >= FACING_DOT_THRESHOLD
+
 # 兩點之間有沒有牆。用碰撞圓心而不是 global_position —— 角色的 CollisionShape2D
 # 有 y 偏移，拿節點原點拉線會從腳底下穿出去，貼牆時判定會反過來
 func _has_line_of_sight(other: Character) -> bool:
+	if not _is_facing(other.get_body_position()):
+		return false
 	var params := PhysicsRayQueryParameters2D.create(
 		_character.get_body_position(), other.get_body_position(), blocker_mask
 	)

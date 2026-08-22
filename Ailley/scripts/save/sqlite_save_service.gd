@@ -60,7 +60,14 @@ const STATE_DEFAULTS := {
 ## 說明），查 npc 會把「場上有這隻角色」誤判成「這隻角色存過檔」。npc_state
 ## 只有 save_character() 才會寫，是這裡要的「真的存過」訊號
 func has_character(id: String) -> bool:
-	return not DatabaseManager.select("npc_state", "npc_id = '%s'" % _esc(id)).is_empty()
+	var rows := DatabaseManager.select("npc_state", "npc_id = '%s'" % _esc(id))
+	if DatabaseManager.last_query_failed:
+		push_error(
+			"SqliteSaveService: has_character(%s) 查詢失敗，"
+			% id
+			+ "無法判斷這筆存檔存不存在——不是「從沒存過」，是讀不到（issue #439）"
+		)
+	return not rows.is_empty()
 
 
 ## 讀一個角色的完整資料，找不到回傳空 Dictionary
@@ -179,7 +186,14 @@ func save_character(id: String, data: Dictionary) -> bool:
 
 
 func has_world(id: String) -> bool:
-	return not DatabaseManager.select("world", "world_id = '%s'" % _esc(id)).is_empty()
+	var rows := DatabaseManager.select("world", "world_id = '%s'" % _esc(id))
+	if DatabaseManager.last_query_failed:
+		push_error(
+			"SqliteSaveService: has_world(%s) 查詢失敗，"
+			% id
+			+ "無法判斷這筆存檔存不存在——不是「從沒存過」，是讀不到（issue #439）"
+		)
+	return not rows.is_empty()
 
 
 ## 讀一個世界的完整資料

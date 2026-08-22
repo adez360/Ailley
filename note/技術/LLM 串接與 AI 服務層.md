@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-19
+updated: 2026-08-22
 ---
 
 # LLM 串接與 AI 服務層
@@ -177,7 +177,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
   "self": {
     "id": "agent", "name": "小明",
     "stats": {"satiety": 42.0, "hydration": 65.0, "stamina": 70.0, "wakefulness": 88.0, "hygiene": 60.0, "alcohol": 0.0, "health": 100.0, "injury": 0.0, "social": 12.0, "fun": 60.0, "mood": 55.0},
-    "time": {"hour": 9, "minute": 30},
+    "time": {"day": 3, "hour": 9, "minute": 30},
     "place": "farm",
     "current_action": "work"
   },
@@ -301,11 +301,106 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 的對話多半已經不值得再付費續下去。記憶注入上線後每輪 payload 都會變大，
 退化點可能提前，屆時應針對現在的逐輪架構重新實測。
 
-**仍未解決**：對話呼叫本身豁免每遊戲日的呼叫上限（`CONVERSATION` policy，見
-`ai/api.md`／規格書《13》§5），走獨立的 `_dialogue_calls_today` 計數但沒有自己的
-封頂值——`SAFETY_MAX_TURNS` 只封頂單場對話的輪數，不封頂一天能開幾場對話。
-「有沒有玩家在觀察」的節流判斷，#178 討論過後刻意不做（範圍太大，需要新的
-「是否被觀察」偵測邏輯），留給之後想做更完整方案時另開 issue。
+對話呼叫（`CONVERSATION` policy）豁免 `min_interval_sec`／`max_calls_per_game_day`
+這兩條限制時，另外走 `max_dialogue_calls_per_game_day` 這個獨立旋鈕封頂
+（#434，落地見下一節）——`SAFETY_MAX_TURNS` 封頂的是單場對話的輪數，這個旋鈕
+封頂的是一天能開幾場對話／講幾輪，兩者互補不重疊。`dialogue_exempt=false` 時
+對話呼叫改走一般 `max_calls_per_game_day` 路徑，這個旋鈕形同虛設（不需要，見
+下一節說明）。「有沒有玩家在觀察」的節流判斷，#178 討論過後刻意不做（範圍太大，
+需要新的「是否被觀察」偵測邏輯），留給之後想做更完整方案時另開 issue。
+
+### 每日對話呼叫上限（#395／#434）
+
+實測「一場對話平均幾輪」：用本機 `local` provider（Qwen2.5-7B-Instruct-Q4_K_M）
+在 `main.tscn` 直接建立 `Conversation` 節點（繞過 `talk_to()` 的距離判定，
+角色互相傳送到同一點後開始對話），跑 **6 場對話樣本**，逐場記下 `_turns.size()`
+與收尾類型：
+
+| 場次 | 雙方 | 輪數 | 收尾類型 |
+| --- | --- | --- | --- |
+| 1 | 小滿／阿虎 | 5 | 正常收尾（`end=true`） |
+| 2 | 阿吉／阿嵐 | 9 | 正常收尾（`end=true`） |
+| 3 | 小滿／阿虎 | 11 | 撞到 `SAFETY_MAX_TURNS` 安全閥截斷 |
+| 4 | 阿吉／陳婆 | 4 | 正常收尾（`end=true`） |
+| 5 | 阿嵐／小滿 | 4 | 正常收尾（`end=true`） |
+| 6 | 阿吉／小滿 | 9 | 正常收尾（`end=true`） |
+
+平均 **7.0 輪／場**（n=6，範圍 4–11）。另有 1 場因陳婆當時觸發昏迷送醫治療
+（#347，跟這次量測無關的既有機制）中途被中斷，樣本捨棄不計。跟這份筆記
+上方「已測試過但沒有效果的方向」記錄的退化門檻（6 輪起始退化、10 輪偶爾
+明顯退化）對照，這裡把「退化區間」定義為 **6–10 輪（含邊界）**：第 3 場
+（11 輪，撞 `SAFETY_MAX_TURNS`）已在上一句另計，不重複算進本區間；其餘
+5 場裡，第 2 場（9 輪）與第 6 場（9 輪）落在 6–10 輪內結束，第 1／4／5 場
+（5／4／4 輪）在區間之前就已收尾——共 **2/6** 落在退化區間內。
+
+> [!warning] n=6 太小，不足以支持「常態性」這種頻率結論（CodeRabbit review 抓到）
+> 本次樣本裡 `SAFETY_MAX_TURNS` 被觸發 1/6 場——這只是「本次樣本觀察到一次」，
+> 不能推論成「這道安全閥常態性地會被用到」，安全閥實際被觸發的頻率需要更大
+> 樣本才能下結論，這裡先只記錄樣本事實，不做外推
+
+<!-- -->
+
+> [!warning] 「撞到安全閥」是這次量測當下人工肉眼觀察記錄的，不是程式自動分類（CodeRabbit review 抓到）
+> `conversation.gd::_run()` 目前對「說話者自己回 `end=true` 收尾」與「耗盡
+> `SAFETY_MAX_TURNS` 被強制截斷」發的是同一個 `ENDED_BY_SPEAKER`，表格裡第 3
+> 場「撞到安全閥」的註記，是量測當下盯著跑、親眼數到第 11 輪被截斷才記下來
+> 的，程式本身讀不出這個區別。要讓這個量測能被重複驗證、不用再人工盯場，
+> `_run()` 要先分出獨立的 termination reason（例如安全閥截斷另給
+> `SAFETY_TRUNCATED`），這是另一件事，不在這則研究範圍內，這裡先誠實記錄
+> 這個方法論限制
+
+**實作**：比照既有 `min_interval_sec`／`max_calls_per_game_day` 這兩個數值型
+旋鈕的模式，`ai_config.json` 有第三個數值型全域旋鈕
+`max_dialogue_calls_per_game_day`（可設 0＝不限，跟前兩者一致，預設 30）。
+`dialogue_exempt` 是布林豁免開關，不是數值上限，不適用「0＝不限」——
+它只控制 `CONVERSATION` policy 是否豁免既有的 `min_interval_sec`／
+`max_calls_per_game_day` 檢查，跟這個旋鈕各自獨立、互不影響。
+`AIService._check_rate_limit()` 判斷 `CONVERSATION` policy 且豁免成立時額外檢查
+`_dialogue_calls_today[requester_id]` **達到或超過**這個值（`count >=
+max_dialogue_calls_per_game_day`，不是 `>`——跟既有
+`_check_rate_limit()` 對 `max_calls_per_game_day` 的判斷式一致，
+`count > max` 會讓計數剛好等於上限那一次仍被放行），達到就回傳跟現有
+冷卻／配額檢查一樣的 `{"ok": false, ...}`。**沒有額外的降級邏輯**：
+`next_line()` 收到 `ok=false` 走既有路徑，
+`conversation.gd::_finish_with_fallback()` 自動說一句
+`DialogueLines.closing()` 收尾，跟現有 LLM 失敗／逾時的降級一模一樣，
+玩家體感上看不出差異，只是提早收尾。
+>
+> [!important] 這個旋鈕只在 `dialogue_exempt=true` 時才有意義（CodeRabbit review 抓到）
+> `_is_exempt(policy)` 只有 `policy == CONVERSATION and dialogue_exempt` 才成立；
+> `dialogue_exempt=false` 時 `CONVERSATION` 請求走的是一般 `_calls_today` 路徑，
+> `_dialogue_calls_today` 永遠是 0，這個新旋鈕檢查的計數器形同虛設。但這不是
+> 疏漏要補一個獨立計數器——`dialogue_exempt=false` 代表玩家已經選擇讓對話呼叫
+> 吃現有的 `max_calls_per_game_day`（跟 plan／reflection 共用同一份配額），
+> 這種設定下對話本來就已經被管控，不需要疊加第二層限制。這個旋鈕要解決的
+> 缺口只存在於 `dialogue_exempt=true`（對話完全豁免既有限制）的情境，範圍要
+> 這樣講清楚，不是無條件對兩種設定都生效
+
+**預設值 30 的依據**：這次記的樣本是 `_turns.size()`（對話輪數），不是真正的
+`AIService.request()` 呼叫次數——每場開頭的 `DialogueLines.opening()` 不打
+LLM，7.0 輪／場扣掉這句開場白，實際是雙方合計約 **6.0 次呼叫／場**（這次
+樣本全是 NPC 對 NPC，不涉及玩家回合那個額外的不打 LLM 因素）。
+>
+> [!warning] 配額 scope 是 per-`requester_id`（單一角色），不是 per-對話（CodeRabbit review 抓到）
+> `_dialogue_calls_today[requester_id]` 算的是**單一角色**今天講了幾輪，不是
+> 一場對話兩隻角色合計打了幾次。上面「6.0 次呼叫／場」是雙方合計，若對話
+> 輪流發言、大致平均分攤，換算成單一角色的負擔是約 **3 次呼叫／場**——30
+> 次配額對單一角色來說約可撐 **10 場**均值對話，不是拿雙方合計數去除的
+> 5 場。這個換算本身也只是「輪流均分」的粗略假設，實際上兩隻角色誰先開口、
+> 誰講得多不會完全對半分，正式訂數字前要用同一個 per-角色口徑重新記樣本，
+> 不是延用這次雙方合計的數字
+>
+> 「對話單輪成本遠低於一次完整 `plan`／`reflection` 呼叫」也只是**未驗證的
+> 假設**，不是量過的事實——`build_dialogue_envelope()` 每次都會把目前為止
+> 完整的對話輪次歷史序列化進 payload，對話越長單輪的 payload 越大，不是
+> 每輪固定的小開銷；`_decide_with_retry()` 的驗證失敗重試也會讓實際
+> `AIService.request()` 次數比輪數本身更多。這兩個因素都會讓真正的呼叫
+> 次數／成本比這次的粗算更高，「30」這個數字在兩者都還沒實測之前只能算
+> 這次量測給出的一個起點，不是已經校準過的建議值
+
+正式上線前建議搭配大規模驗證一併校準，逐場記錄真正的 `AIService.request()`
+次數（依 per-角色 scope 分開記）、payload 隨對話輪次成長的實際大小、以及
+驗證失敗重試的發生率，這三項都還沒有數據支持目前「30」這個預設值。
 
 > [!important] 但 fallback 一定要能終止
 > LLM 失敗／逾時時走 `DialogueLines`，而它**沒有 `end` 訊號**——不特別處理就會
@@ -552,25 +647,35 @@ JSON Schema → GBNF 的轉換器。
 
 ## 不在這一版（正式線）
 
-- **記憶系統** —— 卡在專案完全沒有存檔機制，記憶無處持久化。`character.gd` 的
-  `signal spoke` 跟 Task 上的 `reasoning`／`inner_monologue`（issue #88）都是
-  日後寫逐字稿/決策脈絡的接點，先鋪路但還沒有東西讀
-- **交誼區 WebSocket 線** —— 伺服器技術棧尚未決定
-- `preconditions` 求值 —— 結構留欄位，v1 一律通過
+- **記憶系統的 SQLite 存檔路徑** —— L1-L4 資料結構、事件→候選記憶生成
+  pipeline、prompt 注入（L2＋L4）、JSON 存檔持久化都已完成（issue
+  #167／#168／#169／#170，細節見 [[記憶與睡眠反思]]、[[存檔]]），但只接了
+  `JsonSaveService`：`SqliteSaveService` 尚未讀寫 `memory` 欄位，SQLite
+  round-trip 會遺失記憶（見 [[存檔]]「SQLite 後端現況」）
+- **交誼區 WebSocket 線** —— 伺服器技術棧尚未決定，見 #476
+- `preconditions` 求值 —— 結構留欄位，v1 一律通過，見 #477
 - 白名單中除 `move_to` / `talk` / `sleep` 外的動作實作——白名單本身已經是
   《07》《11》拍板的 22 個（issue #88），但 `IMPLEMENTED_ACTIONS` 沒有跟著擴
-- `speech` 觸發對話交接（issue #90）、約定機制
-- `HumanInput`／`RemotePlayer`（《12》§3.3 另外兩種 DecisionProvider 來源）
+- `speech` 觸發對話交接（issue #90）、約定機制（見 #479）
+- `HumanInput`（#156）／`RemotePlayer`（見 #478）——《12》§3.3 另外兩種
+  DecisionProvider 來源
 
 ## 待決（正式線）
 
-- [ ] 「…」氣泡的等待體感要實跑才知道能不能接受
-- [ ] **LLM 成本上限完全沒有防護**——拿掉硬上限、對話又豁免配額的直接後果，
-      要先實跑量出「一場對話平均幾輪」才有辦法訂
-- [ ] 軟壓力（system prompt 叫模型「聊久了該收尾」）到底有沒有用，未知數
-- [ ] 尚未對真正的 OpenRouter 打過請求，TLS/DNS 與真實回應格式未驗證
-- [ ] 成本上限機制的具體設計
-- [ ] 記憶系統上線前，Agent 的對話逐字稿要不要先存記憶體就好
+- [ ] 「…」氣泡的等待體感要實跑才知道能不能接受，見 #480
+- [x] **LLM 成本上限完全沒有防護**——研究與提案已由 #395 完成（本機
+      Qwen2.5-7B，6 場對話均值 7.0 輪／場，`max_dialogue_calls_per_game_day`
+      旋鈕設計案見上方「每日對話呼叫上限提案」一節），落地實作見 #434
+- [ ] 軟壓力（system prompt 叫模型「聊久了該收尾」）到底有沒有用，未知數，見 #482
+- [ ] 尚未對真正的 OpenRouter 打過請求，TLS/DNS 與真實回應格式未驗證，見 #483
+- [x] 成本上限機制的具體設計——同上，見 #395／#434
+- [x] **對話逐字稿暫存——拍板不做**（#485，2026-08-21）：`spoke` 訊號與
+      `Conversation.turns` 現在都沒有任何暫存，也沒有已排入計畫的功能在讀取
+      逐字稿（回放對話、用逐字稿重新生成記憶都還沒排）。加暫存機制屬於「為
+      假設性需求先做設計」，且現有記憶系統（L2/L4）都還沒接上
+      `SqliteSaveService`（見上方「不在這一版」），先不加這份新資料結構。
+      等真的有具體功能要用逐字稿時，另開 issue 決定要存記憶體還是存
+      SQLite——不現在先做記憶體版本，之後又要重做
 - [x] `response_format`／GBNF 強制路徑，與不送 `response_format` 的純 prompt
       對照組，模型端可靠度差異（issue #245，2026-08-17；補測 2026-08-18，兩輪
       合計、可重現性資訊、逐筆原始結果見《12》§7.3）：地端 provider 對兩者

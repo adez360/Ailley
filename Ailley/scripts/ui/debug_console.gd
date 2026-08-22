@@ -59,6 +59,10 @@ func _ready() -> void:
 		# 先例走 debug 指令打通管線，不等一個像素風的開場選單
 		"charnew": {"run": _cmd_charnew, "usage": "charnew", "help": ""},
 		"charlib": {"run": _cmd_charlib, "usage": "charlib", "help": ""},
+		# 同上，help 留空：#371 化身者投放路由的唯一入口，正式的「由我操控」
+		# 按鈕還沒做（角色庫首頁的視覺任務），先靠指令打通管線驗證 #374
+		# 快捷欄/背包接線正確——見 note/技術/建角面板.md
+		"embody": {"run": _cmd_embody, "usage": "embody <id>", "help": ""},
 		# 同上，help 留空：#21 驗證 SaveService 讀寫進出點用的 debug 入口，
 		# 真正的存讀時機（睡前自動存檔等）是後續 issue 才接
 		"save": {"run": _cmd_save, "usage": "save", "help": ""},
@@ -716,22 +720,42 @@ func _cmd_charlib(_args: PackedStringArray) -> void:
 		return
 	panel.open()
 
-# save   存下目前世界裡每個角色 + 這個世界本身。驗證 SaveService 的讀寫
-# 進出點確實接得起來（#21）——真正該在什麼時機自動存檔（睡前等）是後續 issue
-func _cmd_save(_args: PackedStringArray) -> void:
-	var count := 0
-	for node in get_tree().get_nodes_in_group("characters"):
-		var character := node as Character
-		if SaveService.save_character(character.character_id, character.get_save_data()):
-			count += 1
-		else:
-			_error("存檔失敗：%s" % character.character_name)
+# embody <id>   投放角色庫裡的一筆為玩家操控的化身角色（deploy_from_library
+# 的 as_player=true 分支，#371）。角色庫 id 沒有其他地方會印出來，沒帶參數
+# 或 id 錯誤時列出目前未投放的清單，不用先開 charlib 面板肉眼找
+func _cmd_embody(args: PackedStringArray) -> void:
+	if args.size() == 1:
+		var character := GameManager.deploy_from_library(args[0], true)
+		if character != null:
+			_print("[color=88ff88]化身角色 %s[/color][color=888888]  id %s[/color]" % [
+				_escape_bbcode(character.character_name), character.character_id
+			])
+			return
+		_error("投放失敗（id 不存在／已投放／世界投放上限已滿）")
 
-	if not SaveService.save_world(GameManager.DEFAULT_WORLD_ID, GameManager.get_world_save_data()):
+	var listed := false
+	for entry in GameManager.character_library:
+		if entry.get("deployed", false):
+			continue
+		if not listed:
+			_error("embody <id>，可用：")
+			listed = true
+		_print("  [color=888888]%s[/color]  %s" % [entry["id"], _escape_bbcode(entry["character_name"])])
+	if not listed:
+		_error("embody <id>（角色庫沒有未投放的角色，先用 charnew 建一個）")
+
+# save   存下目前世界裡每個角色 + 這個世界本身。實際存哪些東西走
+# GameManager.save_all()（#359），跟跨遊戲日／離開遊戲的自動存檔共用同一套邏輯
+func _cmd_save(_args: PackedStringArray) -> void:
+	var result := GameManager.save_all()
+	for character_name in result["character_failures"]:
+		_error("存檔失敗：%s" % character_name)
+
+	if not result["world_ok"]:
 		_error("世界存檔失敗：%s" % GameManager.DEFAULT_WORLD_ID)
 		return
 
-	_print("[color=88ff88]已存檔[/color]  %d 個角色 + 世界 %s" % [count, GameManager.DEFAULT_WORLD_ID])
+	_print("[color=88ff88]已存檔[/color]  %d 個角色 + 世界 %s" % [result["character_count"], GameManager.DEFAULT_WORLD_ID])
 
 # load   讀回世界本身 + 場景裡目前每個角色各自的存檔。只套用場景裡找得到的
 # 角色——存檔裡有記載但場景沒有的角色不會被生出來，那是 player 加入世界
@@ -1052,6 +1076,7 @@ func _cmd_ai(args: PackedStringArray) -> void:
 		"calls": usage["calls_today"],
 		"max": usage["max_calls"],
 		"dialogue": usage["dialogue_today"],
+		"max_dialogue": usage["max_dialogue"],
 		"exempt": L10n.t("CON_AI_EXEMPT" if usage["dialogue_exempt"] else "CON_AI_NOT_EXEMPT"),
 		"cooldown": "%.0f" % usage["cooldown_left"],
 		"queued": usage["queued"],

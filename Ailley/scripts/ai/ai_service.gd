@@ -160,6 +160,16 @@ func reload_config_and_wait() -> void:
 		await readiness_batch_finished
 
 
+## _ready() 已經在飛的那一批探測做完就回來，不像 reload_config_and_wait()
+## 那樣重新觸發一整批新的 /models 請求（#357：main_scene.gd 開場只需要等
+## 一次「_ready() 那批」的結果，不需要為了等待就多打一輪重複的網路請求）。
+## 沒有任何一批在飛（探測已經做完，或 config 沒啟用因而從沒開始過）時
+## 立刻回，不會卡住
+func await_readiness_settled() -> void:
+	while _pending_readiness_count.has(_readiness_generation):
+		await readiness_batch_finished
+
+
 # 給 #357／debug 主控台查某個 provider 就不就緒。**只有空字串會退回
 # default_provider**，跟 AIConfig.get_provider() 同一個規則——名字打錯要讓
 # 呼叫端看見「查無此 provider」，不是靜默給錯的狀態
@@ -383,6 +393,7 @@ func get_usage(requester_id: String) -> Dictionary:
 		"max_calls": config.max_calls_per_game_day,
 		# 對話輪次不佔配額，但一樣是錢，所以分開報而不是不報
 		"dialogue_today": dialogue,
+		"max_dialogue": config.max_dialogue_calls_per_game_day,
 		"total_today": calls + dialogue,
 		"dialogue_exempt": config.dialogue_exempt,
 		"cooldown_left": maxf(0.0, config.min_interval_sec - elapsed / 1000.0),
@@ -398,6 +409,13 @@ func _is_exempt(policy: Policy) -> bool:
 
 func _check_rate_limit(requester_id: String, policy: Policy, skip_cooldown: bool = false) -> String:
 	if _is_exempt(policy):
+		# 豁免的是冷卻與「行程重排」那份配額，不是完全不設上限——對話輪次
+		# 沒有這條護欄的話，一場對話可以無限輪講下去，成本無上限（#395 提案，
+		# #434 落地）。0 代表不限，跟 max_calls_per_game_day 同一套慣例；
+		# 用 >= 不用 >，跟下面對 max_calls_per_game_day 的判斷式一致
+		if config.max_dialogue_calls_per_game_day > 0 \
+				and int(_dialogue_calls_today.get(requester_id, 0)) >= config.max_dialogue_calls_per_game_day:
+			return ERROR_DAILY_QUOTA
 		return ""
 
 	# 0 代表不限。設定檔可以把兩條限制各自關掉

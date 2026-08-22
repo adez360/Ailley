@@ -54,6 +54,10 @@ const WORK_PAYMENT := 50
 
 const BUY_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE 一樣的距離門檻，2 格
 
+## 力竭恢復門檻（#364）。stamina ≤ 0 觸發 exhausted，stamina > 此值時自動解除。
+## 待 #361 調校 ACTION_RECOVERY 的實際值後重新調整
+const EXHAUSTION_RECOVERY_THRESHOLD := 50.0
+
 ## buy_from() 的失敗原因碼，形狀比照 TALK_*／WORK_*。除了這五個，buy_from()
 ## 還會**原樣轉傳** Inventory 自己的原因碼（`NOT_ENOUGH`、`NO_SPACE`），
 ## 不在這裡重新取名——沒有必要跟 Inventory 的字典再對一次照
@@ -89,12 +93,18 @@ const DRINK_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 hydr
 
 ## 各飲品 item_id 喝下去回復多少 hydration。抄《規格書 08》§3-2「口渴回復」欄位
 ## 取絕對值，理由跟 EAT_SATIETY_RECOVERY 一樣（改名前 thirst 越低越好，
-## P-32 改成 hydration 越高越好之後方向反過來、數字不變）。ale 喝下去也會
-## 加 alcohol，那條線是 #165 的範圍，這裡先不接
+## P-32 改成 hydration 越高越好之後方向反過來、數字不變）
 const DRINK_HYDRATION_RECOVERY := {
 	"water": 40.0,
 	"ale": 20.0,
 	"spirit": 10.0,
+}
+
+## 含酒精飲品喝下去加多少 alcohol，抄《規格書 08》§3-2「alcohol」欄位（#165）。
+## 查不到（例如 water）就是 0，同一種「保守回 0」規則跟 EAT_SATIETY_RECOVERY 一樣
+const DRINK_ALCOHOL_RECOVERY := {
+	"ale": 25.0,
+	"spirit": 45.0,
 }
 
 const GIVE_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE 一樣的距離門檻，2 格
@@ -129,6 +139,37 @@ const ATTACK_TOO_FAR := "TOO_FAR"
 ## 不像 steal／persuade 等動作走 agent.gd 的 SUCCESS_PARAMS 擲骰
 const ATTACK_HEALTH_DELTA := -15.0
 const ATTACK_INJURY_DELTA := 20.0
+
+## 失敗原因碼 → L10n key（issue #180）。上面 TALK_*／WORK_*／BUY_*／EAT_*／
+## DRINK_*／GIVE_*／HAUL_*／ATTACK_* 與 inventory.gd 的 ADD_*／REMOVE_*／
+## USE_*／MONEY_* 本來就是共用同一組扁平字串詞彙（TOO_FAR、TARGET_NOT_FOUND、
+## NO_SPACE…橫跨全部行為，不是各行為各自一組獨立代碼），一張表就夠、不用
+## 按行為分開維護——give／persuade／shout／eat／drink 之後要顯示失敗原因，
+## 直接呼叫 report_action_failure() 就有，不用回來加這張表
+const FAILURE_MESSAGE_KEYS := {
+	"TARGET_NOT_FOUND": "FAIL_TARGET_NOT_FOUND",
+	"TARGET_IS_SELF": "FAIL_TARGET_IS_SELF",
+	"TOO_FAR": "FAIL_TOO_FAR",
+	"TARGET_BUSY": "FAIL_TARGET_BUSY",
+	"TARGET_UNINTERRUPTIBLE": "FAIL_TARGET_UNINTERRUPTIBLE",
+	"TARGET_NOT_VISIBLE": "FAIL_TARGET_NOT_VISIBLE",
+	"OCCUPIED": "FAIL_OCCUPIED",
+	"BUSY": "FAIL_BUSY",
+	"ITEM_NOT_FOUND": "FAIL_ITEM_NOT_FOUND",
+	"NO_INVENTORY": "FAIL_NO_INVENTORY",
+	"NO_FOOD": "FAIL_NO_FOOD",
+	"NO_DRINK": "FAIL_NO_DRINK",
+	"NO_STATS": "FAIL_NO_STATS",
+	"NOT_FOUND": "FAIL_NOT_FOUND",
+	"INVALID_COUNT": "FAIL_INVALID_COUNT",
+	"NOT_CONSUMABLE": "FAIL_NOT_CONSUMABLE",
+	"INVALID_STATS": "FAIL_INVALID_STATS",
+	"INVALID_EFFECT": "FAIL_INVALID_EFFECT",
+	"REMOVE_FAILED": "FAIL_REMOVE_FAILED",
+	"NOT_ENOUGH": "FAIL_NOT_ENOUGH",
+	"INVALID_AMOUNT": "FAIL_INVALID_AMOUNT",
+	"NO_SPACE": "FAIL_NO_SPACE",
+}
 
 ## 滑鼠指到時套在 sprite 上的描邊
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
@@ -326,6 +367,14 @@ static func generate_id() -> String:
 func _resolve_generated_id() -> String:
 	return generate_id()
 
+# character_id 被 _ensure_unique_id() 換掉時呼叫，預設 no-op。Player 覆寫這個
+# hook 把新 id 同步寫回 _resolve_generated_id() 額外持久化的檔案，不然下次
+# _resolve_generated_id() 還是讀到那組已經被撞掉、不再代表這個 Player 的
+# 舊 id（issue #438）——沒有額外持久化的子類別（Agent／動態生成角色）沒有
+# 檔案要同步，撞號換掉就換掉
+func _on_id_changed(_new_id: String) -> void:
+	pass
+
 # 撞 id 的兩隻會共用同一份關係與記憶（relationships.gd 拿 id 當 key），
 # 所以這裡換掉一個，而不是印完錯誤照樣讓兩隻共用。
 # 生成的 id 不會撞，會走到這裡的是場景裡手寫重複，或日後讀進壞掉的存檔
@@ -337,6 +386,7 @@ func _ensure_unique_id() -> void:
 		push_error("Character id 重複：%s 已被 %s 用掉，%s 改用 %s" % [
 			taken, holder.name, name, character_id
 		])
+		_on_id_changed(character_id)
 		holder = _find_id_holder(character_id)
 
 # 佔用這個 id 的節點，沒人用回 null。回節點而不是 bool 是為了讓訊息講得出
@@ -363,6 +413,7 @@ func _on_game_minute(_hour: int, _minute: int) -> void:
 	# 昏迷與治療檢查每遊戲分鐘執行（與 GameClock.time_changed 同步）
 	_update_incapacitation()
 	_update_treatment()
+	_update_exhausted_condition()
 
 	# 情緒與其他 condition 在全局分鐘邊界執行（tick 機制，與 Stats 漂移同步）
 	if _minute % GameClock.GAME_MINUTES_PER_TICK == 0:
@@ -414,10 +465,37 @@ func has_condition(type: String) -> bool:
 			return true
 	return false
 
-func _set_condition(type: String, present: bool) -> void:
+func _get_condition_display_name(type: String) -> String:
+	match type:
+		CONDITION_INJURED:
+			return "受傷"
+		CONDITION_BLEEDING:
+			return "流血"
+		CONDITION_DRUNK:
+			return "醉酒"
+		CONDITION_STARVING:
+			return "饑餓"
+		CONDITION_DEHYDRATED:
+			return "缺水"
+		CONDITION_EXHAUSTED:
+			return "疲勞"
+		CONDITION_SLEEPY:
+			return "困倦"
+		CONDITION_FILTHY:
+			return "骯髒"
+		CONDITION_INCAPACITATED:
+			return "昏迷"
+		_:
+			return type
+
+func _set_condition(type: String, present: bool, record_event: bool = true) -> void:
 	var had := has_condition(type)
 	if present and not had:
 		conditions.append({"type": type, "turns_left": -1})
+		# 记录进入新状态的事件
+		if record_event and is_in_group("agents"):
+			var condition_name := _get_condition_display_name(type)
+			(self as Agent)._push_daily_event("你開始%s。" % condition_name)
 	elif not present and had:
 		conditions = conditions.filter(func(c): return c["type"] != type)
 
@@ -440,7 +518,6 @@ func _update_conditions() -> void:
 	_set_condition(CONDITION_DRUNK, stats.get_value("alcohol") > 30.0)
 	_set_condition(CONDITION_STARVING, stats.get_value("satiety") < 10.0)
 	_set_condition(CONDITION_DEHYDRATED, stats.get_value("hydration") < 10.0)
-	_set_condition(CONDITION_EXHAUSTED, stats.get_value("stamina") <= 0.0)
 	_set_condition(CONDITION_SLEEPY, stats.get_value("wakefulness") < 15.0)
 	_set_condition(CONDITION_FILTHY, stats.get_value("hygiene") < 20.0)
 
@@ -457,6 +534,21 @@ func _update_conditions() -> void:
 	if has_condition(CONDITION_DEHYDRATED):
 		stats.add("health", -1.0)
 	stats.injury_decay_paused = has_condition(CONDITION_BLEEDING)
+
+## exhausted 的觸發與解除邏輯（#364）。不同於其他生理衍生狀態的簡單門檻，
+## exhausted 需要一個恢復門檻（stamina <= 0 時觸發，stamina > 門檻時解除）。
+## 門檻值待 #361 調校後調整
+func _update_exhausted_condition() -> void:
+	if stats == null:
+		return
+	var stamina := stats.get_value("stamina")
+
+	# 觸發：stamina 歸零且尚未 exhausted
+	if stamina <= 0.0 and not has_condition(CONDITION_EXHAUSTED):
+		_set_condition(CONDITION_EXHAUSTED, true)
+	# 解除：stamina 恢復到門檻且已經 exhausted
+	elif stamina > EXHAUSTION_RECOVERY_THRESHOLD and has_condition(CONDITION_EXHAUSTED):
+		_set_condition(CONDITION_EXHAUSTED, false)
 
 ## 開始昏迷（health ≤ 0 觸發）。記錄開始時間，30 分鐘內若無人搬走則自動傳送藥草鋪
 ## （《99》P-27，搬走邏輯依賴 #161 haul/struggle）
@@ -585,7 +677,7 @@ func _complete_treatment() -> void:
 		stats.set_value("alcohol", 0.0)		# 清除酒精
 		stats.set_value("satiety", 50.0)	# 恢復飽食度
 		stats.set_value("hydration", 50.0)	# 恢復水分
-		stats.set_value("stamina", 50.0)	# 恢復體力
+		stats.set_value("stamina", EXHAUSTION_RECOVERY_THRESHOLD + 1.0)	# 恢復體力，超過力竭恢復門檻
 		stats.set_value("wakefulness", 50.0)	# 恢復清醒度
 		stats.set_value("hygiene", 50.0)	# 恢復衛生
 
@@ -721,6 +813,22 @@ func say(line: String, interrupt: bool = false) -> void:
 		bubble.clear()
 	bubble.say(line)
 	spoke.emit(line)
+
+## 行為失敗時統一的回報方式（issue #180），取代原本三個呼叫點（player.gd
+## 的 work_at／talk_to、vending_menu.gd 的 buy_from）各自手寫的
+## push_warning——格式收進這裡一次，之後 give／persuade／shout／eat／drink
+## 等動作要回報失敗，呼叫這個就有，不用各自重寫一份。reason 是 OK（空字串）
+## 不該傳進來，呼叫端本來就要先判斷過
+##
+## FAILURE_MESSAGE_KEYS 查不到就直接顯示原始碼——寧可暴露一個沒翻過的
+## 識別字，也不要吞掉錯誤讓玩家完全看不到任何反應，跟在地化系統本身
+## 「key 不存在就顯示 KEY 本身」同一種「看得出來哪裡漏了」的設計
+## （見 note/技術/在地化.md）
+func report_action_failure(action_label: String, reason: String) -> void:
+	push_warning("%s: %s 失敗（%s）" % [character_name, action_label, reason])
+
+	var key: String = FAILURE_MESSAGE_KEYS.get(reason, "")
+	say(L10n.t(key) if not key.is_empty() else reason)
 
 ## 這個角色對話中的下一句話由誰產生、內容是什麼。基底不知道答案——
 ## 本機玩家要等打字（見 player.gd），本機 Agent 要打 AIService（見 agent.gd），
@@ -979,6 +1087,7 @@ func drink() -> String:
 		return DRINK_NO_DRINK
 
 	stats.add("hydration", DRINK_HYDRATION_RECOVERY.get(item_id, 0.0))
+	stats.add("alcohol", DRINK_ALCOHOL_RECOVERY.get(item_id, 0.0))
 	return DRINK_OK
 
 
@@ -1199,6 +1308,7 @@ func get_save_data() -> Dictionary:
 		# 性格漂移不該因為重開就被重置回建角當下的原始值——跟 today_plan「跨天
 		# 承諾不該憑空消失」同一個道理（見 note/技術/存檔.md）
 		"personality": personality.duplicate(true),
+		"is_exhausted": has_condition(CONDITION_EXHAUSTED),
 	}
 
 	if stats != null:
@@ -1247,7 +1357,7 @@ func load_save_data(data: Dictionary) -> void:
 	# 治療與昏迷互斥（見 _send_to_herb_shop_for_treatment()），治療中的存檔優先還原成治療狀態，
 	# 不重建 CONDITION_INCAPACITATED；只有「昏迷中但還沒送醫」才需要重建
 	if _incapacitation_start_minute != -1 and _treatment_start_minute == -1:
-		_set_condition(CONDITION_INCAPACITATED, true)
+		_set_condition(CONDITION_INCAPACITATED, true, false)
 
 	# is Dictionary 而不是只看 has()——壞掉的存檔把 stats/relationships 存成
 	# 別的型別時，直接把值傳給下面兩個型別化參數的函式會是執行期型別錯誤，
@@ -1256,6 +1366,14 @@ func load_save_data(data: Dictionary) -> void:
 		stats.load_save_data(data["stats"])
 	if relationships != null and data.get("relationships", null) is Dictionary:
 		relationships.load_save_data(data["relationships"])
+
+	# 獨立還原力竭狀態（不依賴 stats 存在，處理沒有 Stats 節點的角色，也處理
+	# stamina = 1-50 這種邊界情況）。新存檔有 is_exhausted 欄位則直接還原，
+	# 舊存檔沒有這個欄位、但有 stats 可用時才由 stamina 推斷
+	if data.has("is_exhausted"):
+		_set_condition(CONDITION_EXHAUSTED, data["is_exhausted"])
+	elif stats != null:
+		_update_exhausted_condition()
 
 	# 沒有存檔資料時維持 _ready() 已經由 Personality.from_identity() 組好的值，
 	# 不清空——跟 stats／relationships 同一個理由，personality 不是每次都
@@ -1510,6 +1628,12 @@ func start_haul(target: Character) -> String:
 	_hauling_target = target
 	_speed_multiplier = HAUL_SPEED_MULTIPLIER
 	target.set_being_carried(true)		# #271: 通知昏迷機制
+
+	if is_in_group("agents"):
+		(self as Agent)._push_daily_event("你搬運了%s。" % target.character_name, [target.character_id])
+	if target.is_in_group("agents"):
+		(target as Agent)._push_daily_event("你被%s搬運了。" % character_name, [character_id])
+
 	return HAUL_OK
 
 func stop_haul() -> void:
@@ -1519,6 +1643,10 @@ func stop_haul() -> void:
 		# 雙人搬運時（《99》P-27 #8），其中一人放手不該讓另一人還在搬的目標被標記成沒人搬
 		if not target.is_being_hauled():
 			target.set_being_carried(false)		# #271: 通知昏迷機制
+			if is_in_group("agents"):
+				(self as Agent)._push_daily_event("你放開了%s。" % target.character_name, [target.character_id])
+			if target.is_in_group("agents"):
+				(target as Agent)._push_daily_event("你掙脫了搬運。")
 		_hauling_target = null
 	_speed_multiplier = 1.0
 

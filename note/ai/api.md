@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-20
+updated: 2026-08-22
 ---
 
 # api
@@ -441,9 +441,6 @@ hygiene      清潔     0.5    0       70     ✗        ""
 alcohol      酒精濃度 3.0    0       0      ✗        ""
 health       生命值   0.0    100     100    ✗        ""
 injury       傷勢     0.5    0       0      ✗        ""
-social       社交     0.5    0       100    ✓        square
-fun          娛樂     0.2    0       100    ✓        square
-mood         心情     0.5    50      50     ✗        ""
 
 † 加一項數值 = SPEC 加一列，其餘程式全不用改（含主控台 status 顯示）
 † drift 是每 tick（`GameClock.GAME_MINUTES_PER_TICK`＝10 遊戲分鐘）往 toward 靠近多少，
@@ -815,7 +812,7 @@ envelope  system:String          人格/規則/輸出 schema/動作白名單
           model:String           選填，覆寫設定
           response_format:Dict   選填 json_schema；provider.supports_json_schema 為 false 時不送
 provider_name 空字串 -> AIConfig.default_provider；打錯名字回 ERROR_NO_PROVIDER，不會靜默轉去別的服務
-get_usage -> {game_day, calls_today, max_calls, dialogue_today, total_today,
+get_usage -> {game_day, calls_today, max_calls, dialogue_today, max_dialogue, total_today,
               dialogue_exempt, cooldown_left, queued, in_flight}
 
 † 全專案唯一碰網路的地方 ⇒ 成本上限/金鑰/防注入入口只有一處要顧
@@ -824,6 +821,8 @@ get_usage -> {game_day, calls_today, max_calls, dialogue_today, total_today,
 † 用真實秒不用遊戲時間（要擋的帳單與 provider rate limit 都活在真實時間）
 † 金鑰只在組 Authorization header 時碰得到，其餘一律過 _scrub()
 † CONVERSATION 豁免冷卻/配額但照樣計數（_dialogue_calls_today）——豁免的是限制不是帳
+† 豁免成立時另外吃 max_dialogue_calls_per_game_day（count >= max 就 ERROR_DAILY_QUOTA，0=不限，#434）——
+  這個旋鈕只在 dialogue_exempt=true 時有意義，false 時對話走一般 max_calls_per_game_day 路徑
 † is_retry=true 只跳過 min_interval_sec 冷卻，不跳過每日配額——同一次決策內容驗證
   失敗重試（agent.gd::_decide_with_retry()）用，SCHEDULED policy 沒有 CONVERSATION
   那種豁免，重試間隔只有幾秒，不加這個會被自己剛送出的呼叫冷卻擋死
@@ -900,6 +899,7 @@ const DEFAULT_TIMEOUT := 10.0
 const DEFAULT_MIN_INTERVAL_SEC := 30.0
 const DEFAULT_MAX_CALLS_PER_GAME_DAY := 20
 const DEFAULT_DIALOGUE_EXEMPT := true
+const DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY := 30    # 只在 dialogue_exempt=true 時有意義，#434
 const MASK_KEEP := 4
 
 class Provider extends RefCounted:
@@ -911,7 +911,7 @@ class Provider extends RefCounted:
 
 var enabled := false · status_reason · default_provider := ""
 var providers := {}                          # 名字 -> Provider，可同時併用多個具名端點
-var min_interval_sec · max_calls_per_game_day · dialogue_exempt      # 全域，不分 provider
+var min_interval_sec · max_calls_per_game_day · dialogue_exempt · max_dialogue_calls_per_game_day      # 全域，不分 provider
 
 static func load_from_user() -> AIConfig     # 讀不到→enabled=false 的物件
 func get_provider(provider_name: String) -> Provider   # 只有空字串會退回 default_provider，打錯名字回 null

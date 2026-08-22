@@ -102,8 +102,9 @@ const PLAN_SYSTEM_TAIL_TEMPLATE := """
 "expires_in_minutes" is optional: how many game minutes from now this task should still be worth doing before it's no longer relevant (e.g. an appointment you're setting up for later today). It must be an integer between %d and %d. Omit it for tasks you intend to act on right away.
 "emotion" is required every time — it's the only inner state you get to declare yourself. Set "type" to whichever of these fits best right now: %s (use "neutral" if nothing stands out), and "intensity" (0-100) to how strong it is. Base it on your personality and what just happened to you, not on some neutral default. Do not include a duration — how long it lasts is not yours to decide.
 "current_goal" is optional: a short label (a few words, not a sentence) for the one thing you most want to accomplish right now. Omit it if nothing's changed since last time. Once you've accomplished it, or it's no longer something you're pursuing, send an empty string "" to clear it — don't just stop mentioning it, since omitting the field only means "no change."
+"reasoning" must be written first, before you decide on "tasks" — think it through here, then decide, not the other way around. In at most %d characters, walk through: what's the biggest problem right now, what options could address it, which one you're picking, and why — a complete cause-and-effect chain (e.g. "A isn't working, so I need B"), not a list of every option you considered.
 Reply with JSON only, no prose, no code fence:
-{"reasoning": "<why you decided this, brief>",
+{"reasoning": "<problem, options, choice, why — one causal chain, %d chars max>",
  "inner_monologue": "<what this character is thinking right now, first person>",
  "request_plan_update": <true if you want the chance to rewrite today_plan next time, else false>,
  "emotion": {"type": "<one of the 8 listed emotions>", "intensity": 50},
@@ -135,6 +136,7 @@ static func _plan_system_tail() -> String:
 		int(AISchema.MAX_TASK_DURATION),
 		AISchema.MIN_EXPIRES_IN_MINUTES, AISchema.MAX_EXPIRES_IN_MINUTES,
 		", ".join(Character.EMOTION_TYPES),
+		int(AISchema.MAX_REASONING_CHARS), int(AISchema.MAX_REASONING_CHARS),
 	]
 
 ## 動作清單用 AISchema.IMPLEMENTED_ACTIONS 動態組（#341），不是 ALLOWED_ACTIONS——
@@ -257,8 +259,12 @@ static func build_reflection_envelope(character: Character, daily_events: Array[
 
 ## speaker 是要開口的那一方（一定是本機 Agent，玩家的台詞不經過這裡）。
 ## listener 是對話的另一方。turns 是目前為止的逐輪紀錄，形狀見 _turn_entry()。
+## location_id 是 speaker 目前所在地點（呼叫端的 current_place），給
+## _memory_block() 做連結展開篩選用（#360）——listener 本身就是在場角色，
+## 直接算進篩選條件，不用呼叫端額外組一份 present_npc_ids
 static func build_dialogue_envelope(
-	speaker: Character, listener: Character, turns: Array[Dictionary], max_turns: int
+	speaker: Character, listener: Character, turns: Array[Dictionary], max_turns: int,
+	location_id: String = ""
 ) -> Dictionary:
 	return {
 		"system": _system(speaker, DIALOGUE_SYSTEM),
@@ -269,7 +275,9 @@ static func build_dialogue_envelope(
 				"listener": _listener_block(speaker, listener),
 				"turns": turns,
 				"max_turns": max_turns,
-				"memory": _memory_block(speaker),
+				"memory": _memory_block(
+					speaker, [listener.character_id] as Array[String], location_id
+				),
 			},
 		},
 	}
@@ -293,15 +301,21 @@ static func turn_entry(speaker_name: String, text: String) -> Dictionary:
 ## （#227），跟 pool／today_plan 一樣由呼叫端整理好再傳進來，這個檔案不伸進
 ## agent.gd 內部欄位。has_pending_persuade 決定要不要把 persuaded／
 ## importance／valence 這組條件式欄位放進 schema，跟 allow_update_plan
-## 是同一種「文法層面就不存在這個選項」的做法，不是叫模型不要填
+## 是同一種「文法層面就不存在這個選項」的做法，不是叫模型不要填。
+## location_id 是 character 目前所在地點（呼叫端的 current_place），給
+## _memory_block() 做連結展開篩選用（#360）——present_npc_ids 直接從
+## visible 取 character_id，不用呼叫端另外組一份
 static func build_plan_envelope(
 	character: Character, visible: Array[Character], pool: Array[Dictionary],
 	today_plan: Array[Dictionary], allow_update_plan: bool,
-	fact_lines: Array[String] = [], has_pending_persuade: bool = false
+	fact_lines: Array[String] = [], has_pending_persuade: bool = false,
+	location_id: String = ""
 ) -> Dictionary:
 	var visible_block: Array[Dictionary] = []
+	var present_npc_ids: Array[String] = []
 	for other in visible:
 		visible_block.append(_listener_block(character, other))
+		present_npc_ids.append(other.character_id)
 
 	return {
 		"system": _system(character, _plan_system(allow_update_plan, has_pending_persuade)),
@@ -313,7 +327,7 @@ static func build_plan_envelope(
 				"pool": pool,
 				"today_plan": _today_plan_sentence(today_plan),
 				"fact_lines": fact_lines,
-				"memory": _memory_block(character),
+				"memory": _memory_block(character, present_npc_ids, location_id),
 			},
 		},
 		"response_format": AISchema.plan_response_schema(allow_update_plan, has_pending_persuade),
@@ -395,8 +409,8 @@ static func _conditions_summary(conditions: Array) -> Array[String]:
 		types.append(str(condition.get("type", "")))
 	return types
 
-## dialogue 與 plan 共用的角色自身區塊。直接沿用 get_state_snapshot()——
-## 兩邊都不該重新蒐集一次同一批資料，見 character.gd 的說明
+## dialogue／plan／reflection 共用的角色自身區塊。直接沿用 get_state_snapshot()——
+## 三邊都不該重新蒐集一次同一批資料，見 character.gd 的說明
 static func _self_block(character: Character) -> Dictionary:
 	var snapshot := character.get_state_snapshot()
 	var schedule: Dictionary = snapshot.get("schedule", {})
@@ -409,7 +423,11 @@ static func _self_block(character: Character) -> Dictionary:
 		# 這些生理數值，只是剛好都是中性，跟「這個角色根本沒有生理狀態可讀」
 		# 是兩件不同的事（CodeRabbit review 抓到）
 		"stats": _physical_summary(snapshot["stats"]) if snapshot.has("stats") else {},
-		"time": {"hour": GameClock.hour, "minute": GameClock.minute},
+		# day（#496）：引擎自己有 GameClock.day 可讀，原本沒送進 payload，
+		# AI 完全沒有日期基準做跨日推理（估算睡了幾小時、算「上次見到某人是
+		# 幾天前」）。單純多送一個客觀數字，要不要在意、算不算久交給 AI 自己
+		# 判斷，不額外加事實句或標籤（《00》原則二）
+		"time": {"day": GameClock.day, "hour": GameClock.hour, "minute": GameClock.minute},
 		"place": schedule.get("place", ""),
 		"current_action": schedule.get("state", ""),
 		# resolve()（#120）判定結果，中文自然語言，成功是空字串。沒有這欄的話
@@ -432,12 +450,18 @@ static func _self_block(character: Character) -> Dictionary:
 		"current_goal": snapshot.get("current_goal", ""),
 	}
 
-## L2（近期）＋ L4（核心）記憶固定全量帶入，不做情境篩選（#169，《99》P-03
-## 方案 A，語意檢索屬完整版才需要）。放進 context 不是 system——system 段要
-## 逐字元不變才能吃到 provider 的 prompt cache，記憶會隨事件變動，放這裡才對。
-## 只帶 content 字串，不帶 valence/importance/decay_value 這些引擎內部欄位——
-## 模型只需要「記得什麼」，不需要知道引擎怎麼替這則記憶打分
-static func _memory_block(character: Character) -> Dictionary:
+## L2（近期）依連結展開篩選、L4（核心）固定全量帶入（#360，《13》§三 MVP-1，
+## 取代原本 L2/L4 全量倒出的方案 A）。L2 只在「related_npcs 跟在場角色有交集」
+## 或「location_id 等於目前所在地點」時才帶入——L4 核心記憶不論情境一律帶入
+## （《03》§3：核心記憶永不遺忘，本來就該常駐）。present_npc_ids／location_id
+## 由呼叫端整理好傳進來（跟 pool／today_plan／fact_lines 同一種做法，這個檔案
+## 不伸進 agent.gd 內部欄位讀 current_place）。放進 context 不是 system——
+## system 段要逐字元不變才能吃到 provider 的 prompt cache，記憶會隨事件變動，
+## 放這裡才對。只帶 content 字串，不帶 valence/importance/decay_value 這些
+## 引擎內部欄位——模型只需要「記得什麼」，不需要知道引擎怎麼替這則記憶打分
+static func _memory_block(
+	character: Character, present_npc_ids: Array[String], location_id: String
+) -> Dictionary:
 	if character.memory == null:
 		return {"recent": [], "core": []}
 
@@ -445,12 +469,25 @@ static func _memory_block(character: Character) -> Dictionary:
 
 	var recent: Array[String] = []
 	for entry in buckets[2]:
+		var related: Array = entry.get("related_npcs", [])
+		var linked_by_npc := false
+		for npc_id in related:
+			if present_npc_ids.has(npc_id):
+				linked_by_npc = true
+				break
+		var linked_by_place: bool = (
+			not location_id.is_empty() and entry.get("location_id", "") == location_id
+		)
+		if not linked_by_npc and not linked_by_place:
+			continue
+
 		recent.append(entry["content"])
 		# 《03》§4-2：被檢索到的記憶補回 decay_value（上限 DECAY_MAX），
 		# 否則這些記憶持續影響對話/決策卻照常衰減、終被刪除（CodeRabbit
 		# PR #200 抓到）。buckets 裡是 entries 的同一個 Dictionary 參照
 		# （get_by_levels 只分桶不複製），mark_retrieved 的改動會回饋回真正
-		# 存著的那一筆。L4 不衰減，不需要標
+		# 存著的那一筆。只對真的被選中帶入的這幾條標記，不是整桶（#360）。
+		# L4 不衰減，不需要標
 		character.memory.mark_retrieved(entry)
 
 	var core: Array[String] = []
