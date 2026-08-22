@@ -170,8 +170,16 @@ static func _write_default_config() -> bool:
 		push_error("AIConfig: 無法建立預設設定檔 %s（錯誤碼 %d）" % [CONFIG_PATH, FileAccess.get_open_error()])
 		return false
 
-	file.store_string(JSON.stringify(default_data, "\t"))
+	# store_string() 回傳 bool，忽略它的話寫入失敗（例如磁碟滿）時仍會回傳
+	# true，留下一份寫壞的 CONFIG_PATH——下次 load_from_user() 檢查
+	# file_exists() 會判定「有檔案」，改去解析出 AI_STATUS_BAD_JSON，而不是
+	# 停在原本「檔案不存在」該有的 disabled 狀態（CodeRabbit review 抓到）
+	var write_ok := file.store_string(JSON.stringify(default_data, "\t"))
 	file.close()
+	if not write_ok:
+		push_error("AIConfig: 寫入預設設定檔 %s 失敗" % CONFIG_PATH)
+		DirAccess.remove_absolute(CONFIG_PATH)
+		return false
 	return true
 
 
