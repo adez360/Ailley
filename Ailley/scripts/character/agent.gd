@@ -121,6 +121,15 @@ var _pursued_place := ""
 # 變成每秒一次的卡住／放棄迴圈
 var _pursuit_done := false
 
+# buy 任務目前追的販賣機世界座標。_is_own_pursuit_target() 預設只認
+# current_place 對應的錨點座標，販賣機是場景節點的 global_position、
+# 不是任何一個 place 錨點——不額外記這個的話，_check_stuck() 卡住時發出的
+# move_finished(false) 會被 _is_own_pursuit_target() 判定「不是我要的」而
+# 吞掉，_pursuit_done 永遠設不成 true，變成每秒一次的卡住／重試迴圈
+# （CodeRabbit review 抓到，跟 give／talk 目標不是 current_place 錨點時
+# 同一類問題，見上面 _give_pursuit_stuck_ticks 的說明）
+var _buy_pursuit_target := Vector2.ZERO
+
 # talk 任務用的卡住偵測（#90）。目標是會動的角色，每次重算都要重新
 # move_to()，不能沿用上面 _pursued_place／_pursuit_done 那套「地點沒換就不
 # 重下指令」的節流——但這也表示不能靠 Character._stuck_timer：那個計時器在
@@ -439,8 +448,11 @@ func _on_move_finished(_reached: bool) -> void:
 	_pursuit_done = true
 
 # 判斷某個世界座標是不是仲裁器目前追的那個地點——ARRIVE_DISTANCE 當容許誤差，
-# 跟 _has_arrived_at() 判定「站得夠近」用同一個標準
+# 跟 _has_arrived_at() 判定「站得夠近」用同一個標準。buy 的販賣機目標不是
+# place 錨點，額外比對 _buy_pursuit_target（CodeRabbit review 抓到）
 func _is_own_pursuit_target(world_position: Vector2) -> bool:
+	if current_state == "buy" and world_position.distance_to(_buy_pursuit_target) <= ARRIVE_DISTANCE:
+		return true
 	if current_place.is_empty():
 		return false
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
@@ -2007,6 +2019,7 @@ func _pursue_buy_task() -> void:
 			return
 		_pursued_place = current_place
 		_pursuit_done = false
+		_buy_pursuit_target = machine.global_position
 		if not move_to(machine.global_position):
 			push_warning("Agent %s: 走不到販賣機 %s" % [character_name, place])
 			_pursuit_done = true
