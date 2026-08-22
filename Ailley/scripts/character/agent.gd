@@ -1905,7 +1905,13 @@ func _pursue_work_task() -> void:
 	if anchors == null or current_place.is_empty() or not anchors.has(current_place):
 		last_action_result = Character.WORK_TARGET_NOT_FOUND
 		push_warning("Agent %s: work 失敗（無法解析地點 %s）" % [character_name, current_place])
+		# 完整重設追逐狀態，不然下一筆任務可能沿用舊路徑，或被追逐節流
+		# 誤判成已經處理過（CodeRabbit review 抓到）
+		stop_moving()
+		_pursued_place = ""
+		_pursuit_done = false
 		_current_task = {}
+		current_place = ""
 		current_state = "idle"
 		return
 
@@ -1913,13 +1919,17 @@ func _pursue_work_task() -> void:
 
 	# 還沒到達就先走過去
 	if not _has_arrived_at(target):
-		# 這一趟只起步一次，沒換地點就繼續走（同 _pursue_current_task 的邏輯）
-		if current_place != _pursued_place or not is_moving():
-			_pursued_place = current_place
-			_pursuit_done = false
-			if not move_to(target):
-				push_warning("Agent %s: 走不到工作地點 %s" % [character_name, current_place])
-				_pursuit_done = true
+		# 地點沒換的話這一趟只起步一次：還在走就繼續走，已經有結論（含
+		# move_to() 失敗）也不要再試——原本的守衛條件反過來寫，move_to()
+		# 失敗、is_moving() 仍是 false 時下一輪又會重複呼叫、重複噴警告
+		# （CodeRabbit review 抓到）。跟 _pursue_buy_task() 同一套收斂邏輯
+		if current_place == _pursued_place and (is_moving() or _pursuit_done):
+			return
+		_pursued_place = current_place
+		_pursuit_done = false
+		if not move_to(target):
+			push_warning("Agent %s: 走不到工作地點 %s" % [character_name, current_place])
+			_pursuit_done = true
 		return
 
 	# 已到達工作地點，找工作站並執行 work_at()
@@ -1988,12 +1998,15 @@ func _pursue_buy_task() -> void:
 
 	# 還沒到達就先走過去
 	if not _has_arrived_at(machine.global_position):
-		if current_place != _pursued_place or not is_moving():
-			_pursued_place = current_place
-			_pursuit_done = false
-			if not move_to(machine.global_position):
-				push_warning("Agent %s: 走不到販賣機 %s" % [character_name, place])
-				_pursuit_done = true
+		# 同 _pursue_work_task() 的收斂邏輯：已有結論就不要重試
+		# （CodeRabbit review 抓到）
+		if current_place == _pursued_place and (is_moving() or _pursuit_done):
+			return
+		_pursued_place = current_place
+		_pursuit_done = false
+		if not move_to(machine.global_position):
+			push_warning("Agent %s: 走不到販賣機 %s" % [character_name, place])
+			_pursuit_done = true
 		return
 
 	# 已到達販賣機位置，執行購買
