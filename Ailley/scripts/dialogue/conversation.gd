@@ -139,7 +139,12 @@ func _finish_with_fallback(speaker: Character, listener: Character) -> void:
 	# next_line() 裡的 await 讓出過控制權，speaker/listener 理論上可能在這段
 	# 期間被移出場景（跟 _process() 的 is_instance_valid 檢查是同一種顧慮）
 	if is_instance_valid(speaker) and is_instance_valid(listener):
-		_speak(speaker, DialogueLines.closing(), true)
+		var closing := DialogueLines.closing()
+		_speak(speaker, closing, true)
+		# fallback 收尾也是真的說出口的一句，沒算進 _turns 的話
+		# _finish() 判定「5 句以上深度對話」trust +2 時會少算這一句
+		# （CodeRabbit review 抓到）
+		_turns.append(PromptBuilder.turn_entry(speaker.character_name, closing))
 
 	_finish(REASON_ENDED_BY_SPEAKER)
 	queue_free()
