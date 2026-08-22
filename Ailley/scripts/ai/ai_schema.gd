@@ -342,6 +342,12 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 		var place: Variant = buy_params.get("place")
 		if not place is String or (place as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
+		# 只驗證去除前後空白後是不是空字串，但寫回 params 的仍是原始值——
+		# " tavern " 這種帶空白的合法輸入會通過驗證，後續卻對不上
+		# _find_vending_machine_at_place()／VendingMachine.get_price() 的
+		# 精確字串比對而找不到販賣機／物品（CodeRabbit review 抓到）
+		buy_params["item_id"] = (item_id as String).strip_edges()
+		buy_params["place"] = (place as String).strip_edges()
 
 	# #268／#290：expires_in_minutes（模型填的相對時長）現在有跟
 	# priority/duration 同一套量級上限，不再只有 is_finite()——
