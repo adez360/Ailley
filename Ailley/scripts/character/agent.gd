@@ -1967,6 +1967,11 @@ func _pursue_buy_task() -> void:
 
 	# 找不到販賣機：立即返回失敗
 	if not machine:
+		# 要先讀 source／id 再清空 _current_task——清空之後兩個 get() 都只會
+		# 讀到空字典的預設值，llm 任務永遠判斷不是 llm、也移除不掉，會卡在
+		# 池子裡讓 _reevaluate() 重複選到同一筆（CodeRabbit review 抓到）
+		var failed_task_source: String = str(_current_task.get("source", ""))
+		var failed_task_id: String = str(_current_task.get("id", ""))
 		push_warning("Agent %s: 找不到販賣機 %s" % [character_name, place])
 		_pursued_place = ""
 		_pursuit_done = false
@@ -1974,8 +1979,8 @@ func _pursue_buy_task() -> void:
 		current_place = ""
 		current_state = "idle"
 		last_action_result = Character.BUY_TARGET_NOT_FOUND
-		if _current_task.get("source", "") == "llm":
-			_remove_task(_current_task.get("id", ""))
+		if failed_task_source == "llm":
+			_remove_task(failed_task_id)
 		if llm_decision_enabled and not _awaiting_decision:
 			_request_next_decision(_today_plan_needs_new_goal())
 		_reevaluate()
