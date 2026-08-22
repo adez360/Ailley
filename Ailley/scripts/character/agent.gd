@@ -608,6 +608,7 @@ func _ready() -> void:
 
 	if vision != null:
 		vision.spotted.connect(_on_spotted)
+		vision.lost.connect(_on_lost)
 
 	noise_heard.connect(_on_noise_heard)
 	move_finished.connect(_on_move_finished)
@@ -1564,6 +1565,28 @@ func _react_to_spotted_fallback() -> void:
 	# 這次重算會重新起步
 	if not is_in_conversation():
 		_reevaluate()
+
+# 視野裡跟丟某個陌生人（issue #405）。
+#
+# 只對還沒正式認識的人處理——認識的人（has_met()）本來就會頻繁進出視野
+# （同事下班走遠、朋友轉身），每次都排事實句會洗版；陌生人跟丟則呼應
+# _on_spotted() 已經在關注的「第一次注意到」情境，數量上跟 spotted 同一個
+# 量級，不會爆量。_noticed 不在這裡清除——見 note/技術/視覺感測.md 已驗證的
+# 「走出視野再走回來不會重複驚訝」，跟丟不代表要重新觸發陌生人反應。
+#
+# 不像 _on_spotted／_on_noise_heard 有寫死的 fallback 台詞可退——「跟丟了」
+# 沒有通用的驚呼可以套，schedule 模式（llm_decision_enabled 關著）就不處理，
+# 只在有 LLM 可問時把事實句排進下一次決策，要不要有反應交給模型自己判斷
+func _on_lost(other: Character) -> void:
+	if is_in_conversation():
+		return
+	if relationships != null and relationships.has_met(other.character_id):
+		return
+	if not llm_decision_enabled:
+		return
+
+	_queue_reaction_fact_line("你看不到 %s 了，要不要有反應由你自己決定" % other.character_name)
+	await _request_next_decision()
 
 # 範圍內有人發出聲音（見 character.gd 的 make_noise()）。
 # 跟 _on_spotted 不同，這裡不記錄「已經反應過」——聲音是一次性事件，
