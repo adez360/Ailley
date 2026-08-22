@@ -210,6 +210,11 @@ var current_goal := ""
 var _hauling_target: Character = null		# 目前正在搬運誰
 var _hauled_by: Array[Character] = []		# 目前正被誰搬運
 var _speed_multiplier := 1.0				# 速度倍率（搬運時為 50%）
+## 這次昏迷事件裡已經拿過搬運者救助 trust 的名單，避免第一位搬運者救到人、
+## _end_incapacitation() 已經跑過後，稍後才加入的第二位搬運者被
+## set_being_carried() 的 has_condition(CONDITION_INCAPACITATED) 判斷擋掉、
+## 拿不到獎勵（CodeRabbit review 抓到）。新一輪昏迷開始時歸零
+var _rescued_haulers: Array[Character] = []
 
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
@@ -459,6 +464,7 @@ func _start_incapacitation() -> void:
 	_set_condition(CONDITION_INCAPACITATED, true)
 	_incapacitation_start_minute = GameClock.hour * 60 + GameClock.minute
 	_is_being_carried = false
+	_rescued_haulers.clear()
 	stop_moving()  # 立即停止移動
 	print_debug("Character %s 進入昏迷，計時器已啟動" % character_name)
 
@@ -504,8 +510,9 @@ func _end_incapacitation() -> void:
 	# （CodeRabbit review 抓到）
 	if relationships != null:
 		for hauler in _hauled_by:
-			if is_instance_valid(hauler):
+			if is_instance_valid(hauler) and not _rescued_haulers.has(hauler):
 				relationships.add_trust(hauler.character_id, 15.0)
+				_rescued_haulers.append(hauler)
 
 	print_debug("Character %s 昏迷已結束（被搬走）" % character_name)
 
@@ -1518,6 +1525,15 @@ func stop_haul() -> void:
 func _attach_haul(hauler: Character) -> void:
 	if not _hauled_by.has(hauler):
 		_hauled_by.append(hauler)
+
+	# 這位是第一位搬運者已經觸發過 _end_incapacitation() 之後才加入的第二位——
+	# set_being_carried(true) 的 has_condition(CONDITION_INCAPACITATED) 判斷這時
+	# 已經是 false，不會再幫他跑一次救助流程，這裡補發他這次事件該拿的 trust。
+	# _rescued_haulers 非空才代表「這次真的發生過救助」，不是隨便一次沒昏迷的
+	# 搬運（例如搬天神之石這種一般 carryable 物件）也誤發獎勵
+	if relationships != null and not _rescued_haulers.is_empty() and not _rescued_haulers.has(hauler):
+		relationships.add_trust(hauler.character_id, 15.0)
+		_rescued_haulers.append(hauler)
 
 func _detach_haul(hauler: Character) -> void:
 	_hauled_by.erase(hauler)
