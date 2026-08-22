@@ -34,7 +34,7 @@ extends RefCounted
 ## CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
-const CURRENT_VERSION := 5
+const CURRENT_VERSION := 6
 
 
 ## 版本落後時依序套用的變更，每個 entry：
@@ -67,6 +67,11 @@ const MIGRATIONS: Array[Dictionary] = [
 		"version": 5,
 		"name": "Drop orphaned npc_death/grave_highlights tables (issue #512)",
 		"apply": Callable(DatabaseSchema, "_migrate_v5_drop_death_grave_highlights")
+	},
+	{
+		"version": 6,
+		"name": "Rebuild idx_npc_action_history_npc as composite (npc_id, game_day, game_minute, id)",
+		"apply": Callable(DatabaseSchema, "_migrate_v6_action_history_composite_index")
 	}
 ]
 
@@ -366,6 +371,35 @@ static func _migrate_v5_drop_death_grave_highlights(db) -> bool:
 	if not db.query("DROP TABLE IF EXISTS grave_highlights;"):
 		push_error(
 			"[DatabaseSchema] Migration 5: Failed to drop grave_highlights: "
+			+ db.error_message
+		)
+		return false
+
+	return true
+
+
+## Migration 6：npc_action_history 是同一輪開發（#428）才新增的表，
+## NPCActionHistorySchema.gd 最初把 idx_npc_action_history_npc 只建在
+## (npc_id)，後來（#511 CodeRabbit review）才發現重複率分析需要
+## (npc_id, game_day, game_minute, id) 複合索引才能穩定排序。任何在這兩次
+## 提交之間跑過 initialize() 的既有資料庫，索引名稱已經被舊定義占走——
+## CREATE INDEX IF NOT EXISTS 撞到同名索引會直接跳過，不會自動變成新形狀，
+## 所以仍要走正式 migration 補齊，不能只當「純新增 table 不算」處理。
+## 版號原訂 4，rebase 到 main 時發現 4／5 已被 grave_epitaphs（#382）與
+## npc_death 清理（#512）佔用，改編為 6。
+static func _migrate_v6_action_history_composite_index(db) -> bool:
+	if not db.query("DROP INDEX IF EXISTS idx_npc_action_history_npc;"):
+		push_error(
+			"[DatabaseSchema] Migration 6: Failed to drop idx_npc_action_history_npc: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query(
+		"CREATE INDEX IF NOT EXISTS idx_npc_action_history_npc ON npc_action_history(npc_id, game_day, game_minute, id);"
+	):
+		push_error(
+			"[DatabaseSchema] Migration 6: Failed to recreate idx_npc_action_history_npc: "
 			+ db.error_message
 		)
 		return false
