@@ -592,17 +592,20 @@ func apply_world_save_data(data: Dictionary) -> void:
 	GameClock.day = int(data.get("day", GameClock.day))
 	# 存檔損毀／手改可能塞進超出時鐘實際範圍的值（例如 hour: 99）——GameClock._process()
 	# 本身只會遞增到 24/60 就回捲，從沒檢查過賦值當下的範圍，讀檔這裡守住，不合法就
-	# 保留目前值並 push_error，跟下面 position 的驗證同一種規則
+	# 保留目前值並 push_error，跟下面 position 的驗證同一種規則。JSON.parse_string()
+	# 對所有數字一律回傳 TYPE_FLOAT（沒有 int/float 之分），只認 TYPE_INT 會讓正常
+	# JSON 存檔的 hour/minute 每次都被判定成無效——改成接受整數值的 float（例如
+	# 17.0），只擋真正帶小數的值（例如 17.5）
 	var raw_hour = data.get("hour", GameClock.hour)
-	if (typeof(raw_hour) == TYPE_INT or typeof(raw_hour) == TYPE_FLOAT) and int(raw_hour) >= 0 and int(raw_hour) < 24:
+	if (typeof(raw_hour) == TYPE_INT or typeof(raw_hour) == TYPE_FLOAT) and float(raw_hour) == floor(float(raw_hour)) and int(raw_hour) >= 0 and int(raw_hour) < 24:
 		GameClock.hour = int(raw_hour)
 	else:
-		push_error("apply_world_save_data: hour 不是 0-23 範圍內的數字，保留目前值")
+		push_error("apply_world_save_data: hour 不是 0-23 範圍內的整數，保留目前值")
 	var raw_minute = data.get("minute", GameClock.minute)
-	if (typeof(raw_minute) == TYPE_INT or typeof(raw_minute) == TYPE_FLOAT) and int(raw_minute) >= 0 and int(raw_minute) < 60:
+	if (typeof(raw_minute) == TYPE_INT or typeof(raw_minute) == TYPE_FLOAT) and float(raw_minute) == floor(float(raw_minute)) and int(raw_minute) >= 0 and int(raw_minute) < 60:
 		GameClock.minute = int(raw_minute)
 	else:
-		push_error("apply_world_save_data: minute 不是 0-59 範圍內的數字，保留目前值")
+		push_error("apply_world_save_data: minute 不是 0-59 範圍內的整數，保留目前值")
 	allow_player_join = bool(data.get("allow_player_join", allow_player_join))
 	# 缺欄位代表「這份存檔沒有記錄化身角色」（SQLite 的 world 表目前還沒有這個
 	# 欄位、或是 #373 之前存的舊 JSON 存檔），不能沿用 GameManager 目前記憶體裡
