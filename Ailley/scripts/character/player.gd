@@ -1,3 +1,4 @@
+class_name Player
 extends Character
 
 ## 玩家操作的角色。輸入優先於 A* 自動移動：一按方向鍵就中斷現有路徑。
@@ -11,13 +12,29 @@ extends Character
 signal line_submitted(text: String)
 
 ## 玩家這一輪有結果了：打字送出（ok=true），或這一輪被取消（ok=false，
-## 走遠散場／按 E 離開）。
+## 走遠散場／按 E 離開）。只在 next_line() 真的在等待時（_turn_waiting）才會發——
+## 玩家提早打字的那些話改走 _pending_lines 緩衝，不直接 emit（見 _on_line_submitted()）。
 ##
 ## `next_line()` 等的是這個而**不是**直接等 `line_submitted`：後者只在玩家真的
 ## 打字時才發，玩家還沒打字就離開對話的話那個 await 永遠不會回來，
 ## `conversation.gd` 的 `_run()` 就永遠停在那裡——而它是唯一能安全釋放
 ## Conversation 節點的地方（見該檔 `_finish()` 的說明），節點因此永遠留在場景樹上
 signal turn_resolved(text: String, ok: bool)
+
+## NPC 頭上「輪到你了」的常駐提示符號（issue #207）。純符號不是語言內容，
+## 跟 agent.gd::AI_THINKING_TEXT（"…"）同一種處理，不走 L10n
+const WAITING_FOR_PLAYER_TEXT := "？"
+
+## 玩家提早打字（還沒真的輪到自己）時暫存的話，見 _on_line_submitted()
+## 與 next_line() 開頭的緩衝檢查（#207）。FIFO 佇列而不是單一欄位——
+## 單一欄位在玩家提交兩次時，較晚的那句會直接覆蓋掉還沒被 next_line()
+## 取用的前一句，前一句就這樣靜默消失（CodeRabbit review 抓到）
+var _pending_lines: Array[String] = []
+
+## next_line() 正在 await turn_resolved 的期間才是 true——_on_line_submitted()
+## 與 exit_conversation() 靠這個判斷「現在直接 emit 給正在等的 next_line()」
+## 還是「還沒輪到，先緩衝」（#207）
+var _turn_waiting := false
 
 @onready var interact_area: Area2D = $InteractArea
 
@@ -56,15 +73,28 @@ func _on_interact_area_body_exited(body: Node2D) -> void:
 	_nearby_interactables.erase(body)
 
 # 打字是「這一輪有結果了」的其中一種來源，另一種是對話結束（見 exit_conversation()）。
-# 兩者收斂成同一個訊號，next_line() 才只要等一個東西
+# 兩者收斂成同一個訊號，next_line() 才只要等一個東西。
+#
+# _turn_waiting 是 false 的話代表玩家打字時根本沒有 next_line() 在 await——
+# 例如輪到 NPC 講話、NPC 還在等 LLM 回應——這時候直接 emit 會讓 turn_resolved
+# 發進沒人接的地方，訊號就這樣憑空消失（issue #207 已重現的 bug）。改成先存進
+# _pending_lines，等真正輪到玩家、next_line() 開頭檢查到緩衝區有內容就依序取用
 func _on_line_submitted(text: String) -> void:
-	turn_resolved.emit(text, true)
+	if _turn_waiting:
+		turn_resolved.emit(text, true)
+	else:
+		_pending_lines.append(text)
 
 # 對話結束時取消還在等打字的那一輪。conversation.gd 的 _finish() 一定會對雙方
-# 呼叫這個函式，所以不管是走遠散場、按 E 離開、還是對方結束，都會走到這裡
+# 呼叫這個函式，所以不管是走遠散場、按 E 離開、還是對方結束，都會走到這裡。
+# 只有真的有 next_line() 在等待時才需要 emit 取消——沒在等待時 emit 只會是
+# 發進沒人接的訊號（跟上面 _on_line_submitted() 同一個理由），順便清掉任何
+# 殘留的緩衝，不讓上一場對話沒送出的半句話流進下一場對話
 func exit_conversation() -> void:
 	super()
-	turn_resolved.emit("", false)
+	_pending_lines.clear()
+	if _turn_waiting:
+		turn_resolved.emit("", false)
 
 # 用 _unhandled_input 而不是 _input：debug 主控台的輸入框拿到焦點時
 # 打字不該觸發搭話
@@ -92,9 +122,9 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	# 附近的可互動物件（工作站、販賣機）與可搭話的人，三邊都先找出來，誰近誰
 	# 先試——但「近」先被「有沒有面向它」篩過一輪，見 _get_interact_candidates()
-	# 的說明。全部對玩家都是靜默失敗，沒有回饋 UI；但失敗原因會印成 warning
-	# （跟 character.gd 的 _check_stuck() 同一種寫法），方便開發時對著
-	# 編輯器 Output/Debugger 面板看，不用另外開主控台查
+	# 的說明。失敗會用 report_action_failure() 統一顯示在自己頭上（issue #180），
+	# 不再是純靜默——同時也還會印成 warning，方便開發時對著編輯器 Output/
+	# Debugger 面板看，不用另外開主控台查
 	var candidates := _get_interact_candidates()
 	var workstation: Workstation = candidates["workstation"]
 	var machine: VendingMachine = candidates["machine"]
@@ -108,7 +138,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		var work_reason := work_at(workstation)
 		if work_reason == WORK_OK:
 			return
-		push_warning("%s: work_at 失敗（%s）" % [character_name, work_reason])
+		if other == null:
+			report_action_failure("work_at", work_reason)
+			return
+		# 工作失敗但旁邊還有人可以搭話——先試搭話，兩邊都失敗才回報，
+		# 不然「工作站被佔用」跟「搭話失敗」會疊成兩則訊息一起蹦出來
+		if talk_to(other) != TALK_OK:
+			report_action_failure("work_at", work_reason)
+		return
 	# 販賣機不是立刻執行動作，是開商品選單——真正的購買發生在
 	# vending_menu.gd 裡點下某一項的時候。vending_menu 理論上一定找得到
 	# （場景裡固定掛著），這裡多防一手是避免場景漏掛的話直接炸掉
@@ -118,7 +155,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	var talk_reason := talk_to(other)
 	if talk_reason != TALK_OK:
-		push_warning("%s: talk_to 失敗（%s）" % [character_name, talk_reason])
+		report_action_failure("talk_to", talk_reason)
 
 # 面向判定的錐角容許值：跟面向方向的內積要 >= 這個值才算「面對著」。
 # 0.5 大約是 ±60 度的錐角——夠寬容得下斜向靠近的誤差，又不會寬到整個
@@ -314,17 +351,53 @@ func _decide_velocity() -> Vector2:
 
 	return super()
 
-# 玩家的下一句話就是玩家打的字。等 turn_resolved 而不是 line_submitted——
-# 這個 await 一定要有辦法在「玩家沒打字就離開對話」時收場，理由見 turn_resolved
-# 的宣告。ok=false 代表這一輪被取消，呼叫端（conversation.gd 的 _run()）緊接著
-# 的 _bail_if_finished() 會看到 _finished 已經是 true 並釋放節點，不會走到
+# 玩家的下一句話就是玩家打的字。
+#
+# 先檢查 _pending_lines：玩家提早打字時 _on_line_submitted() 已經把話存起來，
+# 有的話取最早那句直接用掉、不用再等一次訊號（#207 的緩衝修法，見那邊的說明）。
+#
+# 沒有緩衝才真的開始等 turn_resolved 而不是 line_submitted——這個 await
+# 一定要有辦法在「玩家沒打字就離開對話」時收場，理由見 turn_resolved 的宣告。
+# ok=false 代表這一輪被取消，呼叫端（conversation.gd 的 _run()）緊接著的
+# _bail_if_finished() 會看到 _finished 已經是 true 並釋放節點，不會走到
 # fallback，也不會把空字串當台詞講出去。
+#
+# listener 頭上的「？」常駐提示只在真的要等待時才顯示（緩衝命中就立刻回傳，
+# 不需要提示）；is_instance_valid() 包一層跟 conversation.gd::_finish_with_fallback()
+# 同一種顧慮——await 讓出控制權的這段期間，listener 理論上可能已經離開場景
 #
 # 沒有 end 這個概念——玩家不是靠一個結構化欄位收尾，是靠實際走開或
 # leave_conversation()（_unhandled_input 的 interact 分支），所以這裡固定 false
-func next_line(_listener: Character, _turns: Array[Dictionary], _max_turns: int) -> Dictionary:
+func next_line(listener: Character, _turns: Array[Dictionary], _max_turns: int) -> Dictionary:
+	if not _pending_lines.is_empty():
+		var line := _pending_lines.pop_front()
+		return {"ok": true, "line": line, "end": false}
+
+	if is_instance_valid(listener) and listener.bubble != null:
+		listener.bubble.hold(WAITING_FOR_PLAYER_TEXT)
+
+	_turn_waiting = true
 	var resolved: Array = await turn_resolved
+	_turn_waiting = false
+
+	if is_instance_valid(listener) and listener.bubble != null:
+		listener.bubble.release_hold()
+
 	return {"ok": resolved[1], "line": resolved[0], "end": false}
+
+## NPC 對玩家發起 persuade 時（#305）跳出的 Y/N 彈窗結果。彈窗是
+## scenes/persuade_dialog.tscn 的單一實例（persuade_dialog 群組，跟
+## vending_menu／god_stone_input 同一種「場景裡固定掛一個、用 group 找」
+## 的既有寫法），這裡只負責找到它、把文案丟過去、把結果轉交回呼叫端
+## （agent.gd 的 _ask_player_persuade()）——跟 next_line()／turn_resolved
+## 同一種「玩家的回應來自 UI 事件不是 LLM」的介面設計，呼叫端不用知道
+## 彈窗怎麼畫、怎麼收使用者輸入
+func request_persuade_response(text: String) -> bool:
+	var dialog := get_tree().get_first_node_in_group("persuade_dialog")
+	if dialog == null:
+		push_error("player.gd: 場景裡找不到 persuade_dialog 群組的節點")
+		return false
+	return await dialog.ask(text)
 
 ## Player 沒有 npc_schedule.json 的 identities 項目可查（那份表本來就只給場景裡
 ## 固定的 NPC 用），每次開遊戲都會走到 Character._ready() 的第三層。這裡覆寫
@@ -348,6 +421,22 @@ func _resolve_generated_id() -> String:
 				return existing
 
 	var id := generate_id()
+	_write_player_id_file(id)
+	return id
+
+## character_id 被 _ensure_unique_id() 換掉時（讀進壞掉的存檔、撞到場上已有
+## 的角色）同步呼叫，把新 id 寫回同一份持久化檔案——不然下次 _resolve_generated_id()
+## 還是讀到那組已經被撞掉的舊 id，若造成碰撞的狀態沒消失，會在下次開遊戲時
+## 再次判定碰撞、再次換新 id，等於每次重開都變（issue #438，違反 #399 想保證的
+## 「跨場次同一組 id」）
+func _on_id_changed(new_id: String) -> void:
+	_write_player_id_file(new_id)
+
+# 寫入 _PLAYER_ID_PATH 的共用邏輯：_resolve_generated_id() 首次生成、
+# _on_id_changed() 撞號換掉後都呼叫這個。失敗只 push_error 不擋呼叫端——
+# 兩個呼叫端都已經拿到可用的 character_id，寫檔只是儘量做到跨場次持久化，
+# 寫不成不影響這一場正常運作
+func _write_player_id_file(id: String) -> void:
 	var dir := _PLAYER_ID_PATH.get_base_dir()
 	if not DirAccess.dir_exists_absolute(dir):
 		DirAccess.make_dir_recursive_absolute(dir)
@@ -359,7 +448,7 @@ func _resolve_generated_id() -> String:
 		push_error("player.gd: 無法寫入 %s（%s），character_id 這次不會跨場次持久化" % [
 			tmp_path, error_string(FileAccess.get_open_error())
 		])
-		return id
+		return
 	file.store_string(id)
 	file.flush()
 	var write_error := file.get_error()
@@ -369,11 +458,10 @@ func _resolve_generated_id() -> String:
 			tmp_path, error_string(write_error)
 		])
 		DirAccess.remove_absolute(tmp_path)
-		return id
+		return
 	var rename_error := DirAccess.rename_absolute(tmp_path, _PLAYER_ID_PATH)
 	if rename_error != OK:
 		push_error("player.gd: 替換 %s 失敗（%s），character_id 這次不會跨場次持久化" % [
 			_PLAYER_ID_PATH, error_string(rename_error)
 		])
 		DirAccess.remove_absolute(tmp_path)
-	return id

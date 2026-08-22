@@ -409,8 +409,8 @@ static func _conditions_summary(conditions: Array) -> Array[String]:
 		types.append(str(condition.get("type", "")))
 	return types
 
-## dialogue 與 plan 共用的角色自身區塊。直接沿用 get_state_snapshot()——
-## 兩邊都不該重新蒐集一次同一批資料，見 character.gd 的說明
+## dialogue／plan／reflection 共用的角色自身區塊。直接沿用 get_state_snapshot()——
+## 三邊都不該重新蒐集一次同一批資料，見 character.gd 的說明
 static func _self_block(character: Character) -> Dictionary:
 	var snapshot := character.get_state_snapshot()
 	var schedule: Dictionary = snapshot.get("schedule", {})
@@ -423,7 +423,11 @@ static func _self_block(character: Character) -> Dictionary:
 		# 這些生理數值，只是剛好都是中性，跟「這個角色根本沒有生理狀態可讀」
 		# 是兩件不同的事（CodeRabbit review 抓到）
 		"stats": _physical_summary(snapshot["stats"]) if snapshot.has("stats") else {},
-		"time": {"hour": GameClock.hour, "minute": GameClock.minute},
+		# day（#496）：引擎自己有 GameClock.day 可讀，原本沒送進 payload，
+		# AI 完全沒有日期基準做跨日推理（估算睡了幾小時、算「上次見到某人是
+		# 幾天前」）。單純多送一個客觀數字，要不要在意、算不算久交給 AI 自己
+		# 判斷，不額外加事實句或標籤（《00》原則二）
+		"time": {"day": GameClock.day, "hour": GameClock.hour, "minute": GameClock.minute},
 		"place": schedule.get("place", ""),
 		"current_action": schedule.get("state", ""),
 		# resolve()（#120）判定結果，中文自然語言，成功是空字串。沒有這欄的話
