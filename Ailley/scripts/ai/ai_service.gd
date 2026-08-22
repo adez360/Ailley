@@ -83,7 +83,7 @@ var config: AIConfig
 
 var _pool: Array[HTTPRequest] = []
 var _busy := {}					# HTTPRequest -> _Job，沒有 key 就代表這個節點閒著
-var _queue: Array = []			# 等節點的 _Job，先進先出
+var _queue: Array = []			# 等節點的 _Job，出隊順序見 _next_job_index()
 
 var _last_call_msec := {}			# requester_id -> Time.get_ticks_msec()，只記受限的呼叫
 var _calls_today := {}				# requester_id -> 今天已用的「受限」次數，吃配額
@@ -375,6 +375,7 @@ func request(
 	job.envelope = envelope
 	job.requester_id = requester_id
 	job.provider = provider
+	job.policy = policy
 	_queue.append(job)
 	_pump()
 
@@ -448,8 +449,24 @@ func _pump() -> void:
 		var http := _take_idle_node()
 		if http == null:
 			return
-		var job: _Job = _queue.pop_front()
+		var job: _Job = _queue.pop_at(_next_job_index())
 		_send(http, job)
+
+
+# 佇列是優先序的不是先進先出：CONVERSATION 先出隊，其餘照進來的順序（#492）。
+#
+# 排序只看呼叫端自己標的 Policy，引擎不另外判斷「誰的處境比較急」——那會變成
+# 引擎替 AI 認定一個情境算不算一回事（《00》原則二），排序依據也會從「誰在等」
+# 悄悄變成「誰重要」。這裡只有前者：CONVERSATION 是玩家停在對話框前面等字出來，
+# SCHEDULED 是背景角色重排行程，晚幾秒沒有人看得出來
+#
+# 線性掃描不換成優先佇列：長度等於同時在等的角色數，掃一遍比維護一個堆便宜，
+# 而且「同優先權內維持進場順序」直接由掃描順序保證，不必另外記進場序號
+func _next_job_index() -> int:
+	for i in _queue.size():
+		if _queue[i].policy == Policy.CONVERSATION:
+			return i
+	return 0
 
 
 func _take_idle_node() -> HTTPRequest:
@@ -537,7 +554,9 @@ func _on_request_completed(
 	var outcome := _interpret(result, response_code, body)
 
 	if not outcome["ok"] and outcome["retryable"] and job.attempts <= RETRY_LIMIT:
-		# 重試不再扣配額：它是同一次邏輯呼叫，扣兩次會讓玩家的每日額度憑空少掉
+		# 重試不再扣配額：它是同一次邏輯呼叫，扣兩次會讓玩家的每日額度憑空少掉。
+		# push_front 只讓它排在同優先權的最前面，不會讓 SCHEDULED 的重試搶到
+		# 還在等的 CONVERSATION 前面——見 _next_job_index()
 		_queue.push_front(job)
 		_pump()
 		return
@@ -630,4 +649,5 @@ class _Job extends RefCounted:
 	var envelope := {}
 	var requester_id := ""
 	var provider: AIConfig.Provider
+	var policy := Policy.SCHEDULED
 	var attempts := 0

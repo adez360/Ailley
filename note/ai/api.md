@@ -820,6 +820,9 @@ get_usage -> {game_day, calls_today, max_calls, dialogue_today, total_today,
 † 速率限制掛 requester_id 不掛全域也不分 provider（多人版帳單逐個擁有者算，同一隻角色不管打哪個服務算同一份額度）
 † 用真實秒不用遊戲時間（要擋的帳單與 provider rate limit 都活在真實時間）
 † 金鑰只在組 Authorization header 時碰得到，其餘一律過 _scrub()
+† 佇列依 Policy 出隊（_next_job_index()）：CONVERSATION 先於 SCHEDULED，同一種之內 FIFO（#492）。
+  排序只看呼叫端標的 Policy，引擎不依角色狀態判斷緊急度（《00》原則二）；重試的 push_front
+  只在同優先權內插隊
 † CONVERSATION 豁免冷卻/配額但照樣計數（_dialogue_calls_today）——豁免的是限制不是帳
 † is_retry=true 只跳過 min_interval_sec 冷卻，不跳過每日配額——同一次決策內容驗證
   失敗重試（agent.gd::_decide_with_retry()）用，SCHEDULED policy 沒有 CONVERSATION
