@@ -1983,6 +1983,9 @@ func _pursue_buy_task() -> void:
 		var failed_task_source: String = str(_current_task.get("source", ""))
 		var failed_task_id: String = str(_current_task.get("id", ""))
 		push_warning("Agent %s: 找不到販賣機 %s" % [character_name, place])
+		# 清掉任務前先停下——不然角色若正走去先前目標，會帶著已失效的
+		# 路徑繼續走（CodeRabbit review 抓到）
+		stop_moving()
 		_pursued_place = ""
 		_pursuit_done = false
 		_current_task = {}
