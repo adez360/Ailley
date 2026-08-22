@@ -1517,8 +1517,18 @@ func _attach_haul(hauler: Character) -> void:
 func _detach_haul(hauler: Character) -> void:
 	_hauled_by.erase(hauler)
 
-## 離開場景樹前放掉正在搬的目標——GameManager 可以直接對角色呼叫
-## queue_free()，不經過 stop_haul()。少了這個鉤子，目標的 _hauled_by
-## 會留著這個即將消失的搬運者的殘留參照（CodeRabbit review 抓到）
+## 離開場景樹前放掉搬運關係的兩個方向——GameManager 可以直接對角色呼叫
+## queue_free()，不經過 stop_haul()：
+## 1. 自己正在搬別人：stop_haul() 處理，會通知對方的 _hauled_by 移除自己
+## 2. 自己正被別人搬：對方的 _hauling_target 還指著即將消失的 self，
+##    對方之後呼叫 stop_haul() 會對已釋放的目標呼叫 _detach_haul()；
+##    _hauled_by[0] 剛好是自己的話，_follow_hauler() 也會繼續朝著已釋放
+##    的目標跟隨。逐一通知每個搬運者放手，再清空自己這邊的紀錄
+##（CodeRabbit review 抓到，原本只處理了第 1 種方向）
 func _exit_tree() -> void:
 	stop_haul()
+	for hauler in _hauled_by.duplicate():
+		if is_instance_valid(hauler) and hauler._hauling_target == self:
+			hauler.stop_haul()
+	_hauled_by.clear()
+	_is_being_carried = false
