@@ -27,6 +27,16 @@ const TAIL_INSET_FROM_RIGHT := 9.0
 @onready var box: NinePatchRect = $Box
 @onready var label: Label = $Box/Label
 
+## 兩個氣泡同時顯示時，z_index 相同會互相遮擋（issue #409）。真實對話是
+## 輪流講，很少同時出現，不需要位移/防碰撞這種排版方案——每次真的顯示新內容
+## 就搶下全域遞增的下一個值，最近開口的那句自然疊在其他還沒消失的舊氣泡上面，
+## 玩家目前在意的正是誰正在說話。static 讓所有 Bubble instance 共用同一組序號。
+## 對 Z_INDEX_MAX 取模避免長時間執行後超出 Godot z_index 的合法範圍
+## （CanvasItem 是 [-4096, 4096]）——同時可見的氣泡最多幾個、停留幾秒，
+## 繞回 0 撞到還沒消失的舊值機率極低，不值得為此換一套更複雜的排序方案
+const Z_INDEX_MAX := 4096
+static var _next_z_index := 0
+
 var _queue: Array[String] = []
 var _remaining := 0.0
 
@@ -78,6 +88,7 @@ func is_speaking() -> bool:
 func hold(message: String) -> void:
 	_queue.clear()
 	_holding = true
+	_bring_to_front()
 	_render(message)
 	set_process(false)
 
@@ -94,9 +105,15 @@ func release_hold() -> void:
 
 func _show_next() -> void:
 	var message: String = _queue.pop_front()
+	_bring_to_front()
 	_render(message)
 	_remaining = clampf(message.length() * SECONDS_PER_CHAR, MIN_DURATION, MAX_DURATION)
 	set_process(true)
+
+# 搶下全域遞增序號的下一個值，蓋過所有還沒消失的舊氣泡（issue #409）
+func _bring_to_front() -> void:
+	_next_z_index = (_next_z_index + 1) % Z_INDEX_MAX
+	z_index = _next_z_index
 
 # 量測、排版、顯示——say() 的排隊訊息與 hold() 的常駐訊息共用同一套呈現，
 # 差別只在要不要跑自動消失的計時（see _show_next() / hold()）
