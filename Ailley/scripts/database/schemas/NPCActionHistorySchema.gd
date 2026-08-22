@@ -37,10 +37,13 @@ static func create(db) -> bool:
 		push_error("[NPCActionHistorySchema] Failed to create npc_action_history.")
 		return false
 
-	# 依 npc_id 查詢是這張表唯一的讀取模式（分析重複率時逐角色抓出全部
-	# 歷史再依時間排序），比照其餘 schema 的索引慣例補一個
+	# 依 npc_id 查詢、依時間排序是這張表唯一的讀取模式（分析重複率時逐角色
+	# 抓出全部歷史再排序成序列 S，見《99》P-52「已拍板」的計算公式）。
+	# game_day/game_minute 無法區分同一遊戲分鐘內的多次切換，複合索引尾端
+	# 加 id（AUTOINCREMENT，插入順序＝真實時間順序）當同分鐘內的排序依據，
+	# 不然同一分鐘的相鄰比較結果會依 SQL 執行計畫而不固定（CodeRabbit review 抓到）
 	if not db.query(
-		"CREATE INDEX IF NOT EXISTS idx_npc_action_history_npc ON npc_action_history(npc_id);"
+		"CREATE INDEX IF NOT EXISTS idx_npc_action_history_npc ON npc_action_history(npc_id, game_day, game_minute, id);"
 	):
 		push_error("[NPCActionHistorySchema] Failed to create idx_npc_action_history_npc.")
 		return false
