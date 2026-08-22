@@ -653,7 +653,6 @@ JSON Schema → GBNF 的轉換器。
   `JsonSaveService`：`SqliteSaveService` 尚未讀寫 `memory` 欄位，SQLite
   round-trip 會遺失記憶（見 [[存檔]]「SQLite 後端現況」）
 - **交誼區 WebSocket 線** —— 伺服器技術棧尚未決定，見 #476
-- `preconditions` 求值 —— 結構留欄位，v1 一律通過，見 #477
 - 白名單中除 `move_to` / `talk` / `sleep` 外的動作實作——白名單本身已經是
   《07》《11》拍板的 22 個（issue #88），但 `IMPLEMENTED_ACTIONS` 沒有跟著擴
 - `speech` 觸發對話交接（issue #90）、約定機制（見 #479）
