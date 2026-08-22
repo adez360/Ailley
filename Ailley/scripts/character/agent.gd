@@ -1596,6 +1596,12 @@ func _select(task: Dictionary, now_minutes: int) -> void:
 	_persuade_pursuit_stuck_ticks = 0
 	_persuade_pursuit_last_distance = INF
 	_persuade_delivered = false
+	# 排程任務的 id 是穩定的 schedule_%d，同一筆 buy 任務會在下一個遊戲日
+	# 重用同一個 id——不歸零的話，前一天走不到販賣機留下的 _buy_pursuit_task_id
+	# 與 _pursuit_done=true 會讓新一天同 id 的任務直接被守衛判定「已處理過」，
+	# 整個跳過 move_to()（CodeRabbit review 抓到，#441 同一套邏輯的 sibling PR）
+	_buy_pursuit_task_id = ""
+	_buy_pursuit_target = Vector2.ZERO
 
 # 力竭狀態下強制休息（#364）。exhausted 激活時選不了別的動作，只能 rest
 # 直到 stamina 恢復到門檻為止。_reevaluate_once() 檢查到 exhausted 時呼叫
@@ -1980,7 +1986,14 @@ func _pursue_buy_task() -> void:
 		_buy_pursuit_target = machine.global_position
 		if not move_to(machine.global_position):
 			push_warning("Agent %s: 走不到販賣機 %s" % [character_name, place])
-			_pursuit_done = true
+			# schedule 任務維持原本的停止重試行為，靠 window 自然退場；
+			# llm 任務沒有 window 這條退路，只設 _pursuit_done 的話會一直卡在
+			# buy 狀態，等不到失敗結果、也不會請求下一個決策（CodeRabbit review 抓到）
+			if _current_task.get("source", "") == "llm":
+				last_action_result = "走不到販賣機，無法購買"
+				_finish_task_and_request_next()
+			else:
+				_pursuit_done = true
 		return
 
 	# 已到達，執行購買
