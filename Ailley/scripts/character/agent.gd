@@ -1038,11 +1038,9 @@ func request_sleep_reflection() -> Dictionary:
 
 	# personality_delta（#349，《03》§5 流程圖 ⑥）：validate_reflection() 已經
 	# 夾制過每一項到 ±MAX_PERSONALITY_DELTA，這裡直接加總套用，不再二次判斷——
-	# 「這個人今天該不該變得更記仇」是模型的判斷，引擎只做防止數值失控的夾制
-	var personality_delta: Dictionary = data.get("personality_delta", {})
-	for dim in personality_delta.keys():
-		var current: float = float(personality.get(dim, 50.0))
-		personality[dim] = clampf(current + float(personality_delta[dim]), 0.0, 100.0)
+	# 「這個人今天該不該變得更記仇」是模型的判斷，引擎只做防止數值失控的夾制。
+	# 套用公式跟物品效果共用 apply_personality_delta()（見 character.gd「人格」段）
+	apply_personality_delta(data.get("personality_delta", {}))
 
 	# today_plan（#350，流程圖 ②）：反思產出的是「明天的新計畫」，跟決策中途
 	# 的 update_plan 是同一個欄位、同一種整份取代語意，直接沿用 _apply_today_plan()
