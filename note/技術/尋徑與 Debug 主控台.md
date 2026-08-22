@@ -47,10 +47,13 @@ signal player.move_finished(reached: bool)
 
 > [!important] 正式建置整個關閉，不留手勢
 > `debug_console.gd`／`debug_overlay.gd` 的 `_ready()` 開頭都判斷
-> `OS.is_debug_build()`，不是就直接 `set_process_input(false)` / `return`——
-> 正式版按 `` ` `` 完全沒反應，不是換一個更難按到的鍵。主控台的指令能存讀檔、
-> 開關角色 LLM 決策迴圈、直接送 LLM 探針請求（真的打雲端 API），誤觸都是
-> 實際後果，見《16》B10。
+> `OS.is_debug_build()`。`debug_console.gd` 非 debug build 時呼叫
+> `_set_open(false)` 再 `set_process_input(false)`——只關鍵盤開關不夠，
+> `Root` 預設 `visible = true`，兩者都要關才是真的關掉；`debug_overlay.gd`
+> 則呼叫 `set_process(false)`，且要擺在 guard **之前**，否則正式建置提早
+> return 反而永遠執行不到這行。正式版按 `` ` `` 完全沒反應，不是換一個更難
+> 按到的鍵。主控台的指令能存讀檔、開關角色 LLM 決策迴圈、直接送 LLM 探針
+> 請求（真的打雲端 API），誤觸都是實際後果，見《16》B10。
 
 > [!important] 可走性用物理查詢量，不讀 tile data
 > TileMapDual 是 dual-grid：畫的是「世界層」，實際貼圖與碰撞在執行時生成的子
