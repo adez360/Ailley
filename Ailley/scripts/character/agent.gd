@@ -2037,6 +2037,16 @@ func _pursue_work_task() -> void:
 	var reason := work_at(nearest_workstation)
 	last_action_result = reason
 
+	if reason == Character.WORK_OCCUPIED:
+		# 工作站被佔用：保留目前的 schedule work 任務、不清掉也不呼叫
+		# _reevaluate()。清掉的話 _reevaluate() 會在同一輪立刻重選到同一筆
+		# schedule 任務（_tasks 裡的參照沒被移除），work_at() 再次回
+		# WORK_OCCUPIED，形成同步無限迴圈（CodeRabbit review 抓到，實測
+		# passes=8 warnings=8 不收斂）。讓下一次 GameClock time_changed
+		# 自然觸發重試，工作站空出來後就能接得上
+		push_warning("Agent %s: work_at 失敗（工作站被佔用）" % [character_name])
+		return
+
 	if reason != Character.WORK_OK:
 		push_warning("Agent %s: work_at 失敗（%s）" % [character_name, reason])
 		# 工作失敗就收尾任務；成功的話協程會自己管理、完成後呼叫 _on_work_finished()
