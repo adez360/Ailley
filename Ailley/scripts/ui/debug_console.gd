@@ -437,6 +437,7 @@ func _cmd_tasks(args: PackedStringArray) -> void:
 		var score: Dictionary = info["score"]
 		var marker := "→" if info["is_current"] else " "
 		var window_note := "" if info["in_window"] else "[color=888888]（窗外）[/color]"
+		var precond_note := "" if info["preconditions_met"] else "[color=888888]（前提不成立）[/color]"
 
 		# 一律 .get()：仲裁器本身允許任務沒有 window（`_in_window_or_unwindowed`
 		# 直接當成隨時可選），硬取 task["window"]["start"] 會在第一筆這種任務上
@@ -444,9 +445,9 @@ func _cmd_tasks(args: PackedStringArray) -> void:
 		var window = task.get("window")
 		var window_text := "隨時" if window == null else "%s..%s" % [window["start"], window["end"]]
 
-		_print("[color=888888]%s %s[/color]  %s  params=%s  window=%s%s" % [
+		_print("[color=888888]%s %s[/color]  %s  params=%s  window=%s%s%s" % [
 			marker, task.get("source", "?"), task.get("action", "?"),
-			JSON.stringify(task.get("params", {})), window_text, window_note,
+			JSON.stringify(task.get("params", {})), window_text, window_note, precond_note,
 		])
 		_print("[color=888888]    score=%.1f = base %.1f + time %.1f + need %.1f + age %.1f[/color]" % [
 			score["total"], score["base"], score["time"], score["need"], score["age"],

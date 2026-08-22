@@ -370,7 +370,12 @@ func _decide_velocity() -> Vector2:
 # leave_conversation()（_unhandled_input 的 interact 分支），所以這裡固定 false
 func next_line(listener: Character, _turns: Array[Dictionary], _max_turns: int) -> Dictionary:
 	if not _pending_lines.is_empty():
-		var line := _pending_lines.pop_front()
+		# 型別標註不能省：Array[String].pop_front() 的靜態分析器認不出元素型別，
+		# := 推論會得到 Variant，這台編輯器把「從 Variant 推論」警告當錯誤看，
+		# 導致這個檔案編譯失敗、連帶讓依賴它的腳本（同繼承 Character 的 Agent）
+		# 一起被判定「depended script 編譯失敗」——跟 #477 無關，是解除驗證阻塞
+		# 順手修的既有問題
+		var line: String = _pending_lines.pop_front()
 		return {"ok": true, "line": line, "end": false}
 
 	if is_instance_valid(listener) and listener.bubble != null:
