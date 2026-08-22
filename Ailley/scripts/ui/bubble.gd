@@ -30,6 +30,9 @@ const TAIL_INSET_FROM_RIGHT := 9.0
 var _queue: Array[String] = []
 var _remaining := 0.0
 
+## true 時 _process() 不跑計時、不會自動消失——見 hold()（#207）
+var _holding := false
+
 
 func _ready() -> void:
 	visible = false
@@ -61,14 +64,43 @@ func say(message: String) -> void:
 func clear() -> void:
 	_queue.clear()
 	_remaining = 0.0
+	_holding = false
 	visible = false
 	set_process(false)
 
 func is_speaking() -> bool:
 	return visible or not _queue.is_empty()
 
+## 常駐顯示，不會自動消失——跟 say() 排隊機制不同，這裡要「一直掛著直到
+## release_hold() 被呼叫」（例如「輪到玩家了」這種要等玩家真的動作才能收起
+## 的提示，見 note/技術/talk 動作設計.md、issue #207）。清掉目前的佇列：
+## 常駐提示期間不該有排隊的舊訊息突然插進來
+func hold(message: String) -> void:
+	_queue.clear()
+	_holding = true
+	_render(message)
+	set_process(false)
+
+## 解除常駐顯示。持有期間排進來的 say() 佇列（理論上不會發生，因為
+## hold() 已經清空過，但 release 之後正常恢復排隊行為）接著播
+func release_hold() -> void:
+	if not _holding:
+		return
+	_holding = false
+	if _queue.is_empty():
+		visible = false
+	else:
+		_show_next()
+
 func _show_next() -> void:
 	var message: String = _queue.pop_front()
+	_render(message)
+	_remaining = clampf(message.length() * SECONDS_PER_CHAR, MIN_DURATION, MAX_DURATION)
+	set_process(true)
+
+# 量測、排版、顯示——say() 的排隊訊息與 hold() 的常駐訊息共用同一套呈現，
+# 差別只在要不要跑自動消失的計時（see _show_next() / hold()）
+func _render(message: String) -> void:
 	label.text = message
 
 	var size := _measure(message)
@@ -87,9 +119,7 @@ func _show_next() -> void:
 		-box.size.y
 	)
 
-	_remaining = clampf(message.length() * SECONDS_PER_CHAR, MIN_DURATION, MAX_DURATION)
 	visible = true
-	set_process(true)
 
 # 直接用字型量文字尺寸。不能用 label.get_minimum_size() —— 開了 autowrap 之後
 # 它回傳的是「最窄可接受寬度」（中文會變成一行一個字），拿它當寬度會得到

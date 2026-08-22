@@ -140,14 +140,30 @@ var _noticed := {}
 # 與「地點換了要重新起步」
 var _pursued_place := ""
 
-# _on_action_interrupted() 清空 current_place 前存的快照，給 _on_attacked()
-# 讀（CodeRabbit review 抓到，見那兩個函式的說明）
+# _on_action_interrupted() 存的即時位置反查快照，給 _on_attacked() 讀
+# （見那兩個函式的說明，#426）
 var _place_before_interrupt := ""
 
 # 這一趟移動已經有結論了（走到了，或 _check_stuck() 放棄了）。
 # 少了它，放棄之後下一次重算又會對同一個走不到的目標重新 move_to()，
 # 變成每秒一次的卡住／放棄迴圈
 var _pursuit_done := false
+
+# buy 任務目前追的販賣機世界座標。_is_own_pursuit_target() 預設只認
+# current_place 對應的錨點座標，販賣機是場景節點的 global_position、
+# 不是任何一個 place 錨點——不額外記這個的話，_check_stuck() 卡住時發出的
+# move_finished(false) 會被 _is_own_pursuit_target() 判定「不是我要的」而
+# 吞掉，_pursuit_done 永遠設不成 true，變成每秒一次的卡住／重試迴圈
+# （CodeRabbit review 抓到，跟 give／talk 目標不是 current_place 錨點時
+# 同一類問題，見上面 _give_pursuit_stuck_ticks 的說明）
+var _buy_pursuit_target := Vector2.ZERO
+
+# 用來判斷「這筆追逐是不是同一筆 buy 任務」——不能沿用 current_place 比對，
+# 因為販賣機不是 place 錨點，兩筆不同的 buy 任務可能落在同一個 place
+# 字串（例如都在餐酒館買不同品項），甚至上一筆非 buy 任務（例如剛做完
+# work）留下的 _pursued_place 也可能剛好等於這筆的 place，導致誤判成
+# 「已經處理過」而整個跳過 move_to()（CodeRabbit review 抓到）
+var _buy_pursuit_task_id := ""
 
 # talk 任務用的卡住偵測（#90）。目標是會動的角色，每次重算都要重新
 # move_to()，不能沿用上面 _pursued_place／_pursuit_done 那套「地點沒換就不
@@ -359,15 +375,16 @@ var _next_daily_event_id := 0
 ## related_npcs 是這件事牽涉到誰——客觀事實，在事件發生的當下記下來，睡前
 ## 反思寫回 Memory.add_candidate() 時原封不動帶過去（見
 ## request_sleep_reflection()），不是引擎替這段記憶加主觀定性（見《00》
-## 原則二）。location_id 不開放呼叫端指定，一律用 current_place——跟
-## get_state_snapshot() 送給 LLM 的 "place" 欄位同一個來源，不另外定義一套
-## 「現在在哪」
+## 原則二）。location_id 預設用 current_place——跟 get_state_snapshot() 送給
+## LLM 的 "place" 欄位同一個來源，不另外定義一套「現在在哪」；指定
+## location_override 時改用覆寫值，見下一段
 ##
-## location_override 給極少數 current_place 當下已經不可信的呼叫端用（目前
-## 只有 _on_attacked()——見那邊的說明）：非 null 時取代 current_place，其餘
-## 呼叫端不用管這個參數（省略即為 null），維持原本「一律用 current_place」的
-## 行為（CodeRabbit review 抓到 force_interrupt() 會搶先把 current_place 清空，
-## 直接讀會拿到空字串）。
+## location_override 給 current_place 當下不可信或不適用的呼叫端用（#426：
+## _on_attacked() 用 _place_before_interrupt 快照的即時位置反查、
+## exit_conversation() 直接呼叫 _resolve_actual_place()——見那兩個函式的
+## 說明）：非 null 時取代 current_place，其餘呼叫端不用管這個參數（省略即為
+## null），維持原本「一律用 current_place」的行為（CodeRabbit review 抓到
+## force_interrupt() 會搶先把 current_place 清空，直接讀會拿到空字串）。
 ##
 ## 一定要用 null 當「沒有指定」的哨兵，不能用空字串——`_place_before_interrupt`
 ## 快照下來的值本來就可能合法地是空字串（角色被攻擊當下 current_place 本來就
@@ -686,14 +703,31 @@ func _on_move_finished(_reached: bool) -> void:
 	_pursuit_done = true
 
 # 判斷某個世界座標是不是仲裁器目前追的那個地點——ARRIVE_DISTANCE 當容許誤差，
-# 跟 _has_arrived_at() 判定「站得夠近」用同一個標準
+# 跟 _has_arrived_at() 判定「站得夠近」用同一個標準。buy 的販賣機目標不是
+# place 錨點，額外比對 _buy_pursuit_target（CodeRabbit review 抓到）
 func _is_own_pursuit_target(world_position: Vector2) -> bool:
+	if current_state == "buy" and world_position.distance_to(_buy_pursuit_target) <= ARRIVE_DISTANCE:
+		return true
 	if current_place.is_empty():
 		return false
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
 	if anchors == null or not anchors.has(current_place):
 		return false
 	return world_position.distance_to(anchors.resolve(current_place)) <= ARRIVE_DISTANCE
+
+# 給事實句（_push_daily_event()）用的即時位置反查（issue #426）：current_place
+# 是目前任務的目的地，不是即時座標——移動中會提早等於目的地，talk／追逐這類
+# 無地點任務更是從頭到尾空字串，記事實句當下若直接沿用會記錯地點。半徑跟
+# TALK_RANGE／WORK_RANGE 等既有互動距離門檻取同一個值（32px，2 格），都在
+# 範圍外就回傳空字串——「在地點之間」是合法值，呼叫端（_push_daily_event()
+# 的 location_override）直接把這個結果原樣傳下去即可
+const ACTUAL_PLACE_RADIUS := 32.0
+
+func _resolve_actual_place() -> String:
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null:
+		return ""
+	return anchors.resolve_from_position(get_body_position(), ACTUAL_PLACE_RADIUS)
 
 # 先問資料檔這隻角色被指派了哪份行程，沒有指派才用場景裡的 @export 後備值。
 # 順序不能反過來：@export 一定有值（agent.tscn 的預設），反過來的話 assignments 永遠不生效
@@ -819,7 +853,12 @@ func exit_conversation() -> void:
 	if _conversation != null:
 		var other: Character = _conversation.target if _conversation.initiator == self else _conversation.initiator
 		if other != null:
-			_push_daily_event("你跟 %s 講完話了" % other.character_name, [other.character_id])
+			# #426：current_place 對指名對話（direct-target talk）從頭到尾是
+			# 空字串（沒有 place 可言），這裡改用即時座標反查——對話結束當下
+			# 兩人就站在彼此旁邊，位置是準的
+			_push_daily_event(
+				"你跟 %s 講完話了" % other.character_name, [other.character_id], _resolve_actual_place()
+			)
 			# 「多久沒說話」事實句的計時基準（#338）
 			_last_social_minute = _now_minutes()
 
@@ -1264,6 +1303,8 @@ func _push_llm_tasks(tasks: Array[Dictionary], response: Dictionary) -> int:
 		var params: Dictionary = task.get("params", {})
 		var dedup_key: String = str(task.get("action", "")) + "|" \
 			+ str(params.get("target", params.get("place", "")))
+		if task.get("action", "") == "buy":
+			dedup_key += "|" + str(params.get("item_id", ""))
 
 		# dedup：同一個 action+target/place 新的覆蓋舊的，不並存兩筆——
 		# 見 [[行程佇列與任務仲裁]]「池子的守則」，沒有這條的話被搭話幾次
@@ -1274,6 +1315,8 @@ func _push_llm_tasks(tasks: Array[Dictionary], response: Dictionary) -> int:
 			var existing_params: Dictionary = _tasks[i].get("params", {})
 			var existing_key: String = str(_tasks[i].get("action", "")) + "|" \
 				+ str(existing_params.get("target", existing_params.get("place", "")))
+			if _tasks[i].get("action", "") == "buy":
+				existing_key += "|" + str(existing_params.get("item_id", ""))
 			if existing_key == dedup_key:
 				_tasks.remove_at(i)
 
@@ -1352,6 +1395,7 @@ func _task_pool_summary() -> Array[Dictionary]:
 			"action": task.get("action", ""),
 			"place": params.get("place", ""),
 			"target": params.get("target", ""),
+			"item_id": params.get("item_id", ""),
 			"source": task.get("source", ""),
 		})
 	return summary
@@ -1373,8 +1417,11 @@ func _on_action_interrupted() -> void:
 	# 清空前先存一份快照——character.gd::attack() 的呼叫順序是
 	# force_interrupt()（跑到這裡，把 current_place 清空）先於 _on_attacked()
 	# （記事實句），直接讀 current_place 的話 _on_attacked() 永遠拿到空字串
-	# （CodeRabbit review 抓到）
-	_place_before_interrupt = current_place
+	# （CodeRabbit review 抓到）。#426：改存即時座標反查的結果，不是
+	# current_place 本身——force_interrupt() 這裡 stop_moving() 剛執行完、
+	# 位置還沒被任何東西改變，正是「事情發生當下人真正站在哪」，比
+	# current_place（任務目的地，移動途中被攻擊時還沒走到）準確
+	_place_before_interrupt = _resolve_actual_place()
 	_pursued_place = ""
 	_pursuit_done = false
 	_clear_current_task(false)
@@ -1595,6 +1642,9 @@ func _apply_action_recovery() -> void:
 		return
 	for recovery in recovery_list:
 		stats.add(recovery["stat"], recovery["amount"])
+		# 若是回復 stamina 的動作，立即同步 exhausted 狀態，避免延遲至下一個 tick
+		if recovery.get("stat") == "stamina":
+			_update_exhausted_condition()
 
 func _on_time_changed(_hour: int, _minute: int) -> void:
 	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務
@@ -1606,20 +1656,35 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 
 # 力竭時強制進入休息，直到 stamina 恢復
 func _force_rest_until_recovered(now_minutes: int) -> void:
-	# 只有 reflex rest 已存在時才直接沿用
-	if _current_task.get("source", "") == "reflex" and current_state == "rest":
-		stop_moving()
+	# 如果已經在執行 exhaustion_rest synthetic task，繼續就好
+	if not _current_task.is_empty() \
+			and _current_task.get("id", "") == "exhaustion_rest" \
+			and _current_task.get("source", "") == "reflex":
 		return
 
+	# 不是 exhaustion_rest 的話，強制切換成 rest。選中新任務前先停止移動、
+	# 結束對話與工作，避免舊動作在強制休息期間繼續執行
 	stop_moving()
+	if is_in_conversation():
+		leave_conversation()
+	if is_working():
+		_end_work(_current_workstation)
+
 	var rest_task: Dictionary = {
-		"id": "reflex_rest_" + str(randi()),
+		"id": "exhaustion_rest",
 		"action": "rest",
-		"source": "reflex",
-		"duration": 999999,
 		"params": {},
+		"priority": 999,  # 最高優先級
+		"window": null,  # 沒有時間窗限制
+		"duration": 0.0,  # 由引擎決定何時結束（stamina 恢復時）
 		"interruptible": false,  # 力竭期間不可被打斷
+		"preconditions": [],
+		"source": "reflex",  # 引擎強制執行，不是 LLM 決定
+		"created_at": now_minutes,
+		"expires_at": 0,
+		"retries": 0,
 	}
+
 	_select(rest_task, now_minutes)
 
 # 睡醒自動存檔（#427），失敗時記錄角色識別資訊並排一次下個遊戲分鐘的
@@ -1678,11 +1743,20 @@ func _reevaluate_once() -> void:
 		_pursue_current_task()
 		return
 
-	# exhausted 清除時，移除 reflex rest 並恢復一般仲裁
-	if _current_task.get("source", "") == "reflex":
+	# 力竭解除後清理：角色不再具有 CONDITION_EXHAUSTED 且 _current_task 仍指向
+	# exhaustion_rest synthetic task 時，清除 _current_task、current_place、
+	# current_state 及相關追逐狀態，再繼續正常仲裁。這個 synthetic task 不在
+	# _tasks 池子裡，不會被正常的過期掃描清掉，必須在這裡主動處理——條件比對
+	# id 而不只是 source，避免以後其他 reflex 來源的任務被誤判成這個 synthetic
+	# task 清掉
+	if not _current_task.is_empty() \
+			and _current_task.get("id", "") == "exhaustion_rest" \
+			and _current_task.get("source", "") == "reflex":
 		_current_task = {}
-		current_state = "idle"
 		current_place = ""
+		current_state = "idle"
+		_pursued_place = ""
+		_pursuit_done = false
 		# 重置各追逐狀態，以便正常仲裁能清楚地選擇下一個任務
 		_talk_pursuit_stuck_ticks = 0
 		_talk_pursuit_last_distance = INF
@@ -1731,7 +1805,7 @@ func _reevaluate_once() -> void:
 	if llm_decision_enabled and not _awaiting_decision \
 			and _current_task.get("source", "") == "llm" \
 			and _current_task.get("id", "") != _active_talk_task_id \
-			and now_minutes - _current_task_started_at >= int(_current_task.get("duration", 0.0)):
+			and now_minutes - _current_task_started_at >= int(ceil(_effective_action_duration(_current_task.get("duration", 0.0)))):
 		# 做完的那筆要先離開池子。llm 任務沒有 window，不像 schedule 靠時間窗
 		# 自然退場——留著的話它會用原本的分數繼續參加下一輪算分，被重新選中，
 		# 變成同一件事做完又做。_current_task 是同一個 Dictionary 的參照，
@@ -1928,24 +2002,26 @@ func _roll_success(action: String, character: Character, environment_risk: float
 	var injury_term := -character.stats.get_value("injury") * 0.004
 	var alcohol_term := -maxf(0.0, character.stats.get_value("alcohol") - 30.0) * 0.005
 	var stamina_term := (stamina - 50.0) * 0.002
+	var wakefulness: float = character.stats.get_value("wakefulness")
+	var sleepy_term := -maxf(0.0, 15.0 - wakefulness) * 0.012
 	var chance: float = params["base"] \
 		+ trait_value * float(params["coef"]) \
-		+ stamina_term + injury_term + alcohol_term - environment_risk
+		+ stamina_term + injury_term + alcohol_term + sleepy_term - environment_risk
 	chance = clampf(chance, 0.05, 0.95)
 
 	var success := randf() < chance
 	if success:
 		return {"success": true, "reason": ""}
-	return {"success": false, "reason": _failure_reason(injury_term, alcohol_term, stamina_term, environment_risk)}
+	return {"success": false, "reason": _failure_reason(injury_term, alcohol_term, stamina_term, sleepy_term, environment_risk)}
 
 ## 《01-2》§5：失敗原因要具體到 AI 能調整策略，不能給一句放諸四海皆準的
 ## 「運氣不好」——找出扣最多分的修正項，講出具體理由。四個修正項全部
 ## 是負值或 0（environment_risk 本身以正值代表風險，取負號比較），取最負
 ## 的那個當主因；都沒扣分時才是真的手氣不好
-func _failure_reason(injury_term: float, alcohol_term: float, stamina_term: float, environment_risk: float) -> String:
+func _failure_reason(injury_term: float, alcohol_term: float, stamina_term: float, sleepy_term: float, environment_risk: float) -> String:
 	var worst := "luck"
 	var worst_value := 0.0
-	for pair in [["injury", injury_term], ["alcohol", alcohol_term], ["stamina", stamina_term], ["environment", -environment_risk]]:
+	for pair in [["injury", injury_term], ["alcohol", alcohol_term], ["stamina", stamina_term], ["sleepy", sleepy_term], ["environment", -environment_risk]]:
 		if float(pair[1]) < worst_value:
 			worst_value = pair[1]
 			worst = pair[0]
@@ -1957,10 +2033,19 @@ func _failure_reason(injury_term: float, alcohol_term: float, stamina_term: floa
 			return "喝多了，手腳不聽使喚"
 		"stamina":
 			return "體力撐不住，中途沒了力氣"
+		"sleepy":
+			return "太睏了，沒辦法集中精神"
 		"environment":
 			return "現場條件不利，沒能成功"
 		_:
 			return "手氣不好，這次沒抓到訣竅"
+
+## 計算動作的有效 duration，考慮 sleepy 狀態下的時長倍率
+func _effective_action_duration(base_duration: float) -> float:
+	var duration := base_duration
+	if has_condition(CONDITION_SLEEPY):
+		duration *= 1.15
+	return duration
 
 ## 環境風險由呼叫端依動作/情境算好傳入（正值代表風險，數字越大成功率扣越多）。
 ## SUCCESS_PARAMS 目前沒有動作會走到這裡，之後接動作時（例如 steal 的目擊者
@@ -1994,6 +2079,22 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 		"drink":
 			if inventory == null or _find_drink_slot().is_empty():
 				return {"success": false, "reason": "背包裡沒有飲品可以喝"}
+		"buy":
+			# 檢查錢夠不夠（需要先找機器查價格）、商品存不存在、背包有沒有空間
+			var place: String = str(params.get("place", ""))
+			var machine := _find_vending_machine_at_place(place)
+			if machine == null:
+				return {"success": false, "reason": "找不到販賣機"}
+			var item_id: String = str(params.get("item_id", ""))
+			var price := machine.get_price(item_id)
+			if price < 0:
+				return {"success": false, "reason": "販賣機裡沒有這個商品"}
+			if inventory == null:
+				return {"success": false, "reason": "背包裡沒有地方放東西"}
+			if inventory.get_money() < price:
+				return {"success": false, "reason": "身上沒有夠的錢"}
+			# 檢查是否有空位或是否可以堆疊（add_item 會幫我們檢查）
+			# 這裡先用樂觀假設，真的失敗讓 buy_from() 退款並傳回原因碼
 		"give":
 			# 《01-2》§1 流程圖①前置檢查點名的例子就是「物品在身上？」——give
 			# 不進②③擲骰（不在 SUCCESS_PARAMS 上），只有這一關硬規則
@@ -2096,6 +2197,12 @@ func _select(task: Dictionary, now_minutes: int, outgoing_ok: bool = true) -> vo
 	_persuade_pursuit_stuck_ticks = 0
 	_persuade_pursuit_last_distance = INF
 	_persuade_delivered = false
+	# 排程任務的 id 是穩定的 schedule_%d，同一筆 buy 任務會在下一個遊戲日
+	# 重用同一個 id——不歸零的話，前一天走不到販賣機留下的 _buy_pursuit_task_id
+	# 與 _pursuit_done=true 會讓新一天同 id 的任務直接被守衛判定「已處理過」，
+	# 整個跳過 move_to()（CodeRabbit review 抓到）
+	_buy_pursuit_task_id = ""
+	_buy_pursuit_target = Vector2.ZERO
 
 # 力竭狀態下強制休息（#364）。exhausted 激活時選不了別的動作，只能 rest
 # 直到 stamina 恢復到門檻為止。_reevaluate_once() 檢查到 exhausted 時呼叫
@@ -2166,6 +2273,16 @@ func _pursue_current_task() -> void:
 	# drink 跟 eat 同一種「呼叫一次就完成」（#163）
 	if current_state == "drink":
 		_pursue_drink_task()
+		return
+
+	# buy 跟 eat／drink 同理：呼叫一次就完成（#340）
+	if current_state == "buy":
+		_pursue_buy_task()
+		return
+
+	# work 是長動作，執行協程會自己跑 5 分鐘，只能呼叫一次（#358）
+	if current_state == "work":
+		_pursue_work_task()
 		return
 
 	if current_place.is_empty():
@@ -2384,6 +2501,9 @@ func _pursue_eat_task() -> void:
 		last_action_result = reason
 		if reason != Character.EAT_OK:
 			push_warning("Agent %s: eat 失敗（%s）" % [character_name, reason])
+		else:
+			var food_name := ItemDatabase.get_display_name(food_item)
+			_push_daily_event("你吃了%s。" % food_name)
 		# 連續失敗事實句涵蓋所有實際執行的動作，不分來源——跟 talk 的既有規則
 		# 一致（CodeRabbit review 抓到：原本只計 llm 來源，talk 卻不分來源，
 		# 兩套契約不一致，schedule／llm 交錯時計數會被錯誤重設或漏算）
@@ -2420,11 +2540,16 @@ func _pursue_drink_task() -> void:
 		if not proceed:
 			_track_action_result_for_facts("drink", false)
 
+	var drink_item := ""
 	if proceed:
+		drink_item = str(_find_drink_slot().get("item_id", ""))
 		var reason := drink()
 		last_action_result = reason
 		if reason != Character.DRINK_OK:
 			push_warning("Agent %s: drink 失敗（%s）" % [character_name, reason])
+		else:
+			var drink_name := ItemDatabase.get_display_name(drink_item)
+			_push_daily_event("你喝了%s。" % drink_name)
 		# 不分來源都記——理由同 _pursue_eat_task()
 		_track_action_result_for_facts("drink", reason == Character.DRINK_OK)
 
@@ -2442,6 +2567,192 @@ func _pursue_drink_task() -> void:
 	# 任務不會被馬上接手，得空等到下一次 GameClock time_changed（跟 murmur
 	# 那條同一個問題）
 	_reevaluate()
+
+# work 任務的執行（#358）：長動作，執行協程會自己跑 5 遊戲分鐘。
+# 跟 eat／drink 的差異是需要先走到工作地點，到達後才呼叫 work_at()。
+# 工作開始後 `_working = true`，後續 _pursue_current_task() 會因 is_working()
+# 直接返回，協程會自己監控 5 分鐘、完成時自動收尾（或中途異常中止）。
+# 成功或失敗都不在這裡結束任務——schedule 任務靠 window 自然退場，
+# 失敗時 resolve() 層級也會記錄原因（未來若開放 LLM 選 work 時）
+func _pursue_work_task() -> void:
+	# 檢查是否已到達工作地點
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null or current_place.is_empty() or not anchors.has(current_place):
+		last_action_result = Character.WORK_TARGET_NOT_FOUND
+		push_warning("Agent %s: work 失敗（無法解析地點 %s）" % [character_name, current_place])
+		# 完整重設追逐狀態，不然下一筆任務可能沿用舊路徑，或被追逐節流
+		# 誤判成已經處理過（CodeRabbit review 抓到）
+		stop_moving()
+		_pursued_place = ""
+		_pursuit_done = false
+		_current_task = {}
+		current_place = ""
+		current_state = "idle"
+		return
+
+	var target: Vector2 = anchors.resolve(current_place)
+
+	# 還沒到達就先走過去
+	if not _has_arrived_at(target):
+		# 地點沒換的話這一趟只起步一次：還在走就繼續走，已經有結論（含
+		# move_to() 失敗）也不要再試——原本的守衛條件反過來寫，move_to()
+		# 失敗、is_moving() 仍是 false 時下一輪又會重複呼叫、重複噴警告
+		# （CodeRabbit review 抓到）。跟 _pursue_buy_task() 同一套收斂邏輯
+		if current_place == _pursued_place and (is_moving() or _pursuit_done):
+			return
+		_pursued_place = current_place
+		_pursuit_done = false
+		if not move_to(target):
+			push_warning("Agent %s: 走不到工作地點 %s" % [character_name, current_place])
+			_pursuit_done = true
+		return
+
+	# 已到達工作地點，找工作站並執行 work_at()
+	stop_moving()
+	_pursued_place = current_place
+	_pursuit_done = true
+
+	# 找最近的工作站（MVP 只有一個，但用最近的方式向前相容）
+	var workstations: Array = get_tree().get_nodes_in_group("workstations")
+	var nearest_workstation: Workstation = null
+	var nearest_distance := INF
+
+	for ws in workstations:
+		var distance := get_body_position().distance_to(ws.global_position)
+		if distance < nearest_distance:
+			nearest_distance = distance
+			nearest_workstation = ws
+
+	# 呼叫 work_at() 並記錄結果
+	var reason := work_at(nearest_workstation)
+	last_action_result = reason
+
+	if reason == Character.WORK_OCCUPIED:
+		# 工作站已被佔用：保留目前的 schedule work 任務，不清掉也不呼叫 _reevaluate()。
+		# 讓下一個時間事件觸發重試，避免頻繁的同步重評估導致遊戲無回應
+		push_warning("Agent %s: work_at 失敗（工作站被佔用）" % [character_name])
+		return
+
+	if reason != Character.WORK_OK:
+		push_warning("Agent %s: work_at 失敗（%s）" % [character_name, reason])
+		# 其他失敗原因：清掉任務、重置 pursuit state 並等待決策
+		_pursued_place = ""
+		_pursuit_done = false
+		_current_task = {}
+		current_place = ""
+		current_state = "idle"
+		if llm_decision_enabled and not _awaiting_decision:
+			_request_next_decision(_today_plan_needs_new_goal())
+
+# buy 任務的執行（#340）：先找到販賣機並移動到其位置，再呼叫 buy_from()。
+# 販賣機透過 params.place 指定（餐酒館或藥草鋪）
+func _pursue_buy_task() -> void:
+	var buy_task_id: String = str(_current_task.get("id", ""))
+	var place: String = str(_current_task.get("params", {}).get("place", ""))
+	var machine := _find_vending_machine_at_place(place)
+
+	# 找不到販賣機：立即返回失敗
+	if not machine:
+		# 要先讀 source／id 再清空 _current_task——清空之後兩個 get() 都只會
+		# 讀到空字典的預設值，llm 任務永遠判斷不是 llm、也移除不掉，會卡在
+		# 池子裡讓 _reevaluate() 重複選到同一筆（CodeRabbit review 抓到）
+		var failed_task_source: String = str(_current_task.get("source", ""))
+		var failed_task_id: String = str(_current_task.get("id", ""))
+		push_warning("Agent %s: 找不到販賣機 %s" % [character_name, place])
+		# 清掉任務前先停下——不然角色若正走去先前目標，會帶著已失效的
+		# 路徑繼續走（CodeRabbit review 抓到）
+		stop_moving()
+		_pursued_place = ""
+		_pursuit_done = false
+		_current_task = {}
+		current_place = ""
+		current_state = "idle"
+		last_action_result = Character.BUY_TARGET_NOT_FOUND
+		if failed_task_source == "llm":
+			_remove_task(failed_task_id)
+		if llm_decision_enabled and not _awaiting_decision:
+			_request_next_decision(_today_plan_needs_new_goal())
+		_reevaluate()
+		return
+
+	# 還沒到達就先走過去
+	if not _has_arrived_at(machine.global_position):
+		# 同 _pursue_work_task() 的收斂邏輯：已有結論就不要重試——但這裡要比對
+		# 任務 id 而不是 current_place，理由見 _buy_pursuit_task_id 的說明
+		# （CodeRabbit review 抓到）
+		if _buy_pursuit_task_id == buy_task_id and (is_moving() or _pursuit_done):
+			# _pursuit_done 除了 move_to() 立即失敗會設，_on_move_finished(false)
+			# 這個非同步的尋徑失敗回呼也會設——原本這裡直接 return，llm 任務會
+			# 卡在這個守衛出不去，永遠記錄不到失敗結果、也不會請求下一次決策
+			# （CodeRabbit review 抓到）
+			if _pursuit_done and _current_task.get("source", "") == "llm":
+				last_action_result = "走不到販賣機，無法購買"
+				_finish_task_and_request_next()
+			return
+		_buy_pursuit_task_id = buy_task_id
+		_pursued_place = current_place
+		_pursuit_done = false
+		_buy_pursuit_target = machine.global_position
+		if not move_to(machine.global_position):
+			push_warning("Agent %s: 走不到販賣機 %s" % [character_name, place])
+			# schedule 任務維持原本的停止重試行為，靠 window 自然退場；
+			# llm 任務沒有 window 這條退路，只設 _pursuit_done 的話會一直卡在
+			# buy 狀態，等不到失敗結果、也不會請求下一個決策（CodeRabbit review 抓到）
+			if _current_task.get("source", "") == "llm":
+				last_action_result = "走不到販賣機，無法購買"
+				_finish_task_and_request_next()
+			else:
+				_pursuit_done = true
+		return
+
+	# 已到達販賣機位置，執行購買
+	stop_moving()
+	_pursued_place = current_place
+	_pursuit_done = true
+
+	var proceed := true
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		proceed = result["success"]
+
+	if proceed:
+		var item_id: String = str(_current_task.get("params", {}).get("item_id", ""))
+		var reason := buy_from(machine, item_id)
+		last_action_result = reason
+		if reason != Character.BUY_OK:
+			push_warning("Agent %s: buy 失敗（%s）" % [character_name, reason])
+
+	if _current_task.get("source", "") == "llm":
+		_remove_task(_current_task.get("id", ""))
+	_pursued_place = ""
+	_pursuit_done = false
+	_current_task = {}
+	current_place = ""
+	current_state = "idle"
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
+	_reevaluate()
+
+# 根據地點找到對應的販賣機。場景中每台機器都有一個對應的地點：
+# - "tavern" → VendingMachine
+# - "herb_shop" → VendingMachineHerbShop
+# 靠節點名稱來區分，更新日期 2026-08-20
+func _find_vending_machine_at_place(place: String) -> VendingMachine:
+	var machines := get_tree().get_nodes_in_group("vending_machines")
+
+	for machine in machines:
+		if not machine is VendingMachine:
+			continue
+
+		var machine_name: String = machine.name.to_lower()
+		# VendingMachineHerbShop → "herb_shop"，VendingMachine → "tavern"
+		if place == "herb_shop" and machine_name.contains("herb"):
+			return machine
+		elif place == "tavern" and not machine_name.contains("herb"):
+			return machine
+
+	return null
 
 # murmur 任務的執行（#162）：沒有目標、不用移動，講給自己聽當下就結束——不像
 # talk 要追著會動的目標走，也不像 nap／rest 那類要佔滿整段 duration。resolve()
@@ -2607,6 +2918,13 @@ func _pursue_give_task() -> void:
 	var give_failure := give_to(target, item_id, count)
 	last_action_result = _give_failure_message(give_failure)
 	_track_action_result_for_facts("give", give_failure == Character.GIVE_OK)
+
+	if give_failure == Character.GIVE_OK:
+		var item_name := ItemDatabase.get_display_name(item_id)
+		_push_daily_event("你把%s給了%s。" % [item_name, target.character_name], [target.character_id])
+		if target.is_in_group("agents"):
+			(target as Agent)._push_daily_event("你收到了%s的%s。" % [character_name, item_name], [character_id])
+
 	_finish_task_and_request_next()
 
 # give_to() 失敗原因碼轉中文，格式跟 _failure_reason() 一致——《01-2》§5
@@ -2939,7 +3257,19 @@ func _resolve_pending_persuade(data: Dictionary) -> void:
 	var pending := _pending_persuade
 	_pending_persuade = {}
 
-	if not data.get("persuaded", false):
+	var persuader: String = str(pending.get("persuader", ""))
+	var persuaded: bool = data.get("persuaded", false)
+	var persuader_related: Array[String] = []
+	var persuader_id_for_event: String = str(pending.get("persuader_id", ""))
+	if not persuader_id_for_event.is_empty():
+		persuader_related.append(persuader_id_for_event)
+
+	if persuaded:
+		_push_daily_event("你被%s說服了。" % persuader, persuader_related)
+	else:
+		_push_daily_event("你拒絕了%s的勸說。" % persuader, persuader_related)
+
+	if not persuaded:
 		return
 
 	var proposed_task: Dictionary = pending.get("proposed_task", {})
@@ -3152,12 +3482,15 @@ func get_current_task_elapsed_minutes() -> int:
 const DEBUG_TASK_PRIORITY := 999.0
 
 func debug_push_task(action: String, params: Dictionary, duration: float) -> void:
+	# expires_at 是安全網，不能比完成判定（_reevaluate_once() 用
+	# _effective_action_duration() 算的有效時長）先到期——不然 sleepy 狀態
+	# 下這筆任務會在真正做完前就被過期清除迴圈提前拿掉（CodeRabbit review 抓到）
 	var tasks: Array[Dictionary] = [{
 		"action": action,
 		"params": params,
 		"priority": DEBUG_TASK_PRIORITY,
 		"duration": duration,
-		"expires_at": _now_minutes() + int(duration),
+		"expires_at": _now_minutes() + int(ceil(_effective_action_duration(duration))),
 	}]
 	_push_llm_tasks(tasks, {})
 	_reevaluate()

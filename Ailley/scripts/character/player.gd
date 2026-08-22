@@ -12,13 +12,29 @@ extends Character
 signal line_submitted(text: String)
 
 ## 玩家這一輪有結果了：打字送出（ok=true），或這一輪被取消（ok=false，
-## 走遠散場／按 E 離開）。
+## 走遠散場／按 E 離開）。只在 next_line() 真的在等待時（_turn_waiting）才會發——
+## 玩家提早打字的那些話改走 _pending_lines 緩衝，不直接 emit（見 _on_line_submitted()）。
 ##
 ## `next_line()` 等的是這個而**不是**直接等 `line_submitted`：後者只在玩家真的
 ## 打字時才發，玩家還沒打字就離開對話的話那個 await 永遠不會回來，
 ## `conversation.gd` 的 `_run()` 就永遠停在那裡——而它是唯一能安全釋放
 ## Conversation 節點的地方（見該檔 `_finish()` 的說明），節點因此永遠留在場景樹上
 signal turn_resolved(text: String, ok: bool)
+
+## NPC 頭上「輪到你了」的常駐提示符號（issue #207）。純符號不是語言內容，
+## 跟 agent.gd::AI_THINKING_TEXT（"…"）同一種處理，不走 L10n
+const WAITING_FOR_PLAYER_TEXT := "？"
+
+## 玩家提早打字（還沒真的輪到自己）時暫存的話，見 _on_line_submitted()
+## 與 next_line() 開頭的緩衝檢查（#207）。FIFO 佇列而不是單一欄位——
+## 單一欄位在玩家提交兩次時，較晚的那句會直接覆蓋掉還沒被 next_line()
+## 取用的前一句，前一句就這樣靜默消失（CodeRabbit review 抓到）
+var _pending_lines: Array[String] = []
+
+## next_line() 正在 await turn_resolved 的期間才是 true——_on_line_submitted()
+## 與 exit_conversation() 靠這個判斷「現在直接 emit 給正在等的 next_line()」
+## 還是「還沒輪到，先緩衝」（#207）
+var _turn_waiting := false
 
 @onready var interact_area: Area2D = $InteractArea
 
@@ -57,15 +73,28 @@ func _on_interact_area_body_exited(body: Node2D) -> void:
 	_nearby_interactables.erase(body)
 
 # 打字是「這一輪有結果了」的其中一種來源，另一種是對話結束（見 exit_conversation()）。
-# 兩者收斂成同一個訊號，next_line() 才只要等一個東西
+# 兩者收斂成同一個訊號，next_line() 才只要等一個東西。
+#
+# _turn_waiting 是 false 的話代表玩家打字時根本沒有 next_line() 在 await——
+# 例如輪到 NPC 講話、NPC 還在等 LLM 回應——這時候直接 emit 會讓 turn_resolved
+# 發進沒人接的地方，訊號就這樣憑空消失（issue #207 已重現的 bug）。改成先存進
+# _pending_lines，等真正輪到玩家、next_line() 開頭檢查到緩衝區有內容就依序取用
 func _on_line_submitted(text: String) -> void:
-	turn_resolved.emit(text, true)
+	if _turn_waiting:
+		turn_resolved.emit(text, true)
+	else:
+		_pending_lines.append(text)
 
 # 對話結束時取消還在等打字的那一輪。conversation.gd 的 _finish() 一定會對雙方
-# 呼叫這個函式，所以不管是走遠散場、按 E 離開、還是對方結束，都會走到這裡
+# 呼叫這個函式，所以不管是走遠散場、按 E 離開、還是對方結束，都會走到這裡。
+# 只有真的有 next_line() 在等待時才需要 emit 取消——沒在等待時 emit 只會是
+# 發進沒人接的訊號（跟上面 _on_line_submitted() 同一個理由），順便清掉任何
+# 殘留的緩衝，不讓上一場對話沒送出的半句話流進下一場對話
 func exit_conversation() -> void:
 	super()
-	turn_resolved.emit("", false)
+	_pending_lines.clear()
+	if _turn_waiting:
+		turn_resolved.emit("", false)
 
 # 用 _unhandled_input 而不是 _input：debug 主控台的輸入框拿到焦點時
 # 打字不該觸發搭話
@@ -322,16 +351,38 @@ func _decide_velocity() -> Vector2:
 
 	return super()
 
-# 玩家的下一句話就是玩家打的字。等 turn_resolved 而不是 line_submitted——
-# 這個 await 一定要有辦法在「玩家沒打字就離開對話」時收場，理由見 turn_resolved
-# 的宣告。ok=false 代表這一輪被取消，呼叫端（conversation.gd 的 _run()）緊接著
-# 的 _bail_if_finished() 會看到 _finished 已經是 true 並釋放節點，不會走到
+# 玩家的下一句話就是玩家打的字。
+#
+# 先檢查 _pending_lines：玩家提早打字時 _on_line_submitted() 已經把話存起來，
+# 有的話取最早那句直接用掉、不用再等一次訊號（#207 的緩衝修法，見那邊的說明）。
+#
+# 沒有緩衝才真的開始等 turn_resolved 而不是 line_submitted——這個 await
+# 一定要有辦法在「玩家沒打字就離開對話」時收場，理由見 turn_resolved 的宣告。
+# ok=false 代表這一輪被取消，呼叫端（conversation.gd 的 _run()）緊接著的
+# _bail_if_finished() 會看到 _finished 已經是 true 並釋放節點，不會走到
 # fallback，也不會把空字串當台詞講出去。
+#
+# listener 頭上的「？」常駐提示只在真的要等待時才顯示（緩衝命中就立刻回傳，
+# 不需要提示）；is_instance_valid() 包一層跟 conversation.gd::_finish_with_fallback()
+# 同一種顧慮——await 讓出控制權的這段期間，listener 理論上可能已經離開場景
 #
 # 沒有 end 這個概念——玩家不是靠一個結構化欄位收尾，是靠實際走開或
 # leave_conversation()（_unhandled_input 的 interact 分支），所以這裡固定 false
-func next_line(_listener: Character, _turns: Array[Dictionary], _max_turns: int) -> Dictionary:
+func next_line(listener: Character, _turns: Array[Dictionary], _max_turns: int) -> Dictionary:
+	if not _pending_lines.is_empty():
+		var line := _pending_lines.pop_front()
+		return {"ok": true, "line": line, "end": false}
+
+	if is_instance_valid(listener) and listener.bubble != null:
+		listener.bubble.hold(WAITING_FOR_PLAYER_TEXT)
+
+	_turn_waiting = true
 	var resolved: Array = await turn_resolved
+	_turn_waiting = false
+
+	if is_instance_valid(listener) and listener.bubble != null:
+		listener.bubble.release_hold()
+
 	return {"ok": resolved[1], "line": resolved[0], "end": false}
 
 ## NPC 對玩家發起 persuade 時（#305）跳出的 Y/N 彈窗結果。彈窗是

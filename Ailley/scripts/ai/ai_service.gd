@@ -393,6 +393,7 @@ func get_usage(requester_id: String) -> Dictionary:
 		"max_calls": config.max_calls_per_game_day,
 		# 對話輪次不佔配額，但一樣是錢，所以分開報而不是不報
 		"dialogue_today": dialogue,
+		"max_dialogue": config.max_dialogue_calls_per_game_day,
 		"total_today": calls + dialogue,
 		"dialogue_exempt": config.dialogue_exempt,
 		"cooldown_left": maxf(0.0, config.min_interval_sec - elapsed / 1000.0),
@@ -408,6 +409,13 @@ func _is_exempt(policy: Policy) -> bool:
 
 func _check_rate_limit(requester_id: String, policy: Policy, skip_cooldown: bool = false) -> String:
 	if _is_exempt(policy):
+		# 豁免的是冷卻與「行程重排」那份配額，不是完全不設上限——對話輪次
+		# 沒有這條護欄的話，一場對話可以無限輪講下去，成本無上限（#395 提案，
+		# #434 落地）。0 代表不限，跟 max_calls_per_game_day 同一套慣例；
+		# 用 >= 不用 >，跟下面對 max_calls_per_game_day 的判斷式一致
+		if config.max_dialogue_calls_per_game_day > 0 \
+				and int(_dialogue_calls_today.get(requester_id, 0)) >= config.max_dialogue_calls_per_game_day:
+			return ERROR_DAILY_QUOTA
 		return ""
 
 	# 0 代表不限。設定檔可以把兩條限制各自關掉

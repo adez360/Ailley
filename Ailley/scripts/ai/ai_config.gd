@@ -43,6 +43,15 @@ const DEFAULT_TIMEOUT := 10.0
 const DEFAULT_MIN_INTERVAL_SEC := 30.0
 const DEFAULT_MAX_CALLS_PER_GAME_DAY := 20
 
+## 對話輪次自己的每日呼叫上限，只在 dialogue_exempt=true 時才有意義——
+## dialogue_exempt=true 讓 CONVERSATION 完全豁免上面兩條限制，沒有這個旋鈕
+## 的話一場對話可以無限輪講下去，成本無上限。0＝不限，跟前兩者同一套慣例。
+## 30 是 #395 研究的建議起點（本機 Qwen2.5-7B，6 場對話樣本，換算單一角色
+## 約可撐 10 場均值對話），不是精算值，見《LLM 串接與 AI 服務層》「每日對話
+## 呼叫上限提案」一節。dialogue_exempt=false 時這個旋鈕形同虛設——那種設定下
+## 對話呼叫已經走一般 max_calls_per_game_day 路徑，不需要疊加第二層限制
+const DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY := 30
+
 ## 對話輪次要不要豁免上面兩條限制。預設豁免 ——
 ## MIN_INTERVAL_SEC 是為「行程重排」訂的，而對話輪次是秒級間隔，
 ## 套上去會從第二輪起全部回 rate_limited，等於對話根本接不起來。
@@ -110,7 +119,7 @@ class Provider extends RefCounted:
 	# 給 debug 主控台印一行摘要。冷卻／每日配額／對話豁免是全域設定，不屬於
 	# 這個 provider 自己，由呼叫端（AIConfig）傳進來，不是這個類別自己存的——
 	# 這樣同一份全域設定印在每個 provider 底下時保證一致，不會各自維護一份
-	func summary(cooldown_sec: float, daily: int, dialogue_exempt: bool) -> String:
+	func summary(cooldown_sec: float, daily: int, dialogue_exempt: bool, max_dialogue: int) -> String:
 		return L10n.tf("AI_CONFIG_SUMMARY", {
 			"enabled": valid,
 			"base_url": base_url,
@@ -120,6 +129,7 @@ class Provider extends RefCounted:
 			"cooldown": "%.0f" % cooldown_sec,
 			"daily": daily,
 			"exempt": dialogue_exempt,
+			"max_dialogue": max_dialogue,
 		})
 
 
@@ -131,6 +141,67 @@ var providers := {}					# 名字 -> Provider
 var min_interval_sec := DEFAULT_MIN_INTERVAL_SEC
 var max_calls_per_game_day := DEFAULT_MAX_CALLS_PER_GAME_DAY
 var dialogue_exempt := DEFAULT_DIALOGUE_EXEMPT
+var max_dialogue_calls_per_game_day := DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY
+
+
+# 內建 sidecar 的本機連線預設值（《16》§2.2 決定隨安裝包附上的 llama-server，
+# 固定跑在這個位址與埠號）。寫死在這裡，不讀 ai_config.example.json——範本檔
+# 同時示範 openrouter 這個玩家要自己填金鑰的 provider，不能整包照抄當預設值，
+# 這裡只需要「local」那一段
+const _DEFAULT_LOCAL_BASE_URL := "http://127.0.0.1:8080/v1"
+const _DEFAULT_LOCAL_MODEL := "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+
+
+# 首次啟動、`user://` 還沒有設定檔時自動寫一份指向內建 sidecar 的預設值
+# （《16 打包與發布規格書》§2.3），玩家不用手動抄 ai_config.example.json。
+# 雲端 provider（OpenRouter token）不在自動產生範圍內——那需要玩家自己的金鑰，
+# 沒有預設值可以填。回傳寫入是否成功；呼叫端失敗時退回原本「檔案不存在」的
+# disabled 狀態，不當硬錯誤
+static func _write_default_config() -> bool:
+	var default_data := {
+		"enabled": true,
+		"default_provider": "local",
+		"providers": {
+			"local": {
+				"base_url": _DEFAULT_LOCAL_BASE_URL,
+				"api_key": "",
+				"model": _DEFAULT_LOCAL_MODEL,
+				"timeout": DEFAULT_TIMEOUT,
+				"supports_json_schema": true,
+				"format_guaranteed": true
+			}
+		},
+		"min_interval_sec": DEFAULT_MIN_INTERVAL_SEC,
+		"max_calls_per_game_day": DEFAULT_MAX_CALLS_PER_GAME_DAY,
+		"dialogue_exempt": DEFAULT_DIALOGUE_EXEMPT
+	}
+
+	var file := FileAccess.open(CONFIG_PATH, FileAccess.WRITE)
+	if file == null:
+		push_error("AIConfig: 無法建立預設設定檔 %s（錯誤碼 %d）" % [CONFIG_PATH, FileAccess.get_open_error()])
+		return false
+
+	# store_string() 回傳 bool，忽略它的話寫入失敗（例如磁碟滿）時仍會回傳
+	# true，留下一份寫壞的 CONFIG_PATH——下次 load_from_user() 檢查
+	# file_exists() 會判定「有檔案」，改去解析出 AI_STATUS_BAD_JSON，而不是
+	# 停在原本「檔案不存在」該有的 disabled 狀態（CodeRabbit review 抓到）
+	var write_ok := file.store_string(JSON.stringify(default_data, "\t"))
+	file.close()
+	if not write_ok:
+		push_error("AIConfig: 寫入預設設定檔 %s 失敗" % CONFIG_PATH)
+		# remove_absolute() 回傳 Error，忽略它的話清理也失敗時（例如檔案被
+		# 其他行程鎖住）會留下寫壞的部分內容，下次啟動 file_exists() 判定
+		# 「有檔案」，改去解析出 AI_STATUS_BAD_JSON，而不是停在「檔案不存在」
+		# 該有的 disabled 狀態——記下來至少能在 log 裡看到清理本身也失敗了
+		# （CodeRabbit review 抓到）
+		var remove_err := DirAccess.remove_absolute(CONFIG_PATH)
+		if remove_err != OK:
+			push_error(
+				"AIConfig: 清理寫壞的 %s 失敗（錯誤碼 %d），下次啟動可能誤判成 AI_STATUS_BAD_JSON"
+				% [CONFIG_PATH, remove_err]
+			)
+		return false
+	return true
 
 
 # 讀不到就回一個 enabled = false 的設定物件，呼叫端不必自己判斷檔案在不在
@@ -138,8 +209,13 @@ static func load_from_user() -> AIConfig:
 	var config := AIConfig.new()
 
 	if not FileAccess.file_exists(CONFIG_PATH):
-		config.status_reason = L10n.tf("AI_STATUS_NO_FILE", {"path": CONFIG_PATH, "example": EXAMPLE_PATH})
-		return config
+		# 首次啟動自動產生一份指向內建 sidecar（127.0.0.1 本機連線）的設定檔
+		# （《16 打包與發布規格書》§2.3）——寫不出去（例如 user:// 沒有寫入權限）
+		# 不當硬錯誤，退回原本「檔案不存在」的 disabled 狀態，遊戲照樣能跑，
+		# 只是要玩家自己抄範本
+		if not _write_default_config():
+			config.status_reason = L10n.tf("AI_STATUS_NO_FILE", {"path": CONFIG_PATH, "example": EXAMPLE_PATH})
+			return config
 
 	var file := FileAccess.open(CONFIG_PATH, FileAccess.READ)
 	if file == null:
@@ -170,6 +246,9 @@ func _apply(data: Dictionary) -> void:
 	min_interval_sec = maxf(0.0, float(data.get("min_interval_sec", DEFAULT_MIN_INTERVAL_SEC)))
 	max_calls_per_game_day = maxi(0, int(data.get("max_calls_per_game_day", DEFAULT_MAX_CALLS_PER_GAME_DAY)))
 	dialogue_exempt = bool(data.get("dialogue_exempt", DEFAULT_DIALOGUE_EXEMPT))
+	max_dialogue_calls_per_game_day = maxi(0, int(
+		data.get("max_dialogue_calls_per_game_day", DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY)
+	))
 
 	default_provider = str(data.get("default_provider", "")).strip_edges()
 
@@ -291,7 +370,9 @@ func _to_string() -> String:
 		var provider: Provider = providers[provider_name]
 		var marker := " (default)" if provider_name == default_provider else ""
 		lines.append("%s%s: %s" % [
-			provider_name, marker, provider.summary(min_interval_sec, max_calls_per_game_day, dialogue_exempt)
+			provider_name, marker, provider.summary(
+				min_interval_sec, max_calls_per_game_day, dialogue_exempt, max_dialogue_calls_per_game_day
+			)
 		])
 
 	if lines.is_empty():
