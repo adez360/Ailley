@@ -95,6 +95,17 @@ const LLM_WAIT_MIN_COMMIT := 5.0
 ## 之後再重新校準
 const MIN_ACTION_DURATION := 10.0
 
+## 長動作固定間隔檢查點（issue #336，《02》§3／《99》P-14）：任務進行到期前，
+## 每隔這麼多遊戲分鐘額外問一次「繼續」或「放棄、改做別的事」，不是被引擎
+## 強制打斷。跟 MIN_ACTION_DURATION 取同一個值——這個值本身就是引擎對「一次
+## 動作」的最小時間顆粒，短於它的任務一律在完成時的那次決策順便收尾，沒有
+## 機會落在任何一個中途檢查點上（見 _reevaluate_once() 的
+## `elapsed < duration` 條件），不需要另外校準一個新量級。MVP 唯一兩個長動作
+## `hunt_large`（40 分鐘）／`work`（進行時間待補，見 P-14）都還沒實際跑過，
+## 這是首次落地的建議值，之後有真實遊玩數據再回頭調（跟 P-04 一樣的「先跑，
+## 實測後調」做法）
+const LONG_ACTION_CHECKPOINT_INTERVAL := 10
+
 ## _tasks 池子的 LLM 來源總量上限（不含 schedule 來源，那批是開場建立一次
 ## 就不變的固定集合）。跟 max_calls_per_game_day（每遊戲日最多幾次 AI 請求）
 ## 是兩個獨立的限制，只是數字剛好一樣——這個管的是池子裡累積、還沒被執行掉
@@ -220,6 +231,12 @@ var _reacting := false
 # 又觸發第二份（同一個 LLM 任務完成的當下可能被重算好幾次），
 # _consider_switch() 靠它決定要用 MIN_COMMIT 還是 LLM_WAIT_MIN_COMMIT
 var _awaiting_decision := false
+
+# 長動作檢查點決策請求還有沒有一份在飛（issue #336）。跟 _awaiting_decision
+# 是兩個獨立的旗標，各自防各自的重疊呼叫——檢查點問的是「這筆任務要不要
+# 繼續」，跟完整重新規劃是兩種不同的請求，_reevaluate_once() 觸發檢查點時
+# 同時看這個旗標與 _awaiting_decision，避免跟一份還在飛的完整決策打架
+var _checkpoint_decision_pending := false
 
 # 同一套道理用在 request_sleep_reflection()：睡眠事件觸發跟 debug_console.gd
 # 的 `reflect` 指令都可能呼叫它，這通吃 await，沒有這個旗標擋，重疊呼叫會
@@ -1756,6 +1773,32 @@ func _reevaluate_once() -> void:
 	# 函式結尾要拿它跟「換完之後」比較，才抓得到真正的轉換瞬間
 	_was_sleeping = current_state == "sleep"
 
+	# 長動作固定間隔檢查點（issue #336，《02》§3）：任務做到一半、每隔
+	# LONG_ACTION_CHECKPOINT_INTERVAL 分鐘額外問一次「繼續」或「放棄」，跟下面
+	# duration 到期的「做完了，問下一步」是兩個獨立的事件——這裡問的當下任務
+	# 還沒做完，`elapsed < duration` 排除掉終點那一刻（那一刻交給下面那個分支
+	# 處理，不重複問）。條件跟下面那個分支同一套（llm 來源、talk 任務排除），
+	# 多加 _checkpoint_decision_pending 避免自己的請求還沒回來又觸發一次。
+	# elapsed % INTERVAL == 0 不需要額外記「上次問過哪一分鐘」：_on_time_changed
+	# 每個遊戲分鐘只呼叫一次，elapsed 每次重算剛好前進 1，同一個間隔倍數只會
+	# 撞上一次
+	if llm_decision_enabled and not _awaiting_decision and not _checkpoint_decision_pending \
+			and _current_task.get("source", "") == "llm" \
+			and _current_task.get("id", "") != _active_talk_task_id:
+		var elapsed := now_minutes - _current_task_started_at
+		var duration := int(_current_task.get("duration", 0.0))
+		if elapsed > 0 and elapsed < duration and elapsed % LONG_ACTION_CHECKPOINT_INTERVAL == 0:
+			_request_checkpoint_decision(_current_task)
+			# 檢查點不限於任務發起者（《02》§3 2026-08-16 擴充）：依附在這個長
+			# 動作上的其他角色（目前唯一情形是被自己 haul 的目標，見
+			# Character.get_checkpoint_dependents()）一併收到通知。問什麼選項、
+			# 要不要因此發起自己的決策請求，是各自機制的責任（haul 的
+			# struggle／shout／idle 見 #337），這裡只負責在檢查點時機把這件事
+			# 通知到，不代問
+			for dependent in get_checkpoint_dependents():
+				if is_instance_valid(dependent):
+					dependent.on_dependent_checkpoint(_current_task)
+
 	# 事件驅動觸發：LLM 來源的目前任務做滿引擎套用過下限的 duration 就算完成，
 	# 發起下一次決策請求。等待期間不 return——照樣往下跑完整套仲裁流程，
 	# 從池子（schedule 任務、上一輪還沒被選中的 llm 任務）挑 fallback 頂著，
@@ -2777,6 +2820,46 @@ func _finish_task_and_request_next() -> void:
 	# 得空等到下一次 GameClock time_changed（跟 murmur 那條 PR 同一個
 	# CodeRabbit review 抓到的問題，這裡是共用的收尾，一次修就對三個呼叫端都生效）
 	_reevaluate()
+
+## 長動作固定間隔檢查點的決策請求本體（issue #336，《02》§3）。跟
+## maybe_speak_to_creator() 同一種輕量是非題信封——問「要不要繼續」不需要
+## visible／pool／today_plan／memory 這些完整重新規劃才要看的資料，不走
+## _request_next_decision() 那整套 tasks schema。
+##
+## task_id 記下呼叫當下這筆任務的 id：這通吃 await，等待期間任務可能已經
+## 自然做完、被外部事件中斷、或被另一個檢查點處理過，_current_task 早就
+## 不是當初問的那一筆了——回應回來後只比對 id，id 對不上就整包丟棄，不套用
+## 到一筆不相干的新任務上（跟 _request_next_decision() 的世代比對同一種
+## 「回應可能已經過期」的處理方式）
+func _request_checkpoint_decision(task: Dictionary) -> void:
+	_checkpoint_decision_pending = true
+	var task_id: String = task.get("id", "")
+	var my_generation := _decision_generation
+	var elapsed := _now_minutes() - _current_task_started_at
+
+	var envelope := PromptBuilder.build_checkpoint_envelope(self, task, elapsed)
+	var validator := func(data: Dictionary) -> Dictionary:
+		return AISchema.validate_checkpoint(data)
+	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
+	_checkpoint_decision_pending = false
+
+	if my_generation != _decision_generation or _current_task.get("id", "") != task_id:
+		return
+	if not result["ok"]:
+		return
+	if not result["data"]["continue"]:
+		_abandon_task_from_checkpoint(task)
+
+## 檢查點問到「放棄」時的收尾。跟 _finish_task_and_request_next() 共用同一套
+## 退出任務池／清空目前任務／補下一次決策的邏輯——差別只在這是 AI 自己主動
+## 決定放棄，不是任務天然做完，所以先寫一個非空的 last_action_result 讓
+## _clear_current_task() 判定為不成功（中止不撥款這類逐動作的代價，由各動作
+## 自己的執行邏輯根據「這筆任務沒有成功」這個事實去決定怎麼處理，不是這裡的
+## 責任——見 issue #336 範圍界線）
+func _abandon_task_from_checkpoint(task: Dictionary) -> void:
+	last_action_result = "你自己決定中途放棄，沒有完成"
+	_push_daily_event("你放棄了正在做的「%s」，改做別的事" % str(task.get("action", "")))
+	_finish_task_and_request_next()
 
 # give 任務的執行（#158）：目標跟 talk 一樣是會動的角色，不能沿用地點式的
 # 「走一次、_pursued_place／_pursuit_done 收斂」節流，每次重算都要重新問一次
