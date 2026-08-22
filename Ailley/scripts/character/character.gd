@@ -1537,6 +1537,11 @@ func _attach_haul(hauler: Character) -> void:
 
 func _detach_haul(hauler: Character) -> void:
 	_hauled_by.erase(hauler)
+	# 最後一位搬運者放手時清掉這次事件的獎勵名單——不清的話，A 救到人放手後，
+	# 之後任何人（B）再搬運同一個已經不昏迷的角色，_attach_haul() 會誤判
+	# 「這次事件還在補發獎勵」而錯發一次 trust（CodeRabbit review 抓到）
+	if _hauled_by.is_empty():
+		_rescued_haulers.clear()
 
 ## 離開場景樹前放掉搬運關係的兩個方向——GameManager 可以直接對角色呼叫
 ## queue_free()，不經過 stop_haul()：
