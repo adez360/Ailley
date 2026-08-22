@@ -1806,8 +1806,9 @@ func _reevaluate_once() -> void:
 	if not best.is_empty():
 		_consider_switch(best, best_score, now, now_minutes)
 	elif not _current_task.is_empty() \
-			and (_is_expired(_current_task, now_minutes) or not _in_window_or_unwindowed(_current_task, now)):
-		# 一個候選都沒有，而目前這筆自己已經過期或窗口過了：清掉，不要留著。
+			and (_is_expired(_current_task, now_minutes) or not _in_window_or_unwindowed(_current_task, now) \
+				or not _preconditions_met(_current_task)):
+		# 一個候選都沒有，而目前這筆自己已經過期、窗口過了、或前提不再成立：清掉，不要留著。
 		# 留著的話 sleep（interruptible = false）會讓 is_talk_interruptible() 與
 		# _is_preemptible() 都永遠回 false，角色再也搭不了話、任務也永遠搶不走
 		# ——跟「窗口過期還被 interruptible 擋住」是同一個坑，只是從 best 為空
@@ -1858,8 +1859,13 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 	if best.get("id", "") == _current_task.get("id", ""):
 		return
 
+	# 三道濾網跟候選迴圈（_reevaluate_once()）用的是同一套：過期／窗口／
+	# preconditions，任一項不成立就不受下面的承諾保護。preconditions 沒過時
+	# 走跟「被搶占」相同的路徑（not current_still_valid → _select() 記
+	# ok=false）——這筆任務不是自然做完，跟過期/出窗被換掉是同一種語意
 	var current_still_valid := not _is_expired(_current_task, now_minutes) \
-		and _in_window_or_unwindowed(_current_task, now)
+		and _in_window_or_unwindowed(_current_task, now) \
+		and _preconditions_met(_current_task)
 
 	if current_still_valid:
 		# 承諾檢查（含 interruptible）只保護「還沒過期、還在自己時間窗內」的
@@ -3101,17 +3107,20 @@ func _is_expired(task: Dictionary, now_minutes: int) -> bool:
 	var expires_at: int = task.get("expires_at", 0)
 	return expires_at > 0 and expires_at <= now_minutes
 
-# preconditions 是 AND 陣列：任一筆比對失敗，這個候選整個被濾掉、不進分數
-# 比較——跟 window／expires_at 兩道既有濾網並排在同一個候選迴圈裡（見
-# _reevaluate_once()），不是額外開一條路徑。目前沒有任何呼叫端會產出非空的
-# preconditions（schedule／llm 建構都固定填 []，見 issue #477），這裡先把
-# 「求值關卡」蓋好，之後真的有東西要卡條件時直接填欄位就生效，不用再改
-# 仲裁邏輯本身。前提不成立目前不留失敗紀錄、不觸發 LLM 重排——這跟「動作
-# 失敗」（見 [[行程佇列與任務仲裁]]「中斷之後怎麼辦」）是不同語意：候選在
-# 選中之前就被這裡濾掉，角色從沒試過、也就沒有「失敗」這件事可記，等真的
-# 有 preconditions 非空的任務出現、且產品面需要這個訊號時再另開範圍評估
+# preconditions 是 AND 陣列：任一筆比對失敗，整筆任務判定不成立——跟
+# window／expires_at 兩道既有濾網並排，候選迴圈（_reevaluate_once()）跟
+# _current_task 的有效性判斷（_consider_switch() 的 current_still_valid）
+# 都呼叫這個函式，不是只管候選篩選。preconditions 本身非 Array、單筆非
+# Dictionary、欄位解析不出來、value 不是數字，一律 fail-closed 回傳 false——
+# value 尤其不能省：_compare_precondition() 對數字比不相容型別（例如對 null）
+# 會直接丟 runtime error，不是安全地回傳 false（見《行程佇列與任務仲裁》
+# 「前提求值」一節的驗證紀錄）
 func _preconditions_met(task: Dictionary) -> bool:
-	for cond in task.get("preconditions", []):
+	var preconditions = task.get("preconditions", [])
+	if not (preconditions is Array):
+		push_warning("Agent: preconditions 格式錯誤（非 Array），視為不成立：%s" % [preconditions])
+		return false
+	for cond in preconditions:
 		if not (cond is Dictionary):
 			push_warning("Agent: precondition 格式錯誤（非 Dictionary），視為不成立：%s" % [cond])
 			return false
@@ -3119,7 +3128,17 @@ func _preconditions_met(task: Dictionary) -> bool:
 		if actual == null:
 			push_warning("Agent: precondition 欄位無法解析，視為不成立：%s" % [cond])
 			return false
-		if not _compare_precondition(cond.get("op", ""), actual, cond.get("value")):
+		# actual 一定是數字（stats/relations 兩個命名空間都只回傳數字或 null，
+		# null 已在上面擋掉）——value 也強制要求數字，否則 >=/<=/>/< 會在
+		# _compare_precondition() 對不相容型別（例如數字對 null／字串）直接
+		# 丟出 runtime error，不是安全地回傳 false（實測驗證過：
+		# `5.0 >= null` 會拋 "Invalid operands 'float' and 'Nil'"，不會被
+		# GDScript 靜默吞掉），違反這裡一路 fail-closed 的原則
+		var expected = cond.get("value")
+		if not (expected is int or expected is float):
+			push_warning("Agent: precondition value 不是數字，視為不成立：%s" % [cond])
+			return false
+		if not _compare_precondition(cond.get("op", ""), actual, expected):
 			return false
 	return true
 
