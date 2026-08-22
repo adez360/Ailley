@@ -919,18 +919,26 @@ func _push_llm_tasks(tasks: Array[Dictionary], response: Dictionary) -> int:
 
 	for task in tasks:
 		var params: Dictionary = task.get("params", {})
-		var dedup_key: String = str(task.get("action", "")) + "|" \
-			+ str(params.get("target", params.get("place", "")))
+		var action: String = str(task.get("action", ""))
+		var dedup_key: String = action + "|" + str(params.get("target", params.get("place", "")))
+		# buy 同一個 place 可以買不同 item（例如 tavern 的 ale 跟 water），
+		# 只用 action+place 去重的話兩筆會互相覆蓋，靜默丟掉其中一筆合法購買
+		# 任務（CodeRabbit review 抓到）
+		if action == "buy":
+			dedup_key += "|" + str(params.get("item_id", ""))
 
-		# dedup：同一個 action+target/place 新的覆蓋舊的，不並存兩筆——
-		# 見 [[行程佇列與任務仲裁]]「池子的守則」，沒有這條的話被搭話幾次
-		# 之後池子就會塞滿重複的「回訪某某」
+		# dedup：同一個 action+target/place（buy 再加 item_id）新的覆蓋舊的，
+		# 不並存兩筆——見 [[行程佇列與任務仲裁]]「池子的守則」，沒有這條的話
+		# 被搭話幾次之後池子就會塞滿重複的「回訪某某」
 		for i in range(_tasks.size() - 1, -1, -1):
 			if _tasks[i].get("source", "") != "llm":
 				continue
 			var existing_params: Dictionary = _tasks[i].get("params", {})
-			var existing_key: String = str(_tasks[i].get("action", "")) + "|" \
+			var existing_action: String = str(_tasks[i].get("action", ""))
+			var existing_key: String = existing_action + "|" \
 				+ str(existing_params.get("target", existing_params.get("place", "")))
+			if existing_action == "buy":
+				existing_key += "|" + str(existing_params.get("item_id", ""))
 			if existing_key == dedup_key:
 				_tasks.remove_at(i)
 
@@ -1885,36 +1893,8 @@ func _pursue_drink_task() -> void:
 		_request_next_decision(_today_plan_needs_new_goal())
 	# CodeRabbit review：_request_next_decision() 只有在非同步回應回來後才會
 	# 重新仲裁，不立刻補一次 _reevaluate() 的話，等回應期間排程或 fallback
-	# 任務不會被馬上接手，得空等到下一次 GameClock time_changed（跟 murmur
-
-# buy 任務的執行（#340）：跟 _pursue_eat_task() 類似「呼叫一次就完成」，但
-# 需要先找到販賣機。販賣機透過 params.place 指定（餐酒館或藥草鋪）
-func _pursue_buy_task() -> void:
-	stop_moving()
-	var proceed := true
-	if _current_task.get("source", "") == "llm":
-		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
-		last_action_result = result["reason"]
-		proceed = result["success"]
-
-	if proceed:
-		# 根據 params.place 找到對應的販賣機
-		var place: String = str(_current_task.get("params", {}).get("place", ""))
-		var machine := _find_vending_machine_at_place(place)
-		var item_id: String = str(_current_task.get("params", {}).get("item_id", ""))
-
-		var reason := buy_from(machine, item_id)
-		last_action_result = reason
-		if reason != Character.BUY_OK:
-			push_warning("Agent %s: buy 失敗（%s）" % [character_name, reason])
-
-	if _current_task.get("source", "") == "llm":
-		_remove_task(_current_task.get("id", ""))
-	_current_task = {}
-	current_place = ""
-	current_state = "idle"
-	if llm_decision_enabled and not _awaiting_decision:
-		_request_next_decision(_today_plan_needs_new_goal())
+	# 任務不會被馬上接手，得空等到下一次 GameClock time_changed 才會被接手
+	_reevaluate()
 
 # 根據地點找到對應的販賣機。場景中每台機器都有一個對應的地點：
 # - "tavern" → VendingMachine
@@ -1935,7 +1915,72 @@ func _find_vending_machine_at_place(place: String) -> VendingMachine:
 			return machine
 
 	return null
-	# 那條同一個問題）
+
+# buy 任務的執行（#340）：跟 work 一樣要先走到定點才能執行——販賣機有
+# BUY_RANGE 距離限制（Character.buy_from()），跟 eat／drink 那種背包裡
+# 直接生效的動作不同，不先移動的話站太遠一定回傳 BUY_TOO_FAR，
+# params.place 就形同虛設（CodeRabbit review 抓到）。移動收斂邏輯跟
+# _pursue_work_task() 同一套
+func _pursue_buy_task() -> void:
+	var place: String = str(_current_task.get("params", {}).get("place", ""))
+	var machine := _find_vending_machine_at_place(place)
+
+	# 找不到販賣機：立即返回失敗，跟 _pursue_work_task() 找不到地點同一套處理
+	if not machine:
+		push_warning("Agent %s: 找不到販賣機 %s" % [character_name, place])
+		last_action_result = Character.BUY_TARGET_NOT_FOUND
+		_pursued_place = ""
+		_pursuit_done = false
+		# 要先讀 source／id 再清空 _current_task，不然兩個 get() 只會讀到
+		# 空字典的預設值，llm 來源的任務移除不掉（同一類問題見 #441 review）
+		var failed_task_source: String = str(_current_task.get("source", ""))
+		var failed_task_id: String = str(_current_task.get("id", ""))
+		_current_task = {}
+		current_place = ""
+		current_state = "idle"
+		if failed_task_source == "llm":
+			_remove_task(failed_task_id)
+		if llm_decision_enabled and not _awaiting_decision:
+			_request_next_decision(_today_plan_needs_new_goal())
+		_reevaluate()
+		return
+
+	# 還沒到達就先走過去
+	if not _has_arrived_at(machine.global_position):
+		if current_place == _pursued_place and (is_moving() or _pursuit_done):
+			return
+		_pursued_place = current_place
+		_pursuit_done = false
+		if not move_to(machine.global_position):
+			push_warning("Agent %s: 走不到販賣機 %s" % [character_name, place])
+			_pursuit_done = true
+		return
+
+	# 已到達，執行購買
+	stop_moving()
+	_pursued_place = current_place
+	_pursuit_done = true
+
+	var proceed := true
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		proceed = result["success"]
+
+	if proceed:
+		var item_id: String = str(_current_task.get("params", {}).get("item_id", ""))
+		var reason := buy_from(machine, item_id)
+		last_action_result = reason
+		if reason != Character.BUY_OK:
+			push_warning("Agent %s: buy 失敗（%s）" % [character_name, reason])
+
+	if _current_task.get("source", "") == "llm":
+		_remove_task(_current_task.get("id", ""))
+	_current_task = {}
+	current_place = ""
+	current_state = "idle"
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
 
 # work 任務的執行（#358）：長動作，執行協程會自己跑 5 遊戲分鐘。
@@ -1958,13 +2003,18 @@ func _pursue_work_task() -> void:
 
 	# 還沒到達就先走過去
 	if not _has_arrived_at(target):
-		# 這一趟只起步一次，沒換地點就繼續走（同 _pursue_current_task 的邏輯）
-		if current_place != _pursued_place or not is_moving():
-			_pursued_place = current_place
-			_pursuit_done = false
-			if not move_to(target):
-				push_warning("Agent %s: 走不到工作地點 %s" % [character_name, current_place])
-				_pursuit_done = true
+		# 地點沒換的話這一趟只起步一次：還在走就繼續走，已經有結論（含
+		# move_to() 失敗）也不要再試——原本的守衛條件反過來寫，導致
+		# move_to() 失敗、is_moving() 仍是 false 時，下一輪重算又會再呼叫
+		# 一次 move_to()，卡住的角色會每個 tick 重複噴同一則警告
+		# （CodeRabbit review 抓到）。跟 _pursue_buy_task() 同一套收斂邏輯
+		if current_place == _pursued_place and (is_moving() or _pursuit_done):
+			return
+		_pursued_place = current_place
+		_pursuit_done = false
+		if not move_to(target):
+			push_warning("Agent %s: 走不到工作地點 %s" % [character_name, current_place])
+			_pursuit_done = true
 		return
 
 	# 已到達工作地點，找工作站並執行 work_at()
