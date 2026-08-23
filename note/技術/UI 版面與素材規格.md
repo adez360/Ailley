@@ -244,7 +244,6 @@ keycode：`hotbar_1`–`hotbar_9`（數字鍵 1–9）、滑鼠滾輪（`wrapi()
 
 ## 還沒做的
 
-- `bubble.tscn` 的 `Box.region_rect` 是非整數（`Rect2(6.065604, 6.3701286, ...)`）。9-slice 用非整數 region 會取樣到相鄰像素，邊框出現雜點
 - `assets/unuse/` 裡的 1536×1024 與 1362×1155 對話框圖在這個解析度用不上，縮下來必糊
 - `StatusPanel` 的年齡欄目前是 `AGE_PLACEHOLDER` 示意值，Character 還沒有年齡欄位
 - `InventoryPanel` 的 27 格目前全部空著，沒有任何道具圖示（`Inventory` 還沒有 item 登錄資料）
