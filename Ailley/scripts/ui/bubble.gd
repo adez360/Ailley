@@ -24,13 +24,20 @@ const BORDER_BOTTOM := 12.0
 ## 氣泡靠這個值對齊到說話者頭上，所以框體是往左上長，不是置中
 const TAIL_INSET_FROM_RIGHT := 9.0
 
+## agent.tscn／player.tscn 裡 Bubble instance 的基準 z_index（CodeRabbit review
+## 抓到：_reassign_z_indices() 原本直接拿陣列位置覆蓋，把這個基準值蓋成 0 起跳，
+## 場景裡其他 z_index 落在 1~9 之間的 CanvasItem 就可能畫到氣泡前面）。跟兩份
+## .tscn 保持一致，改這裡記得同步改
+const BASE_BUBBLE_Z_INDEX := 10
+
 @onready var box: NinePatchRect = $Box
 @onready var label: Label = $Box/Label
 
 ## 兩個氣泡同時顯示時，z_index 相同會互相遮擋（issue #409）。真實對話是
 ## 輪流講，很少同時出現，不需要位移/防碰撞這種排版方案——排一份「目前顯示中」
-## 的疊放順序，最近開口的那句排到陣列尾端（=最上層），z_index 用陣列位置重算。
-## static 讓所有 Bubble instance 共用同一份順序。
+## 的疊放順序，最近開口的那句排到陣列尾端（=最上層），z_index 用 BASE_BUBBLE_Z_INDEX
+## 加陣列位置重算，不直接拿位置覆蓋掉場景設定的基準值。static 讓所有 Bubble
+## instance 共用同一份順序。
 ##
 ## 原本用全域遞增計數器＋對 4096（CanvasItem z_index 合法範圍上限）取模，
 ## CodeRabbit review 抓到：hold() 可以讓一顆氣泡長期停在畫面上（例如「輪到你了」
@@ -143,7 +150,7 @@ static func _reassign_z_indices() -> void:
 	for i in range(_visible_order.size()):
 		var bubble = _visible_order[i]
 		if is_instance_valid(bubble):
-			bubble.z_index = i
+			bubble.z_index = BASE_BUBBLE_Z_INDEX + i
 
 # 量測、排版、顯示——say() 的排隊訊息與 hold() 的常駐訊息共用同一套呈現，
 # 差別只在要不要跑自動消失的計時（see _show_next() / hold()）
