@@ -49,13 +49,15 @@ var _words_to_creator_spoken := false
 ## 判定是否要說出口的 AI 呼叫進行中（見 maybe_speak_to_creator() 的鎖）
 var _words_to_creator_pending := false
 
-## #381：墓碑四內容欄位其中兩個（《規格書 09》§4-2）。last_words 由死者的 LLM
-## 在臨終時生成，可為空字串（來不及說）；life_highlights 由引擎彙整 L4 核心
-## 記憶與重大事件流產出，絕不讓 LLM 潤飾。目前死亡狀態機還沒做（見 #368），
+## #381：墓碑四內容欄位其中兩個（《規格書 09》§4-2）。life_highlights 由引擎彙整
+## L4 核心記憶與重大事件流產出，絕不讓 LLM 潤飾，目前死亡狀態機還沒做（見 #368），
 ## 這裡先開欄位形狀讓存讀檔接得上，沒有任何呼叫端會寫入——不影響現有行為。
 ## words_to_creator 是墓碑第三個欄位，已存在於上面（#164），不重複宣告。
-## 第四個欄位 epitaphs（一對多，SQLite）不在這裡，見 #382
-var last_words := ""
+## last_words（第二個欄位）改由 Character 基底宣告（#379，死亡狀態機落地時
+## 才發現這裡本來就先開了欄位形狀——Godot 4.5 不允許子類別重新宣告父類別
+## 成員，會直接讓這支腳本載入失敗，CodeRabbit review 抓到），寫入邏輯仍在
+## 下面覆寫的 _request_last_words()。第四個欄位 epitaphs（一對多，SQLite）
+## 不在這裡，見 #382
 var life_highlights: Array[String] = []
 
 ## schedule 任務給中間值，靠 time_bonus 拉開跟其他來源的差距，
@@ -1169,8 +1171,12 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	# 決策開關——不管回應抵達當下旗標是什麼值（就算又被重新打開），這份回應
 	# 都屬於已經作廢的世代，整包淘汰，不套用任何任務或計畫更新。
 	# 還原 had_plan_update_requested 時同時檢查 epoch：若 load_save_data() 發生過
-	# （epoch 已遞增），則保持清除狀態，不讓過期請求重新授予 update_plan 許可
-	if my_generation != _decision_generation:
+	# （epoch 已遞增），則保持清除狀態，不讓過期請求重新授予 update_plan 許可。
+	# is_dead 額外把關（CodeRabbit review 抓到）：這通請求可能是死亡發生前那個
+	# 遊戲分鐘（昏迷逾時倒數期間 _on_time_changed() 仍會照常重算）發出的，
+	# 死亡發生在 await 期間、世代沒變——沒有這個判斷，回應回來時會照樣把新任務
+	# 塞進死屍的任務池、幫死屍套上新情緒，跟死亡當下的石化收尾矛盾
+	if my_generation != _decision_generation or is_dead:
 		if my_plan_update_epoch == _plan_update_epoch:
 			_plan_update_requested = had_plan_update_requested
 		final_result = {"ok": false, "triggered": true}
@@ -1484,7 +1490,6 @@ func get_state_snapshot() -> Dictionary:
 func get_save_data() -> Dictionary:
 	var data := super()
 	data["words_to_creator"] = words_to_creator
-	data["last_words"] = last_words
 	data["life_highlights"] = life_highlights.duplicate()
 	data["today_plan"] = _today_plan.duplicate(true)
 	return data
@@ -1495,8 +1500,9 @@ func load_save_data(data: Dictionary) -> void:
 	if data.has("words_to_creator"):
 		var raw_words_to_creator: Variant = data["words_to_creator"]
 		words_to_creator = raw_words_to_creator if raw_words_to_creator is String else ""
-	var raw_last_words: Variant = data.get("last_words", "")
-	last_words = raw_last_words if raw_last_words is String else ""
+	# last_words 已由 super(data) 呼叫的 Character.load_save_data() 還原
+	# （見該函式 is_dead 分支），這裡不重複讀取——之前重複讀取會把 super()
+	# 剛還原好的 null 又轉成空字串，蓋掉「來不及開口」跟「AI 決定不說」的語意區分
 	var raw_highlights: Variant = data.get("life_highlights", [])
 	life_highlights.clear()
 	if raw_highlights is Array:
@@ -1665,6 +1671,16 @@ func _apply_action_recovery() -> void:
 			_update_exhausted_condition()
 
 func _on_time_changed(_hour: int, _minute: int) -> void:
+	# 死屍不再仲裁新任務（CodeRabbit review 抓到）：is_dead 只擋得住
+	# _decide_velocity() 的移動輸出（見 _is_movement_locked()），沒擋住這裡——
+	# 沒有這個 return，死屍每個遊戲分鐘還是會被 _reevaluate_once() 重新仲裁，
+	# 選中並執行不需要移動的任務（eat／drink／murmur／shout／attack／persuade），
+	# 跟《規格書09》§1「石化・停留原地」的死亡定義矛盾。攻擊觸發死亡的唯一現行
+	# 路徑已經在 attack()→force_interrupt() 那一刻收尾掉進行中的 work 協程
+	# （見 force_interrupt() 說明），這裡不需要額外處理 work
+	if is_dead:
+		return
+
 	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務
 	# 會用新任務的 current_state 結算最後一分鐘
 	_apply_action_recovery()
