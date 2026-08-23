@@ -10,10 +10,11 @@ const GAME_MINUTES_PER_TICK := 10
 
 @export var seconds_per_game_minute := 1.0
 
+## 跟著 get_world_save_data()／apply_world_save_data() 一起存讀，可以跨場次
+## 接續（#19，hour／minute 見 #517）
 var hour := 8
 var minute := 0
-## 第幾個遊戲日，從 1 起算。跟著 get_world_save_data()／apply_world_save_data()
-## 一起存讀，可以跨場次接續（#19）
+## 第幾個遊戲日，從 1 起算
 var day := 1
 var _timer := 0.0
 
