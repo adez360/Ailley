@@ -1500,9 +1500,10 @@ func load_save_data(data: Dictionary) -> void:
 	if data.has("words_to_creator"):
 		var raw_words_to_creator: Variant = data["words_to_creator"]
 		words_to_creator = raw_words_to_creator if raw_words_to_creator is String else ""
-	# last_words 已由 super(data) 呼叫的 Character.load_save_data() 還原
-	# （見該函式 is_dead 分支），這裡不重複讀取——之前重複讀取會把 super()
-	# 剛還原好的 null 又轉成空字串，蓋掉「來不及開口」跟「AI 決定不說」的語意區分
+	# last_words 已由 super(data) 呼叫的 Character.load_save_data() 處理完畢
+	# ——is_dead=true 時從存檔還原、is_dead=false 時重設回 null（見該函式
+	# if/else 兩個分支），這裡不重複讀取——之前重複讀取會把 super() 剛處理好的
+	# null 又轉成空字串，蓋掉「來不及開口」跟「AI 決定不說」的語意區分
 	var raw_highlights: Variant = data.get("life_highlights", [])
 	life_highlights.clear()
 	if raw_highlights is Array:
