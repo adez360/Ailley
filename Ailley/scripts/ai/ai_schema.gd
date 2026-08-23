@@ -50,12 +50,10 @@ const ALLOWED_ACTIONS := [
 
 # 本輪真正有實作的動作。其餘動作驗證會過，但執行層要回 NOT_IMPLEMENTED，
 # 而不是在驗證層擋掉 —— 兩者是不同的失敗，混在一起 debug 時會分不清
-# work 與 buy 不在這裡：Character.work_at()／buy_from() 做出來了，但沒有任何
-# 執行層把一筆 {"action": "work"} 對應到一個 Workstation 實例，而它們需要
-# 節點參照，player.gd 的候選偵測也只看 32px 範圍內、面向著的物件。
-# buy 還多缺一個「買哪個 item_id」的來源——目前只有玩家從 vending_menu 點得出來。
-# 列進來的話就變成「白名單宣稱做得到、實際靜默不做」，正是上面那段註解要避免的
-# 混淆。等執行層接得到再加（talk 的動作執行留給 #90，其餘留給各自的 issue）
+# work 與 buy 已在執行層實作（#340）：Agent 的 _pursue_work_task() 與
+# _pursue_buy_task() 分別呼叫 Character.work_at()／buy_from()，買哪個 item_id
+# 由 LLM 決策提供（見《07》販賣機規格）。player.gd 的候選偵測不涉及它們
+# （玩家用 UI 選單，NPC 用決策任務）。talk 的動作執行留給 #90，其餘留給各自的 issue
 #
 # nap／rest／wash／idle 是 #112 接上的：四個都只動 Stats 跟角色 state，不需要新
 # 場景物件或新資源，所以走的是仲裁器既有的「移動到 params.place（沒給就原地）、
@@ -88,7 +86,7 @@ const ALLOWED_ACTIONS := [
 #
 # drink 是 #163 接上的：跟 eat 同一套「呼叫一次就完成」模式，寫法照抄
 # _pursue_eat_task()（見 agent.gd::_pursue_drink_task()）
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade"]
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -340,6 +338,19 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 			var count_float := float(count_value)
 			if count_float < MIN_GIVE_COUNT or count_float > MAX_GIVE_COUNT:
 				return _fail(ERROR_BAD_SHAPE)
+
+	# buy 動作的 params 驗證（#340）：item_id 跟 place 都是必填字串，
+	# 空字串或非字串在這一層就擋掉。驗證後將正規化的值寫回 params
+	if action == "buy":
+		var buy_params: Dictionary = task.get("params", {})
+		var item_id: Variant = buy_params.get("item_id")
+		if not item_id is String or (item_id as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+		buy_params["item_id"] = (item_id as String).strip_edges()
+		var place: Variant = buy_params.get("place")
+		if not place is String or (place as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+		buy_params["place"] = (place as String).strip_edges()
 
 	# #268／#290：expires_in_minutes（模型填的相對時長）現在有跟
 	# priority/duration 同一套量級上限，不再只有 is_finite()——
@@ -854,6 +865,31 @@ static func words_to_creator_choice_schema() -> Dictionary:
 					"say_it": {"type": "boolean"},
 				},
 				"required": ["say_it"],
+			},
+		},
+	}
+
+
+# 長動作固定間隔檢查點（issue #336，《02》§3）：跟 validate_words_to_creator_choice()
+# 同一種純布林是非題驗證——問的是「要不要繼續」，不是重新規劃整批 tasks
+static func validate_checkpoint(data: Dictionary) -> Dictionary:
+	if not data.has("continue") or not data["continue"] is bool:
+		return _fail(ERROR_BAD_SHAPE)
+
+	return _ok({"continue": data["continue"]})
+
+
+static func checkpoint_response_schema() -> Dictionary:
+	return {
+		"type": "json_schema",
+		"json_schema": {
+			"name": "checkpoint_response",
+			"schema": {
+				"type": "object",
+				"properties": {
+					"continue": {"type": "boolean"},
+				},
+				"required": ["continue"],
 			},
 		},
 	}
