@@ -237,7 +237,7 @@ updated: 2026-08-23
 | `emotion` | object | AI 自行宣告 |
 | `current_goal` | string | AI 可隨時改寫，上限 40 字 |
 | `update_plan` | array \| 不存在 | 僅在《10》§5.4 列出的時機，schema 才含此欄位（見《12》§2.4） |
-| `appointment` | — | **現況（2026-08-23）**：`ai_schema.gd` 的 `plan_response_schema()` 沒有這個欄位，還沒接進決策 schema。目前只有 `expires_in_minutes` 讓 AI 對任務設效期，取代原本規劃的 `with`/`location`/`game_time` 結構化物件，追蹤 issue #479（OPEN） |
+| `appointment` | — | **尚未實作（2026-08-23 查證）**：`Ailley/scripts/ai/ai_schema.gd` 的 `plan_response_schema()` 沒有這個欄位，還沒接進決策 schema，不宣稱支援 `with`／`location`／`game_time` 或雙向爽約通知。目前只有 `expires_in_minutes` 讓 AI 對任務設一個效期，是完全不同的機制，不是 `appointment` 的替代品，追蹤 issue #479（OPEN） |
 | `persuaded` | boolean \| 不存在 | 僅在 `fact_lines` 含待回應的說服事實句時，schema 才含此欄位（本例無待回應事實句，故不出現，不傳 `null`）；語意比照 `believed`（見 §4-3），AI 自行判斷、房主機不驗證、不二次判定。回應省略此欄位時視同「不被說動」，待回應記錄照常清除，不重複注入同一句事實句（見《00》原則四、《01-2》§3-1） |
 | `meta.source_model` | string | Provider 實際使用的模型名稱，供《10》B33 結算揭露 |
 
@@ -452,7 +452,7 @@ Godot 操控層                房主機                    llama-server
 
 | `reason` | 觸發狀況 | 玩家端訊息 |
 | --- | --- | --- |
-| `timeout` | 逾時。**現況（2026-08-23）**：`ai_config.gd` 的 `DEFAULT_TIMEOUT` 是單一全域值 **10 秒**，`LocalLLM`／`RemoteLLM`／`/event` 共用，不是原規劃（2026-08-16，見《99》P-11／P-22）分開的 5 秒／15 秒／8 秒——程式碼註解說明是刻意設計：`HTTPRequest` 節點池是共用的，timeout 是節點屬性不是逐請求參數，做成逐 provider 不同值不會真的生效 | 模型回應逾時 |
+| `timeout` | 逾時。**現況（2026-08-23）**：`Ailley/scripts/ai/ai_config.gd` 的 `DEFAULT_TIMEOUT` 是單一全域值 **10 秒**，`LocalLLM`／`RemoteLLM`／`/event` 共用，不是原規劃（2026-08-16，見《99》P-11／P-22）分開的 5 秒／15 秒／8 秒——程式碼註解說明是刻意設計：`HTTPRequest` 節點池是共用的，timeout 是節點屬性不是逐請求參數，做成逐 provider 不同值不會真的生效 | 模型回應逾時 |
 | `invalid_format` | JSON 解析失敗、重試仍失敗 | 模型輸出格式不符 |
 | `model_missing` | 指定模型不存在 | 找不到指定的模型 |
 | `quota_exceeded` | 雲端模型額度用盡 | 模型額度不足 |
