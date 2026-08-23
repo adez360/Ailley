@@ -981,6 +981,14 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 ## 只要作者自己在資料裡填小一點的數字即可
 func apply_personality_delta(delta_dict: Dictionary) -> void:
 	for dim in delta_dict.keys():
+		# 只認 _PERSONALITY_FIELDS 內的 10 個維度——不認得的 key（items.json
+		# 手打錯欄位名之類）略過不寫。personality 存檔載入靠 _is_valid_
+		# personality_data() 卡「剛好 10 項欄位」，這裡如果照單全收把第 11 個
+		# 陌生 key 寫進 personality，下次存讀就會整包 personality 被判定不合法
+		# 而拒絕套用，連本來合法的 10 項都遭殃（CodeRabbit review 抓到）
+		if not _PERSONALITY_FIELDS.has(dim):
+			push_warning("Character %s: 未知的人格欄位 %s，略過" % [character_name, dim])
+			continue
 		var current: float = float(personality.get(dim, 50.0))
 		personality[dim] = clampf(current + float(delta_dict[dim]), 0.0, 100.0)
 

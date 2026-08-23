@@ -51,6 +51,67 @@ func test_use_item_invalid_effect_rejected_before_consuming() -> void:
 	_assert_eq(stats.get_value("satiety"), 0.0, "驗證失敗不應套用效果")
 
 
+# 以下三個測試從 Character.eat()/drink()/apply_personality_delta() 進場，
+# 不像上面三個直接呼叫 Inventory.use_item()——驗證的是 ItemDatabase 查表
+# （真的讀 Ailley/data/items.json，不是測試自己手寫 effects dict）跟
+# Character 這層呼叫路徑本身，兩層合起來才是玩家實際會走到的路徑
+# （CodeRabbit review 抓到：原本三個測試都繞過了這一層）
+
+func test_character_eat_reads_real_item_database() -> void:
+	var character = Character.new()
+	character.inventory = Inventory.new()
+	character.stats = Stats.new()
+	character.inventory.add_item("cooked_meat", 1)
+
+	var result = character.eat()
+
+	_assert_eq(result, Character.EAT_OK, "吃烤肉應成功")
+	_assert_eq(character.stats.get_value("satiety"), 40.0, "satiety 應套用 items.json 的 effect_satiety +40")
+	_assert_eq(character.inventory.has_item("cooked_meat", 1), false, "吃掉後應消耗 1 份")
+	character.free()
+
+
+func test_character_drink_reads_real_item_database() -> void:
+	var character = Character.new()
+	character.inventory = Inventory.new()
+	character.stats = Stats.new()
+	character.stats.add("wakefulness", 50.0)  # 給非 0 起始值才能驗證負向 delta
+	character.inventory.add_item("ale", 1)
+
+	var result = character.drink()
+
+	_assert_eq(result, Character.DRINK_OK, "喝麥酒應成功")
+	_assert_eq(character.stats.get_value("hydration"), 20.0, "hydration 應套用 items.json 的 effect_hydration +20")
+	_assert_eq(character.stats.get_value("alcohol"), 25.0, "alcohol 應套用 items.json 的 effect_alcohol +25")
+	_assert_eq(character.stats.get_value("wakefulness"), 42.0, "wakefulness 應套用 items.json 的 effect_wakefulness -8（50 → 42）")
+	character.free()
+
+
+func test_apply_personality_delta_clamps_both_boundaries() -> void:
+	var character = Character.new()
+	character.personality = {"greed": 95.0, "honesty": 5.0}
+
+	character.apply_personality_delta({"greed": 20.0, "honesty": -20.0})
+
+	_assert_eq(character.personality["greed"], 100.0, "greed 加超過 100 應夾到 100")
+	_assert_eq(character.personality["honesty"], 0.0, "honesty 減到負值應夾到 0")
+	character.free()
+
+
+func test_apply_personality_delta_skips_unknown_field() -> void:
+	# 對應 character.gd 的修正：items.json 手打錯人格欄位名稱時只跳過該欄位、
+	# 印警告，不能真的寫進 personality——多一個陌生 key 會讓下次存讀時
+	# _is_valid_personality_data() 判定整包不合法，連本來合法的 10 項都遭殃
+	var character = Character.new()
+	character.personality = {"greed": 50.0}
+
+	character.apply_personality_delta({"greeed": 10.0})
+
+	_assert_eq(character.personality.has("greeed"), false, "拼錯的欄位名稱不該被寫進 personality")
+	_assert_eq(character.personality["greed"], 50.0, "沒被指定的既有欄位應維持不變")
+	character.free()
+
+
 # 測試輔助方法
 func _assert_eq(actual: Variant, expected: Variant, message: String) -> void:
 	_assertion_count += 1
