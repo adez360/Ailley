@@ -73,39 +73,11 @@ const EAT_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法吃東�
 const EAT_NO_FOOD := "NO_FOOD"			# 背包裡沒有 ItemDatabase 分類為 food 的物品
 const EAT_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 satiety，不能先扣食物
 
-## 各食物 item_id 吃下去回復多少 satiety。抄《規格書 08》§3-1「飢餓回復」欄位
-## 取絕對值——那欄位是改名前（hunger，越低越好）留下的數字，P-32 把欄位改成
-## satiety（越高越好）之後，同一個量就是「回復多少 satiety」，方向反過來但
-## 數字不變。查不到的 item_id（理論上不會發生，_find_food_slot() 已經用
-## ItemDatabase 篩過 category）保守回 0，不讓 eat() 憑空生出滿足感
-const EAT_SATIETY_RECOVERY := {
-	"bread": 25.0,
-	"cooked_meat": 40.0,
-	"fish_dish": 35.0,
-	"herb_soup": 20.0,
-}
-
 ## drink() 的失敗原因碼，形狀比照 EAT_*（#163）
 const DRINK_OK := ""
 const DRINK_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法喝東西
 const DRINK_NO_DRINK := "NO_DRINK"		# 背包裡沒有 ItemDatabase 分類為 drink 的物品
 const DRINK_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 hydration，不能先扣飲品
-
-## 各飲品 item_id 喝下去回復多少 hydration。抄《規格書 08》§3-2「口渴回復」欄位
-## 取絕對值，理由跟 EAT_SATIETY_RECOVERY 一樣（改名前 thirst 越低越好，
-## P-32 改成 hydration 越高越好之後方向反過來、數字不變）
-const DRINK_HYDRATION_RECOVERY := {
-	"water": 40.0,
-	"ale": 20.0,
-	"spirit": 10.0,
-}
-
-## 含酒精飲品喝下去加多少 alcohol，抄《規格書 08》§3-2「alcohol」欄位（#165）。
-## 查不到（例如 water）就是 0，同一種「保守回 0」規則跟 EAT_SATIETY_RECOVERY 一樣
-const DRINK_ALCOHOL_RECOVERY := {
-	"ale": 25.0,
-	"spirit": 45.0,
-}
 
 const GIVE_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE 一樣的距離門檻，2 格
 
@@ -997,6 +969,30 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 	return BUY_OK
 
 
+# ---- 人格 ----
+
+## 依 delta_dict（{欄位: 差值}）調整人格特質，統一夾在 0~100。跟睡眠反思套用
+## personality_delta 是同一件事（同一份人格數值被誰改）,agent.gd 的反思流程
+## 也改呼叫這裡,不要兩份 clampf 公式各自長歪。物品效果（見 eat()/drink()）
+## 跟反思共用同一個 personality_delta 欄位名稱與語意，只是觸發來源不同——
+## 反思那邊的數字在 ai_schema.gd 已經先夾過 ±MAX_PERSONALITY_DELTA（LLM
+## 宣告的內容需要防它自己講過頭），物品這邊的數字是開發者寫在 items.json
+## 裡的靜態資料，不是執行期才收到的不信任輸入，不需要再套一次同樣的驗證，
+## 只要作者自己在資料裡填小一點的數字即可
+func apply_personality_delta(delta_dict: Dictionary) -> void:
+	for dim in delta_dict.keys():
+		# 只認 _PERSONALITY_FIELDS 內的 10 個維度——不認得的 key（items.json
+		# 手打錯欄位名之類）略過不寫。personality 存檔載入靠 _is_valid_
+		# personality_data() 卡「剛好 10 項欄位」，這裡如果照單全收把第 11 個
+		# 陌生 key 寫進 personality，下次存讀就會整包 personality 被判定不合法
+		# 而拒絕套用，連本來合法的 10 項都遭殃（CodeRabbit review 抓到）
+		if not _PERSONALITY_FIELDS.has(dim):
+			push_warning("Character %s: 未知的人格欄位 %s，略過" % [character_name, dim])
+			continue
+		var current: float = float(personality.get(dim, 50.0))
+		personality[dim] = clampf(current + float(delta_dict[dim]), 0.0, 100.0)
+
+
 # ---- 進食 ----
 
 # 找背包裡第一筆食物類物品的摘要（get_summary() 那份，含 item_id/count/slot），
@@ -1010,12 +1006,12 @@ func _find_food_slot() -> Dictionary:
 			return entry
 	return {}
 
-# 吃掉背包裡一份食物：扣一個、回復對應量的 satiety。沒有背包的角色
-# （EAT_NO_INVENTORY）或背包裡沒有食物（EAT_NO_FOOD）都要有明確原因碼，
-# 跟 TALK_*／WORK_*／BUY_* 同一套「每個動作都要能講出為什麼失敗」的規則。
-# remove_item() 的回傳值要先確認是 REMOVE_OK 才能加 satiety（CodeRabbit
-# review 抓到）——不然扣格子失敗（例如兩個來源同一 tick 搶同一份食物）時，
-# satiety 還是會被加上去，變成憑空回復
+# 吃掉背包裡一份食物：扣一個、套用該物品在 items.json 定義的 effect_*／
+# personality_delta。沒有背包的角色（EAT_NO_INVENTORY）或背包裡沒有食物
+# （EAT_NO_FOOD）都要有明確原因碼，跟 TALK_*／WORK_*／BUY_* 同一套「每個
+# 動作都要能講出為什麼失敗」的規則。效果套用交給 inventory.use_item()——
+# 它才是「先套效果、確認成功才扣格子」那個順序的唯一實作，這裡不重複
+# 一次 remove_item() 的判斷
 func eat() -> String:
 	if inventory == null:
 		return EAT_NO_INVENTORY
@@ -1027,11 +1023,12 @@ func eat() -> String:
 		return EAT_NO_STATS
 
 	var item_id: String = food["item_id"]
-	var remove_reason := inventory.remove_item(item_id, 1)
-	if remove_reason != Inventory.REMOVE_OK:
+	var item := ItemDatabase.get_item(item_id)
+	var use_reason := inventory.use_item(item_id, stats, item)
+	if use_reason != Inventory.USE_OK:
 		return EAT_NO_FOOD
 
-	stats.add("satiety", EAT_SATIETY_RECOVERY.get(item_id, 0.0))
+	apply_personality_delta(item.get("personality_delta", {}))
 	return EAT_OK
 
 
@@ -1046,26 +1043,27 @@ func _find_drink_slot() -> Dictionary:
 			return entry
 	return {}
 
-# 喝掉背包裡一份飲品：扣一個、回復對應量的 hydration。跟 eat() 同一套
-# 「每個動作都要能講出為什麼失敗」規則與 remove_item() 先確認 REMOVE_OK
-# 才加值的順序（#163）
+# 喝掉背包裡一份飲品：跟 eat() 同一套「每個動作都要能講出為什麼失敗」規則，
+# 效果套用同樣交給 inventory.use_item()（原本 DRINK_HYDRATION_RECOVERY／
+# DRINK_ALCOHOL_RECOVERY 已刪除，資料搬進 data/items.json——含酒精飲品的
+# alcohol／wakefulness 效果都在裡面一起讀出來，不用分兩行各自 add）
 func drink() -> String:
 	if inventory == null:
 		return DRINK_NO_INVENTORY
 
-	var item := _find_drink_slot()
-	if item.is_empty():
+	var slot := _find_drink_slot()
+	if slot.is_empty():
 		return DRINK_NO_DRINK
 	if stats == null:
 		return DRINK_NO_STATS
 
-	var item_id: String = item["item_id"]
-	var remove_reason := inventory.remove_item(item_id, 1)
-	if remove_reason != Inventory.REMOVE_OK:
+	var item_id: String = slot["item_id"]
+	var item := ItemDatabase.get_item(item_id)
+	var use_reason := inventory.use_item(item_id, stats, item)
+	if use_reason != Inventory.USE_OK:
 		return DRINK_NO_DRINK
 
-	stats.add("hydration", DRINK_HYDRATION_RECOVERY.get(item_id, 0.0))
-	stats.add("alcohol", DRINK_ALCOHOL_RECOVERY.get(item_id, 0.0))
+	apply_personality_delta(item.get("personality_delta", {}))
 	return DRINK_OK
 
 

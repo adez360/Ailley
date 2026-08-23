@@ -12,8 +12,12 @@ extends Node
 ## 為了一個 int 另外開一個節點，換到的只是多一個 get_node_or_null 要防。
 ##
 ## 物品使用（use_item()）不查 DatabaseManager——Character 負責從 item definition
-## 取得 effect_satiety/effect_hydration/effect_alcohol/effect_injury 與
-## is_consumable，再呼叫 inventory.use_item(item_id, stats, effects, is_consumable)。
+## （ItemDatabase.get_item()）整包讀出 effect_* 與 is_consumable，再呼叫
+## inventory.use_item(item_id, stats, effects, is_consumable)。effect_* 的
+## key 是 "effect_" + Stats.SPEC 的欄位名，跟著 SPEC 走、不寫死清單——SPEC
+## 未來加一項數值，這裡不用跟著改。人格特質（personality_delta）不算在內：
+## 那是 Character 自己的欄位，Inventory 不需要知道人格是什麼，由呼叫端
+## （Character.eat()/drink()）另外呼叫 apply_personality_delta() 處理。
 ## Inventory 只負責：1. 確認物品存在 2. 確認是否可消耗 3. 套用 Stats 效果
 ## 4. 成功後消耗 1 個物品
 
@@ -258,10 +262,11 @@ func _remove_item_detailed(item_id: String, count: int, notify: bool = true) -> 
 
 # ---- 使用 ----
 
-# 使用一個消耗品。effects 格式：
-# {"effect_satiety": 40, "effect_hydration": 20, "effect_alcohol": 25, "effect_injury": -30}
-# Stats.add() 會負責將數值限制在 0~100。只有效果套用成功，才會消耗背包中的 1 個物品——
-# 順序反過來的話，remove 失敗會讓效果套用了卻沒扣物品，兩邊帳對不上
+# 使用一個消耗品。effects 格式（通常直接整包傳 ItemDatabase.get_item() 的結果）：
+# {"effect_satiety": 40, "effect_hydration": 20, ...}，key 是 "effect_" + Stats.SPEC
+# 的欄位名，8 項都能寫、沒寫的視為 0。Stats.add() 會負責將數值限制在 0~100。
+# 只有效果套用成功，才會消耗背包中的 1 個物品——順序反過來的話，remove 失敗會讓
+# 效果套用了卻沒扣物品，兩邊帳對不上
 func use_item(item_id: String, stats: Stats, effects: Dictionary, is_consumable: bool = true) -> String:
 	if stats == null:
 		push_warning("[Inventory] 使用物品失敗：Stats 不存在。")
@@ -275,33 +280,27 @@ func use_item(item_id: String, stats: Stats, effects: Dictionary, is_consumable:
 		push_warning("[Inventory] %s 不是可消耗物品。" % item_id)
 		return USE_NOT_CONSUMABLE
 
-	var effect_satiety := float(effects.get("effect_satiety", 0.0))
-	var effect_hydration := float(effects.get("effect_hydration", 0.0))
-	var effect_alcohol := float(effects.get("effect_alcohol", 0.0))
-	var effect_injury := float(effects.get("effect_injury", 0.0))
+	var deltas := {}
+	for key in Stats.SPEC:
+		var value := float(effects.get("effect_%s" % key, 0.0))
+		if not is_finite(value):
+			push_error("[Inventory] %s 的 effect_%s 不是有效數值。" % [item_id, key])
+			return USE_INVALID_EFFECT
+		if value != 0.0:
+			deltas[key] = value
 
-	if not is_finite(effect_satiety) or not is_finite(effect_hydration) \
-			or not is_finite(effect_alcohol) or not is_finite(effect_injury):
-		push_error("[Inventory] %s 的物品效果包含無效數值。" % item_id)
-		return USE_INVALID_EFFECT
-
-	if effect_satiety != 0.0:
-		stats.add("satiety", effect_satiety)
-	if effect_hydration != 0.0:
-		stats.add("hydration", effect_hydration)
-	if effect_alcohol != 0.0:
-		stats.add("alcohol", effect_alcohol)
-	if effect_injury != 0.0:
-		stats.add("injury", effect_injury)
+	for key in deltas:
+		stats.add(key, deltas[key])
 
 	var remove_reason := remove_item(item_id, 1)
 	if remove_reason != REMOVE_OK:
 		push_error("[Inventory] 使用 %s 後移除物品失敗：%s" % [item_id, remove_reason])
 		return USE_REMOVE_FAILED
 
-	print("[Inventory] 使用物品：%s | satiety=%+.1f hydration=%+.1f alcohol=%+.1f injury=%+.1f" % [
-		item_id, effect_satiety, effect_hydration, effect_alcohol, effect_injury
-	])
+	var log_parts := PackedStringArray()
+	for key in deltas:
+		log_parts.append("%s=%+.1f" % [key, deltas[key]])
+	print("[Inventory] 使用物品：%s | %s" % [item_id, " ".join(log_parts)])
 	return USE_OK
 
 
