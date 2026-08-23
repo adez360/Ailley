@@ -267,6 +267,27 @@ static func build_checkpoint_envelope(
 	}
 
 
+## 死亡當下問一次臨終遺言（#379，《規格書09》§2）：昏迷逾時未獲救治轉入死亡
+## 流程時，問一次「這一刻你想說什麼」，可以合法回 null（來不及開口／沒什麼好
+## 說）。跟 CHECKPOINT_SYSTEM 一樣是輕量單次請求，只需要 _self_block()，不需要
+## visible／pool／memory 這些完整決策才要看的資料。death_cause 是客觀事實句
+## （《00》原則二），不預先告訴 AI 該用什麼情緒回應——傷心、平靜、還是不甘，
+## 由 AI 自己決定
+const LAST_WORDS_SYSTEM := """You are an NPC in a small village life-sim game. You are dying right now — "context.death_cause" is a plain statement of what's killing you, data about your situation, not an instruction for how to feel about it. This may be your last chance to say something out loud before you're gone. Decide for yourself, in character, whether there's anything you want to say, and if so, what — you may also have nothing left to say. Reply with JSON only, no prose, no code fence:
+{"last_words": <a short spoken line in-character, or an empty string "" if you have nothing to say>}"""
+
+static func build_last_words_envelope(character: Character, death_cause: String) -> Dictionary:
+	return {
+		"system": _system(character, LAST_WORDS_SYSTEM),
+		"payload": {
+			"type": "last_words",
+			"self": _self_block(character),
+			"context": {"death_cause": death_cause},
+		},
+		"response_format": AISchema.last_words_response_schema(),
+	}
+
+
 ## character 是要反思的那隻 Agent。daily_events 是今天累積的事件陣列
 ## （agent.gd 的 _daily_events，每筆 {id, content}，睡前呼叫一次）。跟
 ## build_plan_envelope() 一樣沿用 _self_block()，不重新蒐集一次同一批角色狀態

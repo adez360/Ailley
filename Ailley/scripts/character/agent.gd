@@ -1082,6 +1082,18 @@ func _finish_sleep_reflection_request() -> void:
 		_sleep_reflection_pending = false
 		request_sleep_reflection()
 
+## 死亡當下的臨終遺言請求（#379，《規格書09》§2）。覆寫 Character 的 no-op
+## 掛點——只有 Agent 有 LLM 決策，Player 沒有，維持 last_words = null。
+## _die() 呼叫這裡時不 await（見該函式說明），跟 request_sleep_reflection() 一樣
+## 「打不到就算了」：last_words 本來就可以合法地是 null（來不及開口），
+## 不值得為了它讓死亡狀態機卡住或另外報錯給誰看
+func _request_last_words(cause: String) -> void:
+	var envelope := PromptBuilder.build_last_words_envelope(self, cause)
+	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, AISchema.validate_last_words)
+	if not result["ok"]:
+		return
+	last_words = result["data"]["last_words"]
+
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
 ## AIService、parse_completion、validate_*，任何一關失敗都靜默放棄，任務池
 ## fallback 頂著，下次任務完成再試。跟 next_line() 不一樣的是這裡失敗不用
