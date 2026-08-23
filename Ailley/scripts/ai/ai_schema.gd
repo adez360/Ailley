@@ -112,6 +112,11 @@ const MAX_PLAN_TEXT_CHARS := MAX_LINE_CHARS
 # 得多——這是「現在最想做的一件事」的簡短標籤，不是完整的句子或段落
 const MAX_CURRENT_GOAL_CHARS := 40
 
+# appointment（issue #479，《10》§5.5）。"with"／"location" 都是自由文字
+# （對方顯示名／地點 id），跟 update_plan 的 text 同一種寬鬆度，沿用
+# MAX_PLAN_TEXT_CHARS 當上限，不另開一組數字
+const MAX_APPOINTMENT_TEXT_CHARS := MAX_PLAN_TEXT_CHARS
+
 # #224：LLM 任務 priority／duration 的合理範圍。實跑觀察到只給文字說明
 # 量級不夠——模型會回 Infinity、或 1e15／5000 這種有限但失控的數字，
 # 讓那筆任務在仲裁時永遠贏、永遠換不掉（見 agent.gd HYSTERESIS 的說明）。
@@ -496,7 +501,14 @@ static func _validate_persuade_params(params: Variant, now_minutes: int) -> Dict
 # 正是這個 PR 要擋的「實質永不過期」退化情況，寧可漏傳時直接編譯期報錯，
 # 也不要靜默吃一個看似合法、實際上錯誤的預設值（GDScript 規則：有預設值
 # 的參數後面不能接沒預設值的，allow_update_plan 只好跟著一起拿掉預設值）
-static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minutes: int) -> Dictionary:
+# allow_appointment（issue #479，《10》§5.5）：目前設計是「一律開放」——
+# 跟 allow_update_plan／has_pending_persuade 那種要看情境的條件式欄位不同，
+# 每次決策都能宣告。仍然做成參數而不是寫死 true，是延續這個檔案「schema
+# 開放範圍由呼叫端決定，這裡只負責照做」的一貫分工，之後若要收斂開放時機
+# 不用動這裡的驗證邏輯
+static func validate_tasks(
+	data: Dictionary, allow_update_plan: bool, now_minutes: int, allow_appointment: bool = true
+) -> Dictionary:
 	if not data.has("tasks") or not data["tasks"] is Array:
 		return _fail(ERROR_BAD_SHAPE)
 
@@ -665,6 +677,62 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minute
 		if current_goal.length() > MAX_CURRENT_GOAL_CHARS:
 			current_goal = current_goal.substr(0, MAX_CURRENT_GOAL_CHARS)
 
+	# appointment（issue #479，《10》§5.5）：選填欄位，跟 update_plan 同一種
+	# 「allow_* 為假時整包忽略、不因此讓回應失敗」的態度。null 代表這輪沒有
+	# 宣告新約定，呼叫端（agent.gd::_apply_appointment()）用 null 判斷要不要
+	# 套用——跟 update_plan 的 null／空陣列分辨方式一致
+	#
+	# game_time 驗證成結構化 {day,hour,minute}（拍板決策：跟 GameClock 內部
+	# 介面一致，不是自由字串），三個欄位都要是合法範圍內的整數；再換算成
+	# 跟 _now_minutes() 同一個基準的絕對分鐘數，擋掉「宣告一個已經過去的
+	# 約定」這種沒有意義的輸入——跟 expires_in_minutes 下限同一個理由
+	# （#290：剛驗證完就過期的任務没有意義），只是這裡改成直接拒絕整包，
+	# 不是夾制或退回預設值：一筆約定的時間本身錯了，沒有「取個安全值頂著」
+	# 的合理退路
+	var appointment: Variant = null
+	if allow_appointment and data.has("appointment"):
+		if not data["appointment"] is Dictionary:
+			return _fail(ERROR_BAD_SHAPE)
+		var appt: Dictionary = data["appointment"]
+
+		if not appt.has("with") or not appt["with"] is String:
+			return _fail(ERROR_BAD_SHAPE)
+		var appt_with: String = (appt["with"] as String).strip_edges()
+		if appt_with.is_empty() or appt_with.length() > MAX_APPOINTMENT_TEXT_CHARS:
+			return _fail(ERROR_BAD_SHAPE)
+
+		if not appt.has("location") or not appt["location"] is String:
+			return _fail(ERROR_BAD_SHAPE)
+		var appt_location: String = (appt["location"] as String).strip_edges()
+		if appt_location.is_empty() or appt_location.length() > MAX_APPOINTMENT_TEXT_CHARS:
+			return _fail(ERROR_BAD_SHAPE)
+
+		if not appt.has("game_time") or not appt["game_time"] is Dictionary:
+			return _fail(ERROR_BAD_SHAPE)
+		var game_time: Dictionary = appt["game_time"]
+		for key in ["day", "hour", "minute"]:
+			if not game_time.has(key):
+				return _fail(ERROR_BAD_SHAPE)
+			var value: Variant = game_time[key]
+			if not (value is int or value is float) or not is_finite(float(value)):
+				return _fail(ERROR_BAD_SHAPE)
+
+		var appt_day := int(game_time["day"])
+		var appt_hour := int(game_time["hour"])
+		var appt_minute := int(game_time["minute"])
+		if appt_day < 1 or appt_hour < 0 or appt_hour > 23 or appt_minute < 0 or appt_minute > 59:
+			return _fail(ERROR_BAD_SHAPE)
+
+		var appt_minutes := appt_day * 1440 + appt_hour * 60 + appt_minute
+		if appt_minutes <= now_minutes:
+			return _fail(ERROR_BAD_SHAPE)
+
+		appointment = {
+			"with": appt_with,
+			"location": appt_location,
+			"game_time": {"day": appt_day, "hour": appt_hour, "minute": appt_minute},
+		}
+
 	return _ok({
 		"tasks": tasks,
 		"reasoning": reasoning,
@@ -677,6 +745,7 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minute
 		"emotion": emotion,
 		"current_goal": current_goal,
 		"current_goal_provided": current_goal_provided,
+		"appointment": appointment,
 	})
 
 
@@ -937,7 +1006,9 @@ static func _validated_optional_line(data: Dictionary, key: String, max_chars: i
 # 有意義，但這裡不細分「這筆待回應是行動說服還是純思想說服」——兩種都一起
 # 給這三個欄位，多給的那兩個模型不會用到就好，不值得為了少給兩個欄位
 # 多一個判斷維度，見 issue #227 討論串
-static func plan_response_schema(allow_update_plan: bool = false, has_pending_persuade: bool = false) -> Dictionary:
+static func plan_response_schema(
+	allow_update_plan: bool = false, has_pending_persuade: bool = false, allow_appointment: bool = true
+) -> Dictionary:
 	var properties := {
 		"reasoning": {"type": "string", "maxLength": MAX_REASONING_CHARS},
 		"inner_monologue": {"type": "string"},
@@ -996,6 +1067,29 @@ static func plan_response_schema(allow_update_plan: bool = false, has_pending_pe
 		properties["persuaded"] = {"type": "boolean"}
 		properties["importance"] = {"type": "number", "minimum": 0, "maximum": 100}
 		properties["valence"] = {"type": "string", "enum": VALID_VALENCES}
+
+	# appointment（issue #479，《10》§5.5）：拍板決策是一律開放，不像
+	# update_plan／persuaded 需要看情境才加進 schema——allow_appointment 預設
+	# true，這裡仍然包一層 if 是保留跟其餘條件式欄位一致的寫法，之後若要收斂
+	# 開放時機，改動只需要呼叫端傳 false，不用動這裡的結構
+	if allow_appointment:
+		properties["appointment"] = {
+			"type": "object",
+			"properties": {
+				"with": {"type": "string", "maxLength": MAX_APPOINTMENT_TEXT_CHARS},
+				"location": {"type": "string", "maxLength": MAX_APPOINTMENT_TEXT_CHARS},
+				"game_time": {
+					"type": "object",
+					"properties": {
+						"day": {"type": "integer", "minimum": 1},
+						"hour": {"type": "integer", "minimum": 0, "maximum": 23},
+						"minute": {"type": "integer", "minimum": 0, "maximum": 59},
+					},
+					"required": ["day", "hour", "minute"],
+				},
+			},
+			"required": ["with", "location", "game_time"],
+		}
 
 	return {
 		"type": "json_schema",

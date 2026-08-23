@@ -475,6 +475,36 @@ const FACT_SOCIAL_SILENCE_1_DAY_MIN := 1440	# 144 tick
 const FACT_GOAL_STALE_MIN := 360				# 36 tick
 const FACT_CONSECUTIVE_FAILURE_THRESHOLD := 3
 
+## 約定機制（issue #479，《10》§5.5）。兩個都是拍板定案的 30 分鐘：提醒
+## 提前量跟爽約寬限期剛好同一個數字，但語意不同，各自成一個常數，不要共用，
+## 之後哪一個要單獨調整不會牽動另一個
+const APPOINTMENT_REMINDER_LEAD_MINUTES := 30
+const APPOINTMENT_GRACE_MINUTES := 30
+
+## 目前追蹤中的約定。允許不限筆數並存——規格書「決策 JSON 一次只能宣告一筆
+## 新約定」講的是 appointment 欄位本身的形狀（單一物件，不是陣列），不是
+## 「同時只能一筆生效中」的規則；真的衝突（同一時段人在兩處）交給下面的
+## 到場判定自然處理，不做衝突偵測。
+##
+## 只有真的呼叫過 _apply_appointment() 宣告過的那一方才會有這筆記錄——
+## 對方即使被寫進 "with"，只要沒有自己也宣告一筆對稱的約定，就完全不會出現
+## 在對方的 _active_appointments 裡，也就收不到任何提醒或爽約通知。這剛好
+## 對應《10》§5.5「單方面宣告的約定...僅給宣告方提醒事實句，未答應的一方
+## 不給」——不需要額外的雙向比對／同意機制：_process_appointments() 每一筆
+## 都是「以記錄擁有者為第一人稱」獨立判斷，雙方各自宣告了對稱約定時，兩邊
+## 各自的記錄剛好各自跑出正確、對稱的事實句；只有一方宣告時，另一方從頭到
+## 尾沒有記錄，天然就不會被通知到。
+##
+## 每筆形狀：{"with": String, "location": String,
+##   "game_time": {"day": int, "hour": int, "minute": int}, "notified_30min": bool}
+var _active_appointments: Array[Dictionary] = []
+
+## 爽約方若當時處於睡眠或昏迷，事實句延遲到下一次真正決策時才補發
+## （《10》§5.5）。跟 _pending_reaction_lines 一樣是讀到即清空的一次性佇列，
+## 只是多墊一層「先攢著，等醒來或恢復行動能力才轉正式送出」——見
+## _flush_deferred_appointment_lines()
+var _deferred_appointment_lines: Array[String] = []
+
 ## 上次「跟人講完話」的時間點，_ready() 時初始化成出生那一刻，不是 0——
 ## 不然剛出生的角色會立刻背著「已經一整天沒說話」的事實句
 var _last_social_minute := 0
@@ -1219,6 +1249,8 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 		if had_pending_persuade:
 			_resolve_pending_persuade(data)
 
+		_apply_appointment(data.get("appointment"))
+
 		_reevaluate()
 
 		final_result = {
@@ -1269,6 +1301,36 @@ func _apply_today_plan(items: Array[Dictionary]) -> void:
 			"text": item.get("text", ""),
 			"is_done": item.get("is_done", false),
 		})
+
+## 套用 AI 這輪決策宣告的 appointment（issue #479，《10》§5.5）。appointment
+## 是 AISchema.validate_tasks() 驗證過的結果——null 代表這輪沒有宣告新約定，
+## 呼叫端（_request_next_decision()）不用先判斷有沒有就直接傳進來，這裡自己
+## 擋 null。
+##
+## 引擎自動把這筆約定併入 today_plan（《10》§5.5「產生約定時...不另外詢問
+## AI」）：文字是引擎生成的，不是問 AI 要不要寫，跟 update_plan「整份由 AI
+## 決定內容」的語意不同——這裡只是「多附加一筆」，不清空也不取代既有
+## _today_plan 內容，也不消耗 update_plan 的四個開放時機額度
+func _apply_appointment(appointment: Variant) -> void:
+	if appointment == null or (appointment as Dictionary).is_empty():
+		return
+	var appt: Dictionary = appointment as Dictionary
+
+	_active_appointments.append({
+		"with": str(appt.get("with", "")),
+		"location": str(appt.get("location", "")),
+		"game_time": (appt.get("game_time", {}) as Dictionary).duplicate(),
+		"notified_30min": false,
+	})
+
+	_next_plan_id += 1
+	_today_plan.append({
+		"id": _next_plan_id,
+		"text": "和%s約好%s在 %s 見面" % [
+			appt.get("with", ""), _appointment_time_label(appt.get("game_time", {})), appt.get("location", "")
+		],
+		"is_done": false,
+	})
 
 ## today_plan 是不是「沒事可做，需要新目標」（#89 觸發時機之一）：一片空白
 ## 也算——開場或剛被清空過，跟「全部項目都做完了」是同一種狀況，都需要
@@ -1650,7 +1712,127 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 	_apply_action_recovery()
 	if _pending_save_retry:
 		_autosave_on_wake()
+	_process_appointments(_now_minutes())
 	_reevaluate()
+
+## 約定機制三個時點的引擎判斷（issue #479，《10》§5.5）：約定前 30 分鐘
+## 提醒、時間到後開始檢查雙方是否在場、寬限期滿仍未雙方到齊才判定爽約。
+## 每個遊戲分鐘的 GameClock.time_changed 都會呼叫到這裡，跟仲裁器其餘依賴
+## 時間推進的邏輯（_apply_action_recovery()／_reevaluate()）同一個節奏，
+## 不用另外養計時器。
+##
+## 每筆都是「以這筆記錄的擁有者（也就是 self）為第一人稱」獨立判斷——
+## 「等待方」／「爽約方」兩種事實句都是講給 self 聽的，跟對方有沒有自己的
+## 對稱記錄無關，見 _active_appointments 欄位說明
+func _process_appointments(now_minutes: int) -> void:
+	_flush_deferred_appointment_lines()
+
+	for i in range(_active_appointments.size() - 1, -1, -1):
+		var entry: Dictionary = _active_appointments[i]
+		var game_time: Dictionary = entry.get("game_time", {})
+		var appt_minutes := int(game_time.get("day", 0)) * 1440 \
+			+ int(game_time.get("hour", 0)) * 60 + int(game_time.get("minute", 0))
+
+		# 前 30 分鐘提醒：只在還沒提醒過、時間還沒到的窗內觸發一次
+		if not entry.get("notified_30min", false) \
+				and now_minutes >= appt_minutes - APPOINTMENT_REMINDER_LEAD_MINUTES \
+				and now_minutes < appt_minutes:
+			_queue_reaction_fact_line("你和 %s 約好%s在 %s 見面。" % [
+				entry.get("with", ""), _appointment_time_label(game_time), entry.get("location", "")
+			])
+			entry["notified_30min"] = true
+
+		if now_minutes < appt_minutes:
+			continue
+
+		var location: String = str(entry.get("location", ""))
+		var other := _find_character_by_name(str(entry.get("with", "")))
+		var self_present := _character_at_location(self, location)
+		var other_present := _character_at_location(other, location)
+
+		if self_present and other_present:
+			_queue_reaction_fact_line("你和 %s 在 %s 準時碰面了。" % [entry.get("with", ""), location])
+			_active_appointments.remove_at(i)
+			continue
+
+		# 寬限期還沒滿，繼續等——爽約事實句要在「等待逾時當下」才給
+		# （《10》§5.5），不是時間一到就立刻判定
+		if now_minutes < appt_minutes + APPOINTMENT_GRACE_MINUTES:
+			continue
+
+		var deadline_label := _appointment_time_label(
+			_minutes_to_game_time(appt_minutes + APPOINTMENT_GRACE_MINUTES)
+		)
+
+		if self_present:
+			# 自己到了、對方沒到——等待方視角（《10》§5.5 表格「等待方」列）
+			_queue_reaction_fact_line("你在 %s 等到 %s，%s 沒有出現。" % [
+				location, deadline_label, entry.get("with", "")
+			])
+		else:
+			# 自己沒到——爽約方視角（同表「爽約方」列）。實際所在地優先用
+			# 即時座標反查（_resolve_actual_place()），查不到（例如正走在兩地
+			# 之間）才退回目前任務的目的地 current_place，避免講出一個自己
+			# 根本不在附近的地名
+			var actual_place := _resolve_actual_place()
+			if actual_place.is_empty():
+				actual_place = current_place
+			var line := "現在是 %s，你和 %s 約好%s在 %s 見面，但你人在 %s。" % [
+				deadline_label, entry.get("with", ""), _appointment_time_label(game_time),
+				location, actual_place
+			]
+			# 爽約當下若在睡眠或昏迷，延到醒來／恢復行動能力後第一次決策才給
+			# （《10》§5.5「爽約方若當時處於睡眠或昏迷，改為醒來後首次決策時
+			# 給予」）
+			if current_state == "sleep" or has_condition(CONDITION_INCAPACITATED):
+				_deferred_appointment_lines.append(line)
+			else:
+				_queue_reaction_fact_line(line)
+
+		_active_appointments.remove_at(i)
+
+## 把爽約當下被延後的事實句，在角色醒來／恢復行動能力後的下一個遊戲分鐘
+## 轉正式送進 _pending_reaction_lines（《10》§5.5）。跟 _process_appointments()
+## 同一個 tick 呼叫、且排在最前面——先把上一輪攢著的舊事實句出隊，再處理
+## 這一輪新的判定，兩批事實句的送出順序才不會反過來
+func _flush_deferred_appointment_lines() -> void:
+	if _deferred_appointment_lines.is_empty():
+		return
+	if current_state == "sleep" or has_condition(CONDITION_INCAPACITATED):
+		return
+	for line in _deferred_appointment_lines:
+		_queue_reaction_fact_line(line)
+	_deferred_appointment_lines.clear()
+
+## 某個角色此刻是不是實際站在某個地點附近——用即時座標反查而不是
+## current_place（那是任務目的地，不是即時位置，見 _resolve_actual_place()
+## 的說明），跟那個函式同一個半徑常數，但不限定 self，_process_appointments()
+## 需要對「約定對象」（可能是另一個 Agent，也可能是玩家）做同樣的判斷，
+## 兩邊共用這份邏輯，不重寫兩份
+func _character_at_location(character: Character, location: String) -> bool:
+	if character == null or not is_instance_valid(character) or location.is_empty():
+		return false
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null:
+		return false
+	return anchors.resolve_from_position(character.get_body_position(), ACTUAL_PLACE_RADIUS) == location
+
+## 絕對遊戲分鐘數換算回結構化 {day,hour,minute}，跟 _now_minutes() 用同一個
+## 基準（day * 1440 + hour * 60 + minute）——給寬限期滿那一刻要顯示的時間點
+## 用，那個時間點不是任何一筆事件的 game_time，是額外算出來的
+func _minutes_to_game_time(total_minutes: int) -> Dictionary:
+	return {
+		"day": total_minutes / 1440,
+		"hour": (total_minutes % 1440) / 60,
+		"minute": total_minutes % 60,
+	}
+
+## 結構化 game_time 轉事實句用的顯示格式（拍板決策：內部存 {day,hour,minute}，
+## 事實句輸出時才轉成「第X天 HH:MM」這種中文顯示格式）
+func _appointment_time_label(game_time: Dictionary) -> String:
+	return "第%d天 %02d:%02d" % [
+		int(game_time.get("day", 0)), int(game_time.get("hour", 0)), int(game_time.get("minute", 0))
+	]
 
 # 力竭時強制進入休息，直到 stamina 恢復
 func _force_rest_until_recovered(now_minutes: int) -> void:

@@ -54,6 +54,14 @@ You cannot rewrite today_plan this turn. If you want the chance to on your next 
 const PLAN_SYSTEM_PERSUADE := """
 "context.fact_lines" may include someone's attempt to persuade you of something. Decide for yourself whether you're convinced — no one will second-guess it either way. Set "persuaded": true if you accept it, or false (or omit it) if you don't. If you accept it and it wasn't asking you to do a specific task, also give "importance" (0-100, how much this matters to you) and "valence" ("positive"/"negative"/"neutral", how it felt) so you'll actually remember it later."""
 
+## appointment（issue #479，《10》§5.5）：一律開放，不像 update_plan／persuaded
+## 需要看情境才加進提示詞。措辭刻意不承諾對方一定會出現、也不會告知有沒有
+## 被答應——引擎只負責在時間到之前提醒雙方各自宣告過的約定，其餘（會不會被
+## 放鴿子、要不要在意）交給角色自己判斷，跟《00》原則二一致。"self.time" 已經
+## 帶了目前的 day/hour/minute，模型可以直接用它推算未來的約定時刻
+const PLAN_SYSTEM_APPOINTMENT := """
+You may propose to meet another character later by including "appointment": {"with": "<exact name>", "location": "<a location id>", "game_time": {"day": <game day>, "hour": 0-23, "minute": 0-59}} in your reply, using "self.time" as your reference point for what day/time it is now. This only records your own intention — it doesn't notify the other person or ask for their agreement, and you won't be told whether they show up until it actually happens."""
+
 ## #224：舊版範例把 priority/duration 寫成 0，模型沒有量級可以參考，實測
 ## 一律照抄範例回傳 duration=0、priority 落在自己發明的 0~1 尺度（跟
 ## agent.gd 的 SCHEDULE_BASE_PRIORITY=10／TIME_BONUS=100 完全對不上）。
@@ -146,11 +154,15 @@ static func _plan_system_tail() -> String:
 ## 給模型選，選中後 agent.gd::_select() 會判定 NOT_IMPLEMENTED、整筆任務丟掉——
 ## 一次完全空轉的決策輪次。不在這裡另外抄一份字串，兩份清單各自維護遲早會漂移，
 ## 常數改了這裡忘記跟著改，模型看到的清單就會跟引擎實際做得到的不一樣
-static func _plan_system(allow_update_plan: bool, has_pending_persuade: bool = false) -> String:
+static func _plan_system(
+	allow_update_plan: bool, has_pending_persuade: bool = false, allow_appointment: bool = true
+) -> String:
 	var body := PLAN_SYSTEM_BASE % ", ".join(AISchema.IMPLEMENTED_ACTIONS)
 	body += PLAN_SYSTEM_UPDATE_PLAN_ALLOWED if allow_update_plan else PLAN_SYSTEM_UPDATE_PLAN_LOCKED
 	if has_pending_persuade:
 		body += PLAN_SYSTEM_PERSUADE
+	if allow_appointment:
+		body += PLAN_SYSTEM_APPOINTMENT
 	return body + _plan_system_tail()
 
 ## today_plan 陣列壓成一句自然語言，不是丟原始欄位列表給模型——見 #89 的
@@ -344,6 +356,10 @@ static func build_plan_envelope(
 		visible_block.append(_listener_block(character, other))
 		present_npc_ids.append(other.character_id)
 
+	# appointment（issue #479）沿用 _plan_system()／plan_response_schema() 各自
+	# 的 allow_appointment 預設值 true（一律開放），不像 allow_update_plan／
+	# has_pending_persuade 那樣需要呼叫端依情境判斷才傳值，這裡不用多接一個
+	# 參數轉傳
 	return {
 		"system": _system(character, _plan_system(allow_update_plan, has_pending_persuade)),
 		"payload": {
