@@ -1498,6 +1498,12 @@ func load_save_data(data: Dictionary) -> void:
 		conditions.clear()
 		conditions.append({"type": CONDITION_PETRIFIED, "turns_left": -1})
 		sprite.modulate = Color(0.5, 0.5, 0.5)
+		# 跟 _die() 同一個理由（CodeRabbit review 抓到）：場上正在工作／對話中的
+		# 角色被載入一份死亡存檔時，這裡只設了狀態欄位，沒有真的收尾——不呼叫
+		# force_interrupt() 的話 _run_work() 協程會在下個 GameClock.time_changed
+		# 通過距離檢查照樣撥款給死屍。Agent 覆寫的 _on_action_interrupted() 已經
+		# 擋了 is_dead，這裡呼叫不會反過來問出新決策
+		force_interrupt()
 	else:
 		# 還原成活人存檔時清掉死亡殘留（CodeRabbit review 抓到）：同一個 Character
 		# 節點先前若死過（例如 debug 重新載入另一份存活存檔），petrified 與灰階
