@@ -46,6 +46,15 @@ You may rewrite your entire today_plan by including "update_plan": [{"text": "<a
 const PLAN_SYSTEM_UPDATE_PLAN_LOCKED := """
 You cannot rewrite today_plan this turn. If you want the chance to on your next decision, set "request_plan_update": true."""
 
+## appointment 是條件式欄位（#479，《10》§5.5／《12》§2.4：對話情境中且在場
+## 有其他角色）——只有呼叫端判斷現在在對話中時才加進 schema 跟提示，跟
+## update_plan 同一種「文法層面就不存在這個選項」做法。措辭裡帶目前的遊戲
+## 時間（day/hour/minute），讓模型有基準能算出一個真的在未來的時間點，
+## 不用它自己亂猜「現在是第幾天」；格式要求跟 AISchema._validate_appointment()
+## 的解析格式一致，改一邊要記得改另一邊
+const PLAN_SYSTEM_APPOINTMENT_TEMPLATE := """
+You may arrange a future meeting by including "appointment": {"with": "<exact name>", "location": "<a place you both know>", "game_time": "<a moment after right now>"} in your reply. Right now is day %d, %02d:%02d. "game_time" must be written exactly as "第D天 HH:MM" (e.g. "第3天 09:00" means day 3, 09:00) and the day/time it names must come strictly after right now — never right now itself. Omit "appointment" entirely if you're not setting one up this turn."""
+
 ## persuaded 是條件式欄位（#227），跟 update_plan 同一套「只在有待回應事實句
 ## 時才加進 schema」做法。措辭刻意不逼模型一定要在同一輪的 tasks 裡反映
 ## 「被說動了」這個決定——那是另一個問題（見 issue #227 討論串），這裡只
@@ -146,11 +155,15 @@ static func _plan_system_tail() -> String:
 ## 給模型選，選中後 agent.gd::_select() 會判定 NOT_IMPLEMENTED、整筆任務丟掉——
 ## 一次完全空轉的決策輪次。不在這裡另外抄一份字串，兩份清單各自維護遲早會漂移，
 ## 常數改了這裡忘記跟著改，模型看到的清單就會跟引擎實際做得到的不一樣
-static func _plan_system(allow_update_plan: bool, has_pending_persuade: bool = false) -> String:
+static func _plan_system(
+	allow_update_plan: bool, has_pending_persuade: bool = false, allow_appointment: bool = false
+) -> String:
 	var body := PLAN_SYSTEM_BASE % ", ".join(AISchema.IMPLEMENTED_ACTIONS)
 	body += PLAN_SYSTEM_UPDATE_PLAN_ALLOWED if allow_update_plan else PLAN_SYSTEM_UPDATE_PLAN_LOCKED
 	if has_pending_persuade:
 		body += PLAN_SYSTEM_PERSUADE
+	if allow_appointment:
+		body += PLAN_SYSTEM_APPOINTMENT_TEMPLATE % [GameClock.day, GameClock.hour, GameClock.minute]
 	return body + _plan_system_tail()
 
 ## today_plan 陣列壓成一句自然語言，不是丟原始欄位列表給模型——見 #89 的
@@ -332,11 +345,15 @@ static func turn_entry(speaker_name: String, text: String) -> Dictionary:
 ## location_id 是 character 目前所在地點（呼叫端的 current_place），給
 ## _memory_block() 做連結展開篩選用（#360）——present_npc_ids 直接從
 ## visible 取 character_id，不用呼叫端另外組一份
+##
+## allow_appointment 決定要不要把 appointment 這個條件式欄位放進 schema 跟
+## 提示（#479，《10》§5.5）——呼叫端（agent.gd）自己判斷現在是不是「對話
+## 情境中」（《12》§2.4），跟 allow_update_plan 同一種做法
 static func build_plan_envelope(
 	character: Character, visible: Array[Character], pool: Array[Dictionary],
 	today_plan: Array[Dictionary], allow_update_plan: bool,
 	fact_lines: Array[String] = [], has_pending_persuade: bool = false,
-	location_id: String = ""
+	location_id: String = "", allow_appointment: bool = false
 ) -> Dictionary:
 	var visible_block: Array[Dictionary] = []
 	var present_npc_ids: Array[String] = []
@@ -345,7 +362,7 @@ static func build_plan_envelope(
 		present_npc_ids.append(other.character_id)
 
 	return {
-		"system": _system(character, _plan_system(allow_update_plan, has_pending_persuade)),
+		"system": _system(character, _plan_system(allow_update_plan, has_pending_persuade, allow_appointment)),
 		"payload": {
 			"type": "plan",
 			"self": _self_block(character),
@@ -357,7 +374,7 @@ static func build_plan_envelope(
 				"memory": _memory_block(character, present_npc_ids, location_id),
 			},
 		},
-		"response_format": AISchema.plan_response_schema(allow_update_plan, has_pending_persuade),
+		"response_format": AISchema.plan_response_schema(allow_update_plan, has_pending_persuade, allow_appointment),
 	}
 
 ## 生理 8 項注入用的中文形容詞對照表（《99》P-07 拍板定案），5 級距。
