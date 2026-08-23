@@ -46,3 +46,22 @@ func list() -> PackedStringArray:
 	for child in get_children():
 		names.append(child.name)
 	return names
+
+
+## 地點 key → 玩家看得懂的顯示名稱翻譯表（issue #179）。
+## LLM prompt／主控台仍然用 key 本身，不要在那些地方呼叫這個——
+## 見 note/技術/在地化.md「刻意沒有翻譯的東西」：外來文字一律視為資料。
+const DISPLAY_NAME_KEYS := {
+	"home": "UI_LOC_HOME",
+	"herb_shop": "UI_LOC_HERB_SHOP",
+	"tavern": "UI_LOC_TAVERN",
+	"pavilion": "UI_LOC_PAVILION",
+	"god_stone": "UI_GOD_STONE_TITLE",
+}
+
+
+func display_name(place_name: String) -> String:
+	var l10n_key: String = DISPLAY_NAME_KEYS.get(place_name, "")
+	if l10n_key.is_empty():
+		return place_name
+	return L10n.t(l10n_key)
