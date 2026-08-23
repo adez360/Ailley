@@ -370,7 +370,7 @@ func _decide_velocity() -> Vector2:
 # leave_conversation()（_unhandled_input 的 interact 分支），所以這裡固定 false
 func next_line(listener: Character, _turns: Array[Dictionary], _max_turns: int) -> Dictionary:
 	if not _pending_lines.is_empty():
-		var line := _pending_lines.pop_front()
+		var line: String = _pending_lines.pop_front()
 		return {"ok": true, "line": line, "end": false}
 
 	if is_instance_valid(listener) and listener.bubble != null:
