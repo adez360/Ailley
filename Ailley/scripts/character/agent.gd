@@ -1438,6 +1438,13 @@ func _on_work_finished() -> void:
 # 做完或判定失敗，只是被打斷，還在池子裡的話下次重新仲裁時值得重新考慮要不要
 # 繼續做（例如原本在走去做別的事，被打斷後可能還是想繼續走過去）
 func _on_action_interrupted() -> void:
+	# 死屍不重新規劃（CodeRabbit review 抓到）：_die() 這次改呼叫
+	# force_interrupt() 收尾在途的工作／對話，會連帶跑到這裡——沒有這個
+	# return，下面的 _request_next_decision()／_reevaluate() 會立刻幫死屍
+	# 問出新任務，等於繞過 _on_time_changed() 那道 is_dead 判斷
+	if is_dead:
+		return
+
 	# 清空前先存一份快照——character.gd::attack() 的呼叫順序是
 	# force_interrupt()（跑到這裡，把 current_place 清空）先於 _on_attacked()
 	# （記事實句），直接讀 current_place 的話 _on_attacked() 永遠拿到空字串

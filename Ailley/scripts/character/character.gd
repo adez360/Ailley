@@ -708,7 +708,13 @@ func _die(cause: String) -> void:
 	_incapacitation_start_minute = -1
 
 	corpse_decay = 0.0
-	stop_moving()
+	# force_interrupt() 已含 stop_moving()／leave_conversation()／_end_work()——
+	# 昏迷倒數的 30 分鐘內角色仍可能開始新的工作或被搭話（is_dead 這時還是
+	# false，_on_time_changed() 照常仲裁，work_at() 也不擋 _is_movement_locked()），
+	# 死亡當下要一次收尾，不能只清路徑，否則死屍會繼續佔用工作站領工資、
+	# 或被 conversation.gd 繼續要台詞（CodeRabbit review 抓到）。Agent 覆寫的
+	# _on_action_interrupted() 已加上 is_dead 判斷，這裡不會反過來觸發新決策
+	force_interrupt()
 	sprite.modulate = Color(0.5, 0.5, 0.5)		# 本體變灰色（《規格書09》§1）
 
 	print_debug("Character %s 死亡：%s" % [character_name, cause])
@@ -971,7 +977,11 @@ func is_working() -> bool:
 func work_at(workstation: Workstation) -> String:
 	if workstation == null:
 		return WORK_TARGET_NOT_FOUND
-	if is_in_conversation() or _working:
+	# 昏迷／治療／死亡期間不能開始新工作（CodeRabbit review 抓到）：
+	# _is_movement_locked() 只擋得住 _decide_velocity() 的移動輸出，原本沒擋
+	# work_at()——角色昏迷時若剛好站在工作站範圍內，仲裁器照樣能選中 work
+	# 任務並成功卡位，昏迷或死亡期間憑空多出一段不該存在的工作
+	if is_in_conversation() or _working or _is_movement_locked():
 		return WORK_BUSY
 	if get_body_position().distance_to(workstation.global_position) > WORK_RANGE:
 		return WORK_TOO_FAR
@@ -1458,9 +1468,13 @@ func load_save_data(data: Dictionary) -> void:
 	_treatment_location = loaded_treat_loc if loaded_treat_loc is String else _treatment_location
 
 	# 還原死亡狀態（#379）。is_dead 一旦是 true 就是終局，其餘欄位照搬存檔值即可
-	# ——不像昏迷/治療那樣需要用哨兵值判斷「進行到一半」，死亡沒有進行到一半這回事
-	var loaded_dead: Variant = data.get("is_dead", is_dead)
-	is_dead = loaded_dead if loaded_dead is bool else is_dead
+	# ——不像昏迷/治療那樣需要用哨兵值判斷「進行到一半」，死亡沒有進行到一半這回事。
+	# 缺席預設 false，不是沿用目前值（CodeRabbit review 抓到）：is_dead 是這個 PR
+	# 新增的欄位，所有既有存檔都沒有這個 key——若沿用目前值，先載入一份死亡存檔、
+	# 再對同一個節點載入一份沒有 is_dead 的舊存檔時，死亡狀態會黏著甩不掉，下面
+	# else 分支的清理永遠執行不到
+	var loaded_dead: Variant = data.get("is_dead", false)
+	is_dead = loaded_dead if loaded_dead is bool else false
 	if is_dead:
 		var loaded_tick: Variant = data.get("death_tick", death_tick)
 		death_tick = loaded_tick if loaded_tick is int else death_tick

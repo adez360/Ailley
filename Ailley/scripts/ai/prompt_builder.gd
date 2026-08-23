@@ -268,8 +268,10 @@ static func build_checkpoint_envelope(
 
 
 ## 死亡當下問一次臨終遺言（#379，《規格書09》§2）：昏迷逾時未獲救治轉入死亡
-## 流程時，問一次「這一刻你想說什麼」，可以合法回 null（來不及開口／沒什麼好
-## 說）。跟 CHECKPOINT_SYSTEM 一樣是輕量單次請求，只需要 _self_block()，不需要
+## 流程時，問一次「這一刻你想說什麼」，可以合法回空字串（來不及開口／沒什麼好
+## 說）——null 保留給請求打不到或驗證失敗這種角色狀態，不是模型能回的合法值
+## （見 ai_schema.gd::validate_last_words()）。跟 CHECKPOINT_SYSTEM 一樣是輕量
+## 單次請求，只需要 _self_block()，不需要
 ## visible／pool／memory 這些完整決策才要看的資料。death_cause 是客觀事實句
 ## （《00》原則二），不預先告訴 AI 該用什麼情緒回應——傷心、平靜、還是不甘，
 ## 由 AI 自己決定
