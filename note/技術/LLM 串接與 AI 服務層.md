@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-22
+updated: 2026-08-23
 ---
 
 # LLM 串接與 AI 服務層
@@ -291,8 +291,34 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 
 ### 界線：軟壓力為主，工程安全閥兜底（issue #178 已收斂範圍）
 
-不設「設計上」的輪數硬上限，改用**軟壓力**：payload 帶 `turns_so_far`，system prompt
-告訴模型「聊得越久越該收尾」。但兩隻 Agent 都禮貌性不收尾時，`conversation.gd`
+不設「設計上」的輪數硬上限，設計目標是**軟壓力**：payload 帶 `turns_so_far`，system prompt
+告訴模型「聊得越久越該收尾」。**這個機制目前還沒有實作**——`prompt_builder.gd`
+的 `DIALOGUE_SYSTEM` 尚未帶這段文字、`build_dialogue_envelope()` 傳的是固定
+`max_turns`，不是遞增的 `turns_so_far`；這裡描述的是設計目標，接回程式碼是
+獨立的後續動作，不在 #482 範圍內。
+
+**A/B/C 實測證實這個方向有效**（issue #482，2026-08-23，本機 llama-server
+直連 `/v1/chat/completions`，Qwen2.5-7B-Instruct-Q4_K_M，三組各 15 場對話跑到
+10 輪上限）：
+
+| 組別 | system prompt | 主動 `end:true` 收尾比率 | 平均總輪數 | 平均收尾輪次 |
+| --- | --- | --- | --- | --- |
+| A（現況對照，無提示） | 逐字照抄目前的 `DIALOGUE_SYSTEM` | 40.0%（6/15） | 9.80 | 第 8.5 輪 |
+| B（軟壓力） | A 組加一句「`context.turns_so_far` 越大越該找自然的點收尾」 | 93.3%（14/15） | 8.87 | 第 7.8 輪 |
+| C（軟壓力＋收尾語氣要求） | B 組再加一句「`end:true` 那句話本身要讀起來像實際道別，不能只是把前面講過的話原樣重複、單純把旗標翻成 true」 | 100.0%（15/15） | 6.80 | 第 5.8 輪 |
+
+單純加「該收尾」的提示（B 組）能把主動收尾比率從 4 成拉到 9 成以上，但人工
+檢視內容發現不少場次的 `end:true` 貼在跟前面同一種空話重複的句子上（例如
+「同意，共同努力讓村子更美好！」），不是真正的道別語氣。額外明講「收尾
+那句話本身要像道別」（C 組）同時解決比率與內容品質兩個問題：比率拉到
+100%、平均輪數降到三組最低，收尾句幾乎全是真正的道別語（「再見」「明天見」
+「路上小心」）或有語境的收尾陳述。**C 組是三版裡最值得接回
+`DIALOGUE_SYSTEM` 的候選文字**，候選文字與完整實驗腳本見
+`note/ai/soft_pressure_experiment/`。**尚未接回 `DIALOGUE_SYSTEM`**——這裡
+只確認方向有效，真的把 `turns_so_far` 欄位與 C 組提示文字接進
+`prompt_builder.gd`／`build_dialogue_envelope()` 留給下一則 issue。
+
+但兩隻 Agent 都禮貌性不收尾時，`conversation.gd`
 的 `SAFETY_MAX_TURNS`（工程安全閥，跟上面的設計軟壓力是兩回事，同時也是無觀眾
 世界的 LLM 呼叫成本閘門，issue #178）會強制截斷，值訂為 **10**。10 是三份獨立
 證據（實測、poc_village_sim 導演模式 B、poc_village_sim 逐 tick 對話追蹤）的
@@ -666,7 +692,9 @@ JSON Schema → GBNF 的轉換器。
 - [x] **LLM 成本上限完全沒有防護**——研究與提案已由 #395 完成（本機
       Qwen2.5-7B，6 場對話均值 7.0 輪／場，`max_dialogue_calls_per_game_day`
       旋鈕設計案見上方「每日對話呼叫上限提案」一節），落地實作見 #434
-- [ ] 軟壓力（system prompt 叫模型「聊久了該收尾」）到底有沒有用，未知數，見 #482
+- [x] **軟壓力有明顯效果**（#482，2026-08-23）：A/B 實測見「界線：軟壓力為主，
+      工程安全閥兜底」一節，機制目前仍未接回 `DIALOGUE_SYSTEM`，接回去是
+      獨立的後續動作
 - [ ] 尚未對真正的 OpenRouter 打過請求，TLS/DNS 與真實回應格式未驗證，見 #483
 - [x] 成本上限機制的具體設計——同上，見 #395／#434
 - [x] **對話逐字稿暫存——拍板不做**（#485，2026-08-21）：`spoke` 訊號與
