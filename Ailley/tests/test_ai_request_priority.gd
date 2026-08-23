@@ -62,7 +62,7 @@ func _dequeue_order(specs: Array) -> Array:
 	return _drain(svc)
 
 
-func _drain(svc: Node) -> Array:
+func _drain(svc: AI_SERVICE) -> Array:
 	var order: Array = []
 	while not svc._queue.is_empty():
 		order.append(svc._queue.pop_at(svc._next_job_index()).tag)
