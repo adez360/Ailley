@@ -46,6 +46,8 @@ const ALLOWED_ACTIONS := [
 	"steal", "attack",
 	# E 搬運類（#161，《99》P-27）
 	"haul", "struggle",
+	# F 安葬類（#380，《規格書09》§3-2／§6）
+	"bury",
 ]
 
 # 本輪真正有實作的動作。其餘動作驗證會過，但執行層要回 NOT_IMPLEMENTED，
@@ -86,7 +88,11 @@ const ALLOWED_ACTIONS := [
 #
 # drink 是 #163 接上的：跟 eat 同一套「呼叫一次就完成」模式，寫法照抄
 # _pursue_eat_task()（見 agent.gd::_pursue_drink_task()）
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade"]
+#
+# bury 是 #380 接上的：跟 attack 同一套「目標是另一個角色、一次執行完就退出
+# 任務池」模式（_pursue_bury_task()），差別是目標必須是已死亡且尚未安葬的
+# 屍體，且雙方都要在墓園錨點附近，見 Character.bury() 的檢查順序
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -296,13 +302,15 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 	if task.has("params") and not task["params"] is Dictionary:
 		return _fail(ERROR_BAD_SHAPE)
 
-	# talk／attack／give 是目前有逐欄位驗證 params 的動作（talk 見 #90，
-	# attack 見 #159，give 見 #264；其餘動作還沒有）：沒有 target 的任務會被
+	# talk／attack／bury／give 是目前有逐欄位驗證 params 的動作（talk 見 #90，
+	# attack 見 #159，give 見 #264，bury 見 #380）：沒有 target 的任務會被
 	# 各自的 _pursue_*_task() 誤判成「目標不存在」一路帶進任務池才發現，
 	# 不如在這一層就擋掉，跟這個檔案「外來內容一律不信任」的原則一致，
-	# 不等到執行層才發現資料是空的。give 的 target 檢查獨立成下面一段，
-	# 因為它還要多驗 count 的範圍，跟 talk／attack 共用的這段不同形狀
-	if ["talk", "attack"].has(action):
+	# 不等到執行層才發現資料是空的。bury 的 target 是要安葬的屍體（另一個
+	# 角色的名字），跟 attack 同一種「單純一個 target 字串」形狀，不需要
+	# 像 give 那樣多驗 count。give 的 target 檢查獨立成下面一段，
+	# 因為它還要多驗 count 的範圍，跟 talk／attack／bury 共用的這段不同形狀
+	if ["talk", "attack", "bury"].has(action):
 		var talk_params: Dictionary = task.get("params", {})
 		var target: Variant = talk_params.get("target")
 		if not target is String or (target as String).strip_edges().is_empty():

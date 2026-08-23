@@ -193,6 +193,10 @@ var _attack_pursuit_last_distance := INF
 var _persuade_pursuit_stuck_ticks := 0
 var _persuade_pursuit_last_distance := INF
 
+# bury 任務用的卡住偵測（#380），跟 _attack_pursuit_* 同一套理由與收尾方式
+var _bury_pursuit_stuck_ticks := 0
+var _bury_pursuit_last_distance := INF
+
 # 送達（已對目標開口，不論對方是否忙碌拒絕）後設 true，擋掉 _pursue_persuade_task()
 # 後續每個 tick 重複呼叫 try_record_pending_persuade()／move_to()（P-09，
 # CodeRabbit review 抓到：persuade 原本送達當下就 _finish_task_and_request_next()，
@@ -1514,10 +1518,12 @@ func get_state_snapshot() -> Dictionary:
 
 # ---- 存檔 ----
 
-# #381：墓碑三個「一份墓一筆」欄位（words_to_creator/last_words/life_highlights），
-# 比照 base 的欄位風格直接存讀，不建 SPEC——三個欄位型別互不相同（string/string/
-# array），硬套 Stats.SPEC 那種同型別、走訪產生數值的模式沒有意義；SPEC 那條
-# 規則要保的是「加一項不用到處改」，這裡欄位數量固定且各自的存讀邏輯本來就不同。
+# #381：墓碑「一份墓一筆」欄位裡屬於 Agent 自己的那兩個
+# （words_to_creator/life_highlights），比照 base 的欄位風格直接存讀，不建
+# SPEC——兩個欄位型別互不相同（string/array），硬套 Stats.SPEC 那種同型別、
+# 走訪產生數值的模式沒有意義；SPEC 那條規則要保的是「加一項不用到處改」，
+# 這裡欄位數量固定且各自的存讀邏輯本來就不同。last_words 是 Character 自己的
+# 欄位（#379，Player 也需要），存讀交給 super()，這裡不重複處理。
 # epitaphs（第四個欄位，一對多）不在這裡，走 SQLite，見 #382
 #
 # today_plan（#350）是跨天的承諾——「今天打算做這幾件事」——跟 current_goal
@@ -1858,6 +1864,8 @@ func _reevaluate_once() -> void:
 		_attack_pursuit_last_distance = INF
 		_persuade_pursuit_stuck_ticks = 0
 		_persuade_pursuit_last_distance = INF
+		_bury_pursuit_stuck_ticks = 0
+		_bury_pursuit_last_distance = INF
 
 	# 剛睡醒的偵測要在這裡的任何選任務邏輯跑之前先記下「進來的時候是不是
 	# 在睡」——選任務邏輯本身就可能把 current_state 從 sleep 換掉，這個
@@ -2221,6 +2229,19 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			if matches.size() > 1:
 				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
 			return {"success": true, "reason": ""}
+		"bury":
+			# 跟 attack 同理：硬規則過了就直接放行，不落進下面的 _roll_success()——
+			# 安葬本身不是一場需要擲骰決定成敗的互動（《00》原則四只管「涉及他人
+			# 意願」的動作要不要擲骰，屍體沒有意願可言），距離／地點／墓碑格數
+			# 這些「這個世界裡真的能不能做到」的檢查交給 Character.bury() 自己
+			# 的檢查順序，這裡只確認目標存在且是名字唯一
+			var target_name: String = str(params.get("target", ""))
+			var matches := _find_all_characters_by_name(target_name)
+			if matches.is_empty():
+				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
+			if matches.size() > 1:
+				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
+			return {"success": true, "reason": ""}
 		"persuade":
 			# 跟 attack 同一套「硬規則過了就直接放行，不落進下面的 _roll_success()」
 			# ——persuade 不擲骰（見《00》原則四），成敗交給被說服者自己的模型
@@ -2294,6 +2315,8 @@ func _select(task: Dictionary, now_minutes: int, outgoing_ok: bool = true) -> vo
 	_persuade_pursuit_stuck_ticks = 0
 	_persuade_pursuit_last_distance = INF
 	_persuade_delivered = false
+	_bury_pursuit_stuck_ticks = 0
+	_bury_pursuit_last_distance = INF
 	# 排程任務的 id 是穩定的 schedule_%d，同一筆 buy 任務會在下一個遊戲日
 	# 重用同一個 id——不歸零的話，前一天走不到販賣機留下的 _buy_pursuit_task_id
 	# 與 _pursuit_done=true 會讓新一天同 id 的任務直接被守衛判定「已處理過」，
@@ -2348,6 +2371,11 @@ func _pursue_current_task() -> void:
 
 	if current_state == "attack":
 		_pursue_attack_task()
+		return
+
+	# bury（#380）跟 attack／give 同理：目標是另一個角色（屍體），不是固定地點
+	if current_state == "bury":
+		_pursue_bury_task()
 		return
 
 	# talk 任務的目標是另一個角色，不是固定地點——current_place 對它一律是空的
@@ -3112,6 +3140,82 @@ func _attack_failure_message(failure: String) -> String:
 			return "距離太遠，攻擊不到"
 		_:
 			return "攻擊沒有成功"
+
+# bury 任務的執行（#380）：目標跟 attack 一樣是另一個角色（要安葬的屍體），
+# 沿用同一套「走一次、卡住偵測、卡住就真的放棄」節流。跟 attack 不同的是
+# 距離門檻用 Character.BURY_RANGE，而且 Character.bury() 自己還會再檢查
+# 屍體是否死亡、是否已安葬、是否在墓園範圍內、墓碑格數滿不滿——這裡只負責
+# 把安葬者移動到屍體旁邊，真正的規則判斷交給 bury() 本身
+func _pursue_bury_task() -> void:
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		if not result["success"]:
+			_track_action_result_for_facts("bury", false)
+			_finish_task_and_request_next()
+			return
+
+	var params: Dictionary = _current_task.get("params", {})
+	var target_name: String = str(params.get("target", ""))
+	var target := _find_character_by_name(target_name)
+
+	if target == null:
+		last_action_result = "找不到這個人，可能已經離開了"
+		_track_action_result_for_facts("bury", false)
+		_finish_task_and_request_next()
+		return
+
+	var distance := get_body_position().distance_to(target.get_body_position())
+	if distance > Character.BURY_RANGE:
+		if not move_to(target.get_body_position()):
+			push_warning("Agent %s: 走不到安葬對象 %s" % [character_name, target.character_name])
+			last_action_result = "靠近不了屍體，安葬不了"
+			_track_action_result_for_facts("bury", false)
+			_finish_task_and_request_next()
+			return
+
+		if distance >= _bury_pursuit_last_distance - 1.0:
+			_bury_pursuit_stuck_ticks += 1
+		else:
+			_bury_pursuit_stuck_ticks = 0
+		_bury_pursuit_last_distance = distance
+
+		if _bury_pursuit_stuck_ticks >= 3:
+			push_warning("Agent %s: 安葬對象 %s 卡住走不到，放棄" % [character_name, target.character_name])
+			last_action_result = "靠近不了屍體，安葬不了"
+			_track_action_result_for_facts("bury", false)
+			_finish_task_and_request_next()
+		return
+
+	stop_moving()
+	var bury_failure := bury(target)
+	last_action_result = _bury_failure_message(bury_failure)
+	_track_action_result_for_facts("bury", bury_failure == Character.BURY_OK)
+
+	if bury_failure == Character.BURY_OK:
+		_push_daily_event("你把%s安葬了。" % target.character_name, [target.character_id])
+
+	_finish_task_and_request_next()
+
+# bury() 失敗原因碼轉中文，格式跟 _attack_failure_message() 一致
+func _bury_failure_message(failure: String) -> String:
+	match failure:
+		Character.BURY_OK:
+			return ""
+		Character.BURY_TARGET_NOT_FOUND:
+			return "找不到這個人，可能已經離開了"
+		Character.BURY_TARGET_NOT_DEAD:
+			return "這個人還活著，不能安葬"
+		Character.BURY_ALREADY_BURIED:
+			return "已經安葬過了"
+		Character.BURY_TOO_FAR:
+			return "距離太遠，安葬不了"
+		Character.BURY_NOT_AT_CEMETERY:
+			return "這裡不是墓園，沒辦法安葬"
+		Character.BURY_CEMETERY_FULL:
+			return "墓園的墓碑格滿了，安葬不了"
+		_:
+			return "安葬沒有成功"
 
 # persuade 任務的執行（#227）：目標跟 talk／give 一樣是會動的角色，走到範圍
 # 內才生效，不擲骰、恆送達——「送不送達」（有沒有走到、對方在不在）跟
