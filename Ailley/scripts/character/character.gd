@@ -747,6 +747,12 @@ func _resolve_death_location() -> String:
 func _update_corpse_decay() -> void:
 	if not is_dead:
 		return
+	# 死亡當下那個 tick 不算：_die() 觸發時若剛好落在 tick 邊界上，_on_game_minute()
+	# 會在同一次呼叫裡先跑 _die()（corpse_decay 歸零）再跑這裡，沒有這個判斷
+	# 剛死的屍體會立刻變成 0.7，等於白白少算一個完整 tick 的「新鮮」時間
+	# （CodeRabbit review 抓到）
+	if death_tick == _current_tick():
+		return
 	corpse_decay = clampf(corpse_decay + 0.7, 0.0, 100.0)
 
 
@@ -1478,6 +1484,22 @@ func load_save_data(data: Dictionary) -> void:
 		conditions.clear()
 		conditions.append({"type": CONDITION_PETRIFIED, "turns_left": -1})
 		sprite.modulate = Color(0.5, 0.5, 0.5)
+	else:
+		# 還原成活人存檔時清掉死亡殘留（CodeRabbit review 抓到）：同一個 Character
+		# 節點先前若死過（例如 debug 重新載入另一份存活存檔），petrified 與灰階
+		# 只在上面 is_dead 分支寫入，不會因為這次 is_dead=false 自動消失——不清的話
+		# 會出現 is_dead=false 但外觀／conditions 仍是死屍的矛盾狀態
+		conditions = conditions.filter(func(c): return c["type"] != CONDITION_PETRIFIED)
+		sprite.modulate = Color(1, 1, 1)
+		death_tick = -1
+		death_day = -1
+		death_at = ""
+		death_cause = ""
+		death_location_id = ""
+		last_words = null
+		corpse_decay = 0.0
+		is_buried = false
+		grave_id = null
 
 	# 治療與昏迷互斥（見 _send_to_herb_shop_for_treatment()），治療中的存檔優先還原成治療狀態，
 	# 不重建 CONDITION_INCAPACITATED；只有「昏迷中但還沒送醫」才需要重建。死亡是終局，

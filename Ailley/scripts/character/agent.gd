@@ -1088,8 +1088,16 @@ func _finish_sleep_reflection_request() -> void:
 ## 「打不到就算了」：last_words 本來就可以合法地是 null（來不及開口），
 ## 不值得為了它讓死亡狀態機卡住或另外報錯給誰看
 func _request_last_words(cause: String) -> void:
+	# 世代守衛（CodeRabbit review 抓到）：跟 _request_next_decision() 同一個理由——
+	# 這通吃 await，等待期間可能發生 load_save_data()（世代遞增，見該函式），回應
+	# 回來時若世代已經不是發起請求那時的世代，代表這份 last_words 屬於已經作廢的
+	# 死亡請求，不能寫回去蓋掉載入後的角色狀態（可能是活人存檔，也可能是另一個
+	# 死亡角色自己的 last_words）
+	var my_generation := _decision_generation
 	var envelope := PromptBuilder.build_last_words_envelope(self, cause)
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, AISchema.validate_last_words)
+	if my_generation != _decision_generation:
+		return
 	if not result["ok"]:
 		return
 	last_words = result["data"]["last_words"]
