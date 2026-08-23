@@ -440,7 +440,12 @@ static func _parse_appointment_game_time(text: String) -> Dictionary:
 		return {"ok": false}
 	var rest := text.substr(day_end + 1).strip_edges()
 	var time_parts := rest.split(":")
-	if time_parts.size() != 2 or not time_parts[0].is_valid_int() or not time_parts[1].is_valid_int():
+	# 時／分兩段都要求剛好兩位數（CodeRabbit review 抓到）：只驗證數字內容會
+	# 放行 "9:00"／"09:0" 這種跟提示詞承諾的固定格式「HH:MM」對不上的寫法，
+	# 之後憑字串比對／顯示這個 game_time 的地方（_process_appointment() 的
+	# 提醒事實句）會直接照抄，格式不一致會讓事實句讀起來怪
+	if time_parts.size() != 2 or time_parts[0].length() != 2 or time_parts[1].length() != 2 \
+			or not time_parts[0].is_valid_int() or not time_parts[1].is_valid_int():
 		return {"ok": false}
 
 	var day := int(day_part)

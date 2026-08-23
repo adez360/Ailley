@@ -911,8 +911,14 @@ func exit_conversation() -> void:
 		# 觸發 2：意圖全數完成）——這裡也是「一筆任務完成」的事件，talk
 		# 剛好完成的這一刻如果 today_plan 已經全部做完，同樣該給重寫的機會，
 		# 不用等到下一次 duration 到期或睡醒才補上
+		#
+		# allow_appointment=true（#479，《12》§2.4「對話情境中且在場有其他
+		# 角色」）：這裡是唯一真正對應那個條件的觸發點——剛講完話，對方
+		# 剛剛還在眼前，適合問「要不要跟這個人約下次見面」。super() 已經把
+		# _conversation 清成 null，不能再靠 is_in_conversation() 現算，改由
+		# 呼叫端（這裡）直接宣告，跟 allow_update_plan 同一種做法
 		if was_llm and llm_decision_enabled and not _awaiting_decision:
-			_request_next_decision(_today_plan_needs_new_goal())
+			_request_next_decision(_today_plan_needs_new_goal(), true)
 
 	_reevaluate()
 
@@ -1120,7 +1126,14 @@ func _finish_sleep_reflection_request() -> void:
 ## 之一」（呼叫端各自的理由見各呼叫處的註解）。這裡另外 or 上
 ## _plan_update_requested：上一輪模型如果申請過，這裡兌現、用完就消費掉——
 ## 不管呼叫端這次是為了什麼理由觸發，欠的那次都在這裡還
-func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
+##
+## allow_appointment（#479）一樣是呼叫端自己判斷、不是這裡讀 is_in_conversation()
+## 現算——《12》§2.4「對話情境中且在場有其他角色」在這個仲裁器裡唯一真正成立
+## 的時刻是 exit_conversation() 剛講完話那一刻，而那個呼叫點在 super() 把
+## _conversation 清成 null 之後才觸發下一次決策（CodeRabbit review 抓到），
+## 這裡現算 is_in_conversation() 永遠讀到 false。改成跟 allow_update_plan
+## 同一種做法：呼叫端自己知道「這通是不是剛結束一場對話」，這裡只負責照做
+func _request_next_decision(allow_update_plan: bool = false, allow_appointment: bool = false) -> Dictionary:
 	if _awaiting_decision:
 		return {"ok": false, "triggered": false}
 	_awaiting_decision = true
@@ -1158,11 +1171,6 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	# 這次根本沒送出去的事實句一起清掉。改成只記「送出了幾筆」，等這次回應
 	# 真的被套用時，才從佇列前面移掉對應筆數——等待期間新增的一律留在後面
 	var fact_lines_sent_count := _pending_fact_lines.size()
-
-	# appointment（#479）：條件式欄位開放時機是「對話情境中且在場有其他角色」
-	# （《12》§2.4）——is_in_conversation() 就是這裡指的對話情境，對話一定有
-	# 對象在場，不需要另外檢查 visible 是否為空
-	var allow_appointment := is_in_conversation()
 
 	var visible: Array[Character] = vision.get_visible_characters() if vision != null else []
 	var envelope := PromptBuilder.build_plan_envelope(
@@ -1250,9 +1258,16 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 
 		# appointment（#479）：null 代表這次沒有新約定（不管是沒開放還是模型
 		# 選擇不用），有值就整筆取代舊的——跟 update_plan 同一種「明確給了才動」
-		# 判斷
+		# 判斷。驗證層（AISchema._validate_appointment()）用的是送出信封那一刻
+		# 的 now_minutes（見上面 var now_minutes := _now_minutes() 那行），但
+		# 這裡是 await 網路往返回來之後——重試、逾時都可能讓時間走到約定時刻
+		# 之後，用當初那個時間點驗證仍會通過，套用後下一個 tick 立刻判定爽約
+		# 這種一出生就過期的約定沒有意義（CodeRabbit review 抓到）。用現在
+		# 重新查一次 _now_minutes() 把關，過期就整筆丟棄，不重試——跟這一整段
+		# 「世代不符、驗證失敗都直接放棄這輪」的態度一致，不特別為這一個欄位
+		# 開一條回頭路
 		var new_appointment: Variant = data.get("appointment")
-		if new_appointment != null:
+		if new_appointment != null and int(new_appointment.get("game_time_minutes", 0)) > _now_minutes():
 			_apply_appointment(new_appointment)
 
 		if had_pending_persuade:
@@ -1309,12 +1324,50 @@ func _apply_today_plan(items: Array[Dictionary]) -> void:
 			"is_done": item.get("is_done", false),
 		})
 
+## 存檔還原用的形狀檢查（CodeRabbit review 抓到）：只接受包含
+## with／location／game_time／game_time_minutes 且型別正確的 Dictionary，
+## 其餘一律當作沒有約定——_process_appointment() 每分鐘都直接讀這幾個欄位，
+## 一份形狀不對的存檔（例如空 Dictionary）會在讀檔後的下一個 tick 就出錯。
+## reminder_sent／waiting_since／plan_id 不在這裡檢查：三者都是引擎自己
+## 記帳用的階段旗標，_process_appointment()／_clear_appointment_plan_entry()
+## 讀取時本來就用 .get() 給預設值，缺了也不會出錯
+static func _is_valid_appointment_shape(data: Dictionary) -> bool:
+	if not data.get("with") is String or (data["with"] as String).is_empty():
+		return false
+	if not data.get("location") is String or (data["location"] as String).is_empty():
+		return false
+	if not data.get("game_time") is String or (data["game_time"] as String).is_empty():
+		return false
+	var minutes: Variant = data.get("game_time_minutes")
+	return minutes is int or minutes is float
+
+## 移除目前 _appointment 對應的 _today_plan 摘要（CodeRabbit review 抓到）：
+## 覆蓋、赴約成功、爽約、等待逾時都是「這筆約定結束了」，_apply_appointment()
+## 產生的那筆摘要不該繼續留著顯示成一筆永遠沒做完的意圖，也不該讓
+## _today_plan_needs_new_goal() 誤判「還有事沒做完」。呼叫端要在真的清掉／
+## 換掉 _appointment 之前呼叫這個，用 plan_id 精準比對只移除那一筆——今日
+## 計畫可能同時有別的、跟約定無關的項目，不能整批清
+func _clear_appointment_plan_entry() -> void:
+	if _appointment == null:
+		return
+	var plan_id: Variant = _appointment.get("plan_id")
+	if plan_id == null:
+		return
+	for i in range(_today_plan.size() - 1, -1, -1):
+		if _today_plan[i].get("id") == plan_id:
+			_today_plan.remove_at(i)
+			return
+
 ## 套用一筆新約定（#479，《10》§5.5）。整筆取代，不跟舊約定合併——跟
-## _apply_today_plan() 同一種「重寫」語意，同時間只有一筆有效。同步把它併入
-## _today_plan 顯示（《10》§5.5「產生約定時，引擎自動將該筆約定併入
-## today_plan 顯示，不另外詢問 AI」）——這裡直接 append 一筆，不透過
+## _apply_today_plan() 同一種「重寫」語意，同時間只有一筆有效，換新的之前先
+## 清掉舊約定留下的 today_plan 摘要（見 _clear_appointment_plan_entry()）。
+## 同步把新約定併入 _today_plan 顯示（《10》§5.5「產生約定時，引擎自動將該筆
+## 約定併入 today_plan 顯示，不另外詢問 AI」）——這裡直接 append 一筆，不透過
 ## update_plan 那套「整份取代」機制，兩件事各自獨立
 func _apply_appointment(data: Dictionary) -> void:
+	_clear_appointment_plan_entry()
+	_next_plan_id += 1
+	var plan_id := _next_plan_id
 	_appointment = {
 		"with": data.get("with", ""),
 		"location": data.get("location", ""),
@@ -1322,10 +1375,10 @@ func _apply_appointment(data: Dictionary) -> void:
 		"game_time_minutes": int(data.get("game_time_minutes", 0)),
 		"reminder_sent": false,
 		"waiting_since": -1,
+		"plan_id": plan_id,
 	}
-	_next_plan_id += 1
 	_today_plan.append({
-		"id": _next_plan_id,
+		"id": plan_id,
 		"text": "跟 %s 約在「%s」見面（%s）" % [
 			_appointment["with"], _appointment["location"], _appointment["game_time"]
 		],
@@ -1350,6 +1403,7 @@ func _notify_appointment_broken(now_minutes: int) -> void:
 		_appointment_broken_pending_line = line
 	else:
 		_pending_fact_lines.append(line)
+	_clear_appointment_plan_entry()
 	_appointment = null
 
 ## 約定機制的每分鐘檢查（#479，《10》§5.5）。跟 _apply_action_recovery() 一樣
@@ -1372,7 +1426,14 @@ func _process_appointment(now_minutes: int) -> void:
 	var with_name := str(appointment["with"])
 	var location := str(appointment["location"])
 
-	if not appointment["reminder_sent"] and now_minutes >= deadline - APPOINTMENT_REMINDER_MINUTES_BEFORE:
+	# reminder_sent／waiting_since 一律用 .get() 讀，不用 []：這兩個是引擎自己
+	# 記帳用的階段旗標，_apply_appointment() 產生的 Dictionary 一定有，但這裡
+	# 不能假設——GDScript 對 Dictionary 缺 key 的 [] 存取是執行期錯誤，會直接
+	# 中斷整個決策迴圈，親自用 game_eval 灌一份缺這兩個欄位的資料重現過
+	# （不是理論上的疑慮）。跟 _is_valid_appointment_shape() 只驗證 AI 會填的
+	# 那四個欄位是同一個立場：這兩個欄位缺席就當作「還沒開始」，不因此整包
+	# 拒絕
+	if not appointment.get("reminder_sent", false) and now_minutes >= deadline - APPOINTMENT_REMINDER_MINUTES_BEFORE:
 		appointment["reminder_sent"] = true
 		_pending_fact_lines.append("你和 %s 約好%s在「%s」見面。" % [
 			with_name, str(appointment["game_time"]), location
@@ -1390,6 +1451,7 @@ func _process_appointment(now_minutes: int) -> void:
 	# 等待階段：對方出現在同一地點就算赴約成功，悄悄結束，不用另外通知
 	var other := _find_character_by_name(with_name)
 	if other != null and _actual_place_of(other) == location:
+		_clear_appointment_plan_entry()
 		_appointment = null
 		return
 
@@ -1397,6 +1459,7 @@ func _process_appointment(now_minutes: int) -> void:
 		_pending_fact_lines.append("你在「%s」等到%s，%s 沒有出現。" % [
 			location, _format_clock(deadline + APPOINTMENT_WAIT_MINUTES), with_name
 		])
+		_clear_appointment_plan_entry()
 		_appointment = null
 
 ## today_plan 是不是「沒事可做，需要新目標」（#89 觸發時機之一）：一片空白
@@ -1640,10 +1703,16 @@ func load_save_data(data: Dictionary) -> void:
 					_today_plan.append((item as Dictionary).duplicate(true))
 
 	# appointment（#479）：跟 today_plan 同一個「省略 key＝不動」語意。存檔裡
-	# 的 null（沒有約定）跟合法的 Dictionary 都要能還原，非法形狀一律當沒有
+	# 的 null（沒有約定）跟合法的 Dictionary 都要能還原，形狀不對（例如存檔
+	# 損毀留下的 {}）一律當沒有約定，不是照單全收——_process_appointment()
+	# 每分鐘都直接讀 game_time_minutes／with／location，形狀不對的資料撐不
+	# 到下一個 tick 就會出錯（CodeRabbit review 抓到）
 	if data.has("appointment"):
 		var raw_appointment: Variant = data.get("appointment")
-		_appointment = raw_appointment.duplicate(true) if raw_appointment is Dictionary else null
+		if raw_appointment is Dictionary and _is_valid_appointment_shape(raw_appointment as Dictionary):
+			_appointment = (raw_appointment as Dictionary).duplicate(true)
+		else:
+			_appointment = null
 	_appointment_broken_pending_line = ""
 
 # 第一次看到某個陌生人的反應。

@@ -506,12 +506,18 @@ schema 跟系統提示裡，其餘時候模型的 response_format 契約裡文�
 `reminder_sent`／`waiting_since`（引擎自己記帳的階段旗標，不是模型填的）。
 
 **輸出端**：條件式欄位（《12》§2.4，加入條件「對話情境中且在場有其他角色」）
-——`Agent._request_next_decision()` 用 `is_in_conversation()` 判斷是否開放，
-跟 `allow_update_plan` 同一種「文法層面就不存在這個選項」做法。`game_time`
-固定格式「第D天 HH:MM」（`AISchema._parse_appointment_game_time()` 手動解析，
-GBNF 轉換器不處理 pattern 這類字串格式約束，格式與未來時間的檢查落在驗證層），
-格式錯或指到過去/現在整包拒絕，跟 `update_plan` 陣列格式錯同一種「條件式
-欄位格式不對就讓整份回應失敗」的立場。
+——跟 `allow_update_plan` 同一種「文法層面就不存在這個選項」做法，但**不是**
+`_request_next_decision()` 內部現算 `is_in_conversation()`：仲裁器裡這個條件
+唯一真正成立的時刻是 `Agent.exit_conversation()` 剛講完話那一刻，而那個呼叫點
+在 `super()` 把 `_conversation` 清成 `null`、對話已經結束之後才觸發下一次決策，
+現算會永遠讀到 `false`。改成跟 `allow_update_plan` 同一種「呼叫端自己判斷、
+往下傳」做法：`_request_next_decision(allow_update_plan, allow_appointment)`
+多一個參數，只有 `exit_conversation()` 那個唯一對應觸發點傳 `true`，其餘呼叫
+處維持預設 `false`。`game_time` 固定格式「第D天 HH:MM」
+（`AISchema._parse_appointment_game_time()` 手動解析，GBNF 轉換器不處理
+pattern 這類字串格式約束，格式與未來時間的檢查落在驗證層；時／分兩段都要求
+剛好兩位數，`9:00`／`09:0` 一律拒絕），格式錯或指到過去/現在整包拒絕，跟
+`update_plan` 陣列格式錯同一種「條件式欄位格式不對就讓整份回應失敗」的立場。
 
 **產生約定時**：`Agent._apply_appointment()` 同步把一筆摘要 append 進
 `_today_plan`（《10》§5.5「不另外詢問 AI」），不透過 `update_plan` 那套整份
