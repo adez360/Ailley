@@ -49,13 +49,15 @@ var _words_to_creator_spoken := false
 ## 判定是否要說出口的 AI 呼叫進行中（見 maybe_speak_to_creator() 的鎖）
 var _words_to_creator_pending := false
 
-## #381：墓碑四內容欄位其中兩個（《規格書 09》§4-2）。last_words 由死者的 LLM
-## 在臨終時生成，可為空字串（來不及說）；life_highlights 由引擎彙整 L4 核心
-## 記憶與重大事件流產出，絕不讓 LLM 潤飾。目前死亡狀態機還沒做（見 #368），
+## #381：墓碑四內容欄位其中兩個（《規格書 09》§4-2）。life_highlights 由引擎彙整
+## L4 核心記憶與重大事件流產出，絕不讓 LLM 潤飾，目前死亡狀態機還沒做（見 #368），
 ## 這裡先開欄位形狀讓存讀檔接得上，沒有任何呼叫端會寫入——不影響現有行為。
 ## words_to_creator 是墓碑第三個欄位，已存在於上面（#164），不重複宣告。
-## 第四個欄位 epitaphs（一對多，SQLite）不在這裡，見 #382
-var last_words := ""
+## last_words（第二個欄位）改由 Character 基底宣告（#379，死亡狀態機落地時
+## 才發現這裡本來就先開了欄位形狀——Godot 4.5 不允許子類別重新宣告父類別
+## 成員，會直接讓這支腳本載入失敗，CodeRabbit review 抓到），寫入邏輯仍在
+## 下面覆寫的 _request_last_words()。第四個欄位 epitaphs（一對多，SQLite）
+## 不在這裡，見 #382
 var life_highlights: Array[String] = []
 
 ## schedule 任務給中間值，靠 time_bonus 拉開跟其他來源的差距，
@@ -190,6 +192,10 @@ var _attack_pursuit_last_distance := INF
 # （卡住就真的放棄，不是只警告）——共用邏輯見 _pursuit_stuck_progress()（#266）
 var _persuade_pursuit_stuck_ticks := 0
 var _persuade_pursuit_last_distance := INF
+
+# bury 任務用的卡住偵測（#380），跟 _attack_pursuit_* 同一套理由與收尾方式
+var _bury_pursuit_stuck_ticks := 0
+var _bury_pursuit_last_distance := INF
 
 # 送達（已對目標開口，不論對方是否忙碌拒絕）後設 true，擋掉 _pursue_persuade_task()
 # 後續每個 tick 重複呼叫 try_record_pending_persuade()／move_to()（P-09，
@@ -523,6 +529,8 @@ func _track_action_result_for_facts(action: String, success: bool) -> void:
 ## L10n——這是餵給 LLM 反思的內部事實句，不是玩家會看到的 UI 文字），
 ## 同時骰一次天神之石觸發判定
 func hear_god_stone(line: String) -> void:
+	if is_dead:
+		return
 	_push_daily_event("你在天神之石附近聽到一個聲音，說：「%s」" % line)
 	maybe_speak_to_creator(line)
 
@@ -548,12 +556,15 @@ func maybe_speak_to_creator(heard_line: String) -> void:
 		return
 
 	_words_to_creator_pending = true
+	var my_generation := _decision_generation
 	var envelope := PromptBuilder.build_words_to_creator_envelope(self, heard_line)
 	var validator := func(data: Dictionary) -> Dictionary:
 		return AISchema.validate_words_to_creator_choice(data)
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	_words_to_creator_pending = false
 
+	if is_dead or my_generation != _decision_generation:
+		return
 	if not result["ok"] or not result["data"]["say_it"]:
 		return
 
@@ -981,6 +992,11 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 ## 觸發時機有兩個：debug_console.gd 的 `reflect` 指令手動呼叫，以及
 ## _reevaluate_once() 偵測到角色進入睡眠狀態時自動呼叫（#112 落地後接上）
 func request_sleep_reflection() -> Dictionary:
+	# 死屍不建立新的反思請求（CodeRabbit review 抓到）：debug_console.gd 的
+	# `reflect` 指令可以對任何角色手動呼叫，不像睡眠轉換那條路徑已經被
+	# force_interrupt()／is_dead 相關守衛擋住
+	if is_dead:
+		return {"ok": false}
 	# 同一時間只能有一個反思請求在飛（CodeRabbit review 抓到）：睡眠事件跟
 	# debug_console.gd 的 `reflect` 指令都會呼叫這裡，這通吃 await，重疊呼叫
 	# 會讓兩個請求同時讀寫同一份 _daily_events——後回來的那個 filter() 會用
@@ -1026,9 +1042,14 @@ func request_sleep_reflection() -> Dictionary:
 			seen_ids[event_id] = true
 		return validated
 
+	var my_generation := _decision_generation
 	var envelope := PromptBuilder.build_reflection_envelope(self, events_sent)
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
-	if not result["ok"]:
+	# 世代守衛＋is_dead（CodeRabbit review 抓到）：跟 _request_last_words() 同一個
+	# 理由——等待期間角色可能死亡或被 load_save_data() 蓋過世代，回來時不能再把
+	# 反思結果（memory／personality_delta／today_plan／last_reflection_summary）
+	# 套用到已經作廢的角色狀態上
+	if is_dead or my_generation != _decision_generation or not result["ok"]:
 		_finish_sleep_reflection_request()
 		return {"ok": false}
 
@@ -1082,6 +1103,26 @@ func _finish_sleep_reflection_request() -> void:
 		_sleep_reflection_pending = false
 		request_sleep_reflection()
 
+## 死亡當下的臨終遺言請求（#379，《規格書09》§2）。覆寫 Character 的 no-op
+## 掛點——只有 Agent 有 LLM 決策，Player 沒有，維持 last_words = null。
+## _die() 呼叫這裡時不 await（見該函式說明），跟 request_sleep_reflection() 一樣
+## 「打不到就算了」：last_words 本來就可以合法地是 null（來不及開口），
+## 不值得為了它讓死亡狀態機卡住或另外報錯給誰看
+func _request_last_words(cause: String) -> void:
+	# 世代守衛（CodeRabbit review 抓到）：跟 _request_next_decision() 同一個理由——
+	# 這通吃 await，等待期間可能發生 load_save_data()（世代遞增，見該函式），回應
+	# 回來時若世代已經不是發起請求那時的世代，代表這份 last_words 屬於已經作廢的
+	# 死亡請求，不能寫回去蓋掉載入後的角色狀態（可能是活人存檔，也可能是另一個
+	# 死亡角色自己的 last_words）
+	var my_generation := _decision_generation
+	var envelope := PromptBuilder.build_last_words_envelope(self, cause)
+	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, AISchema.validate_last_words)
+	if my_generation != _decision_generation:
+		return
+	if not result["ok"]:
+		return
+	last_words = result["data"]["last_words"]
+
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
 ## AIService、parse_completion、validate_*，任何一關失敗都靜默放棄，任務池
 ## fallback 頂著，下次任務完成再試。跟 next_line() 不一樣的是這裡失敗不用
@@ -1094,6 +1135,12 @@ func _finish_sleep_reflection_request() -> void:
 ## _plan_update_requested：上一輪模型如果申請過，這裡兌現、用完就消費掉——
 ## 不管呼叫端這次是為了什麼理由觸發，欠的那次都在這裡還
 func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
+	# 死屍不建立新的決策請求（CodeRabbit review 抓到）：跟下面 await 之後的
+	# is_dead 判斷是兩件事——那道只擋「套用已經送出去的回應」，這裡擋在送出
+	# 請求之前，避免死亡後還被 _pending_reaction_lines 補問邏輯（見本函式
+	# 結尾）之類的呼叫端觸發一次白白浪費的 AI 請求
+	if is_dead:
+		return {"ok": false, "triggered": false}
 	if _awaiting_decision:
 		return {"ok": false, "triggered": false}
 	_awaiting_decision = true
@@ -1149,8 +1196,12 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	# 決策開關——不管回應抵達當下旗標是什麼值（就算又被重新打開），這份回應
 	# 都屬於已經作廢的世代，整包淘汰，不套用任何任務或計畫更新。
 	# 還原 had_plan_update_requested 時同時檢查 epoch：若 load_save_data() 發生過
-	# （epoch 已遞增），則保持清除狀態，不讓過期請求重新授予 update_plan 許可
-	if my_generation != _decision_generation:
+	# （epoch 已遞增），則保持清除狀態，不讓過期請求重新授予 update_plan 許可。
+	# is_dead 額外把關（CodeRabbit review 抓到）：這通請求可能是死亡發生前那個
+	# 遊戲分鐘（昏迷逾時倒數期間 _on_time_changed() 仍會照常重算）發出的，
+	# 死亡發生在 await 期間、世代沒變——沒有這個判斷，回應回來時會照樣把新任務
+	# 塞進死屍的任務池、幫死屍套上新情緒，跟死亡當下的石化收尾矛盾
+	if my_generation != _decision_generation or is_dead:
 		if my_plan_update_epoch == _plan_update_epoch:
 			_plan_update_requested = had_plan_update_requested
 		final_result = {"ok": false, "triggered": true}
@@ -1412,6 +1463,23 @@ func _on_work_finished() -> void:
 # 做完或判定失敗，只是被打斷，還在池子裡的話下次重新仲裁時值得重新考慮要不要
 # 繼續做（例如原本在走去做別的事，被打斷後可能還是想繼續走過去）
 func _on_action_interrupted() -> void:
+	# 死屍不重新規劃（CodeRabbit review 抓到）：_die() 這次改呼叫
+	# force_interrupt() 收尾在途的工作／對話，會連帶跑到這裡——沒有這個
+	# return，下面的 _request_next_decision()／_reevaluate() 會立刻幫死屍
+	# 問出新任務，等於繞過 _on_time_changed() 那道 is_dead 判斷。
+	# 順便清掉目前任務與追逐狀態（CodeRabbit review 抓到）：長動作 checkpoint
+	# 請求若剛好還在飛，_request_checkpoint_decision() 回來時只比對世代跟
+	# task id，不清的話這兩者都還對得上，會讓 _abandon_task_from_checkpoint()
+	# → _finish_task_and_request_next() 對死者發出新的決策請求；清空後
+	# task id 對不上，過期回應會被正確丟棄，死亡角色的狀態快照也回到 idle
+	if is_dead:
+		_current_task = {}
+		current_place = ""
+		current_state = "idle"
+		_pursued_place = ""
+		_pursuit_done = false
+		return
+
 	# 清空前先存一份快照——character.gd::attack() 的呼叫順序是
 	# force_interrupt()（跑到這裡，把 current_place 清空）先於 _on_attacked()
 	# （記事實句），直接讀 current_place 的話 _on_attacked() 永遠拿到空字串
@@ -1450,10 +1518,12 @@ func get_state_snapshot() -> Dictionary:
 
 # ---- 存檔 ----
 
-# #381：墓碑三個「一份墓一筆」欄位（words_to_creator/last_words/life_highlights），
-# 比照 base 的欄位風格直接存讀，不建 SPEC——三個欄位型別互不相同（string/string/
-# array），硬套 Stats.SPEC 那種同型別、走訪產生數值的模式沒有意義；SPEC 那條
-# 規則要保的是「加一項不用到處改」，這裡欄位數量固定且各自的存讀邏輯本來就不同。
+# #381：墓碑「一份墓一筆」欄位裡屬於 Agent 自己的那兩個
+# （words_to_creator/life_highlights），比照 base 的欄位風格直接存讀，不建
+# SPEC——兩個欄位型別互不相同（string/array），硬套 Stats.SPEC 那種同型別、
+# 走訪產生數值的模式沒有意義；SPEC 那條規則要保的是「加一項不用到處改」，
+# 這裡欄位數量固定且各自的存讀邏輯本來就不同。last_words 是 Character 自己的
+# 欄位（#379，Player 也需要），存讀交給 super()，這裡不重複處理。
 # epitaphs（第四個欄位，一對多）不在這裡，走 SQLite，見 #382
 #
 # today_plan（#350）是跨天的承諾——「今天打算做這幾件事」——跟 current_goal
@@ -1464,7 +1534,6 @@ func get_state_snapshot() -> Dictionary:
 func get_save_data() -> Dictionary:
 	var data := super()
 	data["words_to_creator"] = words_to_creator
-	data["last_words"] = last_words
 	data["life_highlights"] = life_highlights.duplicate()
 	data["today_plan"] = _today_plan.duplicate(true)
 	return data
@@ -1475,8 +1544,10 @@ func load_save_data(data: Dictionary) -> void:
 	if data.has("words_to_creator"):
 		var raw_words_to_creator: Variant = data["words_to_creator"]
 		words_to_creator = raw_words_to_creator if raw_words_to_creator is String else ""
-	var raw_last_words: Variant = data.get("last_words", "")
-	last_words = raw_last_words if raw_last_words is String else ""
+	# last_words 已由 super(data) 呼叫的 Character.load_save_data() 處理完畢
+	# ——is_dead=true 時從存檔還原、is_dead=false 時重設回 null（見該函式
+	# if/else 兩個分支），這裡不重複讀取——之前重複讀取會把 super() 剛處理好的
+	# null 又轉成空字串，蓋掉「來不及開口」跟「AI 決定不說」的語意區分
 	var raw_highlights: Variant = data.get("life_highlights", [])
 	life_highlights.clear()
 	if raw_highlights is Array:
@@ -1526,7 +1597,11 @@ func load_save_data(data: Dictionary) -> void:
 # 排進佇列（已經有一份決策在飛，見它自己的補問機制），不算失敗，不用退回
 # 寫死反應——`triggered=true` 但 `ok=false` 才是真的問過但沒問到結果
 func _on_spotted(other: Character) -> void:
-	if is_in_conversation() or _noticed.has(other.character_id):
+	# 死屍不反應（CodeRabbit review 抓到）：_on_time_changed()／
+	# _on_action_interrupted() 那道 is_dead 判斷擋不到這裡——這是 vision.gd
+	# 訊號直接觸發的外部事件回呼，死屍仍會被場上其他角色「第一次注意到」，
+	# 沒擋的話會 say() 台詞、甚至問一次 LLM 決策
+	if is_dead or is_in_conversation() or _noticed.has(other.character_id):
 		return
 
 	_noticed[other.character_id] = true
@@ -1541,6 +1616,8 @@ func _on_spotted(other: Character) -> void:
 			"你第一次注意到 %s，要不要停下來、要不要說些什麼，由你自己決定" % other.character_name
 		)
 		var result := await _request_next_decision()
+		if is_dead:
+			return
 		if result.get("triggered", false) and not result.get("ok", false):
 			await _react_to_spotted_fallback()
 		return
@@ -1573,12 +1650,17 @@ func _react_to_spotted_fallback() -> void:
 # 排隊＋立刻問一次模型，不寫死冒 !?——問不到結果時一樣退回寫死反應，
 # 理由跟 _on_spotted() 的說明相同
 func _on_noise_heard(_source: Character) -> void:
-	if is_in_conversation():
+	# 死屍不反應（CodeRabbit review 抓到），同 _on_spotted() 的理由——這是
+	# character.gd::make_noise() 直接觸發的外部事件回呼，_on_time_changed()
+	# 那道 is_dead 判斷擋不到這裡
+	if is_dead or is_in_conversation():
 		return
 
 	if llm_decision_enabled:
 		_queue_reaction_fact_line("你聽到一個聲音，要不要有反應由你自己決定")
 		var result := await _request_next_decision()
+		if is_dead:
+			return
 		if result.get("triggered", false) and not result.get("ok", false):
 			say(L10n.t("DLG_NOISE_ALERT"))
 		return
@@ -1645,6 +1727,16 @@ func _apply_action_recovery() -> void:
 			_update_exhausted_condition()
 
 func _on_time_changed(_hour: int, _minute: int) -> void:
+	# 死屍不再仲裁新任務（CodeRabbit review 抓到）：is_dead 只擋得住
+	# _decide_velocity() 的移動輸出（見 _is_movement_locked()），沒擋住這裡——
+	# 沒有這個 return，死屍每個遊戲分鐘還是會被 _reevaluate_once() 重新仲裁，
+	# 選中並執行不需要移動的任務（eat／drink／murmur／shout／attack／persuade），
+	# 跟《規格書09》§1「石化・停留原地」的死亡定義矛盾。攻擊觸發死亡的唯一現行
+	# 路徑已經在 attack()→force_interrupt() 那一刻收尾掉進行中的 work 協程
+	# （見 force_interrupt() 說明），這裡不需要額外處理 work
+	if is_dead:
+		return
+
 	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務
 	# 會用新任務的 current_state 結算最後一分鐘
 	_apply_action_recovery()
@@ -1719,6 +1811,14 @@ func _autosave_on_wake() -> void:
 # #265：真正的重新仲裁邏輯搬進 _reevaluate_once()，這個函式只負責
 # trampoline——見上面 _reevaluating／_reevaluate_pending 的宣告註解
 func _reevaluate() -> void:
+	# 死屍不重新仲裁（CodeRabbit review 抓到）：擋在 trampoline 這一層，一次
+	# 涵蓋所有會走到這裡的路徑——_on_time_changed()、_on_action_interrupted()
+	# 各自已經有 is_dead 判斷，但 _end_work() → Agent._on_work_finished() →
+	# _reevaluate() 這條（work_at() 死亡當下同步被 force_interrupt() 收尾時
+	# 觸發）沒有，漏了就會讓死屍立刻選中並執行新任務
+	if is_dead:
+		return
+
 	if _reevaluating:
 		_reevaluate_pending = true
 		return
@@ -1764,6 +1864,8 @@ func _reevaluate_once() -> void:
 		_attack_pursuit_last_distance = INF
 		_persuade_pursuit_stuck_ticks = 0
 		_persuade_pursuit_last_distance = INF
+		_bury_pursuit_stuck_ticks = 0
+		_bury_pursuit_last_distance = INF
 
 	# 剛睡醒的偵測要在這裡的任何選任務邏輯跑之前先記下「進來的時候是不是
 	# 在睡」——選任務邏輯本身就可能把 current_state 從 sleep 換掉，這個
@@ -2127,6 +2229,19 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			if matches.size() > 1:
 				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
 			return {"success": true, "reason": ""}
+		"bury":
+			# 跟 attack 同理：硬規則過了就直接放行，不落進下面的 _roll_success()——
+			# 安葬本身不是一場需要擲骰決定成敗的互動（《00》原則四只管「涉及他人
+			# 意願」的動作要不要擲骰，屍體沒有意願可言），距離／地點／墓碑格數
+			# 這些「這個世界裡真的能不能做到」的檢查交給 Character.bury() 自己
+			# 的檢查順序，這裡只確認目標存在且是名字唯一
+			var target_name: String = str(params.get("target", ""))
+			var matches := _find_all_characters_by_name(target_name)
+			if matches.is_empty():
+				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
+			if matches.size() > 1:
+				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
+			return {"success": true, "reason": ""}
 		"persuade":
 			# 跟 attack 同一套「硬規則過了就直接放行，不落進下面的 _roll_success()」
 			# ——persuade 不擲骰（見《00》原則四），成敗交給被說服者自己的模型
@@ -2200,6 +2315,8 @@ func _select(task: Dictionary, now_minutes: int, outgoing_ok: bool = true) -> vo
 	_persuade_pursuit_stuck_ticks = 0
 	_persuade_pursuit_last_distance = INF
 	_persuade_delivered = false
+	_bury_pursuit_stuck_ticks = 0
+	_bury_pursuit_last_distance = INF
 	# 排程任務的 id 是穩定的 schedule_%d，同一筆 buy 任務會在下一個遊戲日
 	# 重用同一個 id——不歸零的話，前一天走不到販賣機留下的 _buy_pursuit_task_id
 	# 與 _pursuit_done=true 會讓新一天同 id 的任務直接被守衛判定「已處理過」，
@@ -2254,6 +2371,11 @@ func _pursue_current_task() -> void:
 
 	if current_state == "attack":
 		_pursue_attack_task()
+		return
+
+	# bury（#380）跟 attack／give 同理：目標是另一個角色（屍體），不是固定地點
+	if current_state == "bury":
+		_pursue_bury_task()
 		return
 
 	# talk 任務的目標是另一個角色，不是固定地點——current_place 對它一律是空的
@@ -3018,6 +3140,82 @@ func _attack_failure_message(failure: String) -> String:
 			return "距離太遠，攻擊不到"
 		_:
 			return "攻擊沒有成功"
+
+# bury 任務的執行（#380）：目標跟 attack 一樣是另一個角色（要安葬的屍體），
+# 沿用同一套「走一次、卡住偵測、卡住就真的放棄」節流。跟 attack 不同的是
+# 距離門檻用 Character.BURY_RANGE，而且 Character.bury() 自己還會再檢查
+# 屍體是否死亡、是否已安葬、是否在墓園範圍內、墓碑格數滿不滿——這裡只負責
+# 把安葬者移動到屍體旁邊，真正的規則判斷交給 bury() 本身
+func _pursue_bury_task() -> void:
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		if not result["success"]:
+			_track_action_result_for_facts("bury", false)
+			_finish_task_and_request_next()
+			return
+
+	var params: Dictionary = _current_task.get("params", {})
+	var target_name: String = str(params.get("target", ""))
+	var target := _find_character_by_name(target_name)
+
+	if target == null:
+		last_action_result = "找不到這個人，可能已經離開了"
+		_track_action_result_for_facts("bury", false)
+		_finish_task_and_request_next()
+		return
+
+	var distance := get_body_position().distance_to(target.get_body_position())
+	if distance > Character.BURY_RANGE:
+		if not move_to(target.get_body_position()):
+			push_warning("Agent %s: 走不到安葬對象 %s" % [character_name, target.character_name])
+			last_action_result = "靠近不了屍體，安葬不了"
+			_track_action_result_for_facts("bury", false)
+			_finish_task_and_request_next()
+			return
+
+		if distance >= _bury_pursuit_last_distance - 1.0:
+			_bury_pursuit_stuck_ticks += 1
+		else:
+			_bury_pursuit_stuck_ticks = 0
+		_bury_pursuit_last_distance = distance
+
+		if _bury_pursuit_stuck_ticks >= 3:
+			push_warning("Agent %s: 安葬對象 %s 卡住走不到，放棄" % [character_name, target.character_name])
+			last_action_result = "靠近不了屍體，安葬不了"
+			_track_action_result_for_facts("bury", false)
+			_finish_task_and_request_next()
+		return
+
+	stop_moving()
+	var bury_failure := bury(target)
+	last_action_result = _bury_failure_message(bury_failure)
+	_track_action_result_for_facts("bury", bury_failure == Character.BURY_OK)
+
+	if bury_failure == Character.BURY_OK:
+		_push_daily_event("你把%s安葬了。" % target.character_name, [target.character_id])
+
+	_finish_task_and_request_next()
+
+# bury() 失敗原因碼轉中文，格式跟 _attack_failure_message() 一致
+func _bury_failure_message(failure: String) -> String:
+	match failure:
+		Character.BURY_OK:
+			return ""
+		Character.BURY_TARGET_NOT_FOUND:
+			return "找不到這個人，可能已經離開了"
+		Character.BURY_TARGET_NOT_DEAD:
+			return "這個人還活著，不能安葬"
+		Character.BURY_ALREADY_BURIED:
+			return "已經安葬過了"
+		Character.BURY_TOO_FAR:
+			return "距離太遠，安葬不了"
+		Character.BURY_NOT_AT_CEMETERY:
+			return "這裡不是墓園，沒辦法安葬"
+		Character.BURY_CEMETERY_FULL:
+			return "墓園的墓碑格滿了，安葬不了"
+		_:
+			return "安葬沒有成功"
 
 # persuade 任務的執行（#227）：目標跟 talk／give 一樣是會動的角色，走到範圍
 # 內才生效，不擲骰、恆送達——「送不送達」（有沒有走到、對方在不在）跟
