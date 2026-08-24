@@ -42,26 +42,16 @@ func test_stats_condition_not_met() -> void:
 	assert_false(_agent._preconditions_met(task), "satiety 50 >= 80 不應成立")
 
 
-func test_relations_condition_with_explicit_target() -> void:
-	# 沒呼叫過 note_meeting()／add_trust()，"bob" 吃 DEFAULT_RECORD（trust 20）
+# relations.* 命名空間刻意不支援（2026-08-24 拿掉，見全專案盤點的原則二
+# 審查）：允許用 trust／met_count 當 precondition，等於引擎在 AI 看到任務
+# 之前就依信任度濾掉候選，跟《07》§5「社會性限制不過濾，AI 能選、由引擎
+# 判定失敗並給理由」的既有方向相反。改成跟其他不認得的命名空間一樣
+# fail-closed，不特別處理
+func test_relations_namespace_fails_closed() -> void:
 	var task := {"preconditions": [
 		{"field": "relations.trust", "target": "bob", "op": ">=", "value": 10.0},
 	]}
-	assert_true(_agent._preconditions_met(task), "陌生人預設 trust 20 >= 10 應成立")
-
-
-func test_relations_condition_falls_back_to_params_target() -> void:
-	# 沒填 target 時退回 task.params.target——卡「對現在這個任務對象」最常見的用法
-	var task := {
-		"params": {"target": "bob"},
-		"preconditions": [
-			{"field": "relations.met_count", "op": ">=", "value": 1},
-		],
-	}
-	assert_false(_agent._preconditions_met(task), "從沒 note_meeting() 過，met_count 0 >= 1 不應成立")
-
-	_agent.relationships.note_meeting("bob")
-	assert_true(_agent._preconditions_met(task), "note_meeting() 一次後 met_count 1 >= 1 應成立")
+	assert_false(_agent._preconditions_met(task), "relations.* 不是支援的命名空間，應 fail-closed")
 
 
 func test_unknown_stat_key_fails_closed() -> void:

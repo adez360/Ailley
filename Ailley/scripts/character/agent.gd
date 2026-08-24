@@ -3142,14 +3142,19 @@ func _preconditions_met(task: Dictionary) -> bool:
 			return false
 	return true
 
-# 欄位只認兩種命名空間，寫成 "<namespace>.<key>"：
-# - "stats.<key>"：key 要在 Stats.SPEC 裡才算數，錯字視為無法解析（Stats.get_value()
-#   本身對不存在的 key 靜默回 0.0，這裡不能直接沿用，否則錯字會被誤判成「數值 0」
-#   剛好卡過某些條件）
-# - "relations.<key>"：key 只認 trust／met_count；target 沒填時退回
-#   task.params.target——最常見的用法是卡「對現在這個任務的對象」，不用每筆
-#   precondition 都重複寫一次 id
-func _resolve_precondition_field(cond: Dictionary, task: Dictionary) -> Variant:
+# 欄位只認一種命名空間，寫成 "stats.<key>"：key 要在 Stats.SPEC 裡才算數，
+# 錯字視為無法解析（Stats.get_value() 本身對不存在的 key 靜默回 0.0，這裡
+# 不能直接沿用，否則錯字會被誤判成「數值 0」剛好卡過某些條件）。
+#
+# 刻意不支援 "relations.<key>"（trust／met_count，2026-08-24 拿掉，見全專案
+# 盤點的原則二審查）：這個機制濾掉的是候選任務——一旦允許用 relations 當
+# precondition，某個任務會在 AI 連看都沒看到之前就被引擎依信任度濾掉，這
+# 跟《07》§5 已拍板的方向正相反（社會性限制不過濾，AI 能選，由引擎判定
+# 失敗並給理由）。stats 類（力竭、傷勢）是《00》原則一「客觀做不到」的範圍，
+# relations 類是社會性限制，兩者不該用同一道濾網處理。之後如果真的需要用
+# 關係狀態限制任務可見度，要先回頭確認不會複製這個問題，不是直接加回這個
+# 分支
+func _resolve_precondition_field(cond: Dictionary, _task: Dictionary) -> Variant:
 	var field: String = cond.get("field", "")
 	var parts := field.split(".", true, 1)
 	if parts.size() != 2:
@@ -3160,22 +3165,6 @@ func _resolve_precondition_field(cond: Dictionary, task: Dictionary) -> Variant:
 			if stats == null or not Stats.SPEC.has(parts[1]):
 				return null
 			return stats.get_value(parts[1])
-		"relations":
-			if relationships == null:
-				return null
-			var target: String = cond.get("target", "")
-			if target.is_empty():
-				var params: Dictionary = task.get("params", {})
-				target = String(params.get("target", ""))
-			if target.is_empty():
-				return null
-			match parts[1]:
-				"trust":
-					return relationships.get_trust(target)
-				"met_count":
-					return relationships.get_met_count(target)
-				_:
-					return null
 		_:
 			return null
 
