@@ -101,6 +101,17 @@ func test_non_numeric_value_fails_closed() -> void:
 	assert_false(_agent._preconditions_met(string_value), "value 是字串應 fail-closed")
 
 
+func test_non_string_field_fails_closed() -> void:
+	# CodeRabbit review（PR #530）：field 是數字這類非字串值時，
+	# `var field: String = cond.get("field", "")` 的型別化指派會直接丟
+	# runtime error 中止 _reevaluate_once()，不是安全地回傳 false——
+	# 這裡要在指派前先擋下來
+	var task := {"preconditions": [
+		{"field": 5, "op": ">=", "value": 20.0},
+	]}
+	assert_false(_agent._preconditions_met(task), "field 不是字串應 fail-closed")
+
+
 func test_current_task_treated_as_invalid_when_preconditions_become_false() -> void:
 	# CodeRabbit review（PR #530）：preconditions 不只濾候選，_current_task 本身
 	# 執行中途前提轉為不成立時，也要跟過期／出窗同一組條件，讓 _consider_switch()

@@ -2598,9 +2598,10 @@ func _pursue_work_task() -> void:
 		stop_moving()
 		_pursued_place = ""
 		_pursuit_done = false
-		_current_task = {}
-		current_place = ""
-		current_state = "idle"
+		# 改用 _clear_current_task()，不要手動清空——手動清空會漏記
+		# today_log（_log_task_ended() 沒被呼叫），這筆 work 不會出現在
+		# 每日摘要（CodeRabbit review 抓到）
+		_clear_current_task(false)
 		return
 
 	var target: Vector2 = anchors.resolve(current_place)
@@ -2648,12 +2649,11 @@ func _pursue_work_task() -> void:
 
 	if reason != Character.WORK_OK:
 		push_warning("Agent %s: work_at 失敗（%s）" % [character_name, reason])
-		# 其他失敗原因：清掉任務、重置 pursuit state 並等待決策
+		# 其他失敗原因：清掉任務、重置 pursuit state 並等待決策。同上改用
+		# _clear_current_task()，避免漏記 today_log（CodeRabbit review 抓到）
 		_pursued_place = ""
 		_pursuit_done = false
-		_current_task = {}
-		current_place = ""
-		current_state = "idle"
+		_clear_current_task(false)
 		if llm_decision_enabled and not _awaiting_decision:
 			_request_next_decision(_today_plan_needs_new_goal())
 
@@ -2677,12 +2677,21 @@ func _pursue_buy_task() -> void:
 		stop_moving()
 		_pursued_place = ""
 		_pursuit_done = false
-		_current_task = {}
-		current_place = ""
-		current_state = "idle"
 		last_action_result = Character.BUY_TARGET_NOT_FOUND
 		if failed_task_source == "llm":
 			_remove_task(failed_task_id)
+		else:
+			# schedule 來源沒有 _remove_task() 這條退路，任務會留在池子裡。
+			# 下面緊接著同步呼叫 _reevaluate()，若只手動清空 _current_task
+			# 而不經過 _clear_current_task()，這筆任務的 id 不會被寫進
+			# _reevaluate_excluded_ids，window／分數都沒變，會立刻被重新
+			# 選中、再次進來這個分支，形成同一個遊戲分鐘內的同步無窮迴圈
+			# （CodeRabbit review 抓到，🔴 Critical）。_clear_current_task()
+			# 擋住這一輪重選，_mark_schedule_retry_backoff() 擋住下一個
+			# tick 的重選，直到這個 window 過去
+			_mark_schedule_retry_backoff(_current_task)
+		# 手動清空會漏記 today_log，改用共用收尾 helper（CodeRabbit review 抓到）
+		_clear_current_task(false)
 		if llm_decision_enabled and not _awaiting_decision:
 			_request_next_decision(_today_plan_needs_new_goal())
 		_reevaluate()
@@ -2738,11 +2747,16 @@ func _pursue_buy_task() -> void:
 
 	if _current_task.get("source", "") == "llm":
 		_remove_task(_current_task.get("id", ""))
+	else:
+		# 跟上面「找不到販賣機」同一個理由，且不分成功失敗都要擋：買到了
+		# 也不代表這筆 schedule 任務會被移出池子，成功路徑一樣有立即
+		# _reevaluate() 重選到同一筆的風險——會連續購買到錢不足或背包塞滿
+		# 為止（CodeRabbit review 抓到，🔴 Critical）
+		_mark_schedule_retry_backoff(_current_task)
 	_pursued_place = ""
 	_pursuit_done = false
-	_current_task = {}
-	current_place = ""
-	current_state = "idle"
+	# 手動清空會漏記 today_log，改用共用收尾 helper（CodeRabbit review 抓到）
+	_clear_current_task(last_action_result == Character.BUY_OK)
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
@@ -3485,7 +3499,14 @@ func _preconditions_met(task: Dictionary) -> bool:
 # 關係狀態限制任務可見度，要先回頭確認不會複製這個問題，不是直接加回這個
 # 分支
 func _resolve_precondition_field(cond: Dictionary, _task: Dictionary) -> Variant:
-	var field: String = cond.get("field", "")
+	# field 不是字串時（例如 LLM／排程資料誤填數字）直接 fail-closed——
+	# GDScript 對 Variant → String 的型別化指派不會做隱式轉換，非字串會直接
+	# 丟 runtime error 中止 _reevaluate_once()，不是安全地回傳 false
+	# （CodeRabbit review 抓到）
+	var raw_field: Variant = cond.get("field", "")
+	if not (raw_field is String):
+		return null
+	var field: String = raw_field
 	var parts := field.split(".", true, 1)
 	if parts.size() != 2:
 		return null
