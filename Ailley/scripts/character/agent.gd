@@ -1594,6 +1594,8 @@ func _on_spotted(other: Character) -> void:
 			"你第一次注意到 %s，要不要停下來、要不要說些什麼，由你自己決定" % other.character_name
 		)
 		var result := await _request_next_decision()
+		if is_dead:
+			return
 		if result.get("triggered", false) and not result.get("ok", false):
 			await _react_to_spotted_fallback()
 		return
@@ -1635,6 +1637,8 @@ func _on_noise_heard(_source: Character) -> void:
 	if llm_decision_enabled:
 		_queue_reaction_fact_line("你聽到一個聲音，要不要有反應由你自己決定")
 		var result := await _request_next_decision()
+		if is_dead:
+			return
 		if result.get("triggered", false) and not result.get("ok", false):
 			say(L10n.t("DLG_NOISE_ALERT"))
 		return
