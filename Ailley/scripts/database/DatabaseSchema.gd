@@ -263,6 +263,75 @@ static func _migrate_rebuild_single_table(db, table_name: String, schema) -> boo
 	return true
 
 
+## 一組互相依賴的表一起重建：`entries` 依「父表在前、子表在後」排列
+## （例如 `[{"table": "item", ...}, {"table": "npc_inventory", ...}]`）。
+## 子表若有外鍵指向這組裡的父表，改名父表時 SQLite 會把子表的外鍵定義
+## 自動改指向父表的暫存表名（跟單表重建的原理一樣，只是這裡子表本身
+## 也在重建名單裡），所以子表也要跟著重建，讓外鍵在刪暫存表之前先恢復
+## 指向新的父表。
+##
+## 全部改名成暫存表 → 依「父表在前」的順序逐一 create(db) 建回新結構
+## （父表要先存在，子表的 CREATE TABLE 外鍵才不會找不到參照對象）→
+## 依同一順序把資料搬回去（父表先搬，子表的 FK 立即檢查才能通過）→
+## 依反序（子表先、父表後）刪暫存表——這個順序本身就避免了 DROP 觸發
+## FK cascade（CASCADE 子表）或 FK 違規（RESTRICT 子表）波及還沒刪的表，
+## 不需要在 transaction 中途切換 PRAGMA foreign_keys。
+static func _migrate_rebuild_table_group(db, entries: Array) -> bool:
+	var old_names := {}
+
+	for entry in entries:
+		var table_name: String = entry["table"]
+		var old_name := table_name + "__migrate_rebuild_old"
+		old_names[table_name] = old_name
+
+		if not db.query("ALTER TABLE %s RENAME TO %s;" % [table_name, old_name]):
+			push_error(
+				"[DatabaseSchema] Table rebuild: Failed to rename %s: %s"
+				% [table_name, db.error_message]
+			)
+			return false
+
+		if not _migrate_rebuild_drop_stale_indexes(db, old_name):
+			return false
+
+	for entry in entries:
+		if not entry["schema"].create(db):
+			push_error(
+				"[DatabaseSchema] Table rebuild: Failed to recreate %s: %s"
+				% [entry["table"], db.error_message]
+			)
+			return false
+
+	for entry in entries:
+		var table_name: String = entry["table"]
+		var old_name: String = old_names[table_name]
+
+		if not _migrate_rebuild_verify_column_shape(db, old_name, table_name):
+			return false
+
+		if not db.query("INSERT INTO %s SELECT * FROM %s;" % [table_name, old_name]):
+			push_error(
+				"[DatabaseSchema] Table rebuild: Failed to copy data into %s: %s"
+				% [table_name, db.error_message]
+			)
+			return false
+
+	var reverse_entries := entries.duplicate()
+	reverse_entries.reverse()
+
+	for entry in reverse_entries:
+		var old_name: String = old_names[entry["table"]]
+
+		if not db.query("DROP TABLE %s;" % old_name):
+			push_error(
+				"[DatabaseSchema] Table rebuild: Failed to drop %s: %s"
+				% [old_name, db.error_message]
+			)
+			return false
+
+	return true
+
+
 ## memories／memory_related_npcs 兩張表要一起重建：memory_related_npcs
 ## 外鍵指向 memories(memory_id)，改名 memories 時 SQLite 會把這個外鍵定義
 ## 自動改指向暫存表名，所以 memory_related_npcs 也要同步重建，
@@ -384,18 +453,28 @@ static func _migrate_v5_drop_death_grave_highlights(db) -> bool:
 
 ## Migration 6：既有資料庫的 world／item／npc_state／npc_emotion／npc_goal
 ## 跟 migration 3（#446）處理的 4 張表同一個病根——`TEXT PRIMARY KEY` 補
-## `NOT NULL` 只對全新建立的資料庫生效。這 5 張表沒有任何其他表外鍵指向
-## 它們（npc_state／npc_emotion／npc_goal 反過來外鍵指向 npc／location，
-## 但那是「這 5 張表依賴別人」，不是「別人依賴這 5 張表」，重建時不會
-## 觸發別的表跟著改），全部用 _migrate_rebuild_single_table() 逐表重建即可，
-## 不需要 migration 3 的 memories／memory_related_npcs 那種雙表協同重建。
+## `NOT NULL` 只對全新建立的資料庫生效。
+##
+## npc_state／npc_emotion／npc_goal 沒有任何其他表外鍵指向它們（它們反過來
+## 外鍵指向 npc／location，但那是「這 3 張表依賴別人」，不是「別人依賴
+## 這 3 張表」，重建時不會觸發別的表跟著改），用 _migrate_rebuild_single_table()
+## 逐表重建即可。
+##
+## world／item 不是這種情形——world_character_state 外鍵指向
+## world(world_id) ON DELETE CASCADE；npc_inventory／npc_home_storage／
+## item_transaction 外鍵指向 item(item_id) ON DELETE RESTRICT。改名
+## world／item 時 SQLite 會把這些子表的外鍵定義自動改指向暫存表名，
+## 子表沒有跟著重建的話，最後 DROP 舊 world／item 時：CASCADE 的
+## world_character_state 會被隱含 DELETE 連鎖清空（悄悄丟資料）；
+## RESTRICT 的 3 張子表則會擋下 DROP、讓整個 migration 失敗（只要
+## 那 3 張表任一張有資料）。兩種都要用 _migrate_rebuild_table_group()
+## 連同子表一起重建，讓子表的外鍵在刪暫存表之前先恢復指向新的
+## world／item。
 ##
 ## `npc`（近 20 張依附表）與 `npc`／`location` 之間的重建順序問題不在這次
-## 範圍內，見《99》P-55、issue #514。
+## 範圍內，見《99》P-55、issue #561。
 static func _migrate_v6_notnull_primary_keys(db) -> bool:
 	var single_table_schemas := [
-		{"table": "world", "schema": WorldSchema},
-		{"table": "item", "schema": ItemSchema},
 		{"table": "npc_state", "schema": NPCStateSchema},
 		{"table": "npc_emotion", "schema": NPCEmotionSchema},
 		{"table": "npc_goal", "schema": NPCGoalSchema}
@@ -405,7 +484,18 @@ static func _migrate_v6_notnull_primary_keys(db) -> bool:
 		if not _migrate_rebuild_single_table(db, entry["table"], entry["schema"]):
 			return false
 
-	return true
+	if not _migrate_rebuild_table_group(db, [
+		{"table": "world", "schema": WorldSchema},
+		{"table": "world_character_state", "schema": WorldCharacterStateSchema}
+	]):
+		return false
+
+	return _migrate_rebuild_table_group(db, [
+		{"table": "item", "schema": ItemSchema},
+		{"table": "npc_inventory", "schema": NPCInventorySchema},
+		{"table": "npc_home_storage", "schema": NPCHomeStorageSchema},
+		{"table": "item_transaction", "schema": ItemTransactionSchema}
+	])
 
 
 static func initialize(db) -> bool:

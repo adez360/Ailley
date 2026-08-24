@@ -6,9 +6,19 @@ extends Node
 ## 驗證 issue #514／DatabaseSchema migration 6：既有資料庫（缺 NOT NULL
 ## 主鍵約束）的 world／item／npc_state／npc_emotion／npc_goal，跑過
 ## DatabaseSchema.initialize() 之後主鍵補上 NOT NULL、原有資料保留、
-## 外鍵仍然生效。做法跟 MigrationV3Test 同一套，差在這 5 張表沒有其他表
-## 外鍵指向它們（不需要 memories 那種雙表協同重建），也沒有任何
-## CREATE INDEX（*Schema.gd 查證過），不需要驗證索引重建後有沒有保留。
+## 外鍵仍然生效。做法跟 MigrationV3Test 同一套。
+##
+## npc_state／npc_emotion／npc_goal 沒有其他表外鍵指向它們，也沒有任何
+## CREATE INDEX（*Schema.gd 查證過），單表重建即可，不需要驗證索引。
+##
+## world／item 不是這種情形——world_character_state 外鍵指向
+## world(world_id) ON DELETE CASCADE，npc_inventory／npc_home_storage／
+## item_transaction 外鍵指向 item(item_id) ON DELETE RESTRICT。這裡額外
+## seed 這 4 張依賴表的資料，驗證重建 world／item 後：這 4 張表的資料
+## 沒有被 DROP 舊 world／item 時的隱含 DELETE（CASCADE）／FK 違規
+## （RESTRICT）波及，外鍵也確實改指向新表而不是還留在暫存表名上
+## （CodeRabbit review 抓到：原本的實作只重建 world／item 本身，沒有
+## 連帶重建這 4 張子表）。
 ##
 ## 使用方式：
 ## 1. 將本檔放到：
@@ -23,9 +33,12 @@ extends Node
 ## - 不使用 DatabaseManager 的正式資料庫（DATABASE_PATH），自己開一條獨立
 ##   的 SQLite 連線指向暫存檔，模擬「舊版程式碼建出來的資料庫」，測試結束
 ##   立刻刪除，不影響任何人的存檔。
-## - 手刻的「舊版」CREATE TABLE 欄位順序照抄現行 *Schema.gd，只故意省略
-##   主鍵欄位的 NOT NULL——重現既有資料庫的欄位定義，這是 migration 6
-##   保證會修好的情形。
+## - world／item 的舊版 CREATE TABLE 故意省略主鍵欄位的 NOT NULL——重現
+##   既有資料庫的欄位定義，這是 migration 6 保證會修好的情形。
+##   world_character_state／npc_inventory／npc_home_storage／
+##   item_transaction 本身不在 NOT NULL 修復範圍內（它們的主鍵原本就
+##   沒問題），照現行 *Schema.gd 原樣建立即可，只是拿來驗證它們的外鍵
+##   在 world／item 重建過程中沒有被波及。
 ## =====================================================
 
 
@@ -36,12 +49,22 @@ const LOCATION_A := "__migration_v6_test_loc_a"
 const WORLD_A := "__migration_v6_test_world_a"
 const ITEM_A := "__migration_v6_test_item_a"
 
+## 直接補 NOT NULL 主鍵的 5 張目標表。
 const REBUILT_TABLES := [
 	"world",
 	"item",
 	"npc_state",
 	"npc_emotion",
 	"npc_goal"
+]
+
+## 外鍵指向 world／item、重建時必須連帶處理的依賴表——本身主鍵沒有
+## NOT NULL 缺口，只驗證資料沒有在重建過程中被波及。
+const DEPENDENT_TABLES := [
+	"world_character_state",
+	"npc_inventory",
+	"npc_home_storage",
+	"item_transaction"
 ]
 
 var passed := 0
@@ -75,7 +98,7 @@ func _run() -> void:
 		_finish()
 		return
 
-	var pre_counts := _row_counts()
+	var pre_counts := _row_counts(REBUILT_TABLES + DEPENDENT_TABLES)
 
 	if not DatabaseSchema.initialize(db):
 		_fail("DatabaseSchema.initialize", "回傳 false")
@@ -95,7 +118,7 @@ func _run() -> void:
 			"PRAGMA table_info(%s) 顯示主鍵欄位 notnull != 1" % table
 		)
 
-	var post_counts := _row_counts()
+	var post_counts := _row_counts(REBUILT_TABLES + DEPENDENT_TABLES)
 	for table in pre_counts:
 		_check(
 			"%s 列數保留（原 %d 筆）" % [table, pre_counts[table]],
@@ -119,6 +142,19 @@ func _run() -> void:
 		"外鍵仍然生效（npc_emotion → npc）",
 		not _can_insert_orphan_npc_emotion(),
 		"指向不存在 npc_id 的資料竟然插入成功，FK 沒生效"
+	)
+
+	for table in DEPENDENT_TABLES:
+		_check(
+			"%s 外鍵沒有殘留指向暫存表" % table,
+			not _foreign_key_targets_stale_table(table),
+			"PRAGMA foreign_key_list(%s) 有外鍵仍指向 *__migrate_rebuild_old" % table
+		)
+
+	_check(
+		"PRAGMA foreign_key_check 沒有違規",
+		_foreign_key_check_clean(),
+		"PRAGMA foreign_key_check 回傳非空結果——重建後有外鍵資料對不上"
 	)
 
 	_finish()
@@ -205,6 +241,74 @@ func _seed_legacy_schema() -> bool:
 			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			FOREIGN KEY (npc_id) REFERENCES npc(npc_id) ON DELETE CASCADE
 		);
+		""",
+
+		# --- world_character_state（照現行 schema，主鍵本身沒問題）---
+		"""
+		CREATE TABLE world_character_state (
+			world_id TEXT NOT NULL,
+			npc_id TEXT NOT NULL,
+			pos_x REAL NOT NULL DEFAULT 0.0,
+			pos_y REAL NOT NULL DEFAULT 0.0,
+			current_place TEXT,
+			current_state TEXT,
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (world_id, npc_id),
+			FOREIGN KEY (world_id) REFERENCES world(world_id) ON DELETE CASCADE,
+			FOREIGN KEY (npc_id) REFERENCES npc(npc_id) ON DELETE CASCADE
+		);
+		""",
+
+		# --- npc_inventory（照現行 schema，主鍵本身沒問題）---
+		"""
+		CREATE TABLE npc_inventory (
+			inventory_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			npc_id TEXT NOT NULL,
+			slot INTEGER NOT NULL,
+			item_id TEXT NOT NULL,
+			count INTEGER NOT NULL DEFAULT 0,
+			decay INTEGER NOT NULL DEFAULT 0,
+			durability INTEGER NOT NULL DEFAULT 100,
+			FOREIGN KEY (npc_id) REFERENCES npc(npc_id) ON DELETE CASCADE,
+			FOREIGN KEY (item_id) REFERENCES item(item_id) ON DELETE RESTRICT,
+			UNIQUE (npc_id, slot)
+		);
+		""",
+
+		# --- npc_home_storage（照現行 schema，主鍵本身沒問題）---
+		"""
+		CREATE TABLE npc_home_storage (
+			storage_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			npc_id TEXT NOT NULL,
+			item_id TEXT NOT NULL,
+			count INTEGER NOT NULL DEFAULT 0,
+			decay INTEGER NOT NULL DEFAULT 0,
+			durability INTEGER NOT NULL DEFAULT 100,
+			slot INTEGER NOT NULL,
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (npc_id) REFERENCES npc(npc_id) ON DELETE CASCADE,
+			FOREIGN KEY (item_id) REFERENCES item(item_id) ON DELETE RESTRICT,
+			UNIQUE (npc_id, slot)
+		);
+		""",
+
+		# --- item_transaction（照現行 schema，主鍵本身沒問題）---
+		"""
+		CREATE TABLE item_transaction (
+			transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+			from_npc_id TEXT,
+			to_npc_id TEXT,
+			item_id TEXT NOT NULL,
+			quantity INTEGER NOT NULL,
+			transaction_type TEXT NOT NULL DEFAULT 'trade',
+			description TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (from_npc_id) REFERENCES npc(npc_id) ON DELETE CASCADE,
+			FOREIGN KEY (to_npc_id) REFERENCES npc(npc_id) ON DELETE CASCADE,
+			FOREIGN KEY (item_id) REFERENCES item(item_id) ON DELETE RESTRICT,
+			CHECK (quantity > 0),
+			CHECK (from_npc_id IS NOT NULL OR to_npc_id IS NOT NULL)
+		);
 		"""
 	]
 
@@ -256,6 +360,37 @@ func _seed_legacy_schema() -> bool:
 		push_error("[MigrationV6Test] seed npc_goal 失敗: " + db.error_message)
 		return false
 
+	if not db.query_with_bindings(
+		"INSERT INTO world_character_state (world_id, npc_id, pos_x, pos_y) VALUES (?, ?, ?, ?);",
+		[WORLD_A, NPC_A, 10.0, 20.0]
+	):
+		push_error("[MigrationV6Test] seed world_character_state 失敗: " + db.error_message)
+		return false
+
+	if not db.query_with_bindings(
+		"INSERT INTO npc_inventory (npc_id, slot, item_id, count) VALUES (?, ?, ?, ?);",
+		[NPC_A, 0, ITEM_A, 3]
+	):
+		push_error("[MigrationV6Test] seed npc_inventory 失敗: " + db.error_message)
+		return false
+
+	if not db.query_with_bindings(
+		"INSERT INTO npc_home_storage (npc_id, item_id, count, slot) VALUES (?, ?, ?, ?);",
+		[NPC_A, ITEM_A, 5, 0]
+	):
+		push_error("[MigrationV6Test] seed npc_home_storage 失敗: " + db.error_message)
+		return false
+
+	if not db.query_with_bindings(
+		"""
+		INSERT INTO item_transaction (from_npc_id, to_npc_id, item_id, quantity)
+		VALUES (?, ?, ?, ?);
+		""",
+		[NPC_A, null, ITEM_A, 1]
+	):
+		push_error("[MigrationV6Test] seed item_transaction 失敗: " + db.error_message)
+		return false
+
 	if not db.query("PRAGMA user_version = 5;"):
 		push_error("[MigrationV6Test] 設定 user_version 失敗: " + db.error_message)
 		return false
@@ -296,10 +431,10 @@ func _primary_key_is_notnull(table: String) -> bool:
 	return true
 
 
-func _row_counts() -> Dictionary:
+func _row_counts(tables: Array) -> Dictionary:
 	var counts := {}
 
-	for table in REBUILT_TABLES:
+	for table in tables:
 		if db.query("SELECT COUNT(*) AS c FROM %s;" % table):
 			counts[table] = int(db.query_result[0].get("c", -1))
 		else:
@@ -332,6 +467,29 @@ func _can_insert_orphan_npc_emotion() -> bool:
 		"INSERT INTO npc_emotion (npc_id, emotion) VALUES (?, ?);",
 		["__migration_v6_test_nonexistent_npc", "neutral"]
 	)
+
+
+## PRAGMA foreign_key_list 的 "table" 欄位是這個外鍵目前實際指向的表名。
+## 重建 world／item 時如果漏了連帶重建這幾張依賴表，它們的外鍵會停留在
+## SQLite 改名時自動重寫的暫存表名（例如 world__migrate_rebuild_old），
+## 而不是恢復指向新建的 world／item——CodeRabbit review 抓到的正是這個。
+func _foreign_key_targets_stale_table(table: String) -> bool:
+	if not db.query("PRAGMA foreign_key_list(%s);" % table):
+		return true
+
+	for row in (db.query_result as Array):
+		var target: String = row.get("table", "")
+		if target.ends_with("__migrate_rebuild_old"):
+			return true
+
+	return false
+
+
+func _foreign_key_check_clean() -> bool:
+	if not db.query("PRAGMA foreign_key_check;"):
+		return false
+
+	return (db.query_result as Array).is_empty()
 
 
 # =====================================================
