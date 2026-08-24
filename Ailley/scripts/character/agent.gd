@@ -2598,6 +2598,10 @@ func _pursue_work_task() -> void:
 		stop_moving()
 		_pursued_place = ""
 		_pursuit_done = false
+		# schedule 來源沒有 _remove_task() 這條退路，任務會留在池子裡——跟
+		# _pursue_buy_task() 同一個理由，失敗要先設退避，不然下一個 tick
+		# window 還沒過就會立刻重試同一個解不開的地點（CodeRabbit review 抓到）
+		_mark_schedule_retry_backoff(_current_task)
 		# 改用 _clear_current_task()，不要手動清空——手動清空會漏記
 		# today_log（_log_task_ended() 沒被呼叫），這筆 work 不會出現在
 		# 每日摘要（CodeRabbit review 抓到）
@@ -2650,9 +2654,11 @@ func _pursue_work_task() -> void:
 	if reason != Character.WORK_OK:
 		push_warning("Agent %s: work_at 失敗（%s）" % [character_name, reason])
 		# 其他失敗原因：清掉任務、重置 pursuit state 並等待決策。同上改用
-		# _clear_current_task()，避免漏記 today_log（CodeRabbit review 抓到）
+		# _clear_current_task()，避免漏記 today_log；失敗也一併設退避，理由
+		# 同上一條路徑（CodeRabbit review 抓到）
 		_pursued_place = ""
 		_pursuit_done = false
+		_mark_schedule_retry_backoff(_current_task)
 		_clear_current_task(false)
 		if llm_decision_enabled and not _awaiting_decision:
 			_request_next_decision(_today_plan_needs_new_goal())
@@ -3482,7 +3488,15 @@ func _preconditions_met(task: Dictionary) -> bool:
 		if not (expected is int or expected is float):
 			push_warning("Agent: precondition value 不是數字，視為不成立：%s" % [cond])
 			return false
-		if not _compare_precondition(cond.get("op", ""), actual, expected):
+		# op 不是字串時（例如誤填數字）一樣要在呼叫前擋下來——
+		# _compare_precondition() 的 op 參數型別化成 String，非字串 Variant
+		# 傳進去會在呼叫當下直接丟 runtime error，不是安全地回傳 false
+		# （CodeRabbit review 抓到，跟 field 那則同一種型別漏洞）
+		var op = cond.get("op", "")
+		if not (op is String):
+			push_warning("Agent: precondition op 不是字串，視為不成立：%s" % [cond])
+			return false
+		if not _compare_precondition(op, actual, expected):
 			return false
 	return true
 

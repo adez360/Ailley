@@ -112,6 +112,18 @@ func test_non_string_field_fails_closed() -> void:
 	assert_false(_agent._preconditions_met(task), "field 不是字串應 fail-closed")
 
 
+func test_non_string_op_fails_closed() -> void:
+	# CodeRabbit review（PR #530）：op 是數字這類非字串值時，
+	# _compare_precondition() 的 op 參數型別化成 String，非字串 Variant 傳
+	# 進去會在呼叫當下直接丟 runtime error，不是安全地回傳 false——
+	# 跟 field 那則同一種型別漏洞，一樣要在呼叫前擋下來
+	_agent.stats.values["satiety"] = 50.0
+	var task := {"preconditions": [
+		{"field": "stats.satiety", "op": 5, "value": 20.0},
+	]}
+	assert_false(_agent._preconditions_met(task), "op 不是字串應 fail-closed")
+
+
 func test_current_task_treated_as_invalid_when_preconditions_become_false() -> void:
 	# CodeRabbit review（PR #530）：preconditions 不只濾候選，_current_task 本身
 	# 執行中途前提轉為不成立時，也要跟過期／出窗同一組條件，讓 _consider_switch()
