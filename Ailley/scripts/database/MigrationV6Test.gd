@@ -20,6 +20,10 @@ extends Node
 ## （CodeRabbit review 抓到：原本的實作只重建 world／item 本身，沒有
 ## 連帶重建這 4 張子表）。
 ##
+## issue #566／P-59：也驗證主鍵「已經是 NULL」的舊資料列——world 是根表
+## （主鍵不是外鍵），NULL 主鍵要補新 UUID 保留；npc_state 主鍵同時是外鍵
+## （指向 npc），NULL 沒辦法補，migration 要中止。
+##
 ## 使用方式：
 ## 1. 將本檔放到：
 ##      res://scripts/database/MigrationV6Test.gd
@@ -156,6 +160,9 @@ func _run() -> void:
 		_foreign_key_check_clean(),
 		"PRAGMA foreign_key_check 回傳非空結果——重建後有外鍵資料對不上"
 	)
+
+	_run_null_pk_repair_test()
+	_run_null_pk_reject_test()
 
 	_finish()
 
@@ -398,6 +405,150 @@ func _seed_legacy_schema() -> bool:
 	return true
 
 
+## world 是根表——world_id 不是外鍵，NULL 主鍵可以安全補新 UUID
+## （issue #566／P-59）。種一筆 world_id 是 NULL 的舊資料列，跑完
+## migration 後驗證：migration 成功、列數保留、NULL 那筆補到一個合法的
+## UUID，其他欄位（day）內容沒有被搞壞。
+func _run_null_pk_repair_test() -> void:
+	if db != null:
+		db.close_db()
+		db = null
+
+	_delete_test_db()
+
+	db = SQLite.new()
+	db.path = TEST_DB_PATH
+	db.foreign_keys = true
+
+	if not db.open_db():
+		_fail("null_pk_repair/open_db", db.error_message)
+		return
+
+	if not db.query(
+		"""
+		CREATE TABLE world (
+			world_id TEXT PRIMARY KEY,
+			day INTEGER NOT NULL DEFAULT 1,
+			allow_player_join INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		"""
+	):
+		_fail("null_pk_repair/seed", db.error_message)
+		return
+
+	if not db.query_with_bindings(
+		"INSERT INTO world (world_id, day) VALUES (?, ?);", [WORLD_A, 5]
+	) or not db.query_with_bindings(
+		"INSERT INTO world (world_id, day) VALUES (?, ?);", [null, 99]
+	):
+		_fail("null_pk_repair/seed world", db.error_message)
+		return
+
+	if not db.query("PRAGMA user_version = 5;"):
+		_fail("null_pk_repair/set user_version", db.error_message)
+		return
+
+	_check(
+		"world 有 NULL 主鍵列時 migration 仍然成功（根表可以補新 ID）",
+		DatabaseSchema.initialize(db),
+		"initialize() 回傳 false"
+	)
+
+	_check(
+		"world 列數保留（NULL 主鍵那筆沒被丟掉）",
+		_count_rows("world") == 2,
+		"got %d, expected 2" % _count_rows("world")
+	)
+
+	_check(
+		"NULL 主鍵那筆補到一個合法的 UUID",
+		_null_pk_row_repaired(),
+		"day=99 那一列查不到，或補上去的 world_id 不像 UUID"
+	)
+
+	db.close_db()
+	db = null
+	_delete_test_db()
+
+
+## npc_state 的主鍵同時是外鍵（指向 npc），NULL 代表「不知道這筆屬於
+## 哪個 npc」，這個資訊已經遺失，不能補新 ID（issue #566／P-59）。種一筆
+## npc_id 是 NULL 的舊資料列，驗證 migration 中止、ROLLBACK、原資料沒被
+## 動過。
+func _run_null_pk_reject_test() -> void:
+	if db != null:
+		db.close_db()
+		db = null
+
+	_delete_test_db()
+
+	db = SQLite.new()
+	db.path = TEST_DB_PATH
+	db.foreign_keys = true
+
+	if not db.open_db():
+		_fail("null_pk_reject/open_db", db.error_message)
+		return
+
+	var statements := [
+		"CREATE TABLE npc (npc_id TEXT PRIMARY KEY);",
+		"""
+		CREATE TABLE npc_state (
+			npc_id TEXT PRIMARY KEY,
+			satiety REAL NOT NULL DEFAULT 100.0,
+			hydration REAL NOT NULL DEFAULT 80.0,
+			stamina REAL NOT NULL DEFAULT 80.0,
+			wakefulness REAL NOT NULL DEFAULT 90.0,
+			hygiene REAL NOT NULL DEFAULT 70.0,
+			alcohol REAL NOT NULL DEFAULT 0.0,
+			health REAL NOT NULL DEFAULT 100.0,
+			injury REAL NOT NULL DEFAULT 0.0,
+			location_id TEXT,
+			FOREIGN KEY (npc_id) REFERENCES npc(npc_id) ON DELETE CASCADE
+		);
+		"""
+	]
+
+	for sql in statements:
+		if not db.query(sql):
+			_fail("null_pk_reject/seed", db.error_message)
+			return
+
+	if not db.query_with_bindings(
+		"INSERT INTO npc_state (npc_id, satiety) VALUES (?, ?);", [null, 13.0]
+	):
+		_fail("null_pk_reject/seed npc_state", db.error_message)
+		return
+
+	if not db.query("PRAGMA user_version = 5;"):
+		_fail("null_pk_reject/set user_version", db.error_message)
+		return
+
+	_check(
+		"npc_state 有 NULL 主鍵列時 migration 中止（PK 同時是外鍵，不能亂補）",
+		not DatabaseSchema.initialize(db),
+		"initialize() 回傳 true——NULL 主鍵卻放行了"
+	)
+
+	_check(
+		"中止後 user_version 保持在 5（ROLLBACK，不是半套）",
+		_get_user_version() == 5,
+		"got %d, expected 5" % _get_user_version()
+	)
+
+	_check(
+		"中止後 npc_state 舊資料仍在原表",
+		_null_pk_reject_row_survived(),
+		"npc_state 裡查不到 seed 時插入的 satiety=13.0"
+	)
+
+	db.close_db()
+	db = null
+	_delete_test_db()
+
+
 # =====================================================
 # 驗證用小工具
 # =====================================================
@@ -490,6 +641,35 @@ func _foreign_key_check_clean() -> bool:
 		return false
 
 	return (db.query_result as Array).is_empty()
+
+
+func _count_rows(table: String) -> int:
+	if not db.query("SELECT COUNT(*) AS c FROM %s;" % table):
+		return -1
+
+	return int(db.query_result[0].get("c", -1))
+
+
+## UUID v4 是 36 字元、4 個連字號（8-4-4-4-12）。不驗證精確演算法，
+## 只驗證「看起來像 UUID」——這裡的重點是主鍵補上了合法值、資料沒對錯欄位。
+func _null_pk_row_repaired() -> bool:
+	if not db.query_with_bindings("SELECT world_id FROM world WHERE day = ?;", [99]):
+		return false
+
+	if db.query_result.is_empty():
+		return false
+
+	var repaired_id: String = db.query_result[0].get("world_id", "")
+	return repaired_id.length() == 36 and repaired_id.count("-") == 4
+
+
+func _null_pk_reject_row_survived() -> bool:
+	if not db.query_with_bindings(
+		"SELECT satiety FROM npc_state WHERE satiety = ?;", [13.0]
+	):
+		return false
+
+	return not db.query_result.is_empty()
 
 
 # =====================================================
