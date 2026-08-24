@@ -81,7 +81,7 @@ updated: 2026-08-24
 
 事件驅動架構下，決策請求以**單一角色**為單位發起，不再是每 tick 批次送出全體 NPC（見《10》§5.1、《12》§5.1）。
 
-**這些不是獨立行程的網路端點**——`AIService.request()` 一律打同一個 `LocalLLM`／`RemoteLLM` 的 `/v1/chat/completions`，用同一支 `HTTPRequest`。差別只在 `PromptBuilder` 組出來的 `envelope.payload.type`（決定 system prompt、要不要帶 `response_format`），不是不同 URL——下表沿用「訊息類型」只是方便對照「這次呼叫要做什麼」，實際 wire format 見《技術/LLM 串接與 AI 服務層》與 `Ailley/scripts/ai/prompt_builder.gd`。
+**這些不是獨立行程的網路端點**——`AIService` 一律打同一個 `LocalLLM`／`RemoteLLM` 的 `/v1/chat/completions`。`AIService` 內部維護一個 `POOL_SIZE := 3` 的 `HTTPRequest` 節點池（跟 llama-server 的 `--parallel 3` 對齊），佇列裡的請求依序分派給空閒節點，可以同時有 3 筆在飛，不是單一節點依序排隊。差別只在 `PromptBuilder` 組出來的 `envelope.payload.type`（決定 system prompt、要不要帶 `response_format`），不是不同 URL——下表沿用「訊息類型」只是方便對照「這次呼叫要做什麼」，實際 wire format 見《技術/LLM 串接與 AI 服務層》與 `Ailley/scripts/ai/prompt_builder.gd`。
 
 啟動就緒檢查也不是獨立端點：`AIService._probe_models()` 打 provider 標準的 `GET {base_url}/models`（OpenAI 相容 API 既有端點，順便驗證 API 金鑰是否有效），不是下面曾經設想過的 `/health`——`ai_service.gd`／`ai_config.gd` 的註解都明講「刻意不用《04》§4-1 想像的 `/health`，那是沒有的」。
 
@@ -162,7 +162,9 @@ updated: 2026-08-24
 | `context.visible` | ✔ | **只放在場的人**，無則傳 `[]`，形狀是 `{name, trust, met_count}`——只送 `trust`，好感／熟悉／虧欠三維已拿掉（《01》3-1） |
 | `context.memory` | ✔ | L2（近期）依連結展開篩選、L4（核心）固定全量帶入（#360），只帶 `content` 字串 |
 
-沒有本文件先前設想的 `available_actions` 陣列、`present_npcs` 的 `appearance_text`、`location.desc`——可選動作清單是寫死在 system prompt 文字裡的 `IMPLEMENTED_ACTIONS`（見 §3），不是每次動態依前提條件過濾出來的陣列（那是 issue #477，目前未實作，`Task.preconditions` 一律通過）。
+沒有本文件先前設想的 `available_actions` 陣列、`present_npcs` 的 `appearance_text`、`location.desc`——可選動作清單是寫死在 system prompt 文字裡的 `AISchema.IMPLEMENTED_ACTIONS`（`Ailley/scripts/ai/ai_schema.gd`，由 `PromptBuilder._plan_system()` 動態組進提示詞），不是每次動態依前提條件過濾出來的陣列。
+
+《07 地點與行動》§5 描述的「Godot 端依地點／角色狀態／持有物過濾 `available_actions`」是還沒落地的目標設計，不是文件寫錯——issue #477（`Task.preconditions` 評估）就是在追蹤這個缺口，目前 `Task.preconditions` 一律通過，過濾這一層完全沒做。兩份文件不衝突：《07》講的是設計終點，這裡講的是現在打出去的請求實際長什麼樣，#477 落地前不要照《07》的措辭去對接實作。
 
 > ⚠️ **每次決策只讀請求發起當下的快照**。套用階段在房主機序列處理，避免 race condition（見《00》§7）。
 
@@ -195,6 +197,12 @@ updated: 2026-08-24
 | `update_plan` | 條件式 | 只在《10》§5.4 列出的開放時機才存在於 schema／system prompt，不是模型自己判斷要不要填（見《12》§2.4） |
 | `persuaded`／`importance`／`valence` | 條件式 | 只在 `context.fact_lines` 帶有待回應的說服事實句時，schema 才含這三個欄位（#227）。省略 `persuaded` 視同不被說動 |
 | `appointment` | 尚未實作 | 《10》§5.5 已拍板設計，但 `ai_schema.gd`／`prompt_builder.gd` 都還沒接上這個欄位，見 issue #479 |
+
+`action == "persuade"` 的那筆 `tasks[]` 項目，`params` 另外多兩個欄位：`target`（必填，非空字串）、`reason`（必填，非空字串，說服理由，不驗證內容合不合理）、`proposed_task`（選填）：
+
+- **省略 `proposed_task`**：純思想說服——只想改變對方相信什麼，不要求對方做什麼
+- **給一個合法的 task 物件**（跟 `tasks[]` 裡一筆任務同一個形狀，遞迴驗證，但不可再是 `persuade`）：行動說服，被說服者下一輪決策若 `persuaded: true`，這筆任務才會被插進它自己的任務池——插不插隊、`persuaded` 是誰判斷的，見 §4-2 上方 `persuaded` 那列
+- **傳 `null`、`{}`，或任務驗證不過**：整包 `plan` 回應直接判失敗（`ERROR_BAD_SHAPE`），不是只丟掉這一筆 `persuade` 任務——`_validate_persuade_params()` 在 `validate_tasks()` 的逐筆迴圈裡，失敗會讓整個回應被拒收，見 §6
 
 失敗（逾時／格式錯誤／驗證不過）時房主機不會收到上面這個形狀，改走 §6。
 
@@ -238,7 +246,7 @@ updated: 2026-08-24
 
 ### 4-4 `words_to_creator_choice`　天神之石：這句話現在要不要說出口
 
-跟本文件曾經設想的「單一 `/event` 請求打包 `audience[]`、換回一批 `reactions[]`」不同——天神之石事件觸發後，範圍內每個候選角色**各自獨立擲骰、各自打一次這種呼叫**（`agent.gd::maybe_speak_to_creator()`），不是一次請求換一批反應。擲骰本身（情緒強度 ≥70 時 40% 機率，否則 25%）是 Godot 端純機率判定，不經 AI；AI 只回答「骰中之後，這句我早就想好的話，現在要不要說出口」這個是非題。
+跟本文件曾經設想的「單一 `/event` 請求打包 `audience[]`、換回一批 `reactions[]`」不同——天神之石事件觸發後，**範圍內**（`god_stone_input.gd` 的 `HEAR_RADIUS`＝96px＝6 格，跟 note/技術/天神之石輸入機制.md 一致）每個候選角色**各自獨立擲骰、各自打一次這種呼叫**（`agent.gd::maybe_speak_to_creator()`），不是一次請求換一批反應。擲骰本身（情緒強度 ≥70 時 40% 機率，否則 25%）是 Godot 端純機率判定，不經 AI；AI 只回答「骰中之後，這句我早就想好的話，現在要不要說出口」這個是非題。
 
 **Godot → AI**
 
@@ -279,7 +287,11 @@ system prompt 是 `character.system_prompt`（人格段）接上固定的收尾�
 { "words_to_creator": "我天生就是個怕生的傢伙，也是沒辦法。" }
 ```
 
-生成規則見《01》§1-4。違反內容規則（提及遊戲內容或數值）時 Godot 端重試，**上限 3 次**（2026-08-16 定案，見《99》P-10）——但這個次數是呼叫端（`game_manager.gd`／`agent.gd`）自己數的迴圈次數，AI 回應裡**沒有** `retries` 欄位回報。3 次都不過，改用固定備用句庫，`words_to_creator` 絕不留空——它是唯讀欄位，之後沒有機會補救。50 個官方 NPC 模板在資料準備階段就先生成好、經過人工檢閱，不等投放時才生成。
+生成規則見《01》§1-4。**違反內容規則時重試 3 次、3 次都不過改用固定備用句庫**是《99》P-10 已拍板的目標設計（2026-08-16 定案），但目前**沒有實作**——`agent.gd::_generate_words_to_creator()`／`game_manager.gd::_generate_words_to_creator()` 兩處都只呼叫一次 `AIService.request()`，`AISchema.validate_creation(result["data"])` 沒過就直接 `return`，沒有內容驗證重試迴圈、也沒有備用句庫。實際行為是：這次生成失敗，`words_to_creator` 就停在空字串——不是「絕不留空」。
+
+AI 回應裡本來就**沒有** `retries` 欄位回報（重試次數如果真的做了，也只會是呼叫端自己數的迴圈次數，不會是 AI 回應的一部分）。50 個官方 NPC 模板在資料準備階段就先生成好、經過人工檢閱，不等投放時才生成，這件事不受上面這個缺口影響。
+
+> ⚠️ `AIService` 本身對部分可重試的傳輸層錯誤（HTTP 5xx、特定網路錯誤）會自動重試 1 次（`RETRY_LIMIT := 1`），但那是**傳輸層**重試，跟這裡在講的「內容違規要不要重打」是兩回事——傳輸重試對所有呼叫類型都生效，不是 `creation` 專屬的行為，見 §6。
 
 ---
 
@@ -322,7 +334,7 @@ system prompt 是 `character.system_prompt`（人格段）接上固定的收尾�
 
 ### 4-7 `checkpoint`　長動作固定間隔檢查點
 
-本文件先前完全沒有這個訊息類型（issue #336，《02》§3）：長動作（`duration` 較長的任務）進行到一半，固定間隔問一次「繼續還是放棄」，不是完整重新規劃，所以只帶 `self`（自身狀態），不帶 `visible`／`pool`／`memory`。
+本文件先前完全沒有這個訊息類型（issue #336，《02》§3）：長動作（`duration` 較長的任務）進行到一半，每 `LONG_ACTION_CHECKPOINT_INTERVAL := 10` 遊戲分鐘（跟 `MIN_ACTION_DURATION` 取同一個值，《99》P-14 #9）固定問一次「繼續還是放棄」，不是完整重新規劃，所以只帶 `self`（自身狀態），不帶 `visible`／`pool`／`memory`。放棄時若這個角色正在被別人依附（目前唯一情形是搬運中的目標，`get_checkpoint_dependents()`），依附者也會一併收到通知（`on_dependent_checkpoint()`），但通知走的是引擎內部呼叫，不是另一次 AI 請求。
 
 **Godot → AI**
 
@@ -495,3 +507,4 @@ HTTP 5xx、逾時都落在上面 AIService 層的 `http`／`timeout` identifier 
 | 5 | ~~Godot 端 `HTTPRequest` 封裝與重試邏輯~~ | 前端 | ☑ 已實作，見 `ai_service.gd` |
 | 6 | ~~單一角色決策請求的併發上限~~ | 後端 | ☑ 2026-08-16，見《99》P-11 |
 | 7 | ~~`build_schema_for_call()` / `DecisionProvider` 重構六項任務~~ | AI・後端 | ☑ 已改走 §8 簡化路線，不需要這六項（《12》§8，issue #245） |
+| 8 | `creation` 內容違規重試 3 次＋固定備用句庫（《99》P-10 已拍板） | AI・後端 | 未實作，`agent.gd`／`game_manager.gd` 的 `_generate_words_to_creator()` 目前只打一次，失敗就留空字串，見 §4-5 |
