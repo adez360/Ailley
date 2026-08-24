@@ -328,6 +328,10 @@ func _ready() -> void:
 	system_prompt = persona["system_prompt"]
 
 	sprite.play("idle_" + facing)
+	# load_save_data() 若在進場景樹前就被呼叫（見該函式開頭註解），is_dead=true
+	# 時會因為 sprite 還不存在而跳過灰階——sprite 現在已就緒，補套一次
+	# （CodeRabbit review 抓到）
+	_apply_death_tint(is_dead)
 
 	# emotion.duration_left／conditions[].turns_left 都是離散單位，用 GameClock 既有的
 	# 「每遊戲分鐘」訊號驅動比自己在 _process(delta) 裡做累加器精簡（agent.gd 也是這樣接的），
@@ -722,13 +726,23 @@ func _die(cause: String) -> void:
 	# 或被 conversation.gd 繼續要台詞（CodeRabbit review 抓到）。Agent 覆寫的
 	# _on_action_interrupted() 已加上 is_dead 判斷，這裡不會反過來觸發新決策
 	force_interrupt()
-	sprite.modulate = Color(0.5, 0.5, 0.5)		# 本體變灰色（《規格書09》§1）
+	_apply_death_tint(true)		# 本體變灰色（《規格書09》§1）
 
 	print_debug("Character %s 死亡：%s" % [character_name, cause])
 
 	# 不 await——last_words 是死亡當下才問 LLM，回應要等數百毫秒到數十秒，
 	# 死亡狀態機（is_dead、石化、decay 開始累積）不該卡在那份請求後面才生效
 	_request_last_words(cause)
+
+## 死亡本體變灰／存活還原正常顏色。獨立成函式是因為 load_save_data() 明確
+## 允許在節點還沒進場景樹時呼叫（見該函式開頭註解）——這時 @onready var sprite
+## 還沒初始化，直接寫 sprite.modulate 會炸掉，這裡統一擋 null（CodeRabbit
+## review 抓到）。_ready() 會在 sprite 就緒後補呼叫一次，把 load_save_data()
+## 在 sprite 還不存在時被跳過的那次補回來
+func _apply_death_tint(dead: bool) -> void:
+	if sprite == null:
+		return
+	sprite.modulate = Color(0.5, 0.5, 0.5) if dead else Color(1, 1, 1)
 
 ## 臨終遺言請求的掛點，基底 no-op：Player 沒有 LLM 決策，last_words 維持 null
 ## （來不及開口，跟《規格書09》§2 表格「無機會留遺言」的語意不同，是單純沒有
@@ -1515,7 +1529,7 @@ func load_save_data(data: Dictionary) -> void:
 
 		conditions.clear()
 		conditions.append({"type": CONDITION_PETRIFIED, "turns_left": -1})
-		sprite.modulate = Color(0.5, 0.5, 0.5)
+		_apply_death_tint(true)
 		# 跟 _die() 同一個理由（CodeRabbit review 抓到）：場上正在工作／對話中的
 		# 角色被載入一份死亡存檔時，這裡只設了狀態欄位，沒有真的收尾——不呼叫
 		# force_interrupt() 的話 _run_work() 協程會在下個 GameClock.time_changed
@@ -1528,7 +1542,7 @@ func load_save_data(data: Dictionary) -> void:
 		# 只在上面 is_dead 分支寫入，不會因為這次 is_dead=false 自動消失——不清的話
 		# 會出現 is_dead=false 但外觀／conditions 仍是死屍的矛盾狀態
 		conditions = conditions.filter(func(c): return c["type"] != CONDITION_PETRIFIED)
-		sprite.modulate = Color(1, 1, 1)
+		_apply_death_tint(false)
 		death_tick = -1
 		death_day = -1
 		death_at = ""
