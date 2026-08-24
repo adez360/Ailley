@@ -315,6 +315,10 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 		var target: Variant = talk_params.get("target")
 		if not target is String or (target as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
+		# 存回去的是修剪過的值——_find_character_by_name() 用精確比對，
+		# LLM 輸出偶爾帶前後空白的話，不修剪會讓合法目標在執行層被誤判成
+		# 「找不到這個人」（CodeRabbit review 抓到）
+		talk_params["target"] = (target as String).strip_edges()
 
 	# give 動作的 params 驗證（#264）：target 比照 talk，缺失／非字串／
 	# 空字串在這一層就擋掉，不要等到 _pursue_give_task() 才被動吸收成
