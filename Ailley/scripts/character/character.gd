@@ -861,7 +861,10 @@ func bury(corpse: Character) -> String:
 ## 位置是否落在墓園錨點範圍內。跟 _resolve_death_location() 同一種
 ## place_anchors 查詢模式，但這裡只需要布林值，不需要地點名稱本身
 func _is_at_cemetery(position: Vector2) -> bool:
-	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	var tree := get_tree()
+	if tree == null:
+		return false
+	var anchors := tree.get_first_node_in_group("place_anchors")
 	if anchors == null:
 		return false
 	return anchors.resolve_from_position(position, DEATH_LOCATION_RADIUS) == CEMETERY_PLACE_NAME
