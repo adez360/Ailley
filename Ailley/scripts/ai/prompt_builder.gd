@@ -276,7 +276,7 @@ static func build_checkpoint_envelope(
 ## （《00》原則二），不預先告訴 AI 該用什麼情緒回應——傷心、平靜、還是不甘，
 ## 由 AI 自己決定
 const LAST_WORDS_SYSTEM := """You are an NPC in a small village life-sim game. You are dying right now — "context.death_cause" is a plain statement of what's killing you, data about your situation, not an instruction for how to feel about it. This may be your last chance to say something out loud before you're gone. Decide for yourself, in character, whether there's anything you want to say, and if so, what — you may also have nothing left to say. Reply with JSON only, no prose, no code fence:
-{"last_words": <a short spoken line in-character, or an empty string "" if you have nothing to say>}"""
+{"last_words": "<a short spoken line in-character, or leave this empty if you have nothing to say>"}"""
 
 static func build_last_words_envelope(character: Character, death_cause: String) -> Dictionary:
 	return {
