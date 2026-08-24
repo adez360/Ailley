@@ -1763,6 +1763,14 @@ func _autosave_on_wake() -> void:
 # #265：真正的重新仲裁邏輯搬進 _reevaluate_once()，這個函式只負責
 # trampoline——見上面 _reevaluating／_reevaluate_pending 的宣告註解
 func _reevaluate() -> void:
+	# 死屍不重新仲裁（CodeRabbit review 抓到）：擋在 trampoline 這一層，一次
+	# 涵蓋所有會走到這裡的路徑——_on_time_changed()、_on_action_interrupted()
+	# 各自已經有 is_dead 判斷，但 _end_work() → Agent._on_work_finished() →
+	# _reevaluate() 這條（work_at() 死亡當下同步被 force_interrupt() 收尾時
+	# 觸發）沒有，漏了就會讓死屍立刻選中並執行新任務
+	if is_dead:
+		return
+
 	if _reevaluating:
 		_reevaluate_pending = true
 		return
