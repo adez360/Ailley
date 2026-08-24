@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-22
+updated: 2026-08-24
 ---
 
 # api
@@ -88,7 +88,7 @@ signal move_finished(reached: bool)          # 走完 true / 卡住放棄 false
 signal noise_heard(source: Character)        # 收到方會發，見 make_noise()
 signal spoke(line: String)                   # 講出任何一句話都會發（逐字稿/記憶的接點）
 
-const SPEED = 80.0
+const SPEED = 60.0                           # 2026-08-24 從 80 調降
 const ARRIVE_DISTANCE = 2.0
 const STUCK_TIME = 1.0
 const TALK_RANGE := 32.0                     # 2 格
