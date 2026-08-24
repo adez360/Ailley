@@ -525,6 +525,8 @@ func _track_action_result_for_facts(action: String, success: bool) -> void:
 ## L10n——這是餵給 LLM 反思的內部事實句，不是玩家會看到的 UI 文字），
 ## 同時骰一次天神之石觸發判定
 func hear_god_stone(line: String) -> void:
+	if is_dead:
+		return
 	_push_daily_event("你在天神之石附近聽到一個聲音，說：「%s」" % line)
 	maybe_speak_to_creator(line)
 
@@ -550,12 +552,15 @@ func maybe_speak_to_creator(heard_line: String) -> void:
 		return
 
 	_words_to_creator_pending = true
+	var my_generation := _decision_generation
 	var envelope := PromptBuilder.build_words_to_creator_envelope(self, heard_line)
 	var validator := func(data: Dictionary) -> Dictionary:
 		return AISchema.validate_words_to_creator_choice(data)
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	_words_to_creator_pending = false
 
+	if is_dead or my_generation != _decision_generation:
+		return
 	if not result["ok"] or not result["data"]["say_it"]:
 		return
 
