@@ -988,6 +988,11 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 ## 觸發時機有兩個：debug_console.gd 的 `reflect` 指令手動呼叫，以及
 ## _reevaluate_once() 偵測到角色進入睡眠狀態時自動呼叫（#112 落地後接上）
 func request_sleep_reflection() -> Dictionary:
+	# 死屍不建立新的反思請求（CodeRabbit review 抓到）：debug_console.gd 的
+	# `reflect` 指令可以對任何角色手動呼叫，不像睡眠轉換那條路徑已經被
+	# force_interrupt()／is_dead 相關守衛擋住
+	if is_dead:
+		return {"ok": false}
 	# 同一時間只能有一個反思請求在飛（CodeRabbit review 抓到）：睡眠事件跟
 	# debug_console.gd 的 `reflect` 指令都會呼叫這裡，這通吃 await，重疊呼叫
 	# 會讓兩個請求同時讀寫同一份 _daily_events——後回來的那個 filter() 會用
@@ -1033,9 +1038,14 @@ func request_sleep_reflection() -> Dictionary:
 			seen_ids[event_id] = true
 		return validated
 
+	var my_generation := _decision_generation
 	var envelope := PromptBuilder.build_reflection_envelope(self, events_sent)
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
-	if not result["ok"]:
+	# 世代守衛＋is_dead（CodeRabbit review 抓到）：跟 _request_last_words() 同一個
+	# 理由——等待期間角色可能死亡或被 load_save_data() 蓋過世代，回來時不能再把
+	# 反思結果（memory／personality_delta／today_plan／last_reflection_summary）
+	# 套用到已經作廢的角色狀態上
+	if is_dead or my_generation != _decision_generation or not result["ok"]:
 		_finish_sleep_reflection_request()
 		return {"ok": false}
 
