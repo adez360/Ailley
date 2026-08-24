@@ -707,6 +707,13 @@ func _die(cause: String) -> void:
 	# 重新加回死屍身上
 	_incapacitation_start_minute = -1
 
+	# 治療同理要清掉（CodeRabbit review 抓到）：_update_treatment() 沒有 is_dead
+	# 判斷，_treatment_start_minute 若殘留，60 分鐘後 _complete_treatment() 會
+	# 把 conditions 清空（連 petrified 一起沒了）並恢復 health／injury，等於
+	# 讓死屍活過來
+	_treatment_start_minute = -1
+	_treatment_location = ""
+
 	corpse_decay = 0.0
 	# force_interrupt() 已含 stop_moving()／leave_conversation()／_end_work()——
 	# 昏迷倒數的 30 分鐘內角色仍可能開始新的工作或被搭話（is_dead 這時還是
@@ -824,7 +831,9 @@ func is_in_conversation() -> bool:
 # _is_preemptible()）——這兩個問題曾經共用同一個 is_interruptible()，
 # 是意外共用不是設計決定，issue #113 把它們拆開成各自獨立的判斷
 func is_talk_interruptible() -> bool:
-	return not _working
+	# is_dead 排除（CodeRabbit review 抓到）：force_interrupt() 只收尾死亡當下
+	# 已經存在的對話，沒擋之後別人再對死屍發起新對話——死屍不該再被搭話
+	return not _working and not is_dead
 
 # 對某人搭話。成功回傳 TALK_OK（空字串），否則回傳失敗原因碼
 func talk_to(other: Character) -> String:
@@ -833,8 +842,10 @@ func talk_to(other: Character) -> String:
 	if other == self:
 		return TALK_TARGET_IS_SELF
 	# 自己在工作中也算忙。少了這條，E 鍵在 work_at() 回 WORK_BUSY 之後退回搭話，
-	# 工作中的角色就開得起對話——正好繞過上面 is_talk_interruptible() 要擋的那件事
-	if is_in_conversation() or _working or other.is_in_conversation():
+	# 工作中的角色就開得起對話——正好繞過上面 is_talk_interruptible() 要擋的那件事。
+	# is_dead 同理擋自己是死屍發起搭話（CodeRabbit review 抓到）——target 那側已經
+	# 靠 is_talk_interruptible() 擋掉，initiator 這側沒有對稱檢查會漏掉
+	if is_in_conversation() or _working or is_dead or other.is_in_conversation():
 		return TALK_TARGET_BUSY
 	if get_body_position().distance_to(other.get_body_position()) > TALK_RANGE:
 		return TALK_TOO_FAR
@@ -1494,6 +1505,13 @@ func load_save_data(data: Dictionary) -> void:
 		is_buried = loaded_buried if loaded_buried is bool else is_buried
 		var loaded_grave: Variant = data.get("grave_id", grave_id)
 		grave_id = loaded_grave if (loaded_grave == null or loaded_grave is String) else grave_id
+
+		# 治療欄位跟 _die() 同一個理由清掉（CodeRabbit review 抓到）：上面幾行
+		# 只還原死亡欄位本身，沒清掉治療欄位——若這份存檔或載入前的角色狀態剛好
+		# 帶著沒清乾淨的 treatment_start_minute，_update_treatment() 沒有 is_dead
+		# 判斷，60 分鐘後 _complete_treatment() 會把 petrified 一起清掉、救活死屍
+		_treatment_start_minute = -1
+		_treatment_location = ""
 
 		conditions.clear()
 		conditions.append({"type": CONDITION_PETRIFIED, "turns_left": -1})
