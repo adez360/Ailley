@@ -3458,7 +3458,7 @@ func _preconditions_met(task: Dictionary) -> bool:
 		if actual == null:
 			push_warning("Agent: precondition 欄位無法解析，視為不成立：%s" % [cond])
 			return false
-		# actual 一定是數字（stats/relations 兩個命名空間都只回傳數字或 null，
+		# actual 一定是數字（stats 命名空間只回傳數字或 null，
 		# null 已在上面擋掉）——value 也強制要求數字，否則 >=/<=/>/< 會在
 		# _compare_precondition() 對不相容型別（例如數字對 null／字串）直接
 		# 丟出 runtime error，不是安全地回傳 false（實測驗證過：
