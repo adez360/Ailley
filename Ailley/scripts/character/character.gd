@@ -1609,9 +1609,9 @@ func load_save_data(data: Dictionary) -> void:
 		# 若先載入一份已安葬存檔、再載入一份沒有這兩個 key 的舊死亡存檔，
 		# 沿用目前值會讓安葬歸屬與時間點黏著甩不掉
 		var loaded_buried_by: Variant = data.get("buried_by", null)
-		buried_by = loaded_buried_by if (loaded_buried_by == null or loaded_buried_by is String) else null
+		buried_by = loaded_buried_by if (loaded_buried_by == null or (loaded_buried_by is String and not loaded_buried_by.is_empty())) else null
 		var loaded_buried_tick: Variant = data.get("buried_tick", -1)
-		buried_tick = loaded_buried_tick if loaded_buried_tick is int else -1
+		buried_tick = loaded_buried_tick if (loaded_buried_tick is int and (loaded_buried_tick == -1 or loaded_buried_tick >= 0)) else -1
 
 		# 治療欄位跟 _die() 同一個理由清掉（CodeRabbit review 抓到）：上面幾行
 		# 只還原死亡欄位本身，沒清掉治療欄位——若這份存檔或載入前的角色狀態剛好
