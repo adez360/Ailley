@@ -201,8 +201,8 @@ updated: 2026-08-24
 `action == "persuade"` 的那筆 `tasks[]` 項目，`params` 另外多兩個欄位：`target`（必填，非空字串）、`reason`（必填，非空字串，說服理由，不驗證內容合不合理）、`proposed_task`（選填）：
 
 - **省略 `proposed_task`**：純思想說服——只想改變對方相信什麼，不要求對方做什麼
-- **給一個合法的 task 物件**（跟 `tasks[]` 裡一筆任務同一個形狀，遞迴驗證，但不可再是 `persuade`）：行動說服，被說服者下一輪決策若 `persuaded: true`，這筆任務才會被插進它自己的任務池——插不插隊、`persuaded` 是誰判斷的，見 §4-2 上方 `persuaded` 那列
-- **傳 `null`、`{}`，或任務驗證不過**：整包 `plan` 回應直接判失敗（`ERROR_BAD_SHAPE`），不是只丟掉這一筆 `persuade` 任務——`_validate_persuade_params()` 在 `validate_tasks()` 的逐筆迴圈裡，失敗會讓整個回應被拒收，見 §6
+- **給一個合法的 task 物件**（跟 `tasks[]` 裡一筆任務同一個形狀，遞迴驗證，但不可再是 `persuade`）：行動說服。被說服者下一輪決策回應 `persuaded: true` 時（`agent.gd::_resolve_pending_persuade()`），這筆 `proposed_task` 才會被插進它自己的任務池；`persuaded: false` 或省略則不插入，只留一句事實句記錄被拒絕，`persuaded` 本身怎麼判斷見上方那列
+- **傳 `null`、`{}`，或任務驗證不過**：整包 `plan` 回應直接判失敗，不是只丟掉這一筆 `persuade` 任務——`_validate_persuade_params()` 在 `validate_tasks()` 的逐筆迴圈裡，失敗會讓整個回應被拒收，見 §6。錯誤碼依失敗原因而定：`null`／`{}`／巢狀 `persuade`／欄位形狀錯誤是 `ERROR_BAD_SHAPE`；`proposed_task.action` 不在 `ALLOWED_ACTIONS` 白名單則是 `ERROR_ACTION_NOT_ALLOWED`，不是一律同一個錯誤碼
 
 失敗（逾時／格式錯誤／驗證不過）時房主機不會收到上面這個形狀，改走 §6。
 
