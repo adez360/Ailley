@@ -595,18 +595,30 @@ func _end_incapacitation() -> void:
 	if stats != null:
 		stats.set_value("health", 10.0)
 
-	# 被救助：對每個搬運者 trust +15（《01》3-1）。搬運者只會被 stop_haul()
-	# 從 _hauled_by 移除，沒有 _exit_tree() 清理時，搬運者若被 queue_free()
-	# 直接砍掉，_hauled_by 會留著已釋放的殘留參照——!= null 擋不住這個，
-	# 已釋放的 Object 不會自動變成 null，要用 is_instance_valid()
-	# （CodeRabbit review 抓到）
-	if relationships != null:
-		for hauler in _hauled_by:
-			if is_instance_valid(hauler) and not _rescued_haulers.has(hauler):
-				relationships.add_trust(hauler.character_id, 15.0)
-				_rescued_haulers.append(hauler)
+	# 被救助：通知每個搬運者的救助鉤子（見 _on_rescued()）。搬運者只會被
+	# stop_haul() 從 _hauled_by 移除，沒有 _exit_tree() 清理時，搬運者若被
+	# queue_free() 直接砍掉，_hauled_by 會留著已釋放的殘留參照——!= null
+	# 擋不住這個，已釋放的 Object 不會自動變成 null，要用 is_instance_valid()
+	# （CodeRabbit review 抓到）。_rescued_haulers 仍要記——不是為了擋重複扣／
+	# 加 trust（已拿掉，見 _on_rescued() 說明），是擋同一位搬運者的事實句被
+	# 重複記兩次
+	for hauler in _hauled_by:
+		if is_instance_valid(hauler) and not _rescued_haulers.has(hauler):
+			_on_rescued(hauler)
+			_rescued_haulers.append(hauler)
 
 	print_debug("Character %s 昏迷已結束（被搬走）" % character_name)
+
+## 被搬運者救助的收尾鉤子（含 _attach_haul() 補發的晚到搬運者）。基底只是
+## 掛點，跟 _on_attacked() 同一個理由——Player 沒有記憶系統可寫，只有 Agent
+## 需要記事實句。
+##
+## 刻意不在這裡直接加 trust（2026-08-24 拿掉，見全專案盤點的原則二／三審查）：
+## 跟 _on_attacked() 同一個問題——引擎用固定公式（+15）幫「被救助」這件事
+## 定性成該加多少信任，AI 沒機會表態；trust 也沒有任何公式拿它當輸入。事件
+## 本身照樣要記成事實句給 AI（見 agent.gd 覆寫），該不該信任由 AI 自己判斷
+func _on_rescued(_hauler: Character) -> void:
+	pass
 
 ## 由搬運動作（#161 haul）調用，標記此角色正在被搬運。
 ## 若該角色昏迷，搬運會立即結束昏迷（《99》P-27）——不能只設旗標等下一次
@@ -1205,11 +1217,16 @@ func attack(other: Character) -> String:
 	return ATTACK_OK
 
 ## 被攻擊的收尾鉤子。基底只是掛點——Player 沒有記憶系統可寫，只有 Agent
-## 需要把這件事記成事實句給下次決策／反思用（見 agent.gd 覆寫）
+## 需要把這件事記成事實句給下次決策／反思用（見 agent.gd 覆寫）。
+##
+## 刻意不在這裡直接扣 trust（2026-08-24 拿掉，見全專案盤點的原則二／三審查）：
+## 引擎用固定公式幫「被攻擊」這件事定性成「值 -50 信任」，AI 完全沒機會表態，
+## 跟《00》原則二「引擎只給事件，不給情緒」相反；而且 trust 目前沒有任何公式
+## 拿它當輸入（只餵給 LLM 讀），不符合《00》原則三的留存門檻。事件本身照樣
+## 完整記成事實句給 AI（見 agent.gd 覆寫），該不該信任由 AI 自己判斷、記在
+## 自己的記憶系統裡
 func _on_attacked(attacker: Character) -> void:
-	# 被攻擊：trust -50（《01》3-1）
-	if attacker != null and relationships != null:
-		relationships.add_trust(attacker.character_id, -50.0)
+	pass
 
 ## 強制中斷目前行動，不徵詢 interruptible／能不能被搭話打斷——跟仲裁器的
 ## 「搶占」判斷是兩回事，這裡是外部事件硬性發生（被攻擊等，《02》§3「立即
@@ -1656,11 +1673,11 @@ func _attach_haul(hauler: Character) -> void:
 
 	# 這位是第一位搬運者已經觸發過 _end_incapacitation() 之後才加入的第二位——
 	# set_being_carried(true) 的 has_condition(CONDITION_INCAPACITATED) 判斷這時
-	# 已經是 false，不會再幫他跑一次救助流程，這裡補發他這次事件該拿的 trust。
-	# _rescued_haulers 非空才代表「這次真的發生過救助」，不是隨便一次沒昏迷的
-	# 搬運（例如搬天神之石這種一般 carryable 物件）也誤發獎勵
-	if relationships != null and not _rescued_haulers.is_empty() and not _rescued_haulers.has(hauler):
-		relationships.add_trust(hauler.character_id, 15.0)
+	# 已經是 false，不會再幫他跑一次救助流程，這裡補發他這次事件該記的事實句
+	# （見 _on_rescued()）。_rescued_haulers 非空才代表「這次真的發生過救助」，
+	# 不是隨便一次沒昏迷的搬運（例如搬天神之石這種一般 carryable 物件）也誤記
+	if not _rescued_haulers.is_empty() and not _rescued_haulers.has(hauler):
+		_on_rescued(hauler)
 		_rescued_haulers.append(hauler)
 
 func _detach_haul(hauler: Character) -> void:

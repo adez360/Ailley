@@ -177,6 +177,8 @@ func _apply_rewards() -> void:
 
 		if character.relationships != null:
 			character.relationships.note_meeting(other.character_id)
-			# 深度對話：5 句以上 trust +2（《01》3-1）
-			if _turns.size() >= 5:
-				character.relationships.add_trust(other.character_id, 2.0)
+			# 刻意不在這裡加 trust（2026-08-24 拿掉，見全專案盤點的原則二／三
+			# 審查）：跟 _on_attacked()／_on_rescued() 同一個問題——固定公式
+			# 幫「深度對話」定性成該加多少信任，AI 沒機會表態。這裡甚至不需要
+			# 額外記事實句：對話內容本身就在 AI 自己的上下文裡，不必引擎另外
+			# 告知「你們聊了很久」，該不該多信任對方由 AI 自己判斷
