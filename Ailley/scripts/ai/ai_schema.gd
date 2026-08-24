@@ -895,6 +895,37 @@ static func checkpoint_response_schema() -> Dictionary:
 	}
 
 
+# 死亡當下的臨終遺言（#379，《規格書09》§2）：跟 reasoning／inner_monologue／
+# summary 同一種選填字串慣例——本機 llama-server 的 json_schema 支援度有限
+# （見 ai_config.gd::supports_json_schema 附近說明），這批既有欄位全部刻意
+# 避開 nullable／聯合型別寫法，用「空字串代表沒有」統一表示，這裡沿用同一套，
+# 不引入這個代碼庫沒有先例的 schema 寫法。角色資料層的 last_words（character.gd）
+# 仍然是 String｜null——null 只在「根本沒問到（打不到/驗證失敗）」時出現，
+# 「AI 決定沒話說」在這裡回空字串，跟《規格書09》§2「來不及開口」語意相容：
+# 面板顯示規則只在意「有沒有內容」，空字串跟 null 是同一種「沒有」
+static func validate_last_words(data: Dictionary) -> Dictionary:
+	var last_words: Variant = _validated_optional_line(data, "last_words")
+	if last_words == null:
+		return _fail(ERROR_BAD_SHAPE)
+	return _ok({"last_words": last_words})
+
+
+static func last_words_response_schema() -> Dictionary:
+	return {
+		"type": "json_schema",
+		"json_schema": {
+			"name": "last_words_response",
+			"schema": {
+				"type": "object",
+				"properties": {
+					"last_words": {"type": "string", "maxLength": MAX_LINE_CHARS},
+				},
+				"required": ["last_words"],
+			},
+		},
+	}
+
+
 # 選填字串欄位的共用驗證：缺席回空字串、型別錯回 null（呼叫端用 null 判斷失敗，
 # 因為合法值本身可以是空字串，不能拿空字串當失敗信號）、超長截斷不拒絕。
 # validate_dialogue() 的 line 沒有共用這個，因為它是必填且不可為空，跟這裡
