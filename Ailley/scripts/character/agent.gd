@@ -1441,8 +1441,18 @@ func _on_action_interrupted() -> void:
 	# 死屍不重新規劃（CodeRabbit review 抓到）：_die() 這次改呼叫
 	# force_interrupt() 收尾在途的工作／對話，會連帶跑到這裡——沒有這個
 	# return，下面的 _request_next_decision()／_reevaluate() 會立刻幫死屍
-	# 問出新任務，等於繞過 _on_time_changed() 那道 is_dead 判斷
+	# 問出新任務，等於繞過 _on_time_changed() 那道 is_dead 判斷。
+	# 順便清掉目前任務與追逐狀態（CodeRabbit review 抓到）：長動作 checkpoint
+	# 請求若剛好還在飛，_request_checkpoint_decision() 回來時只比對世代跟
+	# task id，不清的話這兩者都還對得上，會讓 _abandon_task_from_checkpoint()
+	# → _finish_task_and_request_next() 對死者發出新的決策請求；清空後
+	# task id 對不上，過期回應會被正確丟棄，死亡角色的狀態快照也回到 idle
 	if is_dead:
+		_current_task = {}
+		current_place = ""
+		current_state = "idle"
+		_pursued_place = ""
+		_pursuit_done = false
 		return
 
 	# 清空前先存一份快照——character.gd::attack() 的呼叫順序是
