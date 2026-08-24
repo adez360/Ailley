@@ -97,6 +97,7 @@ const HAUL_STAMINA_DRAIN := 3.0			# 搬運者每現實秒額外扣的體力（�
 const HAUL_OK := ""
 const HAUL_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
 const HAUL_TARGET_IS_SELF := "TARGET_IS_SELF"
+const HAUL_TARGET_ALREADY_BURIED := "TARGET_ALREADY_BURIED"
 const HAUL_TOO_FAR := "TOO_FAR"
 
 const ATTACK_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE／GIVE_RANGE 一樣的距離門檻，2 格
@@ -285,6 +286,8 @@ var last_words: Variant = null	# String 或 null（來不及開口）；只有 A
 var corpse_decay := 0.0		# 0–100，_update_corpse_decay() 每 tick +0.7；達 100 之後交給 #387 判斷是否自動立無名碑
 var is_buried := false			# 安葬流程見 #380，這裡只保留欄位供其寫入
 var grave_id: Variant = null	# 同上，String 或 null
+var buried_by: Variant = null	# 誰安葬了你，String（character_id）或 null（無名碑等非人為安葬留給 #387）
+var buried_tick := -1			# 安葬當下的全域 tick，同 death_tick 換算方式，見 bury()
 
 # 滑鼠 hover（selection.gd）跟 E 鍵目前的互動目標（player.gd）是兩個獨立的
 # 高亮來源，任一個成立就該顯示描邊。分開存，不是合用一個布林值——CodeRabbit
@@ -787,6 +790,94 @@ func _update_corpse_decay() -> void:
 	if death_tick == _current_tick():
 		return
 	corpse_decay = clampf(corpse_decay + 0.7, 0.0, 100.0)
+
+
+# ---- 安葬（#380，《規格書09》§3-2／§6） ----
+
+## 搬運／安葬距離門檻，跟 HAUL_RANGE／GIVE_RANGE 同一種「2 格內」判斷，
+## 沒有理由對屍體另訂一套距離
+const BURY_RANGE := 32.0
+
+## PlaceAnchors 底下這個錨點的節點名稱（見 note/技術/村莊地圖.md）。
+## 《規格書09》§6 寫的 `loc_cemetery` 是 LocationSchema／規格文件那一層的
+## 正式 location_id（帶 `loc_` 前綴），跟這裡不是同一份字串——PlaceAnchors
+## 錨點名稱／`current_place`／`npc_schedule.json` 的 `place` 欄位全部是不帶
+## 前綴的短名（`home`／`herb_shop`…，見《村莊地圖》），跟其餘地點一致才能讓
+## `move_to()`／`resolve_from_position()` 認得
+const CEMETERY_PLACE_NAME := "cemetery"
+
+## 墓碑格數上限（《規格書09》§6，issue #368 拍板值）。滿格時 bury() 直接拒絕，
+## 屍體留在原地繼續佔一般 capacity，符合§6「Phase 2：拒絕」——動態擴張是
+## Phase 3（《99》P-57），不在這則範圍內
+const CEMETERY_GRAVE_CAPACITY := 6
+
+const BURY_OK := ""
+const BURY_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const BURY_TARGET_IS_SELF := "TARGET_IS_SELF"
+const BURY_TARGET_NOT_DEAD := "TARGET_NOT_DEAD"
+const BURY_ALREADY_BURIED := "ALREADY_BURIED"
+const BURY_TOO_FAR := "TOO_FAR"
+const BURY_NOT_AT_CEMETERY := "NOT_AT_CEMETERY"
+const BURY_CEMETERY_FULL := "CEMETERY_FULL"
+
+## 安葬。self 是動手安葬的人，corpse 是屍體本體（死亡後角色不會被移除，
+## 石化留在原地／被搬運，見 _die()）。跟 attack()／give_to() 同一種寫法：
+## 一路檢查、任何一關不過就回失敗碼，全過才真的寫入狀態。
+##
+## 沒有檢查 self 是不是也在墓園——安葬者跟屍體只要彼此在 BURY_RANGE 內、
+## 屍體本身位於墓園錨點範圍內即可，跟 give_to() 只檢查雙方距離、不檢查
+## 「送禮者站在哪」同一個道理
+func bury(corpse: Character) -> String:
+	if corpse == null or not is_instance_valid(corpse):
+		return BURY_TARGET_NOT_FOUND
+	if corpse == self:
+		return BURY_TARGET_IS_SELF
+	if not corpse.is_dead:
+		return BURY_TARGET_NOT_DEAD
+	if corpse.is_buried:
+		return BURY_ALREADY_BURIED
+	if get_body_position().distance_to(corpse.get_body_position()) > BURY_RANGE:
+		return BURY_TOO_FAR
+	if not _is_at_cemetery(corpse.get_body_position()):
+		return BURY_NOT_AT_CEMETERY
+	if _cemetery_grave_count() >= CEMETERY_GRAVE_CAPACITY:
+		return BURY_CEMETERY_FULL
+
+	corpse.is_buried = true
+	corpse.grave_id = "grave_%s" % corpse.character_id
+	corpse.buried_by = character_id
+	corpse.buried_tick = _current_tick()
+
+	# 解除既有搬運關係——is_being_hauled() 在 _decide_velocity() 裡排在
+	# petrified 鎖定之前（見該函式註解），is_buried 本身不會讓身體停止跟著
+	# 搬運者走，不主動放手的話墓碑會被拖出墓園
+	for hauler in corpse._hauled_by.duplicate():
+		if is_instance_valid(hauler):
+			hauler.stop_haul()
+
+	print_debug("Character %s 安葬了 %s" % [character_name, corpse.character_name])
+	return BURY_OK
+
+## 位置是否落在墓園錨點範圍內。跟 _resolve_death_location() 同一種
+## place_anchors 查詢模式，但這裡只需要布林值，不需要地點名稱本身
+func _is_at_cemetery(position: Vector2) -> bool:
+	var tree := get_tree()
+	if tree == null:
+		return false
+	var anchors := tree.get_first_node_in_group("place_anchors")
+	if anchors == null:
+		return false
+	return anchors.resolve_from_position(position, DEATH_LOCATION_RADIUS) == CEMETERY_PLACE_NAME
+
+## 目前已佔用的墓碑格數：場上所有已安葬角色的數量。不另外維護一個計數器——
+## 死亡角色不會被移除節點（見 _die()），直接數 is_buried 的人數就是即時正確
+## 答案，跟 hauler_count() 數 _hauled_by 而不是另存一個計數欄位同一種作法
+func _cemetery_grave_count() -> int:
+	var count := 0
+	for node in get_tree().get_nodes_in_group("characters"):
+		if node is Character and (node as Character).is_buried:
+			count += 1
+	return count
 
 
 # ---- 移動 ----
@@ -1453,6 +1544,8 @@ func get_save_data() -> Dictionary:
 		"corpse_decay": corpse_decay,
 		"is_buried": is_buried,
 		"grave_id": grave_id,
+		"buried_by": buried_by,
+		"buried_tick": buried_tick,
 	}
 
 	if stats != null:
@@ -1521,10 +1614,20 @@ func load_save_data(data: Dictionary) -> void:
 		last_words = loaded_words if (loaded_words == null or loaded_words is String) else last_words
 		var loaded_decay: Variant = data.get("corpse_decay", corpse_decay)
 		corpse_decay = clampf(loaded_decay, 0.0, 100.0) if (loaded_decay is float or loaded_decay is int) else corpse_decay
-		var loaded_buried: Variant = data.get("is_buried", is_buried)
-		is_buried = loaded_buried if loaded_buried is bool else is_buried
-		var loaded_grave: Variant = data.get("grave_id", grave_id)
-		grave_id = loaded_grave if (loaded_grave == null or loaded_grave is String) else grave_id
+		# 缺席預設 false／null／null／-1，不是沿用目前值，跟 is_dead 同一個理由
+		# （CodeRabbit review 抓到）：is_buried／grave_id 沿用目前值的話，跟這裡
+		# 剛修過的 buried_by／buried_tick（缺席即歸零）放在一起會兜出矛盾狀態——
+		# 同一節點先載入已安葬存檔、再載入一份沒有安葬欄位的舊死亡存檔時，
+		# is_buried 會留 true、grave_id 留舊值，但 buried_by／buried_tick 已經是
+		# null／-1，變成「安葬了但沒人知道誰安葬的、何時安葬的」
+		var loaded_buried: Variant = data.get("is_buried", false)
+		is_buried = loaded_buried if loaded_buried is bool else false
+		var loaded_grave: Variant = data.get("grave_id", null)
+		grave_id = loaded_grave if (loaded_grave == null or loaded_grave is String) else null
+		var loaded_buried_by: Variant = data.get("buried_by", null)
+		buried_by = loaded_buried_by if (loaded_buried_by == null or (loaded_buried_by is String and not loaded_buried_by.is_empty())) else null
+		var loaded_buried_tick: Variant = data.get("buried_tick", -1)
+		buried_tick = loaded_buried_tick if (loaded_buried_tick is int and (loaded_buried_tick == -1 or loaded_buried_tick >= 0)) else -1
 
 		# 治療欄位跟 _die() 同一個理由清掉（CodeRabbit review 抓到）：上面幾行
 		# 只還原死亡欄位本身，沒清掉治療欄位——若這份存檔或載入前的角色狀態剛好
@@ -1562,6 +1665,8 @@ func load_save_data(data: Dictionary) -> void:
 		corpse_decay = 0.0
 		is_buried = false
 		grave_id = null
+		buried_by = null
+		buried_tick = -1
 
 	# 治療與昏迷互斥（見 _send_to_herb_shop_for_treatment()），治療中的存檔優先還原成治療狀態，
 	# 不重建 CONDITION_INCAPACITATED；只有「昏迷中但還沒送醫」才需要重建。死亡是終局，
@@ -1831,6 +1936,8 @@ func start_haul(target: Character) -> String:
 		return HAUL_TARGET_NOT_FOUND
 	if target == self:
 		return HAUL_TARGET_IS_SELF
+	if target.is_buried:
+		return HAUL_TARGET_ALREADY_BURIED
 	if get_body_position().distance_to(target.get_body_position()) > HAUL_RANGE:
 		return HAUL_TOO_FAR
 
