@@ -1131,6 +1131,12 @@ func _request_last_words(cause: String) -> void:
 ## _plan_update_requested：上一輪模型如果申請過，這裡兌現、用完就消費掉——
 ## 不管呼叫端這次是為了什麼理由觸發，欠的那次都在這裡還
 func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
+	# 死屍不建立新的決策請求（CodeRabbit review 抓到）：跟下面 await 之後的
+	# is_dead 判斷是兩件事——那道只擋「套用已經送出去的回應」，這裡擋在送出
+	# 請求之前，避免死亡後還被 _pending_reaction_lines 補問邏輯（見本函式
+	# 結尾）之類的呼叫端觸發一次白白浪費的 AI 請求
+	if is_dead:
+		return {"ok": false, "triggered": false}
 	if _awaiting_decision:
 		return {"ok": false, "triggered": false}
 	_awaiting_decision = true
