@@ -135,10 +135,10 @@ var current_state := "idle"
 # 沒有這張表的話，走出視野再走回來就會再驚訝一次
 var _noticed := {}
 
-# 這一場已經對誰觸發過跟丟反應（#405，CodeRabbit review 抓到）。跟 _noticed
-# 不同的是：同一個陌生人只要還沒正式認識，可能反覆進出視野很多次（走近又
-# 走遠），每次 lost 都觸發事實句＋決策請求會變成洗版與 LLM 呼叫量爆增——
-# 沒有這張表的話，_on_lost() 會對同一個人的每一次「跟丟」都重複反應
+# 今天已經對誰觸發過跟丟反應（#405）。跟 _noticed（終身只驚訝一次）不同：
+# 這是單純的量級控制，每天由 _on_day_changed() 清空，不分認不認識——同一人
+# 一天內反覆進出視野（走近又走遠）不會每次都排事實句洗版、拖爆 LLM 呼叫量，
+# 但隔天還是會再觸發，不會變成終身只通知一次
 var _lost_reacted := {}
 
 # 上一次真的呼叫 move_to()（或判定「已經到了」「走不到」）的地點。
@@ -432,6 +432,7 @@ func get_today_log() -> Array[Dictionary]:
 
 func _on_day_changed(_day: int) -> void:
 	_today_log.clear()
+	_lost_reacted.clear()
 
 ## 收尾清空 _current_task 前先記一筆 today_log（#172）。集中在這一個 helper
 ## 而不是在每個呼叫端各自 push，是因為 _current_task 被清空的地方分散在
@@ -1572,15 +1573,18 @@ func _react_to_spotted_fallback() -> void:
 	if not is_in_conversation():
 		_reevaluate()
 
-# 視野裡跟丟某個陌生人（issue #405）。
+# 視野裡跟丟某個人（issue #405）。
 #
-# 只對還沒正式認識的人處理——認識的人（has_met()）本來就會頻繁進出視野
-# （同事下班走遠、朋友轉身），每次都排事實句會洗版。
+# 不分認不認識都處理（2026-08-24 拿掉原本的 has_met() 篩選——CLAUDE.md
+# 「AI 自主性自檢」認定那是引擎替 AI 判斷「這件事不重要」，AI 連表態機會
+# 都沒有；「認識的人本來就常常走出視野」是頻率論證，不是重要性論證，兩者
+# 不能互相替代，見該次全專案盤點的審查結論）。事實句一律排給模型，
+# 要不要在意、在意多少交給 AI 自己判斷。
 #
-# _lost_reacted 只讓每個陌生人觸發一次跟丟反應（CodeRabbit review 抓到）：
-# 還沒正式認識的人在正式認識之前可能反覆進出視野很多次（走近又走遠），
-# 沒有這張表的話每次 lost 都會排事實句＋問一次模型，量級遠超過 spotted
-# （spotted 有 _noticed 擋住重複驚訝，這裡原本沒有對應的擋）。
+# _lost_reacted 是量級控制，不是相關性判斷：同一人一天只觸發一次跟丟反應，
+# 避免頻繁進出視野的人（不論認不認識）洗版事實句、把 LLM 呼叫量拖爆。
+# 每天由 _on_day_changed() 清空，不是永久只給一次——拿掉 has_met() 篩選後
+# 若還維持終身只觸發一次，天天見面的熟人實質上會跟沒接這個訊號一樣。
 # _noticed 不在這裡清除——見 note/技術/視覺感測.md 已驗證的「走出視野再走
 # 回來不會重複驚訝」，跟丟不代表要重新觸發陌生人反應。
 #
@@ -1589,8 +1593,6 @@ func _react_to_spotted_fallback() -> void:
 # 只在有 LLM 可問時把事實句排進下一次決策，要不要有反應交給模型自己判斷
 func _on_lost(other: Character) -> void:
 	if is_in_conversation():
-		return
-	if relationships != null and relationships.has_met(other.character_id):
 		return
 	if not llm_decision_enabled:
 		return
