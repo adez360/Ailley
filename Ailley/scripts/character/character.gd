@@ -97,6 +97,7 @@ const HAUL_STAMINA_DRAIN := 3.0			# 搬運者每現實秒額外扣的體力（�
 const HAUL_OK := ""
 const HAUL_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
 const HAUL_TARGET_IS_SELF := "TARGET_IS_SELF"
+const HAUL_TARGET_ALREADY_BURIED := "TARGET_ALREADY_BURIED"
 const HAUL_TOO_FAR := "TOO_FAR"
 
 const ATTACK_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE／GIVE_RANGE 一樣的距離門檻，2 格
@@ -812,6 +813,7 @@ const CEMETERY_GRAVE_CAPACITY := 6
 
 const BURY_OK := ""
 const BURY_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const BURY_TARGET_IS_SELF := "TARGET_IS_SELF"
 const BURY_TARGET_NOT_DEAD := "TARGET_NOT_DEAD"
 const BURY_ALREADY_BURIED := "ALREADY_BURIED"
 const BURY_TOO_FAR := "TOO_FAR"
@@ -828,6 +830,8 @@ const BURY_CEMETERY_FULL := "CEMETERY_FULL"
 func bury(corpse: Character) -> String:
 	if corpse == null or not is_instance_valid(corpse):
 		return BURY_TARGET_NOT_FOUND
+	if corpse == self:
+		return BURY_TARGET_IS_SELF
 	if not corpse.is_dead:
 		return BURY_TARGET_NOT_DEAD
 	if corpse.is_buried:
@@ -843,6 +847,13 @@ func bury(corpse: Character) -> String:
 	corpse.grave_id = "grave_%s" % corpse.character_id
 	corpse.buried_by = character_id
 	corpse.buried_tick = _current_tick()
+
+	# 解除既有搬運關係——is_being_hauled() 在 _decide_velocity() 裡排在
+	# petrified 鎖定之前（見該函式註解），is_buried 本身不會讓身體停止跟著
+	# 搬運者走，不主動放手的話墓碑會被拖出墓園
+	for hauler in corpse._hauled_by.duplicate():
+		if is_instance_valid(hauler):
+			hauler.stop_haul()
 
 	print_debug("Character %s 安葬了 %s" % [character_name, corpse.character_name])
 	return BURY_OK
@@ -1920,6 +1931,8 @@ func start_haul(target: Character) -> String:
 		return HAUL_TARGET_NOT_FOUND
 	if target == self:
 		return HAUL_TARGET_IS_SELF
+	if target.is_buried:
+		return HAUL_TARGET_ALREADY_BURIED
 	if get_body_position().distance_to(target.get_body_position()) > HAUL_RANGE:
 		return HAUL_TOO_FAR
 

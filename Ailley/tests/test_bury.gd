@@ -25,6 +25,14 @@ func _make_character(script: Script) -> Character:
 	return character
 
 
+func test_bury_self_fails() -> void:
+	var burier := _make_character(Agent)
+
+	var failure := burier.bury(burier)
+
+	assert_eq(failure, Character.BURY_TARGET_IS_SELF, "安葬自己應回 BURY_TARGET_IS_SELF")
+
+
 func test_bury_alive_target_fails() -> void:
 	var burier := _make_character(Agent)
 	var target := _make_character(Agent)
