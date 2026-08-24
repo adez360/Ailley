@@ -5,11 +5,12 @@ extends McpTestSuite
 ## 驗證 Character.bury() 不依賴場景樹的那幾道檢查（issue #380）。
 ##
 ## 跟 test_give_attack_on_player.gd 同一種輕量寫法：兩個角色都不掛進場景樹，
-## 手動組出 collider／stats 卡位。but 距離／地點／墓碑格數這三關要用到
+## 手動組出 collider／stats 卡位。地點／墓碑格數與成功路徑要用到
 ## get_tree().get_first_node_in_group("place_anchors")，跟既有的
 ## _resolve_death_location()（#379）同一個限制——沒有掛進真場景就查不到墓園
 ## 錨點，這幾項留給 project_run + game_eval 在編輯器裡活的場景驗證，
-## 不在這個 test_run 套件涵蓋範圍內。
+## 不在這個 test_run 套件涵蓋範圍內。距離檢查（BURY_TOO_FAR）不依賴場景樹，
+## 已由 test_bury_too_far_fails() 覆蓋。
 
 func suite_name() -> String:
 	return "bury"

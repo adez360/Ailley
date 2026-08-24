@@ -1611,14 +1611,16 @@ func load_save_data(data: Dictionary) -> void:
 		last_words = loaded_words if (loaded_words == null or loaded_words is String) else last_words
 		var loaded_decay: Variant = data.get("corpse_decay", corpse_decay)
 		corpse_decay = clampf(loaded_decay, 0.0, 100.0) if (loaded_decay is float or loaded_decay is int) else corpse_decay
-		var loaded_buried: Variant = data.get("is_buried", is_buried)
-		is_buried = loaded_buried if loaded_buried is bool else is_buried
-		var loaded_grave: Variant = data.get("grave_id", grave_id)
-		grave_id = loaded_grave if (loaded_grave == null or loaded_grave is String) else grave_id
-		# 缺席預設 null／-1，不是沿用目前值，跟 is_dead 同一個理由（CodeRabbit
-		# review 抓到）：buried_by／buried_tick 是這個 PR 新增的欄位，同一節點
-		# 若先載入一份已安葬存檔、再載入一份沒有這兩個 key 的舊死亡存檔，
-		# 沿用目前值會讓安葬歸屬與時間點黏著甩不掉
+		# 缺席預設 false／null／null／-1，不是沿用目前值，跟 is_dead 同一個理由
+		# （CodeRabbit review 抓到）：is_buried／grave_id 沿用目前值的話，跟這裡
+		# 剛修過的 buried_by／buried_tick（缺席即歸零）放在一起會兜出矛盾狀態——
+		# 同一節點先載入已安葬存檔、再載入一份沒有安葬欄位的舊死亡存檔時，
+		# is_buried 會留 true、grave_id 留舊值，但 buried_by／buried_tick 已經是
+		# null／-1，變成「安葬了但沒人知道誰安葬的、何時安葬的」
+		var loaded_buried: Variant = data.get("is_buried", false)
+		is_buried = loaded_buried if loaded_buried is bool else false
+		var loaded_grave: Variant = data.get("grave_id", null)
+		grave_id = loaded_grave if (loaded_grave == null or loaded_grave is String) else null
 		var loaded_buried_by: Variant = data.get("buried_by", null)
 		buried_by = loaded_buried_by if (loaded_buried_by == null or (loaded_buried_by is String and not loaded_buried_by.is_empty())) else null
 		var loaded_buried_tick: Variant = data.get("buried_tick", -1)
