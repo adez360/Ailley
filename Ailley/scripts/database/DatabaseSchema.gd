@@ -34,7 +34,7 @@ extends RefCounted
 ## CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
-const CURRENT_VERSION := 5
+const CURRENT_VERSION := 6
 
 
 ## 版本落後時依序套用的變更，每個 entry：
@@ -67,6 +67,11 @@ const MIGRATIONS: Array[Dictionary] = [
 		"version": 5,
 		"name": "Drop orphaned npc_death/grave_highlights tables (issue #512)",
 		"apply": Callable(DatabaseSchema, "_migrate_v5_drop_death_grave_highlights")
+	},
+	{
+		"version": 6,
+		"name": "Rebuild world/item/npc_state/npc_emotion/npc_goal with NOT NULL primary keys",
+		"apply": Callable(DatabaseSchema, "_migrate_v6_notnull_primary_keys")
 	}
 ]
 
@@ -125,7 +130,7 @@ static func _migrate_v3_notnull_primary_keys(db) -> bool:
 	]
 
 	for entry in single_table_schemas:
-		if not _migrate_v3_rebuild_table(db, entry["table"], entry["schema"]):
+		if not _migrate_rebuild_single_table(db, entry["table"], entry["schema"]):
 			return false
 
 	return _migrate_v3_rebuild_memories(db)
@@ -138,7 +143,10 @@ static func _migrate_v3_notnull_primary_keys(db) -> bool:
 ## 之前要先把暫存表上的索引清掉，讓索引名稱空出來給新表用。
 ## sqlite_autoindex_* 是 PRIMARY KEY 隱含建立的，跟著表本身建立／刪除，
 ## 不能也不需要手動 DROP。
-static func _migrate_v3_drop_stale_indexes(db, old_table_name: String) -> bool:
+##
+## 版本無關的共用工具——migration 3（#446）與 migration 6（#514）都靠這個
+## 重建流程補 NOT NULL 主鍵，函式名不再綁死 v3。
+static func _migrate_rebuild_drop_stale_indexes(db, old_table_name: String) -> bool:
 	if not db.query(
 		"""
 		SELECT name FROM sqlite_master
@@ -147,7 +155,7 @@ static func _migrate_v3_drop_stale_indexes(db, old_table_name: String) -> bool:
 		""" % old_table_name
 	):
 		push_error(
-			"[DatabaseSchema] Migration 3: Failed to query indexes on %s: %s"
+			"[DatabaseSchema] Table rebuild: Failed to query indexes on %s: %s"
 			% [old_table_name, db.error_message]
 		)
 		return false
@@ -159,7 +167,7 @@ static func _migrate_v3_drop_stale_indexes(db, old_table_name: String) -> bool:
 	for index_name in index_names:
 		if not db.query("DROP INDEX %s;" % index_name):
 			push_error(
-				"[DatabaseSchema] Migration 3: Failed to drop stale index %s: %s"
+				"[DatabaseSchema] Table rebuild: Failed to drop stale index %s: %s"
 				% [index_name, db.error_message]
 			)
 			return false
@@ -174,11 +182,11 @@ static func _migrate_v3_drop_stale_indexes(db, old_table_name: String) -> bool:
 ## 資料複製到錯的欄位，不會報錯。INSERT 之前比對兩邊 PRAGMA table_info
 ## 的欄位名稱與順序，兜不起來就直接中止（呼叫端 ROLLBACK），不嘗試猜
 ## 欄位怎麼對應——這種既有資料庫已經超出這個 migration 的範圍，需要另外
-## 判斷怎麼處理。
-static func _migrate_v3_verify_column_shape(db, old_name: String, new_name: String) -> bool:
+## 判斷怎麼處理。版本無關的共用工具，理由同上——migration 3 與 6 共用。
+static func _migrate_rebuild_verify_column_shape(db, old_name: String, new_name: String) -> bool:
 	if not db.query("PRAGMA table_info(%s);" % old_name):
 		push_error(
-			"[DatabaseSchema] Migration 3: Failed to read columns of %s: %s"
+			"[DatabaseSchema] Table rebuild: Failed to read columns of %s: %s"
 			% [old_name, db.error_message]
 		)
 		return false
@@ -189,7 +197,7 @@ static func _migrate_v3_verify_column_shape(db, old_name: String, new_name: Stri
 
 	if not db.query("PRAGMA table_info(%s);" % new_name):
 		push_error(
-			"[DatabaseSchema] Migration 3: Failed to read columns of %s: %s"
+			"[DatabaseSchema] Table rebuild: Failed to read columns of %s: %s"
 			% [new_name, db.error_message]
 		)
 		return false
@@ -203,7 +211,7 @@ static func _migrate_v3_verify_column_shape(db, old_name: String, new_name: Stri
 
 	push_error(
 		(
-			"[DatabaseSchema] Migration 3: %s column shape doesn't match current "
+			"[DatabaseSchema] Table rebuild: %s column shape doesn't match current "
 			+ "schema (old=%s, new=%s) — refusing to copy data positionally with "
 			+ "SELECT *. This existing database predates a schema change beyond "
 			+ "the NOT NULL primary key fix this migration handles."
@@ -213,40 +221,41 @@ static func _migrate_v3_verify_column_shape(db, old_name: String, new_name: Stri
 
 
 ## 沒有其他表外鍵指向的單一表重建：改名成暫存表 → 用 schema.create(db)
-## 建回原名的新結構 → 把資料從暫存表複製回來 → 刪掉暫存表。
-static func _migrate_v3_rebuild_table(db, table_name: String, schema) -> bool:
-	var old_name := table_name + "__migrate_v3_old"
+## 建回原名的新結構 → 把資料從暫存表複製回來 → 刪掉暫存表。版本無關的
+## 共用工具——migration 3 與 6 共用，暫存表名不再帶版本號。
+static func _migrate_rebuild_single_table(db, table_name: String, schema) -> bool:
+	var old_name := table_name + "__migrate_rebuild_old"
 
 	if not db.query("ALTER TABLE %s RENAME TO %s;" % [table_name, old_name]):
 		push_error(
-			"[DatabaseSchema] Migration 3: Failed to rename %s: %s"
+			"[DatabaseSchema] Table rebuild: Failed to rename %s: %s"
 			% [table_name, db.error_message]
 		)
 		return false
 
-	if not _migrate_v3_drop_stale_indexes(db, old_name):
+	if not _migrate_rebuild_drop_stale_indexes(db, old_name):
 		return false
 
 	if not schema.create(db):
 		push_error(
-			"[DatabaseSchema] Migration 3: Failed to recreate %s: %s"
+			"[DatabaseSchema] Table rebuild: Failed to recreate %s: %s"
 			% [table_name, db.error_message]
 		)
 		return false
 
-	if not _migrate_v3_verify_column_shape(db, old_name, table_name):
+	if not _migrate_rebuild_verify_column_shape(db, old_name, table_name):
 		return false
 
 	if not db.query("INSERT INTO %s SELECT * FROM %s;" % [table_name, old_name]):
 		push_error(
-			"[DatabaseSchema] Migration 3: Failed to copy data into %s: %s"
+			"[DatabaseSchema] Table rebuild: Failed to copy data into %s: %s"
 			% [table_name, db.error_message]
 		)
 		return false
 
 	if not db.query("DROP TABLE %s;" % old_name):
 		push_error(
-			"[DatabaseSchema] Migration 3: Failed to drop %s: %s"
+			"[DatabaseSchema] Table rebuild: Failed to drop %s: %s"
 			% [old_name, db.error_message]
 		)
 		return false
@@ -277,10 +286,10 @@ static func _migrate_v3_rebuild_memories(db) -> bool:
 		)
 		return false
 
-	if not _migrate_v3_drop_stale_indexes(db, "memories__migrate_v3_old"):
+	if not _migrate_rebuild_drop_stale_indexes(db, "memories__migrate_v3_old"):
 		return false
 
-	if not _migrate_v3_drop_stale_indexes(db, "memory_related_npcs__migrate_v3_old"):
+	if not _migrate_rebuild_drop_stale_indexes(db, "memory_related_npcs__migrate_v3_old"):
 		return false
 
 	if not MemorySchema.create(db):
@@ -290,7 +299,7 @@ static func _migrate_v3_rebuild_memories(db) -> bool:
 		)
 		return false
 
-	if not _migrate_v3_verify_column_shape(db, "memories__migrate_v3_old", "memories"):
+	if not _migrate_rebuild_verify_column_shape(db, "memories__migrate_v3_old", "memories"):
 		return false
 
 	if not db.query("INSERT INTO memories SELECT * FROM memories__migrate_v3_old;"):
@@ -300,7 +309,7 @@ static func _migrate_v3_rebuild_memories(db) -> bool:
 		)
 		return false
 
-	if not _migrate_v3_verify_column_shape(
+	if not _migrate_rebuild_verify_column_shape(
 		db, "memory_related_npcs__migrate_v3_old", "memory_related_npcs"
 	):
 		return false
@@ -369,6 +378,32 @@ static func _migrate_v5_drop_death_grave_highlights(db) -> bool:
 			+ db.error_message
 		)
 		return false
+
+	return true
+
+
+## Migration 6：既有資料庫的 world／item／npc_state／npc_emotion／npc_goal
+## 跟 migration 3（#446）處理的 4 張表同一個病根——`TEXT PRIMARY KEY` 補
+## `NOT NULL` 只對全新建立的資料庫生效。這 5 張表沒有任何其他表外鍵指向
+## 它們（npc_state／npc_emotion／npc_goal 反過來外鍵指向 npc／location，
+## 但那是「這 5 張表依賴別人」，不是「別人依賴這 5 張表」，重建時不會
+## 觸發別的表跟著改），全部用 _migrate_rebuild_single_table() 逐表重建即可，
+## 不需要 migration 3 的 memories／memory_related_npcs 那種雙表協同重建。
+##
+## `npc`（近 20 張依附表）與 `npc`／`location` 之間的重建順序問題不在這次
+## 範圍內，見《99》P-55、issue #514。
+static func _migrate_v6_notnull_primary_keys(db) -> bool:
+	var single_table_schemas := [
+		{"table": "world", "schema": WorldSchema},
+		{"table": "item", "schema": ItemSchema},
+		{"table": "npc_state", "schema": NPCStateSchema},
+		{"table": "npc_emotion", "schema": NPCEmotionSchema},
+		{"table": "npc_goal", "schema": NPCGoalSchema}
+	]
+
+	for entry in single_table_schemas:
+		if not _migrate_rebuild_single_table(db, entry["table"], entry["schema"]):
+			return false
 
 	return true
 
