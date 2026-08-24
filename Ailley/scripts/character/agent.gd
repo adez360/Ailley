@@ -1570,7 +1570,11 @@ func load_save_data(data: Dictionary) -> void:
 # 排進佇列（已經有一份決策在飛，見它自己的補問機制），不算失敗，不用退回
 # 寫死反應——`triggered=true` 但 `ok=false` 才是真的問過但沒問到結果
 func _on_spotted(other: Character) -> void:
-	if is_in_conversation() or _noticed.has(other.character_id):
+	# 死屍不反應（CodeRabbit review 抓到）：_on_time_changed()／
+	# _on_action_interrupted() 那道 is_dead 判斷擋不到這裡——這是 vision.gd
+	# 訊號直接觸發的外部事件回呼，死屍仍會被場上其他角色「第一次注意到」，
+	# 沒擋的話會 say() 台詞、甚至問一次 LLM 決策
+	if is_dead or is_in_conversation() or _noticed.has(other.character_id):
 		return
 
 	_noticed[other.character_id] = true
@@ -1617,7 +1621,10 @@ func _react_to_spotted_fallback() -> void:
 # 排隊＋立刻問一次模型，不寫死冒 !?——問不到結果時一樣退回寫死反應，
 # 理由跟 _on_spotted() 的說明相同
 func _on_noise_heard(_source: Character) -> void:
-	if is_in_conversation():
+	# 死屍不反應（CodeRabbit review 抓到），同 _on_spotted() 的理由——這是
+	# character.gd::make_noise() 直接觸發的外部事件回呼，_on_time_changed()
+	# 那道 is_dead 判斷擋不到這裡
+	if is_dead or is_in_conversation():
 		return
 
 	if llm_decision_enabled:
