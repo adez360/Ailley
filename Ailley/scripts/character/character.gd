@@ -719,6 +719,12 @@ func _die(cause: String) -> void:
 	_treatment_location = ""
 
 	corpse_decay = 0.0
+	# 搬運中的角色（自己是搬運者）要先放手，不然目標的 _hauled_by 卡在死掉的
+	# 搬運者身上、_follow_hauler() 讓目標永遠走不動（CodeRabbit review 抓到）。
+	# 只解除「自己搬運別人」這一端，被別人搬運（_hauled_by）的關係不動——
+	# 死屍本來就該繼續能被搬運去墓園
+	if is_hauling():
+		stop_haul()
 	# force_interrupt() 已含 stop_moving()／leave_conversation()／_end_work()——
 	# 昏迷倒數的 30 分鐘內角色仍可能開始新的工作或被搭話（is_dead 這時還是
 	# false，_on_time_changed() 照常仲裁，work_at() 也不擋 _is_movement_locked()），
@@ -1530,6 +1536,10 @@ func load_save_data(data: Dictionary) -> void:
 		conditions.clear()
 		conditions.append({"type": CONDITION_PETRIFIED, "turns_left": -1})
 		_apply_death_tint(true)
+		# 跟 _die() 同一個理由（CodeRabbit review 抓到）：還原死亡存檔時若既有
+		# _hauling_target 殘留，同樣要放手，不然目標卡在死掉的搬運者身上走不動
+		if is_hauling():
+			stop_haul()
 		# 跟 _die() 同一個理由（CodeRabbit review 抓到）：場上正在工作／對話中的
 		# 角色被載入一份死亡存檔時，這裡只設了狀態欄位，沒有真的收尾——不呼叫
 		# force_interrupt() 的話 _run_work() 協程會在下個 GameClock.time_changed
