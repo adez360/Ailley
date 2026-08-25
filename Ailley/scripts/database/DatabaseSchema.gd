@@ -258,7 +258,7 @@ static func _migrate_rebuild_handle_null_primary_keys(
 	if not db.query("PRAGMA table_info(%s);" % old_name):
 		push_error(
 			"[DatabaseSchema] Table rebuild: Failed to read columns of %s: %s"
-			% [old_name, db.error_message]
+			% [table_name, db.error_message]
 		)
 		return false
 
@@ -274,7 +274,7 @@ static func _migrate_rebuild_handle_null_primary_keys(
 	if not db.query("SELECT rowid FROM %s WHERE %s;" % [old_name, null_check]):
 		push_error(
 			"[DatabaseSchema] Table rebuild: Failed to check NULL primary keys in %s: %s"
-			% [old_name, db.error_message]
+			% [table_name, db.error_message]
 		)
 		return false
 
@@ -290,11 +290,10 @@ static func _migrate_rebuild_handle_null_primary_keys(
 			(
 				"[DatabaseSchema] Table rebuild: %s has %d row(s) with NULL primary "
 				+ "key (%s) — this legacy database predates the NOT NULL fix and "
-				+ "these rows can't be safely repaired (the primary key doubles as "
-				+ "a foreign key; the lost value would have said which parent row "
-				+ "they belong to, and a freshly generated id can't recover that). "
-				+ "Refusing to migrate — see issue #566."
-			) % [old_name, null_rowids.size(), ", ".join(pk_columns)]
+				+ "these rows can't be safely repaired (a freshly generated id "
+				+ "can't recover whatever identity or relationship the lost value "
+				+ "encoded). Refusing to migrate — see issue #566."
+			) % [table_name, null_rowids.size(), ", ".join(pk_columns)]
 		)
 		return false
 
@@ -303,7 +302,7 @@ static func _migrate_rebuild_handle_null_primary_keys(
 			(
 				"[DatabaseSchema] Table rebuild: %s has a composite primary key (%s) "
 				+ "but repair_null_pk=true only supports single-column primary keys."
-			) % [old_name, ", ".join(pk_columns)]
+			) % [table_name, ", ".join(pk_columns)]
 		)
 		return false
 
@@ -316,13 +315,13 @@ static func _migrate_rebuild_handle_null_primary_keys(
 		):
 			push_error(
 				"[DatabaseSchema] Table rebuild: Failed to repair NULL primary key in %s: %s"
-				% [old_name, db.error_message]
+				% [table_name, db.error_message]
 			)
 			return false
 
 	print(
 		"[DatabaseSchema] Table rebuild: repaired %d row(s) with NULL primary key in %s"
-		% [null_rowids.size(), old_name]
+		% [null_rowids.size(), table_name]
 	)
 
 	return true
