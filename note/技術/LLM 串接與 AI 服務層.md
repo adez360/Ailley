@@ -292,19 +292,12 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 ### 界線：軟壓力為主，工程安全閥兜底（issue #178 已收斂範圍）
 
 不設「設計上」的輪數硬上限，設計目標是**軟壓力**：payload 帶 `turns_so_far`，system prompt
-告訴模型「聊得越久越該收尾」。**這個機制目前還沒有實作**——`Ailley/scripts/ai/prompt_builder.gd`
+告訴模型「聊得越久越該收尾」。**這個機制目前還沒有實作**——`prompt_builder.gd`
 的 `DIALOGUE_SYSTEM` 尚未帶這段文字、`build_dialogue_envelope()` 傳的是固定
 `max_turns`，不是遞增的 `turns_so_far`；這裡描述的是設計目標，接回程式碼是
 獨立的後續動作，不在 #482 範圍內。
 
-> [!note] `turns_so_far` 口徑尚未定案，接線時要挑一個
-> `conversation.gd::_run()` 的迴圈變數 `turn`（從 0 起算、不含開場白）跟
-> `_turns.size()`（陣列長度，含開場白那一句）是兩個不同的數字——下面 A/B/C
-> 實驗腳本用的是前者（`turn`），跟 `_turns` 陣列本身的長度不等價。接回真代碼
-> 時要明確選一種當 `turns_so_far` 的定義，`prompt_builder.gd::build_dialogue_envelope()`
-> 沿用同一個公式，不要兩邊各自算一套。
-
-**A/B/C 實測在本次樣本中大幅改善收尾行為**（issue #482，2026-08-23，本機 llama-server
+**A/B/C 實測證實這個方向有效**（issue #482，2026-08-23，本機 llama-server
 直連 `/v1/chat/completions`，Qwen2.5-7B-Instruct-Q4_K_M，三組各 15 場對話跑到
 10 輪上限）：
 
@@ -317,14 +310,13 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 單純加「該收尾」的提示（B 組）能把主動收尾比率從 4 成拉到 9 成以上，但人工
 檢視內容發現不少場次的 `end:true` 貼在跟前面同一種空話重複的句子上（例如
 「同意，共同努力讓村子更美好！」），不是真正的道別語氣。額外明講「收尾
-那句話本身要像道別」（C 組）在本次樣本中同時改善了比率與內容品質：比率拉到
+那句話本身要像道別」（C 組）同時解決比率與內容品質兩個問題：比率拉到
 100%、平均輪數降到三組最低，收尾句幾乎全是真正的道別語（「再見」「明天見」
-「路上小心」）或有語境的收尾陳述。這是單一本機模型（Qwen2.5-7B-Instruct-Q4_K_M）、
-兩個人設、每組 15 場的小樣本結果，尚未驗證其他模型／provider 是否同樣成立。
-**C 組是三版裡最值得接回 `DIALOGUE_SYSTEM` 的候選文字**，候選文字與完整實驗腳本見
+「路上小心」）或有語境的收尾陳述。**C 組是三版裡最值得接回
+`DIALOGUE_SYSTEM` 的候選文字**，候選文字與完整實驗腳本見
 `note/ai/soft_pressure_experiment/`。**尚未接回 `DIALOGUE_SYSTEM`**——這裡
-只確認本次樣本方向有效，真的把 `turns_so_far` 欄位與 C 組提示文字接進
-`Ailley/scripts/ai/prompt_builder.gd`／`build_dialogue_envelope()` 留給下一則 issue。
+只確認方向有效，真的把 `turns_so_far` 欄位與 C 組提示文字接進
+`prompt_builder.gd`／`build_dialogue_envelope()` 留給下一則 issue。
 
 但兩隻 Agent 都禮貌性不收尾時，`conversation.gd`
 的 `SAFETY_MAX_TURNS`（工程安全閥，跟上面的設計軟壓力是兩回事，同時也是無觀眾
@@ -745,10 +737,9 @@ JSON Schema → GBNF 的轉換器。
 - [x] **LLM 成本上限完全沒有防護**——研究與提案已由 #395 完成（本機
       Qwen2.5-7B，6 場對話均值 7.0 輪／場，`max_dialogue_calls_per_game_day`
       旋鈕設計案見上方「每日對話呼叫上限提案」一節），落地實作見 #434
-- [x] **軟壓力研究結果已確認**（#482，2026-08-23）：A/B/C 實測見「界線：軟壓力為主，
-      工程安全閥兜底」一節
-- [ ] **軟壓力尚未接回 `DIALOGUE_SYSTEM`**：`turns_so_far` 欄位與 C 組提示文字接進
-      `prompt_builder.gd`／`build_dialogue_envelope()`，列為後續 issue
+- [x] **軟壓力有明顯效果**（#482，2026-08-23）：A/B 實測見「界線：軟壓力為主，
+      工程安全閥兜底」一節，機制目前仍未接回 `DIALOGUE_SYSTEM`，接回去是
+      獨立的後續動作
 - [ ] 尚未對真正的 OpenRouter 打過請求，TLS/DNS 與真實回應格式未驗證，見 #483
 - [x] 成本上限機制的具體設計——同上，見 #395／#434
 - [x] **對話逐字稿暫存——拍板不做**（#485，2026-08-21）：`spoke` 訊號與
