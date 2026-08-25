@@ -241,8 +241,9 @@ const LLM_TASK_POOL_CAP := 20                # 只算 source=="llm" 的筆數
 const ACTION_RECOVERY := {sleep: {stat: stamina, amount: 6.0}, nap: {stat: stamina, amount: 4.0}, rest: {stat: stamina, amount: 2.0}}   # 動作->{stat,amount}（#112／#214），暫定值
 const DEBUG_TASK_PRIORITY := 999.0           # act 指令推進來的任務分數，壓過任何 schedule 任務
 const SUCCESS_PARAMS := {                    # 《01-2》§3 成功率表照抄，含尚未接執行邏輯的動作（#120）
-    hunt_small/hunt_large/gather/fish/steal/persuade/perform/attack
-    → {base, trait, coef}                    # struggle 例外太多，不套用這張表
+    hunt_small/hunt_large/gather/fish/steal/perform
+    → {base, trait, coef}                    # attack 必中、persuade 不擲骰（見《01-2》§3 註），
+                                              # 兩者都不走這張表；struggle 例外太多，同樣不套用
 }
 
 var _tasks: Array[Dictionary]                # 候選池，schedule 開場建立一次，llm 用 _push_llm_tasks() 加
