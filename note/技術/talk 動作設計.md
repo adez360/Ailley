@@ -89,9 +89,65 @@ updated: 2026-08-22
 關係是「對某個人」而不是「角色自己的數值」，所以獨立成 `Relationships`，
 key 用對方的 `character_id` 而不是 name —— name 會改，用它當 key 等於改名即失憶。
 每筆存成 Dictionary 而不是單一浮點數：欄位是 `trust`／`met_count`／
-`appearance_cache` 三項（規格《01》3-1、《99》P-08），之後要加最後見面時間
-（見 #497）、印象標籤也一樣不用改結構；外觀異動偵測（`appearance_cache`
-目前只是快取，沒有比對邏輯）見 #498。
+`appearance_cache`（規格《01》3-1、《99》P-08）／`appearance_state`（#498，
+見下方外觀異動偵測），之後要加最後見面時間（見 #497）、印象標籤也一樣不用
+改結構。
+
+外觀異動偵測（#498 拍板）：`appearance_cache`（自由文字、初次相遇的外觀描述，
+P-08 已拍板但從沒有任何呼叫端寫入過）繼續維持原樣不動，這次新增一個獨立欄位
+`appearance_state: {injured: bool, filthy: bool}`，直接讀 `character.gd` 既有
+的 `CONDITION_INJURED`／`CONDITION_FILTHY`（門檻沿用《02》既有拍板值，不新增
+任何欄位或門檻）。兩個欄位語意不同、不合併：`appearance_cache` 是「這個人
+長什麼樣子」的一次性靜態描述，`appearance_state` 是「跟上次見到比，動態狀態
+有沒有變」的比對快照。見面時跟 `appearance_state` 快取的舊快照逐欄位比對，
+跨過門檻的欄位各自透過既有《01-3》§3 事實句機制發一句事實句（跟「看到陌生
+人」同一條路徑）：
+
+| 轉變 | 事實句 |
+| --- | --- |
+| `injured` false→true | 「TAMMY 身上有傷。」 |
+| `injured` true→false | 「TAMMY 身上已經沒有傷了。」 |
+| `filthy` false→true | 「TAMMY 現在看起來不乾淨，跟你上次見到不一樣。」 |
+| `filthy` true→false | 「TAMMY 現在看起來乾淨了，跟你上次見到不一樣。」 |
+
+只描述布林值本身翻成中文的客觀狀態，不加程度／恢復過程等額外語氣詞（CodeRabbit
+review 抓到：「髒兮兮」「乾淨多了」「傷已經好了」這幾種措辭帶了布林快照本身
+證明不了的程度或病程語意，跟「不判斷嚴重程度」的原則衝突，改成上表這種純
+狀態陳述）。比對後更新快照。
+
+> [!important] 沒有舊快照時只建立 baseline，不發事實句（CodeRabbit review 抓到）
+> 第一次見到這個人（或快照因任何原因缺失／無效）時，沒有「上次」可比較——
+> 這種情況只把目前的 `injured`／`filthy` 存進快照當 baseline，不產生任何事實句。
+> 不能把「沒有舊快照」當成「舊值是 false」處理，否則初次見面時若對方剛好
+> `injured = true`，會被誤判成「false→true」而發出「有異動」的事實句，
+> 但其實這是這個人第一次被觀察到的既有狀態，不是變化。
+>
+> 這條規則要對「缺失」的所有成因一視同仁：欄位整個不存在、只有一半欄位、
+> 型別不對、舊格式存檔——通通算「沒有 baseline」，一律只建立新 baseline、
+> 不比對、不發事實句，不能退回 `{injured: false, filthy: false}` 這種看似
+> 合法的預設值再拿去比對（那樣等於偷偷假造了一個「上次見到時沒受傷也不髒」
+> 的假歷史）。這點刻意不跟 `Relationships` 其餘欄位（`trust`／`met_count`
+> 型別不對時退回 `DEFAULT_RECORD` 的預設數字）同一套處理——那些欄位的預設
+> 值本身就是合法的初始狀態，`appearance_state` 的「不存在」跟「存在且是
+> false」語意不同，不能共用退回預設值那條路。具體的讀檔/型別驗證程式碼留給
+> 實作 issue 寫，這裡只定住這條語意規則，避免照抄其他欄位的驗證模式時
+> 順手做錯。
+
+連帶修正 P-08 #3 的舊決定（原本假設「動態變化已經由 conditions 走其他管道
+傳遞」，查證後那條管道從沒被建過——`_listener_block()` 從未攜帶對方的
+`conditions`），詳見《99》P-08。不含 `appearance[]`（髮型／衣著／配件）比對，
+那組資料卡在《99》P-38、目前一律是空陣列，等落地後另開 issue。觸發時機（掛
+在 Vision 首次注意到還是 `note_meeting()`）留給實作 issue 決定。
+
+> [!note] 存檔路徑跟 `appearance_cache` 相同，不是新流程（CodeRabbit review 抓到）
+> `appearance_state` 是同一筆 `relations` 記錄裡的欄位，跟 `appearance_cache`
+> 一樣要接上 `NPCRelationsSchema.gd`（多一欄）與 `sqlite_save_service.gd` 的
+> `get_character()`／`save_character()`（`relations_appearance_cache` 那兩處
+> 讀寫的旁邊）——這是既有欄位新增的既定模式，不是這次要另外設計一套新的存檔
+> 流程。讀到沒有這個欄位的舊存檔（欄位不存在）時，直接套用上面的「沒有
+> baseline」規則：不當成任何合法值，只在下次見面時重新建立 baseline，不會
+> 因為讀不到欄位而報錯或誤判成異動。具體的 schema migration 寫法留給實作
+> issue。
 
 好感、熟悉、虧欠不是引擎欄位：沒有任何公式讀過它們（《00》原則三），
 那三件事交給《03》記憶系統自己記、自己判斷、自己演。
@@ -236,5 +292,4 @@ Enter 開啟／送出，Esc 取消。不在對話中就是單純冒一句氣泡�
 - **Agent 對 Agent**：`talk <a> <b>` 指令可以觸發，但「誰先開口、誰決定結束」
   的規則要等 LLM 版一起做，見 [[LLM 串接與 AI 服務層]]
 
-- 兩個氣泡同時顯示會互相遮擋（`z_index` 相同）。真實對話是輪流講，很少同時出現
 - 記憶寫入 —— 記憶系統還沒做，目前只留掛勾

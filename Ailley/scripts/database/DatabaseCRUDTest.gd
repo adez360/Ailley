@@ -393,25 +393,8 @@ func _run() -> void:
 	) and ok
 
 	# -------------------------------------------------
-	# 14. npc_death
+	# 14. npc_death 已移除（死碼，死亡狀態走 JSON，見《99》P-50）
 	# -------------------------------------------------
-
-	ok = _test_insert_select(
-		"npc_death",
-		"death",
-		{
-			"npc_id": NPC_B,
-			"is_dead": 1,
-			"death_tick": 1,
-			"death_day": 1,
-			"death_cause": "CRUD 測試",
-			"death_location_id": LOCATION_B,
-			"last_words": "測試遺言",
-			"corpse_decay": 0,
-			"is_buried": 0
-		},
-		"npc_id"
-	) and ok
 
 	# -------------------------------------------------
 	# 15. grave
@@ -470,19 +453,8 @@ func _run() -> void:
 	)
 
 	# -------------------------------------------------
-	# 16. grave_highlights
+	# 16. grave_highlights 已移除（死碼，life_highlights 走 JSON，見《99》P-50）
 	# -------------------------------------------------
-
-	ok = _test_insert_select(
-		"grave_highlights",
-		"grave_highlight",
-		{
-			"grave_id": grave_id,
-			"highlight_order": 0,
-			"content": "測試人生亮點"
-		},
-		"grave_id"
-	) and ok
 
 	# -------------------------------------------------
 	# 17. grave_epitaphs
@@ -708,8 +680,6 @@ func _test_insert_select(
 			condition = "npc_id = '%s' AND type = 'injured'" % NPC_A
 		elif table == "npc_daily_plan":
 			condition = "npc_id = '%s' AND game_day = 1" % NPC_A
-		elif table == "grave_highlights":
-			condition = "grave_id = %d AND highlight_order = 0" % int(data["grave_id"])
 		elif table == "grave_epitaphs":
 			condition = "grave_id = %d AND npc_id = '%s'" % [
 				int(data["grave_id"]),
@@ -718,10 +688,7 @@ func _test_insert_select(
 		else:
 			condition = "1 = 0"
 	else:
-		if key_value.is_valid_int() and table in [
-			"grave_highlights",
-			"grave_epitaphs"
-		]:
+		if key_value.is_valid_int() and table == "grave_epitaphs":
 			condition = "%s = %d" % [key_column, int(key_value)]
 		else:
 			condition = "%s = '%s'" % [
@@ -845,26 +812,15 @@ func _cleanup_test_data() -> void:
 		"npc_id LIKE '%s%%'" % _escape_sql(PREFIX)
 	)
 
-	# 墓園相關。
-	# 先刪 epitaph/highlight，再刪 grave/death。
+	# 墓園相關。先刪 epitaphs（子表），再刪 grave（父表）——
+	# grave_highlights／npc_death 已移除，不用再清（見《99》P-50）。
 	DatabaseManager.delete(
 		"grave_epitaphs",
 		"npc_id LIKE '%s%%'" % _escape_sql(PREFIX)
 	)
 
 	DatabaseManager.delete(
-		"grave_highlights",
-		"grave_id IN (SELECT grave_id FROM grave WHERE npc_id LIKE '%s%%')"
-		% _escape_sql(PREFIX)
-	)
-
-	DatabaseManager.delete(
 		"grave",
-		"npc_id LIKE '%s%%'" % _escape_sql(PREFIX)
-	)
-
-	DatabaseManager.delete(
-		"npc_death",
 		"npc_id LIKE '%s%%'" % _escape_sql(PREFIX)
 	)
 

@@ -73,39 +73,11 @@ const EAT_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法吃東�
 const EAT_NO_FOOD := "NO_FOOD"			# 背包裡沒有 ItemDatabase 分類為 food 的物品
 const EAT_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 satiety，不能先扣食物
 
-## 各食物 item_id 吃下去回復多少 satiety。抄《規格書 08》§3-1「飢餓回復」欄位
-## 取絕對值——那欄位是改名前（hunger，越低越好）留下的數字，P-32 把欄位改成
-## satiety（越高越好）之後，同一個量就是「回復多少 satiety」，方向反過來但
-## 數字不變。查不到的 item_id（理論上不會發生，_find_food_slot() 已經用
-## ItemDatabase 篩過 category）保守回 0，不讓 eat() 憑空生出滿足感
-const EAT_SATIETY_RECOVERY := {
-	"bread": 25.0,
-	"cooked_meat": 40.0,
-	"fish_dish": 35.0,
-	"herb_soup": 20.0,
-}
-
 ## drink() 的失敗原因碼，形狀比照 EAT_*（#163）
 const DRINK_OK := ""
 const DRINK_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法喝東西
 const DRINK_NO_DRINK := "NO_DRINK"		# 背包裡沒有 ItemDatabase 分類為 drink 的物品
 const DRINK_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 hydration，不能先扣飲品
-
-## 各飲品 item_id 喝下去回復多少 hydration。抄《規格書 08》§3-2「口渴回復」欄位
-## 取絕對值，理由跟 EAT_SATIETY_RECOVERY 一樣（改名前 thirst 越低越好，
-## P-32 改成 hydration 越高越好之後方向反過來、數字不變）
-const DRINK_HYDRATION_RECOVERY := {
-	"water": 40.0,
-	"ale": 20.0,
-	"spirit": 10.0,
-}
-
-## 含酒精飲品喝下去加多少 alcohol，抄《規格書 08》§3-2「alcohol」欄位（#165）。
-## 查不到（例如 water）就是 0，同一種「保守回 0」規則跟 EAT_SATIETY_RECOVERY 一樣
-const DRINK_ALCOHOL_RECOVERY := {
-	"ale": 25.0,
-	"spirit": 45.0,
-}
 
 const GIVE_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE 一樣的距離門檻，2 格
 
@@ -125,6 +97,7 @@ const HAUL_STAMINA_DRAIN := 3.0			# 搬運者每現實秒額外扣的體力（�
 const HAUL_OK := ""
 const HAUL_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
 const HAUL_TARGET_IS_SELF := "TARGET_IS_SELF"
+const HAUL_TARGET_ALREADY_BURIED := "TARGET_ALREADY_BURIED"
 const HAUL_TOO_FAR := "TOO_FAR"
 
 const ATTACK_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE／GIVE_RANGE 一樣的距離門檻，2 格
@@ -198,6 +171,11 @@ const CONDITION_FILTHY := "filthy"
 ## MVP 新機制：昏迷狀態（#160，《99》P-27）
 const CONDITION_INCAPACITATED := "incapacitated"
 
+## 死亡後的石化狀態（#379，《規格書09》§1）。跟其餘 8 種生理衍生 condition
+## 不同，不是「門檻自動」——只在 _die() 寫入一次，之後不會被 _update_conditions()
+## 移除（死亡是終局狀態，沒有恢復路徑）
+const CONDITION_PETRIFIED := "petrified"
+
 ## 角色的身分，全遊戲唯一且不隨改名而變：存檔、記憶連結、交誼區都靠它指人。
 ## 是內部識別字，不拿來顯示，也**不要去解析它** —— 格式只有 generate_id() 說了算。
 ##
@@ -251,6 +229,11 @@ var current_goal := ""
 var _hauling_target: Character = null		# 目前正在搬運誰
 var _hauled_by: Array[Character] = []		# 目前正被誰搬運
 var _speed_multiplier := 1.0				# 速度倍率（搬運時為 50%）
+## 這次昏迷事件裡已經拿過搬運者救助 trust 的名單，避免第一位搬運者救到人、
+## _end_incapacitation() 已經跑過後，稍後才加入的第二位搬運者被
+## set_being_carried() 的 has_condition(CONDITION_INCAPACITATED) 判斷擋掉、
+## 拿不到獎勵（CodeRabbit review 抓到）。新一輪昏迷開始時歸零
+var _rescued_haulers: Array[Character] = []
 
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
@@ -294,6 +277,23 @@ var _treatment_start_minute := -1			# 藥草鋪治療開始的遊戲分鐘，-1 
 var _treatment_location := ""				# 治療地點（暫定「藥草鋪」）
 var _herb_shop_lookup_error_reported := false	# 找不到 herb_shop 時只記一次錯誤，避免昏迷期間每遊戲分鐘洗版
 
+## 死亡相關狀態（#379，《規格書09》§1／§2）。is_dead 是死亡狀態的唯一事實
+## 來源，其餘欄位只在 is_dead=true 時有意義，一旦寫入不會再變回未死亡
+## （死亡是終局狀態）。這批 issue 只做「health≤0→昏迷→逾時未獲救治→死亡」
+## 這條觸發路徑，見 _die() 說明與 issue #379 範圍界線
+var is_dead := false
+var death_tick := -1			# 見 _current_tick()，跨天累積的全域 tick 計數
+var death_day := -1
+var death_at := ""				# UTC ISO 8601 時間戳，見 §8 復活窗口判斷依據
+var death_cause := ""			# 中文自然語言，引擎彙整，不讓 LLM 潤飾
+var death_location_id := ""	# 死亡當下的地點，查不到具名地點時是空字串（在地點之間）
+var last_words: Variant = null	# String 或 null（來不及開口）；只有 Agent 會真的問 LLM，見 _request_last_words()
+var corpse_decay := 0.0		# 0–100，_update_corpse_decay() 每 tick +0.7；達 100 之後交給 #387 判斷是否自動立無名碑
+var is_buried := false			# 安葬流程見 #380，這裡只保留欄位供其寫入
+var grave_id: Variant = null	# 同上，String 或 null
+var buried_by: Variant = null	# 誰安葬了你，String（character_id）或 null（無名碑等非人為安葬留給 #387）
+var buried_tick := -1			# 安葬當下的全域 tick，同 death_tick 換算方式，見 bury()
+
 # 滑鼠 hover（selection.gd）跟 E 鍵目前的互動目標（player.gd）是兩個獨立的
 # 高亮來源，任一個成立就該顯示描邊。分開存，不是合用一個布林值——CodeRabbit
 # review 抓到的問題：合用的話，一邊把它關掉（例如滑鼠移開）會連帶關掉另一邊
@@ -336,6 +336,10 @@ func _ready() -> void:
 	system_prompt = persona["system_prompt"]
 
 	sprite.play("idle_" + facing)
+	# load_save_data() 若在進場景樹前就被呼叫（見該函式開頭註解），is_dead=true
+	# 時會因為 sprite 還不存在而跳過灰階——sprite 現在已就緒，補套一次
+	# （CodeRabbit review 抓到）
+	_apply_death_tint(is_dead)
 
 	# emotion.duration_left／conditions[].turns_left 都是離散單位，用 GameClock 既有的
 	# 「每遊戲分鐘」訊號驅動比自己在 _process(delta) 裡做累加器精簡（agent.gd 也是這樣接的），
@@ -414,6 +418,7 @@ func _on_game_minute(_hour: int, _minute: int) -> void:
 	if _minute % GameClock.GAME_MINUTES_PER_TICK == 0:
 		_tick_emotion()
 		_update_conditions()
+		_update_corpse_decay()
 
 ## AI 宣告新情緒。type 必須是 EMOTION_TYPES 之一，intensity 0–100。
 ## stability／grudge 是《02》§1-4 持續時間公式的人格係數，人格資料還沒接上
@@ -480,6 +485,8 @@ func _get_condition_display_name(type: String) -> String:
 			return "骯髒"
 		CONDITION_INCAPACITATED:
 			return "昏迷"
+		CONDITION_PETRIFIED:
+			return "石化"
 		_:
 			return type
 
@@ -501,8 +508,12 @@ func _set_condition(type: String, present: bool, record_event: bool = true) -> v
 ##
 ## 昏迷狀態檢查（《99》P-27）：health ≤ 0 即進入昏迷。注意昏迷不是「門檻自動」，
 ## 只要曾經觸發就必須明確結束（被搬走或完成治療），不會因為 health 變正就自動消失
+##
+## 死亡後整個函式直接跳過（#379）：死亡的 conditions 只留 petrified（見 _die()），
+## 不然這裡任何一項「門檻自動」condition 只要生理數值仍符合門檻，下次檢查就會
+## 被重新加回死屍身上；health 仍 ≤0 也會撞到下面的昏迷觸發，把死屍重新打回昏迷
 func _update_conditions() -> void:
-	if stats == null:
+	if stats == null or is_dead:
 		return
 
 	var injury := stats.get_value("injury")
@@ -533,8 +544,10 @@ func _update_conditions() -> void:
 ## exhausted 的觸發與解除邏輯（#364）。不同於其他生理衍生狀態的簡單門檻，
 ## exhausted 需要一個恢復門檻（stamina <= 0 時觸發，stamina > 門檻時解除）。
 ## 門檻值待 #361 調校後調整
+##
+## 死亡後跳過（#379），理由同 _update_conditions()：死屍 conditions 只留 petrified
 func _update_exhausted_condition() -> void:
-	if stats == null:
+	if stats == null or is_dead:
 		return
 	var stamina := stats.get_value("stamina")
 
@@ -551,17 +564,22 @@ func _start_incapacitation() -> void:
 	_set_condition(CONDITION_INCAPACITATED, true)
 	_incapacitation_start_minute = GameClock.hour * 60 + GameClock.minute
 	_is_being_carried = false
+	_rescued_haulers.clear()
 	stop_moving()  # 立即停止移動
 	print_debug("Character %s 進入昏迷，計時器已啟動" % character_name)
 
-## 昏迷或治療中都不能動：昏迷是「石化原地」，治療是「住院中」，兩者共用同一個
-## 移動鎖（《99》P-27／藥草鋪筆記），供 move_to() 與 _decide_velocity()（含 Player 覆寫）共用
+## 死亡／昏迷／治療中都不能動：死亡是終局的石化，昏迷是暫時的石化，治療是
+## 「住院中」，三者共用同一個移動鎖（《99》P-27／藥草鋪筆記／《規格書09》§1），
+## 供 move_to() 與 _decide_velocity()（含 Player 覆寫）共用
 func _is_movement_locked() -> bool:
-	return has_condition(CONDITION_INCAPACITATED) or _treatment_start_minute != -1
+	return is_dead or has_condition(CONDITION_INCAPACITATED) or _treatment_start_minute != -1
 
 ## 每遊戲分鐘檢查昏迷狀態：
 ## 1. 若被搬走（#161 設置 _is_being_carried），立即結束昏迷
-## 2. 若昏迷 30 分鐘無人搬走，自動傳送藥草鋪並開始治療（待藥草鋪傳送機制完成）
+## 2. 若昏迷 30 分鐘無人搬走，轉入真正死亡流程（#379，依 #368 拍板結果取代
+##    原本「自動傳送藥草鋪治療」這個結局分支——見《規格書09》文首拍板 note）。
+##    「天神主動介入送醫」與昏迷倒數改依傷勢動態計算，都留給後續實作 issue，
+##    不在 #379 範圍內；_send_to_herb_shop_for_treatment() 保留給那個 issue用
 func _update_incapacitation() -> void:
 	if not has_condition(CONDITION_INCAPACITATED):
 		return
@@ -575,9 +593,9 @@ func _update_incapacitation() -> void:
 	var current_minute := GameClock.hour * 60 + GameClock.minute
 	var elapsed_minutes := (current_minute - _incapacitation_start_minute) % (24 * 60)
 
-	# 30 分鐘無人搬走時自動傳送藥草鋪開始治療
+	# 30 分鐘無人搬走時轉入死亡流程
 	if elapsed_minutes >= 30:
-		_send_to_herb_shop_for_treatment()
+		_die("傷重昏迷，始終無人相救")
 
 ## 結束昏迷（被搬走時觸發，#161 負責調用）
 func _end_incapacitation() -> void:
@@ -589,17 +607,48 @@ func _end_incapacitation() -> void:
 	if stats != null:
 		stats.set_value("health", 10.0)
 
+	# 被救助：通知每個搬運者的救助鉤子（見 _on_rescued()）。搬運者只會被
+	# stop_haul() 從 _hauled_by 移除，沒有 _exit_tree() 清理時，搬運者若被
+	# queue_free() 直接砍掉，_hauled_by 會留著已釋放的殘留參照——!= null
+	# 擋不住這個，已釋放的 Object 不會自動變成 null，要用 is_instance_valid()
+	# （CodeRabbit review 抓到）。_rescued_haulers 仍要記——不是為了擋重複扣／
+	# 加 trust（已拿掉，見 _on_rescued() 說明），是擋同一位搬運者的事實句被
+	# 重複記兩次
+	for hauler in _hauled_by:
+		if is_instance_valid(hauler) and not _rescued_haulers.has(hauler):
+			_on_rescued(hauler)
+			_rescued_haulers.append(hauler)
+
 	print_debug("Character %s 昏迷已結束（被搬走）" % character_name)
 
+## 被搬運者救助的收尾鉤子（含 _attach_haul() 補發的晚到搬運者）。基底只是
+## 掛點，跟 _on_attacked() 同一個理由——Player 沒有記憶系統可寫，只有 Agent
+## 需要記事實句。
+##
+## 刻意不在這裡直接加 trust（2026-08-24 拿掉，見全專案盤點的原則二／三審查）：
+## 跟 _on_attacked() 同一個問題——引擎用固定公式（+15）幫「被救助」這件事
+## 定性成該加多少信任，AI 沒機會表態；trust 也沒有任何公式拿它當輸入。事件
+## 本身照樣要記成事實句給 AI（見 agent.gd 覆寫），該不該信任由 AI 自己判斷
+func _on_rescued(_hauler: Character) -> void:
+	pass
+
 ## 由搬運動作（#161 haul）調用，標記此角色正在被搬運。
-## 若該角色昏迷，搬運會立即結束昏迷計時器（《99》P-27）
+## 若該角色昏迷，搬運會立即結束昏迷（《99》P-27）——不能只設旗標等下一次
+## _update_incapacitation()（每遊戲分鐘才跑一次）才處理：stop_haul() 若搶在
+## 下一個 time_changed 之前執行，_is_being_carried 會被重設回 false，
+## _end_incapacitation() 永遠不會被呼叫到，角色維持昏迷、也拿不到 health
+## 恢復與搬運者 trust 獎勵（CodeRabbit review 抓到）
 func set_being_carried(is_carried: bool) -> void:
 	if is_carried and has_condition(CONDITION_INCAPACITATED):
 		_is_being_carried = true
+		_end_incapacitation()
 	elif not is_carried:
 		_is_being_carried = false
 
-## 自動傳送到藥草鋪並開始治療
+## 傳送到藥草鋪並開始治療。#379 之前是昏迷逾時的自動結局，現在改成死亡流程
+## 接手那個結局分支（見 _update_incapacitation()），這個函式暫時沒有呼叫端——
+## 保留給後續「天神主動介入送醫」的實作 issue（《規格書09》文首拍板 note）用，
+## 不是死代碼
 func _send_to_herb_shop_for_treatment() -> void:
 	# 治療已開始時不重複設置（避免重置計時器）
 	if _treatment_start_minute != -1:
@@ -668,6 +717,203 @@ func _complete_treatment() -> void:
 	print_debug("Character %s 已恢復可行動" % character_name)
 
 
+# ---- 死亡 ----
+
+## 死亡地點反查半徑，跟 agent.gd::ACTUAL_PLACE_RADIUS（事實句的即時位置反查）
+## 取同一個值——都是「站在哪個地點錨點附近算數」的同一種判斷，沒有理由不同
+const DEATH_LOCATION_RADIUS := 32.0
+
+## 死亡流程（#379，《規格書09》§1／§2）。這批 issue 只處理
+## 「health≤0→昏迷→逾時未獲救治→死亡」這一條觸發路徑；餓死／渴死／老化／
+## 瞬間死亡 Flag 等其餘觸發源留給後續 issue，各自準備好 death_cause 文案後
+## 呼叫這裡收尾即可，不需要重做狀態機本身。墓園／安葬（#380）與 corpse_decay
+## 達 100 自動立無名碑（#387）都是後續 issue，這裡只負責觸發與石化
+func _die(cause: String) -> void:
+	if is_dead:
+		return
+
+	is_dead = true
+	death_tick = _current_tick()
+	death_day = GameClock.day
+	death_at = Time.get_datetime_string_from_system(true, false) + "Z"
+	death_cause = cause
+	death_location_id = _resolve_death_location()
+
+	# ①②③：conditions 清空只留 petrified（《規格書09》§1 死亡流程圖）
+	conditions.clear()
+	conditions.append({"type": CONDITION_PETRIFIED, "turns_left": -1})
+
+	# 昏迷正式被死亡取代，清掉哨兵值——不然存檔會同時記著一段「未結束的昏迷」，
+	# load_save_data() 讀回來會誤判成「昏迷中但還沒送醫」，把 CONDITION_INCAPACITATED
+	# 重新加回死屍身上
+	_incapacitation_start_minute = -1
+
+	# 治療同理要清掉（CodeRabbit review 抓到）：_update_treatment() 沒有 is_dead
+	# 判斷，_treatment_start_minute 若殘留，60 分鐘後 _complete_treatment() 會
+	# 把 conditions 清空（連 petrified 一起沒了）並恢復 health／injury，等於
+	# 讓死屍活過來
+	_treatment_start_minute = -1
+	_treatment_location = ""
+
+	corpse_decay = 0.0
+	# 搬運中的角色（自己是搬運者）要先放手，不然目標的 _hauled_by 卡在死掉的
+	# 搬運者身上、_follow_hauler() 讓目標永遠走不動（CodeRabbit review 抓到）。
+	# 只解除「自己搬運別人」這一端，被別人搬運（_hauled_by）的關係不動——
+	# 死屍本來就該繼續能被搬運去墓園
+	if is_hauling():
+		stop_haul()
+	# force_interrupt() 已含 stop_moving()／leave_conversation()／_end_work()——
+	# 昏迷倒數的 30 分鐘內角色仍可能開始新的工作或被搭話（is_dead 這時還是
+	# false，_on_time_changed() 照常仲裁，work_at() 也不擋 _is_movement_locked()），
+	# 死亡當下要一次收尾，不能只清路徑，否則死屍會繼續佔用工作站領工資、
+	# 或被 conversation.gd 繼續要台詞（CodeRabbit review 抓到）。Agent 覆寫的
+	# _on_action_interrupted() 已加上 is_dead 判斷，這裡不會反過來觸發新決策
+	force_interrupt()
+	_apply_death_tint(true)		# 本體變灰色（《規格書09》§1）
+
+	print_debug("Character %s 死亡：%s" % [character_name, cause])
+
+	# 不 await——last_words 是死亡當下才問 LLM，回應要等數百毫秒到數十秒，
+	# 死亡狀態機（is_dead、石化、decay 開始累積）不該卡在那份請求後面才生效
+	_request_last_words(cause)
+
+## 死亡本體變灰／存活還原正常顏色。獨立成函式是因為 load_save_data() 明確
+## 允許在節點還沒進場景樹時呼叫（見該函式開頭註解）——這時 @onready var sprite
+## 還沒初始化，直接寫 sprite.modulate 會炸掉，這裡統一擋 null（CodeRabbit
+## review 抓到）。_ready() 會在 sprite 就緒後補呼叫一次，把 load_save_data()
+## 在 sprite 還不存在時被跳過的那次補回來
+func _apply_death_tint(dead: bool) -> void:
+	if sprite == null:
+		return
+	sprite.modulate = Color(0.5, 0.5, 0.5) if dead else Color(1, 1, 1)
+
+## 臨終遺言請求的掛點，基底 no-op：Player 沒有 LLM 決策，last_words 維持 null
+## （來不及開口，跟《規格書09》§2 表格「無機會留遺言」的語意不同，是單純沒有
+## 生成管道）。Agent 覆寫這個 hook 真正送出 LLM 請求，見 agent.gd
+func _request_last_words(_cause: String) -> void:
+	pass
+
+## 死亡時刻換算成全域遞增的 tick 計數（《規格書09》§2 death_tick 範例
+## 8642：跨天累積，不是當天的相對 tick）。GameClock 本身沒有這個計數器，
+## 只有 hour/minute/day，用既有的 GAME_MINUTES_PER_TICK 週期换算
+func _current_tick() -> int:
+	var ticks_per_day := (24 * 60) / GameClock.GAME_MINUTES_PER_TICK
+	var minute_of_day := GameClock.hour * 60 + GameClock.minute
+	return (GameClock.day - 1) * ticks_per_day + int(minute_of_day / GameClock.GAME_MINUTES_PER_TICK)
+
+## 死亡地點反查，跟 agent.gd::_resolve_actual_place() 同一種做法（不能沿用
+## current_place——那個欄位只有 Agent 有意義，Player 沒有）。查不到具名地點
+## （例如死在地點之間的路上）就回傳空字串，是合法值
+func _resolve_death_location() -> String:
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null:
+		return ""
+	return anchors.resolve_from_position(get_body_position(), DEATH_LOCATION_RADIUS)
+
+## 屍體腐壞（《規格書09》§3-4）：死亡後每 tick +0.7，clamp 在 [0,100]——
+## 100/0.7 除不盡，不 clamp 會在某個 tick 算出 100.1，讓存檔的 CHECK 約束
+## 寫入失敗（規格書原文引用 issue #451 CodeRabbit review 踩過的坑）。達到
+## 100 之後交給 #387（自動立無名碑）判斷，這裡只負責累加，不做立碑
+func _update_corpse_decay() -> void:
+	if not is_dead:
+		return
+	# 死亡當下那個 tick 不算：_die() 觸發時若剛好落在 tick 邊界上，_on_game_minute()
+	# 會在同一次呼叫裡先跑 _die()（corpse_decay 歸零）再跑這裡，沒有這個判斷
+	# 剛死的屍體會立刻變成 0.7，等於白白少算一個完整 tick 的「新鮮」時間
+	# （CodeRabbit review 抓到）
+	if death_tick == _current_tick():
+		return
+	corpse_decay = clampf(corpse_decay + 0.7, 0.0, 100.0)
+
+
+# ---- 安葬（#380，《規格書09》§3-2／§6） ----
+
+## 搬運／安葬距離門檻，跟 HAUL_RANGE／GIVE_RANGE 同一種「2 格內」判斷，
+## 沒有理由對屍體另訂一套距離
+const BURY_RANGE := 32.0
+
+## PlaceAnchors 底下這個錨點的節點名稱（見 note/技術/村莊地圖.md）。
+## 《規格書09》§6 寫的 `loc_cemetery` 是 LocationSchema／規格文件那一層的
+## 正式 location_id（帶 `loc_` 前綴），跟這裡不是同一份字串——PlaceAnchors
+## 錨點名稱／`current_place`／`npc_schedule.json` 的 `place` 欄位全部是不帶
+## 前綴的短名（`home`／`herb_shop`…，見《村莊地圖》），跟其餘地點一致才能讓
+## `move_to()`／`resolve_from_position()` 認得
+const CEMETERY_PLACE_NAME := "cemetery"
+
+## 墓碑格數上限（《規格書09》§6，issue #368 拍板值）。滿格時 bury() 直接拒絕，
+## 屍體留在原地繼續佔一般 capacity，符合§6「Phase 2：拒絕」——動態擴張是
+## Phase 3（《99》P-57），不在這則範圍內
+const CEMETERY_GRAVE_CAPACITY := 6
+
+const BURY_OK := ""
+const BURY_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const BURY_TARGET_IS_SELF := "TARGET_IS_SELF"
+const BURY_TARGET_NOT_DEAD := "TARGET_NOT_DEAD"
+const BURY_ALREADY_BURIED := "ALREADY_BURIED"
+const BURY_TOO_FAR := "TOO_FAR"
+const BURY_NOT_AT_CEMETERY := "NOT_AT_CEMETERY"
+const BURY_CEMETERY_FULL := "CEMETERY_FULL"
+
+## 安葬。self 是動手安葬的人，corpse 是屍體本體（死亡後角色不會被移除，
+## 石化留在原地／被搬運，見 _die()）。跟 attack()／give_to() 同一種寫法：
+## 一路檢查、任何一關不過就回失敗碼，全過才真的寫入狀態。
+##
+## 沒有檢查 self 是不是也在墓園——安葬者跟屍體只要彼此在 BURY_RANGE 內、
+## 屍體本身位於墓園錨點範圍內即可，跟 give_to() 只檢查雙方距離、不檢查
+## 「送禮者站在哪」同一個道理
+func bury(corpse: Character) -> String:
+	if corpse == null or not is_instance_valid(corpse):
+		return BURY_TARGET_NOT_FOUND
+	if corpse == self:
+		return BURY_TARGET_IS_SELF
+	if not corpse.is_dead:
+		return BURY_TARGET_NOT_DEAD
+	if corpse.is_buried:
+		return BURY_ALREADY_BURIED
+	if get_body_position().distance_to(corpse.get_body_position()) > BURY_RANGE:
+		return BURY_TOO_FAR
+	if not _is_at_cemetery(corpse.get_body_position()):
+		return BURY_NOT_AT_CEMETERY
+	if _cemetery_grave_count() >= CEMETERY_GRAVE_CAPACITY:
+		return BURY_CEMETERY_FULL
+
+	corpse.is_buried = true
+	corpse.grave_id = "grave_%s" % corpse.character_id
+	corpse.buried_by = character_id
+	corpse.buried_tick = _current_tick()
+
+	# 解除既有搬運關係——is_being_hauled() 在 _decide_velocity() 裡排在
+	# petrified 鎖定之前（見該函式註解），is_buried 本身不會讓身體停止跟著
+	# 搬運者走，不主動放手的話墓碑會被拖出墓園
+	for hauler in corpse._hauled_by.duplicate():
+		if is_instance_valid(hauler):
+			hauler.stop_haul()
+
+	print_debug("Character %s 安葬了 %s" % [character_name, corpse.character_name])
+	return BURY_OK
+
+## 位置是否落在墓園錨點範圍內。跟 _resolve_death_location() 同一種
+## place_anchors 查詢模式，但這裡只需要布林值，不需要地點名稱本身
+func _is_at_cemetery(position: Vector2) -> bool:
+	var tree := get_tree()
+	if tree == null:
+		return false
+	var anchors := tree.get_first_node_in_group("place_anchors")
+	if anchors == null:
+		return false
+	return anchors.resolve_from_position(position, DEATH_LOCATION_RADIUS) == CEMETERY_PLACE_NAME
+
+## 目前已佔用的墓碑格數：場上所有已安葬角色的數量。不另外維護一個計數器——
+## 死亡角色不會被移除節點（見 _die()），直接數 is_buried 的人數就是即時正確
+## 答案，跟 hauler_count() 數 _hauled_by 而不是另存一個計數欄位同一種作法
+func _cemetery_grave_count() -> int:
+	var count := 0
+	for node in get_tree().get_nodes_in_group("characters"):
+		if node is Character and (node as Character).is_buried:
+			count += 1
+	return count
+
+
 # ---- 移動 ----
 
 # 這次 move_to() 的目標世界座標。move_to() 的呼叫端不只一個（仲裁器、
@@ -730,7 +976,9 @@ func is_in_conversation() -> bool:
 # _is_preemptible()）——這兩個問題曾經共用同一個 is_interruptible()，
 # 是意外共用不是設計決定，issue #113 把它們拆開成各自獨立的判斷
 func is_talk_interruptible() -> bool:
-	return not _working
+	# is_dead 排除（CodeRabbit review 抓到）：force_interrupt() 只收尾死亡當下
+	# 已經存在的對話，沒擋之後別人再對死屍發起新對話——死屍不該再被搭話
+	return not _working and not is_dead
 
 # 對某人搭話。成功回傳 TALK_OK（空字串），否則回傳失敗原因碼
 func talk_to(other: Character) -> String:
@@ -739,8 +987,10 @@ func talk_to(other: Character) -> String:
 	if other == self:
 		return TALK_TARGET_IS_SELF
 	# 自己在工作中也算忙。少了這條，E 鍵在 work_at() 回 WORK_BUSY 之後退回搭話，
-	# 工作中的角色就開得起對話——正好繞過上面 is_talk_interruptible() 要擋的那件事
-	if is_in_conversation() or _working or other.is_in_conversation():
+	# 工作中的角色就開得起對話——正好繞過上面 is_talk_interruptible() 要擋的那件事。
+	# is_dead 同理擋自己是死屍發起搭話（CodeRabbit review 抓到）——target 那側已經
+	# 靠 is_talk_interruptible() 擋掉，initiator 這側沒有對稱檢查會漏掉
+	if is_in_conversation() or _working or is_dead or other.is_in_conversation():
 		return TALK_TARGET_BUSY
 	if get_body_position().distance_to(other.get_body_position()) > TALK_RANGE:
 		return TALK_TOO_FAR
@@ -883,7 +1133,11 @@ func is_working() -> bool:
 func work_at(workstation: Workstation) -> String:
 	if workstation == null:
 		return WORK_TARGET_NOT_FOUND
-	if is_in_conversation() or _working:
+	# 昏迷／治療／死亡期間不能開始新工作（CodeRabbit review 抓到）：
+	# _is_movement_locked() 只擋得住 _decide_velocity() 的移動輸出，原本沒擋
+	# work_at()——角色昏迷時若剛好站在工作站範圍內，仲裁器照樣能選中 work
+	# 任務並成功卡位，昏迷或死亡期間憑空多出一段不該存在的工作
+	if is_in_conversation() or _working or _is_movement_locked():
 		return WORK_BUSY
 	if get_body_position().distance_to(workstation.global_position) > WORK_RANGE:
 		return WORK_TOO_FAR
@@ -997,6 +1251,30 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 	return BUY_OK
 
 
+# ---- 人格 ----
+
+## 依 delta_dict（{欄位: 差值}）調整人格特質，統一夾在 0~100。跟睡眠反思套用
+## personality_delta 是同一件事（同一份人格數值被誰改）,agent.gd 的反思流程
+## 也改呼叫這裡,不要兩份 clampf 公式各自長歪。物品效果（見 eat()/drink()）
+## 跟反思共用同一個 personality_delta 欄位名稱與語意，只是觸發來源不同——
+## 反思那邊的數字在 ai_schema.gd 已經先夾過 ±MAX_PERSONALITY_DELTA（LLM
+## 宣告的內容需要防它自己講過頭），物品這邊的數字是開發者寫在 items.json
+## 裡的靜態資料，不是執行期才收到的不信任輸入，不需要再套一次同樣的驗證，
+## 只要作者自己在資料裡填小一點的數字即可
+func apply_personality_delta(delta_dict: Dictionary) -> void:
+	for dim in delta_dict.keys():
+		# 只認 _PERSONALITY_FIELDS 內的 10 個維度——不認得的 key（items.json
+		# 手打錯欄位名之類）略過不寫。personality 存檔載入靠 _is_valid_
+		# personality_data() 卡「剛好 10 項欄位」，這裡如果照單全收把第 11 個
+		# 陌生 key 寫進 personality，下次存讀就會整包 personality 被判定不合法
+		# 而拒絕套用，連本來合法的 10 項都遭殃（CodeRabbit review 抓到）
+		if not _PERSONALITY_FIELDS.has(dim):
+			push_warning("Character %s: 未知的人格欄位 %s，略過" % [character_name, dim])
+			continue
+		var current: float = float(personality.get(dim, 50.0))
+		personality[dim] = clampf(current + float(delta_dict[dim]), 0.0, 100.0)
+
+
 # ---- 進食 ----
 
 # 找背包裡第一筆食物類物品的摘要（get_summary() 那份，含 item_id/count/slot），
@@ -1010,12 +1288,12 @@ func _find_food_slot() -> Dictionary:
 			return entry
 	return {}
 
-# 吃掉背包裡一份食物：扣一個、回復對應量的 satiety。沒有背包的角色
-# （EAT_NO_INVENTORY）或背包裡沒有食物（EAT_NO_FOOD）都要有明確原因碼，
-# 跟 TALK_*／WORK_*／BUY_* 同一套「每個動作都要能講出為什麼失敗」的規則。
-# remove_item() 的回傳值要先確認是 REMOVE_OK 才能加 satiety（CodeRabbit
-# review 抓到）——不然扣格子失敗（例如兩個來源同一 tick 搶同一份食物）時，
-# satiety 還是會被加上去，變成憑空回復
+# 吃掉背包裡一份食物：扣一個、套用該物品在 items.json 定義的 effect_*／
+# personality_delta。沒有背包的角色（EAT_NO_INVENTORY）或背包裡沒有食物
+# （EAT_NO_FOOD）都要有明確原因碼，跟 TALK_*／WORK_*／BUY_* 同一套「每個
+# 動作都要能講出為什麼失敗」的規則。效果套用交給 inventory.use_item()——
+# 它才是「先套效果、確認成功才扣格子」那個順序的唯一實作，這裡不重複
+# 一次 remove_item() 的判斷
 func eat() -> String:
 	if inventory == null:
 		return EAT_NO_INVENTORY
@@ -1027,11 +1305,12 @@ func eat() -> String:
 		return EAT_NO_STATS
 
 	var item_id: String = food["item_id"]
-	var remove_reason := inventory.remove_item(item_id, 1)
-	if remove_reason != Inventory.REMOVE_OK:
+	var item := ItemDatabase.get_item(item_id)
+	var use_reason := inventory.use_item(item_id, stats, item)
+	if use_reason != Inventory.USE_OK:
 		return EAT_NO_FOOD
 
-	stats.add("satiety", EAT_SATIETY_RECOVERY.get(item_id, 0.0))
+	apply_personality_delta(item.get("personality_delta", {}))
 	return EAT_OK
 
 
@@ -1046,26 +1325,27 @@ func _find_drink_slot() -> Dictionary:
 			return entry
 	return {}
 
-# 喝掉背包裡一份飲品：扣一個、回復對應量的 hydration。跟 eat() 同一套
-# 「每個動作都要能講出為什麼失敗」規則與 remove_item() 先確認 REMOVE_OK
-# 才加值的順序（#163）
+# 喝掉背包裡一份飲品：跟 eat() 同一套「每個動作都要能講出為什麼失敗」規則，
+# 效果套用同樣交給 inventory.use_item()（原本 DRINK_HYDRATION_RECOVERY／
+# DRINK_ALCOHOL_RECOVERY 已刪除，資料搬進 data/items.json——含酒精飲品的
+# alcohol／wakefulness 效果都在裡面一起讀出來，不用分兩行各自 add）
 func drink() -> String:
 	if inventory == null:
 		return DRINK_NO_INVENTORY
 
-	var item := _find_drink_slot()
-	if item.is_empty():
+	var slot := _find_drink_slot()
+	if slot.is_empty():
 		return DRINK_NO_DRINK
 	if stats == null:
 		return DRINK_NO_STATS
 
-	var item_id: String = item["item_id"]
-	var remove_reason := inventory.remove_item(item_id, 1)
-	if remove_reason != Inventory.REMOVE_OK:
+	var item_id: String = slot["item_id"]
+	var item := ItemDatabase.get_item(item_id)
+	var use_reason := inventory.use_item(item_id, stats, item)
+	if use_reason != Inventory.USE_OK:
 		return DRINK_NO_DRINK
 
-	stats.add("hydration", DRINK_HYDRATION_RECOVERY.get(item_id, 0.0))
-	stats.add("alcohol", DRINK_ALCOHOL_RECOVERY.get(item_id, 0.0))
+	apply_personality_delta(item.get("personality_delta", {}))
 	return DRINK_OK
 
 
@@ -1175,16 +1455,26 @@ func attack(other: Character) -> String:
 		other.stats.add("injury", ATTACK_INJURY_DELTA)
 		# 立即同步 bleeding／injury 衰減暫停，不等 _update_conditions() 的 10 分鐘
 		# 一次 tick——命中瞬間 injury 可能已經跨過 20 的門檻，晚同步的話這段空窗期
-		# injury 會繼續被 Stats 的自然衰減（GameClock 驅動）蓋掉這次造成的傷害
-		other._set_condition(CONDITION_BLEEDING, other.stats.get_value("injury") >= 20.0)
-		other.stats.injury_decay_paused = other.has_condition(CONDITION_BLEEDING)
+		# injury 會繼續被 Stats 的自然衰減（GameClock 驅動）蓋掉這次造成的傷害。
+		# is_dead 時跳過：死屍的 conditions 只留 petrified（#379），這裡不能
+		# 直接呼叫 _set_condition() 把 BLEEDING 疊加回去，蓋掉那個不變量
+		if not other.is_dead:
+			other._set_condition(CONDITION_BLEEDING, other.stats.get_value("injury") >= 20.0)
+			other.stats.injury_decay_paused = other.has_condition(CONDITION_BLEEDING)
 	other.force_interrupt()
 	other._on_attacked(self)
 	return ATTACK_OK
 
 ## 被攻擊的收尾鉤子。基底只是掛點——Player 沒有記憶系統可寫，只有 Agent
-## 需要把這件事記成事實句給下次決策／反思用（見 agent.gd 覆寫）
-func _on_attacked(_attacker: Character) -> void:
+## 需要把這件事記成事實句給下次決策／反思用（見 agent.gd 覆寫）。
+##
+## 刻意不在這裡直接扣 trust（2026-08-24 拿掉，見全專案盤點的原則二／三審查）：
+## 引擎用固定公式幫「被攻擊」這件事定性成「值 -50 信任」，AI 完全沒機會表態，
+## 跟《00》原則二「引擎只給事件，不給情緒」相反；而且 trust 目前沒有任何公式
+## 拿它當輸入（只餵給 LLM 讀），不符合《00》原則三的留存門檻。事件本身照樣
+## 完整記成事實句給 AI（見 agent.gd 覆寫），該不該信任由 AI 自己判斷、記在
+## 自己的記憶系統裡
+func _on_attacked(attacker: Character) -> void:
 	pass
 
 ## 強制中斷目前行動，不徵詢 interruptible／能不能被搭話打斷——跟仲裁器的
@@ -1285,6 +1575,18 @@ func get_save_data() -> Dictionary:
 		# 承諾不該憑空消失」同一個道理（見 note/技術/存檔.md）
 		"personality": personality.duplicate(true),
 		"is_exhausted": has_condition(CONDITION_EXHAUSTED),
+		"is_dead": is_dead,
+		"death_tick": death_tick,
+		"death_day": death_day,
+		"death_at": death_at,
+		"death_cause": death_cause,
+		"death_location_id": death_location_id,
+		"last_words": last_words,
+		"corpse_decay": corpse_decay,
+		"is_buried": is_buried,
+		"grave_id": grave_id,
+		"buried_by": buried_by,
+		"buried_tick": buried_tick,
 	}
 
 	if stats != null:
@@ -1330,9 +1632,88 @@ func load_save_data(data: Dictionary) -> void:
 	var loaded_treat_loc: Variant = data.get("treatment_location", _treatment_location)
 	_treatment_location = loaded_treat_loc if loaded_treat_loc is String else _treatment_location
 
+	# 還原死亡狀態（#379）。is_dead 一旦是 true 就是終局，其餘欄位照搬存檔值即可
+	# ——不像昏迷/治療那樣需要用哨兵值判斷「進行到一半」，死亡沒有進行到一半這回事。
+	# 缺席預設 false，不是沿用目前值（CodeRabbit review 抓到）：is_dead 是這個 PR
+	# 新增的欄位，所有既有存檔都沒有這個 key——若沿用目前值，先載入一份死亡存檔、
+	# 再對同一個節點載入一份沒有 is_dead 的舊存檔時，死亡狀態會黏著甩不掉，下面
+	# else 分支的清理永遠執行不到
+	var loaded_dead: Variant = data.get("is_dead", false)
+	is_dead = loaded_dead if loaded_dead is bool else false
+	if is_dead:
+		var loaded_tick: Variant = data.get("death_tick", death_tick)
+		death_tick = loaded_tick if loaded_tick is int else death_tick
+		var loaded_day: Variant = data.get("death_day", death_day)
+		death_day = loaded_day if loaded_day is int else death_day
+		var loaded_at: Variant = data.get("death_at", death_at)
+		death_at = loaded_at if loaded_at is String else death_at
+		var loaded_cause: Variant = data.get("death_cause", death_cause)
+		death_cause = loaded_cause if loaded_cause is String else death_cause
+		var loaded_loc: Variant = data.get("death_location_id", death_location_id)
+		death_location_id = loaded_loc if loaded_loc is String else death_location_id
+		var loaded_words: Variant = data.get("last_words", last_words)
+		last_words = loaded_words if (loaded_words == null or loaded_words is String) else last_words
+		var loaded_decay: Variant = data.get("corpse_decay", corpse_decay)
+		corpse_decay = clampf(loaded_decay, 0.0, 100.0) if (loaded_decay is float or loaded_decay is int) else corpse_decay
+		# 缺席預設 false／null／null／-1，不是沿用目前值，跟 is_dead 同一個理由
+		# （CodeRabbit review 抓到）：is_buried／grave_id 沿用目前值的話，跟這裡
+		# 剛修過的 buried_by／buried_tick（缺席即歸零）放在一起會兜出矛盾狀態——
+		# 同一節點先載入已安葬存檔、再載入一份沒有安葬欄位的舊死亡存檔時，
+		# is_buried 會留 true、grave_id 留舊值，但 buried_by／buried_tick 已經是
+		# null／-1，變成「安葬了但沒人知道誰安葬的、何時安葬的」
+		var loaded_buried: Variant = data.get("is_buried", false)
+		is_buried = loaded_buried if loaded_buried is bool else false
+		var loaded_grave: Variant = data.get("grave_id", null)
+		grave_id = loaded_grave if (loaded_grave == null or loaded_grave is String) else null
+		var loaded_buried_by: Variant = data.get("buried_by", null)
+		buried_by = loaded_buried_by if (loaded_buried_by == null or (loaded_buried_by is String and not loaded_buried_by.is_empty())) else null
+		var loaded_buried_tick: Variant = data.get("buried_tick", -1)
+		buried_tick = loaded_buried_tick if (loaded_buried_tick is int and (loaded_buried_tick == -1 or loaded_buried_tick >= 0)) else -1
+
+		# 治療欄位跟 _die() 同一個理由清掉（CodeRabbit review 抓到）：上面幾行
+		# 只還原死亡欄位本身，沒清掉治療欄位——若這份存檔或載入前的角色狀態剛好
+		# 帶著沒清乾淨的 treatment_start_minute，_update_treatment() 沒有 is_dead
+		# 判斷，60 分鐘後 _complete_treatment() 會把 petrified 一起清掉、救活死屍
+		_treatment_start_minute = -1
+		_treatment_location = ""
+
+		conditions.clear()
+		conditions.append({"type": CONDITION_PETRIFIED, "turns_left": -1})
+		_apply_death_tint(true)
+		# 跟 _die() 同一個理由（CodeRabbit review 抓到）：還原死亡存檔時若既有
+		# _hauling_target 殘留，同樣要放手，不然目標卡在死掉的搬運者身上走不動
+		if is_hauling():
+			stop_haul()
+		# 跟 _die() 同一個理由（CodeRabbit review 抓到）：場上正在工作／對話中的
+		# 角色被載入一份死亡存檔時，這裡只設了狀態欄位，沒有真的收尾——不呼叫
+		# force_interrupt() 的話 _run_work() 協程會在下個 GameClock.time_changed
+		# 通過距離檢查照樣撥款給死屍。Agent 覆寫的 _on_action_interrupted() 已經
+		# 擋了 is_dead，這裡呼叫不會反過來問出新決策
+		force_interrupt()
+	else:
+		# 還原成活人存檔時清掉死亡殘留（CodeRabbit review 抓到）：同一個 Character
+		# 節點先前若死過（例如 debug 重新載入另一份存活存檔），petrified 與灰階
+		# 只在上面 is_dead 分支寫入，不會因為這次 is_dead=false 自動消失——不清的話
+		# 會出現 is_dead=false 但外觀／conditions 仍是死屍的矛盾狀態
+		conditions = conditions.filter(func(c): return c["type"] != CONDITION_PETRIFIED)
+		_apply_death_tint(false)
+		death_tick = -1
+		death_day = -1
+		death_at = ""
+		death_cause = ""
+		death_location_id = ""
+		last_words = null
+		corpse_decay = 0.0
+		is_buried = false
+		grave_id = null
+		buried_by = null
+		buried_tick = -1
+
 	# 治療與昏迷互斥（見 _send_to_herb_shop_for_treatment()），治療中的存檔優先還原成治療狀態，
-	# 不重建 CONDITION_INCAPACITATED；只有「昏迷中但還沒送醫」才需要重建
-	if _incapacitation_start_minute != -1 and _treatment_start_minute == -1:
+	# 不重建 CONDITION_INCAPACITATED；只有「昏迷中但還沒送醫」才需要重建。死亡是終局，
+	# 優先於昏迷——_die() 已經把 _incapacitation_start_minute 清成 -1，這裡的 not is_dead
+	# 只是雙重保險，防止未來別的路徑忘記清理時把 INCAPACITATED 疊加回死屍身上
+	if not is_dead and _incapacitation_start_minute != -1 and _treatment_start_minute == -1:
 		_set_condition(CONDITION_INCAPACITATED, true, false)
 
 	# is Dictionary 而不是只看 has()——壞掉的存檔把 stats/relationships 存成
@@ -1345,11 +1726,14 @@ func load_save_data(data: Dictionary) -> void:
 
 	# 獨立還原力竭狀態（不依賴 stats 存在，處理沒有 Stats 節點的角色，也處理
 	# stamina = 1-50 這種邊界情況）。新存檔有 is_exhausted 欄位則直接還原，
-	# 舊存檔沒有這個欄位、但有 stats 可用時才由 stamina 推斷
-	if data.has("is_exhausted"):
-		_set_condition(CONDITION_EXHAUSTED, data["is_exhausted"])
-	elif stats != null:
-		_update_exhausted_condition()
+	# 舊存檔沒有這個欄位、但有 stats 可用時才由 stamina 推斷。
+	# 死亡分支已經把 conditions 清成只留 petrified（#379）——not is_dead 防止
+	# 這裡把 EXHAUSTED 疊加回死屍身上，蓋掉那個清空
+	if not is_dead:
+		if data.has("is_exhausted"):
+			_set_condition(CONDITION_EXHAUSTED, data["is_exhausted"])
+		elif stats != null:
+			_update_exhausted_condition()
 
 	# 沒有存檔資料時維持 _ready() 已經由 Personality.from_identity() 組好的值，
 	# 不清空——跟 stats／relationships 同一個理由，personality 不是每次都
@@ -1593,6 +1977,8 @@ func start_haul(target: Character) -> String:
 		return HAUL_TARGET_NOT_FOUND
 	if target == self:
 		return HAUL_TARGET_IS_SELF
+	if target.is_buried:
+		return HAUL_TARGET_ALREADY_BURIED
 	if get_body_position().distance_to(target.get_body_position()) > HAUL_RANGE:
 		return HAUL_TOO_FAR
 
@@ -1630,5 +2016,58 @@ func _attach_haul(hauler: Character) -> void:
 	if not _hauled_by.has(hauler):
 		_hauled_by.append(hauler)
 
+	# 這位是第一位搬運者已經觸發過 _end_incapacitation() 之後才加入的第二位——
+	# set_being_carried(true) 的 has_condition(CONDITION_INCAPACITATED) 判斷這時
+	# 已經是 false，不會再幫他跑一次救助流程，這裡補發他這次事件該記的事實句
+	# （見 _on_rescued()）。_rescued_haulers 非空才代表「這次真的發生過救助」，
+	# 不是隨便一次沒昏迷的搬運（例如搬天神之石這種一般 carryable 物件）也誤記
+	if not _rescued_haulers.is_empty() and not _rescued_haulers.has(hauler):
+		_on_rescued(hauler)
+		_rescued_haulers.append(hauler)
+
 func _detach_haul(hauler: Character) -> void:
 	_hauled_by.erase(hauler)
+	# 最後一位搬運者放手時清掉這次事件的獎勵名單——不清的話，A 救到人放手後，
+	# 之後任何人（B）再搬運同一個已經不昏迷的角色，_attach_haul() 會誤判
+	# 「這次事件還在補發獎勵」而錯發一次 trust（CodeRabbit review 抓到）
+	if _hauled_by.is_empty():
+		_rescued_haulers.clear()
+
+## 離開場景樹前放掉搬運關係的兩個方向——GameManager 可以直接對角色呼叫
+## queue_free()，不經過 stop_haul()：
+## 1. 自己正在搬別人：stop_haul() 處理，會通知對方的 _hauled_by 移除自己
+## 2. 自己正被別人搬：對方的 _hauling_target 還指著即將消失的 self，
+##    對方之後呼叫 stop_haul() 會對已釋放的目標呼叫 _detach_haul()；
+##    _hauled_by[0] 剛好是自己的話，_follow_hauler() 也會繼續朝著已釋放
+##    的目標跟隨。逐一通知每個搬運者放手，再清空自己這邊的紀錄
+##（CodeRabbit review 抓到，原本只處理了第 1 種方向）
+func _exit_tree() -> void:
+	stop_haul()
+	for hauler in _hauled_by.duplicate():
+		if is_instance_valid(hauler) and hauler._hauling_target == self:
+			hauler.stop_haul()
+	_hauled_by.clear()
+	_is_being_carried = false
+
+
+# ---- 長動作檢查點的依附者（issue #336，《02》§3） ----
+
+## 自己進行長動作、觸發固定間隔檢查點時，除了自己還要一併收到檢查點通知的
+## 角色——目前唯一情形是被自己 haul 的目標。檢查點觸發時「搬運者選繼續搬
+## 還是放棄放下、被搬運者選 struggle／shout／idle」是兩件不同的事（見
+## Agent._reevaluate_once()／#337），這裡只負責列出「還有誰要一併通知」。
+##
+## 之後若有類似「一方長時間限制另一方行動」的機制（如 detained），比照這套
+## 模式在這裡加一條，不要各自另兜一套通知管道（《02》§3 明訂）
+func get_checkpoint_dependents() -> Array[Character]:
+	var dependents: Array[Character] = []
+	if _hauling_target != null:
+		dependents.append(_hauling_target)
+	return dependents
+
+## 依附在別人的長動作上時收到的檢查點通知（例如被 haul 時，對方的 haul
+## 檢查點觸發）。基底預設什麼都不做——要不要因此發起自己的決策請求、問什麼
+## 選項，是各自機制的責任（被 haul 時要問 struggle／shout／idle，見 #337；
+## Player 若之後也會被 haul，這裡會是接 UI 提示的地方，不是這裡的責任）
+func on_dependent_checkpoint(_task: Dictionary) -> void:
+	pass

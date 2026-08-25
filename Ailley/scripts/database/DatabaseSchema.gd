@@ -34,7 +34,7 @@ extends RefCounted
 ## CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
-const CURRENT_VERSION := 4
+const CURRENT_VERSION := 5
 
 
 ## 版本落後時依序套用的變更，每個 entry：
@@ -62,6 +62,11 @@ const MIGRATIONS: Array[Dictionary] = [
 		"version": 4,
 		"name": "Add grave_epitaphs.content length CHECK (issue #382)",
 		"apply": Callable(DatabaseSchema, "_migrate_v4_epitaph_length_check")
+	},
+	{
+		"version": 5,
+		"name": "Drop orphaned npc_death/grave_highlights tables (issue #512)",
+		"apply": Callable(DatabaseSchema, "_migrate_v5_drop_death_grave_highlights")
 	}
 ]
 
@@ -342,6 +347,32 @@ static func _migrate_v4_epitaph_length_check(db) -> bool:
 	return GraveEpitaphSchema.create(db)
 
 
+## Migration 5：`npc_death`／`grave_highlights` 隨 NPCDeathSchema.gd／
+## GraveHighlightSchema.gd 一起移除（issue #512）——死亡狀態與
+## life_highlights 都決定走 JSON，這兩張表從 #124 骨架階段就沒有任何
+## 呼叫端讀寫過（整份 git 歷史查無 INSERT INTO npc_death／grave_highlights），
+## 不需要搬資料，既有資料庫上的孤兒空表直接砍掉即可。DATABASE_PATH 只依
+## res:// 路徑雜湊、不依 schema 版本，既有資料庫不會自己重建，CREATE TABLE
+## IF NOT EXISTS 也不會反向清除已移除 schema 對應的舊表，所以仍要走正式
+## migration，不能只當「純新增/移除 table 不算」處理
+static func _migrate_v5_drop_death_grave_highlights(db) -> bool:
+	if not db.query("DROP TABLE IF EXISTS npc_death;"):
+		push_error(
+			"[DatabaseSchema] Migration 5: Failed to drop npc_death: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query("DROP TABLE IF EXISTS grave_highlights;"):
+		push_error(
+			"[DatabaseSchema] Migration 5: Failed to drop grave_highlights: "
+			+ db.error_message
+		)
+		return false
+
+	return true
+
+
 static func initialize(db) -> bool:
 	if db == null:
 		push_error("[DatabaseSchema] Database object is null.")
@@ -378,9 +409,13 @@ static func initialize(db) -> bool:
 		MemorySchema,
 
 		# NPC Death
-		NPCDeathSchema,
+		# 死亡狀態（is_dead/death_cause/last_words 等）與 grave_highlights
+		# 已拍板走 JSON（見 note/技術/存檔.md「墓碑欄位」），對應的
+		# NPCDeathSchema／GraveHighlightSchema 是 #124 骨架階段留下、沒有
+		# 任何呼叫端讀寫的死碼，見《99》P-50，已移除。GraveSchema 仍保留——
+		# grave_epitaphs 的 grave_id 外鍵指向 grave(grave_id)，epitaphs
+		# 這張表需要一個父表才能寫入資料，不是死碼
 		GraveSchema,
-		GraveHighlightSchema,
 		GraveEpitaphSchema,
 
 		# Item

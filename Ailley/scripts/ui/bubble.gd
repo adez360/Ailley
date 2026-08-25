@@ -24,8 +24,27 @@ const BORDER_BOTTOM := 12.0
 ## 氣泡靠這個值對齊到說話者頭上，所以框體是往左上長，不是置中
 const TAIL_INSET_FROM_RIGHT := 9.0
 
+## agent.tscn／player.tscn 裡 Bubble instance 的基準 z_index（CodeRabbit review
+## 抓到：_reassign_z_indices() 原本直接拿陣列位置覆蓋，把這個基準值蓋成 0 起跳，
+## 場景裡其他 z_index 落在 1~9 之間的 CanvasItem 就可能畫到氣泡前面）。跟兩份
+## .tscn 保持一致，改這裡記得同步改
+const BASE_BUBBLE_Z_INDEX := 10
+
 @onready var box: NinePatchRect = $Box
 @onready var label: Label = $Box/Label
+
+## 兩個氣泡同時顯示時，z_index 相同會互相遮擋（issue #409）。真實對話是
+## 輪流講，很少同時出現，不需要位移/防碰撞這種排版方案——排一份「目前顯示中」
+## 的疊放順序，最近開口的那句排到陣列尾端（=最上層），z_index 用 BASE_BUBBLE_Z_INDEX
+## 加陣列位置重算，不直接拿位置覆蓋掉場景設定的基準值。static 讓所有 Bubble
+## instance 共用同一份順序。
+##
+## 原本用全域遞增計數器＋對 4096（CanvasItem z_index 合法範圍上限）取模，
+## CodeRabbit review 抓到：hold() 可以讓一顆氣泡長期停在畫面上（例如「輪到你了」
+## 的常駐提示），計數器繞回 0 時完全可能撞到還在顯示的舊氣泡、把新氣泡排到
+## 它後面——不是機率低的邊角案例，是真的會發生。改成陣列位置就沒有這個問題：
+## 位置範圍永遠落在「目前同時可見的氣泡數」內，不會無限增長，也就不會繞回去
+static var _visible_order: Array = []
 
 var _queue: Array[String] = []
 var _remaining := 0.0
@@ -38,6 +57,11 @@ func _ready() -> void:
 	visible = false
 	set_process(false)
 
+# 角色被 queue_free()（例如死亡、退場）時，就算這時候氣泡還在顯示中，
+# 也要退出疊放順序——不然陣列會留著死掉的參照，長期下來一樣是無限增長
+func _exit_tree() -> void:
+	_leave_visible_order()
+
 func _process(delta: float) -> void:
 	_remaining -= delta
 	if _remaining > 0.0:
@@ -46,6 +70,7 @@ func _process(delta: float) -> void:
 	if _queue.is_empty():
 		visible = false
 		set_process(false)
+		_leave_visible_order()
 		return
 
 	_show_next()
@@ -67,6 +92,7 @@ func clear() -> void:
 	_holding = false
 	visible = false
 	set_process(false)
+	_leave_visible_order()
 
 func is_speaking() -> bool:
 	return visible or not _queue.is_empty()
@@ -78,6 +104,7 @@ func is_speaking() -> bool:
 func hold(message: String) -> void:
 	_queue.clear()
 	_holding = true
+	_bring_to_front()
 	_render(message)
 	set_process(false)
 
@@ -89,14 +116,41 @@ func release_hold() -> void:
 	_holding = false
 	if _queue.is_empty():
 		visible = false
+		_leave_visible_order()
 	else:
 		_show_next()
 
 func _show_next() -> void:
 	var message: String = _queue.pop_front()
+	_bring_to_front()
 	_render(message)
 	_remaining = clampf(message.length() * SECONDS_PER_CHAR, MIN_DURATION, MAX_DURATION)
 	set_process(true)
+
+# 把自己搬到疊放順序的最後一個位置（=最上層），蓋過所有還沒消失的舊氣泡
+# （issue #409）。先移除自己既有的位置（可能已經在陣列裡，例如同一顆氣泡
+# 連續播兩句），避免重複
+func _bring_to_front() -> void:
+	_visible_order.erase(self)
+	_visible_order.append(self)
+	_reassign_z_indices()
+
+# 自己不再顯示時要退出疊放順序，不然陣列會無限增長，繞回原本 CodeRabbit
+# 抓到的「計數器爆表」同一類問題，只是換了個增長的東西
+func _leave_visible_order() -> void:
+	if _visible_order.has(self):
+		_visible_order.erase(self)
+		_reassign_z_indices()
+
+# z_index 直接用陣列位置——範圍永遠落在同時可見的氣泡數量內，不會超出
+# CanvasItem 的合法範圍（[-4096, 4096]），也就不需要處理繞回的問題。
+# is_instance_valid() 防呆：角色被 queue_free() 時 Bubble 是子節點會跟著死，
+# 但還沒被下一次 _process() 從陣列清掉之前，這裡不能對死掉的參照賦值
+static func _reassign_z_indices() -> void:
+	for i in range(_visible_order.size()):
+		var bubble = _visible_order[i]
+		if is_instance_valid(bubble):
+			bubble.z_index = BASE_BUBBLE_Z_INDEX + i
 
 # 量測、排版、顯示——say() 的排隊訊息與 hold() 的常駐訊息共用同一套呈現，
 # 差別只在要不要跑自動消失的計時（see _show_next() / hold()）
