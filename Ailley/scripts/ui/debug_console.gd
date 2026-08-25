@@ -19,6 +19,20 @@ var _history_index := 0
 
 
 func _ready() -> void:
+	# 正式建置完全關閉，不留任何手勢/參數可以叫回來（issue #356）：這裡的指令
+	# 能存讀檔、開關角色的 LLM 決策迴圈、直接送 LLM 探針請求（真的打雲端 API），
+	# 誤按都是實際後果，不是單純介面問題。set_process_input(false) 讓 _input()
+	# 整個不會被引擎呼叫，比在 _input() 裡面判斷更早關掉，也不用另外建
+	# _commands 表
+	if not OS.is_debug_build():
+		# _set_open(false) 是必要的一步，不是保險：debug_console.tscn 的 Root
+		# 沒設 visible = false，預設就是 true（CodeRabbit review 抓到）。
+		# 只關 _input() 只擋得住鍵盤開關，Root 本身還是會顯示在畫面上、
+		# 還是會吃 GUI 事件——兩者都要關才是真的關掉
+		_set_open(false)
+		set_process_input(false)
+		return
+
 	# 一個指令的 run／usage／help 放同一列，help 留空代表不列進 `help` 指令的輸出
 	# （目前只有 help 自己是這樣）。順序就是 `help` 印出來的順序。
 	_commands = {
@@ -510,12 +524,12 @@ func _cmd_act(args: PackedStringArray) -> void:
 		])
 		return
 
-	# talk／attack 的參數是人不是地點（見 agent.gd::_pursue_talk_task()／
-	# _pursue_attack_task()），其餘動作一律吃 place。這裡照 action 分流，
-	# 不要求下指令的人自己記得填哪個 key
+	# talk／attack／bury 的參數是人不是地點（見 agent.gd::_pursue_talk_task()／
+	# _pursue_attack_task()／_pursue_bury_task()），其餘動作一律吃 place。
+	# 這裡照 action 分流，不要求下指令的人自己記得填哪個 key
 	var params := {}
 	if args.size() == 3:
-		params["target" if ["talk", "attack"].has(action) else "place"] = args[2]
+		params["target" if ["talk", "attack", "bury"].has(action) else "place"] = args[2]
 
 	# is_in_group("agents") 不會幫 GDScript 縮窄靜態型別，顯式轉型才能讓
 	# debug_push_task()（Agent-only）這個呼叫真的是型別安全的
