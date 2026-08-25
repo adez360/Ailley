@@ -137,6 +137,12 @@ var current_state := "idle"
 # 沒有這張表的話，走出視野再走回來就會再驚訝一次
 var _noticed := {}
 
+# 今天已經對誰觸發過跟丟反應（#405）。跟 _noticed（終身只驚訝一次）不同：
+# 這是單純的量級控制，每天由 _on_day_changed() 清空，不分認不認識——同一人
+# 一天內反覆進出視野（走近又走遠）不會每次都排事實句洗版、拖爆 LLM 呼叫量，
+# 但隔天還是會再觸發，不會變成終身只通知一次
+var _lost_reacted := {}
+
 # 上一次真的呼叫 move_to()（或判定「已經到了」「走不到」）的地點。
 # _pursue_current_task() 每個遊戲分鐘都會跑，靠這個分辨「還在處理同一個地點」
 # 與「地點換了要重新起步」
@@ -432,6 +438,7 @@ func get_today_log() -> Array[Dictionary]:
 
 func _on_day_changed(_day: int) -> void:
 	_today_log.clear()
+	_lost_reacted.clear()
 
 ## 收尾清空 _current_task 前先記一筆 today_log（#172）。集中在這一個 helper
 ## 而不是在每個呼叫端各自 push，是因為 _current_task 被清空的地方分散在
@@ -619,6 +626,7 @@ func _ready() -> void:
 
 	if vision != null:
 		vision.spotted.connect(_on_spotted)
+		vision.lost.connect(_on_lost)
 
 	noise_heard.connect(_on_noise_heard)
 	move_finished.connect(_on_move_finished)
@@ -1648,6 +1656,36 @@ func _react_to_spotted_fallback() -> void:
 	# 這次重算會重新起步
 	if not is_in_conversation():
 		_reevaluate()
+
+# 視野裡跟丟某個人（issue #405）。
+#
+# 不分認不認識都處理（2026-08-24 拿掉原本的 has_met() 篩選——CLAUDE.md
+# 「AI 自主性自檢」認定那是引擎替 AI 判斷「這件事不重要」，AI 連表態機會
+# 都沒有；「認識的人本來就常常走出視野」是頻率論證，不是重要性論證，兩者
+# 不能互相替代，見該次全專案盤點的審查結論）。事實句一律排給模型，
+# 要不要在意、在意多少交給 AI 自己判斷。
+#
+# _lost_reacted 是量級控制，不是相關性判斷：同一人一天只觸發一次跟丟反應，
+# 避免頻繁進出視野的人（不論認不認識）洗版事實句、把 LLM 呼叫量拖爆。
+# 每天由 _on_day_changed() 清空，不是永久只給一次——拿掉 has_met() 篩選後
+# 若還維持終身只觸發一次，天天見面的熟人實質上會跟沒接這個訊號一樣。
+# _noticed 不在這裡清除——見 note/技術/視覺感測.md 已驗證的「走出視野再走
+# 回來不會重複驚訝」，跟丟不代表要重新觸發陌生人反應。
+#
+# 不像 _on_spotted／_on_noise_heard 有寫死的 fallback 台詞可退——「跟丟了」
+# 沒有通用的驚呼可以套，schedule 模式（llm_decision_enabled 關著）就不處理，
+# 只在有 LLM 可問時把事實句排進下一次決策，要不要有反應交給模型自己判斷
+func _on_lost(other: Character) -> void:
+	if is_in_conversation():
+		return
+	if not llm_decision_enabled:
+		return
+	if _lost_reacted.has(other.character_id):
+		return
+	_lost_reacted[other.character_id] = true
+
+	_queue_reaction_fact_line("你看不到 %s 了，要不要有反應由你自己決定" % other.character_name)
+	await _request_next_decision()
 
 # 範圍內有人發出聲音（見 character.gd 的 make_noise()）。
 # 跟 _on_spotted 不同，這裡不記錄「已經反應過」——聲音是一次性事件，
