@@ -581,15 +581,18 @@ func _notification(what: int) -> void:
 
 # 離開目前對局共用的存檔收尾——關視窗（上面的 _notification）、Esc 選單
 # 「回主選單」都算「離開遊戲」（#359 存檔時機之一），走同一條路避免兩處
-# 各自維護一份存檔＋錯誤處理
-func save_before_leaving() -> void:
+# 各自維護一份存檔＋錯誤處理。回傳是否全部存檔成功——關視窗那條路不看這個值
+# （視窗都要關了擋不住），但 Esc 選單「回主選單」要靠它決定能不能真的切場景，
+# 不然存檔失敗會悄悄弄丟進度（CodeRabbit review on #587 抓到）
+func save_before_leaving() -> bool:
 	if not _has_active_game_session():
-		return
+		return true
 	var result := save_all()
 	for character_name in result["character_failures"]:
 		push_error("離開遊戲存檔失敗：%s" % character_name)
 	if not result["world_ok"]:
 		push_error("離開遊戲存檔失敗：世界 %s" % DEFAULT_WORLD_ID)
+	return result["world_ok"] and result["character_failures"].is_empty()
 
 # data 缺欄位一律用預設值補，不當成錯誤（跟 character.gd 同一條規則）。
 # 場景裡目前找到的角色直接套用；存檔裡有記載但場景沒有的角色會被重新生成

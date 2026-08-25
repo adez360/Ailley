@@ -11,8 +11,12 @@ func _ready() -> void:
 
 func on_interactable_activated() -> void:
 	animated_sprite_2d.play("door-open")
-	collision_shape_2d.set_deferred("disabled", true)
+	await animated_sprite_2d.animation_finished
+	if animated_sprite_2d.animation == &"door-open":
+		collision_shape_2d.set_deferred("disabled", true)
 
 func on_interactable_deactivated() -> void:
 	animated_sprite_2d.play("door-close")
-	collision_shape_2d.set_deferred("disabled", false)
+	await animated_sprite_2d.animation_finished
+	if animated_sprite_2d.animation == &"door-close":
+		collision_shape_2d.set_deferred("disabled", false)

@@ -47,6 +47,7 @@ offset_bottom = 40.0
 [node name="Pause" type="CanvasLayer" parent="."]
 process_mode = 3
 layer = 10
+visible = false
 script = ExtResource("10_iypfu")
 
 [node name="Dim" type="ColorRect" parent="Pause"]
