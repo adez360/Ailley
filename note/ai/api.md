@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-22
+updated: 2026-08-24
 ---
 
 # api
@@ -81,14 +81,14 @@ ui_cancel                Esc（Godot 內建，project.godot 沒有覆寫）
 
 ---
 
-## Character — scripts/character/character.gd · class_name · CharacterBody2D
+## Character — Ailley/scripts/character/character.gd · class_name · CharacterBody2D
 
 ```gdscript
 signal move_finished(reached: bool)          # 走完 true / 卡住放棄 false
 signal noise_heard(source: Character)        # 收到方會發，見 make_noise()
 signal spoke(line: String)                   # 講出任何一句話都會發（逐字稿/記憶的接點）
 
-const SPEED = 80.0
+const SPEED = 60.0                           # 2026-08-24 從 80 調降
 const ARRIVE_DISTANCE = 2.0
 const STUCK_TIME = 1.0
 const TALK_RANGE := 32.0                     # 2 格
@@ -820,6 +820,9 @@ get_usage -> {game_day, calls_today, max_calls, dialogue_today, max_dialogue, to
 † 速率限制掛 requester_id 不掛全域也不分 provider（多人版帳單逐個擁有者算，同一隻角色不管打哪個服務算同一份額度）
 † 用真實秒不用遊戲時間（要擋的帳單與 provider rate limit 都活在真實時間）
 † 金鑰只在組 Authorization header 時碰得到，其餘一律過 _scrub()
+† 佇列依 Policy 出隊（_next_job_index()）：CONVERSATION 先於 SCHEDULED，同一種之內 FIFO（#492）。
+  排序只看呼叫端標的 Policy，引擎不依角色狀態判斷緊急度（《00》原則二）；重試的 push_front
+  只在同優先權內插隊
 † CONVERSATION 豁免冷卻/配額但照樣計數（_dialogue_calls_today）——豁免的是限制不是帳
 † 豁免成立時另外吃 max_dialogue_calls_per_game_day（count >= max 就 ERROR_DAILY_QUOTA，0=不限，#434）——
   這個旋鈕只在 dialogue_exempt=true 時有意義，false 時對話走一般 max_calls_per_game_day 路徑

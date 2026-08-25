@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-22
+updated: 2026-08-23
 ---
 
 # LLM 串接與 AI 服務層
@@ -291,8 +291,34 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 
 ### 界線：軟壓力為主，工程安全閥兜底（issue #178 已收斂範圍）
 
-不設「設計上」的輪數硬上限，改用**軟壓力**：payload 帶 `turns_so_far`，system prompt
-告訴模型「聊得越久越該收尾」。但兩隻 Agent 都禮貌性不收尾時，`conversation.gd`
+不設「設計上」的輪數硬上限，設計目標是**軟壓力**：payload 帶 `turns_so_far`，system prompt
+告訴模型「聊得越久越該收尾」。**這個機制目前還沒有實作**——`prompt_builder.gd`
+的 `DIALOGUE_SYSTEM` 尚未帶這段文字、`build_dialogue_envelope()` 傳的是固定
+`max_turns`，不是遞增的 `turns_so_far`；這裡描述的是設計目標，接回程式碼是
+獨立的後續動作，不在 #482 範圍內。
+
+**A/B/C 實測證實這個方向有效**（issue #482，2026-08-23，本機 llama-server
+直連 `/v1/chat/completions`，Qwen2.5-7B-Instruct-Q4_K_M，三組各 15 場對話跑到
+10 輪上限）：
+
+| 組別 | system prompt | 主動 `end:true` 收尾比率 | 平均總輪數 | 平均收尾輪次 |
+| --- | --- | --- | --- | --- |
+| A（現況對照，無提示） | 逐字照抄目前的 `DIALOGUE_SYSTEM` | 40.0%（6/15） | 9.80 | 第 8.5 輪 |
+| B（軟壓力） | A 組加一句「`context.turns_so_far` 越大越該找自然的點收尾」 | 93.3%（14/15） | 8.87 | 第 7.8 輪 |
+| C（軟壓力＋收尾語氣要求） | B 組再加一句「`end:true` 那句話本身要讀起來像實際道別，不能只是把前面講過的話原樣重複、單純把旗標翻成 true」 | 100.0%（15/15） | 6.80 | 第 5.8 輪 |
+
+單純加「該收尾」的提示（B 組）能把主動收尾比率從 4 成拉到 9 成以上，但人工
+檢視內容發現不少場次的 `end:true` 貼在跟前面同一種空話重複的句子上（例如
+「同意，共同努力讓村子更美好！」），不是真正的道別語氣。額外明講「收尾
+那句話本身要像道別」（C 組）同時解決比率與內容品質兩個問題：比率拉到
+100%、平均輪數降到三組最低，收尾句幾乎全是真正的道別語（「再見」「明天見」
+「路上小心」）或有語境的收尾陳述。**C 組是三版裡最值得接回
+`DIALOGUE_SYSTEM` 的候選文字**，候選文字與完整實驗腳本見
+`note/ai/soft_pressure_experiment/`。**尚未接回 `DIALOGUE_SYSTEM`**——這裡
+只確認方向有效，真的把 `turns_so_far` 欄位與 C 組提示文字接進
+`prompt_builder.gd`／`build_dialogue_envelope()` 留給下一則 issue。
+
+但兩隻 Agent 都禮貌性不收尾時，`conversation.gd`
 的 `SAFETY_MAX_TURNS`（工程安全閥，跟上面的設計軟壓力是兩回事，同時也是無觀眾
 世界的 LLM 呼叫成本閘門，issue #178）會強制截斷，值訂為 **10**。10 是三份獨立
 證據（實測、poc_village_sim 導演模式 B、poc_village_sim 逐 tick 對話追蹤）的
@@ -497,6 +523,51 @@ schema 跟系統提示裡，其餘時候模型的 response_format 契約裡文�
 > 引擎驗證（幫每筆計畫項目建立可比對身分、Task 完成時自動回寫），是比這次
 > 大得多的工程，不在 #89 這輪範圍內。
 
+## 約定機制（appointment，#479，《10》§5.5）
+
+**資料形狀**：`Agent._appointment`，單一 `Dictionary` 或 `null`，同時間只追蹤
+一筆——新宣告整筆覆蓋舊的，跟 `_today_plan` 的「重寫」語意一致，不是陣列
+累加。欄位：`with`／`location`／`game_time`（模型填的原始字串）、
+`game_time_minutes`（驗證層算好的絕對分鐘數，`day*1440+hour*60+minute`）、
+`reminder_sent`／`waiting_since`（引擎自己記帳的階段旗標，不是模型填的）。
+
+**輸出端**：條件式欄位（《12》§2.4，加入條件「對話情境中且在場有其他角色」）
+——跟 `allow_update_plan` 同一種「文法層面就不存在這個選項」做法，但**不是**
+`_request_next_decision()` 內部現算 `is_in_conversation()`：仲裁器裡這個條件
+唯一真正成立的時刻是 `Agent.exit_conversation()` 剛講完話那一刻，而那個呼叫點
+在 `super()` 把 `_conversation` 清成 `null`、對話已經結束之後才觸發下一次決策，
+現算會永遠讀到 `false`。改成跟 `allow_update_plan` 同一種「呼叫端自己判斷、
+往下傳」做法：`_request_next_decision(allow_update_plan, allow_appointment)`
+多一個參數，只有 `exit_conversation()` 那個唯一對應觸發點傳 `true`，其餘呼叫
+處維持預設 `false`。`game_time` 固定格式「第D天 HH:MM」
+（`AISchema._parse_appointment_game_time()` 手動解析，GBNF 轉換器不處理
+pattern 這類字串格式約束，格式與未來時間的檢查落在驗證層；時／分兩段都要求
+剛好兩位數，`9:00`／`09:0` 一律拒絕），格式錯或指到過去/現在整包拒絕，跟
+`update_plan` 陣列格式錯同一種「條件式欄位格式不對就讓整份回應失敗」的立場。
+
+**產生約定時**：`Agent._apply_appointment()` 同步把一筆摘要 append 進
+`_today_plan`（《10》§5.5「不另外詢問 AI」），不透過 `update_plan` 那套整份
+取代機制。
+
+**三個時點**（`Agent._process_appointment()`，掛在 `GameClock.time_changed`，
+`_on_time_changed()` 裡 `_reevaluate()` 之前跑）：
+
+| 時點 | 行為 |
+| --- | --- |
+| 約定前 30 分鐘 | 提醒事實句，只給宣告方（`_pending_fact_lines`） |
+| 約定時間到 | 用 `_actual_place_of()`（即時位置反查，不是 `current_place`——那是任務目的地不是即時座標）判斷自己在不在場；不在場＝爽約，立刻通知，睡眠中則暫存到 `_appointment_broken_pending_line`，`_on_time_changed()` 偵測到睡醒轉換時補送 |
+| 等待期滿（+30 分鐘） | 自己在場的話，這段期間持續檢查對方（`_find_character_by_name()` 找到的 `Character`）是否出現在同一地點；出現了悄悄結束、不通知，沒出現則在期滿當下通知等待方 |
+
+「單方面宣告的約定」不需要額外處理：`_process_appointment()` 只讀
+`self._appointment`，未答應的一方從沒呼叫過 `_apply_appointment()`，自然
+不會收到任何提醒——不對稱是設計本身。
+
+死亡／昏迷狀態機尚未接上（見 #379），爽約延後通知目前只處理睡眠，不含
+「昏迷」那個分支；#379 merge 後需要回頭補上。
+
+好感度變化與情緒反應不由引擎處理，全部交給 AI 自己決定（《10》§5.5、《00》
+原則二）——這裡完全沒有寫任何 relations／emotion 的自動調整。
+
 ## 正式線實作順序（Step 0-4 全部完成）
 
 ### Step 0 — 底層 ✅ 完成
@@ -656,7 +727,7 @@ JSON Schema → GBNF 的轉換器。
 - `preconditions` 求值 —— 結構留欄位，v1 一律通過，見 #477
 - 白名單中除 `move_to` / `talk` / `sleep` 外的動作實作——白名單本身已經是
   《07》《11》拍板的 22 個（issue #88），但 `IMPLEMENTED_ACTIONS` 沒有跟著擴
-- `speech` 觸發對話交接（issue #90）、約定機制（見 #479）
+- `speech` 觸發對話交接（issue #90）
 - `HumanInput`（#156）／`RemotePlayer`（見 #478）——《12》§3.3 另外兩種
   DecisionProvider 來源
 
@@ -666,7 +737,9 @@ JSON Schema → GBNF 的轉換器。
 - [x] **LLM 成本上限完全沒有防護**——研究與提案已由 #395 完成（本機
       Qwen2.5-7B，6 場對話均值 7.0 輪／場，`max_dialogue_calls_per_game_day`
       旋鈕設計案見上方「每日對話呼叫上限提案」一節），落地實作見 #434
-- [ ] 軟壓力（system prompt 叫模型「聊久了該收尾」）到底有沒有用，未知數，見 #482
+- [x] **軟壓力有明顯效果**（#482，2026-08-23）：A/B 實測見「界線：軟壓力為主，
+      工程安全閥兜底」一節，機制目前仍未接回 `DIALOGUE_SYSTEM`，接回去是
+      獨立的後續動作
 - [ ] 尚未對真正的 OpenRouter 打過請求，TLS/DNS 與真實回應格式未驗證，見 #483
 - [x] 成本上限機制的具體設計——同上，見 #395／#434
 - [x] **對話逐字稿暫存——拍板不做**（#485，2026-08-21）：`spoke` 訊號與

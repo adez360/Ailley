@@ -14,6 +14,14 @@ const COLOR_PARTIAL := Color(1.0, 0.55, 0.2)
 const COLOR_SCHEDULE := Color(1.0, 0.8, 0.3)
 
 
+# 正式建置隱藏（issue #356 拍板：跟主控台走同一套 OS.is_debug_build() 判斷）。
+# main_scene.gd 照舊會呼叫 set_status()，只是寫在一個看不見的 Label 上，
+# 不用另外去改呼叫端
+func _ready() -> void:
+	if not OS.is_debug_build():
+		visible = false
+
+
 ## ready_count／total_count 是這輪開場探測後，場上總共有幾隻 Agent、其中幾隻
 ## provider 就緒。三種狀態：全部就緒、部分就緒（混合場面，例如某隻角色的
 ## model_name 指到一個壞掉的 provider）、全部排程——混合場面不能只用
