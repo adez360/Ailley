@@ -288,13 +288,11 @@ var death_at := ""				# UTC ISO 8601 時間戳，見 §8 復活窗口判斷依�
 var death_cause := ""			# 中文自然語言，引擎彙整，不讓 LLM 潤飾
 var death_location_id := ""	# 死亡當下的地點，查不到具名地點時是空字串（在地點之間）
 var last_words: Variant = null	# String 或 null（來不及開口）；只有 Agent 會真的問 LLM，見 _request_last_words()
-var corpse_decay := 0.0		# 0–100，_update_corpse_decay() 每 tick +0.7；達 100 觸發 _erect_unmarked_grave()
-var is_buried := false			# 人為安葬見 bury()（#380），自動立無名碑見 _erect_unmarked_grave()（#387）
+var corpse_decay := 0.0		# 0–100，_update_corpse_decay() 每 tick +0.7；達 100 之後交給 #387 判斷是否自動立無名碑
+var is_buried := false			# 安葬流程見 #380，這裡只保留欄位供其寫入
 var grave_id: Variant = null	# 同上，String 或 null
-var buried_by: Variant = null	# 誰安葬了你，String（character_id）或 null（無名碑等非人為安葬，見 _erect_unmarked_grave()）
+var buried_by: Variant = null	# 誰安葬了你，String（character_id）或 null（無名碑等非人為安葬留給 #387）
 var buried_tick := -1			# 安葬當下的全域 tick，同 death_tick 換算方式，見 bury()
-var is_anonymous := false		# 無名碑（《規格書09》§3-4／§4-3）：_erect_unmarked_grave() 自動立碑時設 true；
-								# bury() 人為安葬不改這個值，只有《規格書09》§4-4 擦拭墓碑（未實作）能清成 false
 
 # 滑鼠 hover（selection.gd）跟 E 鍵目前的互動目標（player.gd）是兩個獨立的
 # 高亮來源，任一個成立就該顯示描邊。分開存，不是合用一個布林值——CodeRabbit
@@ -728,8 +726,8 @@ const DEATH_LOCATION_RADIUS := 32.0
 ## 死亡流程（#379，《規格書09》§1／§2）。這批 issue 只處理
 ## 「health≤0→昏迷→逾時未獲救治→死亡」這一條觸發路徑；餓死／渴死／老化／
 ## 瞬間死亡 Flag 等其餘觸發源留給後續 issue，各自準備好 death_cause 文案後
-## 呼叫這裡收尾即可，不需要重做狀態機本身。這裡只負責觸發與石化，墓園／安葬
-## 見 bury()（#380），corpse_decay 達 100 自動立無名碑見 _erect_unmarked_grave()（#387）
+## 呼叫這裡收尾即可，不需要重做狀態機本身。墓園／安葬（#380）與 corpse_decay
+## 達 100 自動立無名碑（#387）都是後續 issue，這裡只負責觸發與石化
 func _die(cause: String) -> void:
 	if is_dead:
 		return
@@ -815,7 +813,7 @@ func _resolve_death_location() -> String:
 ## 屍體腐壞（《規格書09》§3-4）：死亡後每 tick +0.7，clamp 在 [0,100]——
 ## 100/0.7 除不盡，不 clamp 會在某個 tick 算出 100.1，讓存檔的 CHECK 約束
 ## 寫入失敗（規格書原文引用 issue #451 CodeRabbit review 踩過的坑）。達到
-## 100 且還沒被安葬、還沒立過碑時，交給 _erect_unmarked_grave() 自動立無名碑
+## 100 之後交給 #387（自動立無名碑）判斷，這裡只負責累加，不做立碑
 func _update_corpse_decay() -> void:
 	if not is_dead:
 		return
@@ -826,14 +824,9 @@ func _update_corpse_decay() -> void:
 	if death_tick == _current_tick():
 		return
 	corpse_decay = clampf(corpse_decay + 0.7, 0.0, 100.0)
-	# grave_id 仍是 null 才觸發：避免每個超過 100 之後的 tick 都重複嘗試立碑
-	# （已安葬的屍體 corpse_decay 理論上不會再被呼叫到這裡，is_buried 這個
-	# 條件只是雙重保險）
-	if corpse_decay >= 100.0 and not is_buried and grave_id == null:
-		_erect_unmarked_grave()
 
 
-# ---- 安葬（#380／#387，《規格書09》§3-2／§3-4／§6） ----
+# ---- 安葬（#380，《規格書09》§3-2／§6） ----
 
 ## 搬運／安葬距離門檻，跟 HAUL_RANGE／GIVE_RANGE 同一種「2 格內」判斷，
 ## 沒有理由對屍體另訂一套距離
@@ -919,23 +912,6 @@ func _cemetery_grave_count() -> int:
 		if node is Character and (node as Character).is_buried:
 			count += 1
 	return count
-
-## 屍體腐壞見底、沒人安葬時，引擎自動立「無名碑」（#387，《規格書09》§1／§3-4）：
-## 確保每一個死亡都會被記錄，不需要搬到墓園、不需要任何人動手。跟 bury() 的差別
-## 只在「誰做的」——is_buried 一樣設 true，但 buried_by 留 null（自動、非人為），
-## is_anonymous 設 true 讓墓碑面板只顯示死亡原因與日期（§4-3）。跟 bury() 共用
-## 同一組 CEMETERY_GRAVE_CAPACITY 上限（§6 拍板：滿格時兩者都直接失敗）——
-## 滿格時這裡直接放棄，corpse_decay 已經是 100、grave_id 仍是 null，
-## _update_corpse_decay() 之後每個 tick 都會重試，直到有格子空出來
-func _erect_unmarked_grave() -> void:
-	if _cemetery_grave_count() >= CEMETERY_GRAVE_CAPACITY:
-		return
-	is_buried = true
-	grave_id = "grave_%s" % character_id
-	buried_by = null
-	buried_tick = _current_tick()
-	is_anonymous = true
-	print_debug("Character %s 腐壞見底，自動立無名碑" % character_name)
 
 
 # ---- 移動 ----
@@ -1611,7 +1587,6 @@ func get_save_data() -> Dictionary:
 		"grave_id": grave_id,
 		"buried_by": buried_by,
 		"buried_tick": buried_tick,
-		"is_anonymous": is_anonymous,
 	}
 
 	if stats != null:
@@ -1694,8 +1669,6 @@ func load_save_data(data: Dictionary) -> void:
 		buried_by = loaded_buried_by if (loaded_buried_by == null or (loaded_buried_by is String and not loaded_buried_by.is_empty())) else null
 		var loaded_buried_tick: Variant = data.get("buried_tick", -1)
 		buried_tick = loaded_buried_tick if (loaded_buried_tick is int and (loaded_buried_tick == -1 or loaded_buried_tick >= 0)) else -1
-		var loaded_anonymous: Variant = data.get("is_anonymous", false)
-		is_anonymous = loaded_anonymous if loaded_anonymous is bool else false
 
 		# 治療欄位跟 _die() 同一個理由清掉（CodeRabbit review 抓到）：上面幾行
 		# 只還原死亡欄位本身，沒清掉治療欄位——若這份存檔或載入前的角色狀態剛好
@@ -1735,7 +1708,6 @@ func load_save_data(data: Dictionary) -> void:
 		grave_id = null
 		buried_by = null
 		buried_tick = -1
-		is_anonymous = false
 
 	# 治療與昏迷互斥（見 _send_to_herb_shop_for_treatment()），治療中的存檔優先還原成治療狀態，
 	# 不重建 CONDITION_INCAPACITATED；只有「昏迷中但還沒送醫」才需要重建。死亡是終局，
