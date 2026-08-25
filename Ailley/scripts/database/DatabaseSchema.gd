@@ -34,7 +34,7 @@ extends RefCounted
 ## CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
-const CURRENT_VERSION := 6
+const CURRENT_VERSION := 7
 
 
 ## 版本落後時依序套用的變更，每個 entry：
@@ -70,8 +70,13 @@ const MIGRATIONS: Array[Dictionary] = [
 	},
 	{
 		"version": 6,
+		"name": "Rebuild idx_npc_action_history_npc as composite (npc_id, game_day, game_minute, id)",
+		"apply": Callable(DatabaseSchema, "_migrate_v6_action_history_composite_index")
+	},
+	{
+		"version": 7,
 		"name": "Rebuild world/item/npc_state/npc_emotion/npc_goal with NOT NULL primary keys",
-		"apply": Callable(DatabaseSchema, "_migrate_v6_notnull_primary_keys")
+		"apply": Callable(DatabaseSchema, "_migrate_v7_notnull_primary_keys")
 	}
 ]
 
@@ -588,9 +593,10 @@ static func _migrate_v5_drop_death_grave_highlights(db) -> bool:
 	return true
 
 
-## Migration 6：既有資料庫的 world／item／npc_state／npc_emotion／npc_goal
+## Migration 7：既有資料庫的 world／item／npc_state／npc_emotion／npc_goal
 ## 跟 migration 3（#446）處理的 4 張表同一個病根——`TEXT PRIMARY KEY` 補
-## `NOT NULL` 只對全新建立的資料庫生效。
+## `NOT NULL` 只對全新建立的資料庫生效。版號原訂 6，rebase 到 main 時發現
+## 6 已被 npc_action_history 複合索引（#511）佔用，改編為 7。
 ##
 ## npc_state／npc_emotion／npc_goal 沒有任何其他表外鍵指向它們（它們反過來
 ## 外鍵指向 npc／location，但那是「這 3 張表依賴別人」，不是「別人依賴
@@ -610,7 +616,7 @@ static func _migrate_v5_drop_death_grave_highlights(db) -> bool:
 ##
 ## `npc`（近 20 張依附表）與 `npc`／`location` 之間的重建順序問題不在這次
 ## 範圍內，見《99》P-55、issue #561。
-static func _migrate_v6_notnull_primary_keys(db) -> bool:
+static func _migrate_v7_notnull_primary_keys(db) -> bool:
 	var single_table_schemas := [
 		{"table": "npc_state", "schema": NPCStateSchema},
 		{"table": "npc_emotion", "schema": NPCEmotionSchema},
@@ -637,6 +643,33 @@ static func _migrate_v6_notnull_primary_keys(db) -> bool:
 		{"table": "npc_home_storage", "schema": NPCHomeStorageSchema},
 		{"table": "item_transaction", "schema": ItemTransactionSchema}
 	])
+## Migration 6：npc_action_history 是同一輪開發（#428）才新增的表，
+## NPCActionHistorySchema.gd 最初把 idx_npc_action_history_npc 只建在
+## (npc_id)，後來（#511 CodeRabbit review）才發現重複率分析需要
+## (npc_id, game_day, game_minute, id) 複合索引才能穩定排序。任何在這兩次
+## 提交之間跑過 initialize() 的既有資料庫，索引名稱已經被舊定義占走——
+## CREATE INDEX IF NOT EXISTS 撞到同名索引會直接跳過，不會自動變成新形狀，
+## 所以仍要走正式 migration 補齊，不能只當「純新增 table 不算」處理。
+## 版號原訂 4，rebase 到 main 時發現 4／5 已被 grave_epitaphs（#382）與
+## npc_death 清理（#512）佔用，改編為 6。
+static func _migrate_v6_action_history_composite_index(db) -> bool:
+	if not db.query("DROP INDEX IF EXISTS idx_npc_action_history_npc;"):
+		push_error(
+			"[DatabaseSchema] Migration 6: Failed to drop idx_npc_action_history_npc: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query(
+		"CREATE INDEX IF NOT EXISTS idx_npc_action_history_npc ON npc_action_history(npc_id, game_day, game_minute, id);"
+	):
+		push_error(
+			"[DatabaseSchema] Migration 6: Failed to recreate idx_npc_action_history_npc: "
+			+ db.error_message
+		)
+		return false
+
+	return true
 
 
 static func initialize(db) -> bool:
@@ -670,6 +703,7 @@ static func initialize(db) -> bool:
 		NPCGoalSchema,
 		NPCDailyPlanSchema,
 		NPCLastActionSchema,
+		NPCActionHistorySchema,
 
 		# NPC Memory
 		MemorySchema,
