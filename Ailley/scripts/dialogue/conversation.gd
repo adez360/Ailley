@@ -135,7 +135,12 @@ func _finish_with_fallback(speaker: Character, listener: Character) -> void:
 	# next_line() 裡的 await 讓出過控制權，speaker/listener 理論上可能在這段
 	# 期間被移出場景（跟 _process() 的 is_instance_valid 檢查是同一種顧慮）
 	if is_instance_valid(speaker) and is_instance_valid(listener):
-		_speak(speaker, DialogueLines.closing(), true)
+		var closing := DialogueLines.closing()
+		_speak(speaker, closing, true)
+		# fallback 收尾也是真的說出口的一句，沒算進 _turns 的話
+		# _finish() 判定「5 句以上深度對話」trust +2 時會少算這一句
+		# （CodeRabbit review 抓到）
+		_turns.append(PromptBuilder.turn_entry(speaker.character_name, closing))
 
 	_finish(REASON_ENDED_BY_SPEAKER)
 	queue_free()
@@ -170,8 +175,10 @@ func _apply_rewards() -> void:
 		if not is_instance_valid(character) or not is_instance_valid(other):
 			continue
 
-		# 只記「互動過一次」，不動 trust：《01》3-1 的 trust 只有深度對話
-		# （5 句以上）才 +2，那條判定跟其他 trust 事件一起接線，是各自行動的
-		# issue，不在關係資料結構這則裡
 		if character.relationships != null:
 			character.relationships.note_meeting(other.character_id)
+			# 刻意不在這裡加 trust（2026-08-24 拿掉，見全專案盤點的原則二／三
+			# 審查）：跟 _on_attacked()／_on_rescued() 同一個問題——固定公式
+			# 幫「深度對話」定性成該加多少信任，AI 沒機會表態。這裡甚至不需要
+			# 額外記事實句：對話內容本身就在 AI 自己的上下文裡，不必引擎另外
+			# 告知「你們聊了很久」，該不該多信任對方由 AI 自己判斷

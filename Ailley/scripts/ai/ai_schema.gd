@@ -46,6 +46,8 @@ const ALLOWED_ACTIONS := [
 	"steal", "attack",
 	# E 搬運類（#161，《99》P-27）
 	"haul", "struggle",
+	# F 安葬類（#380，《規格書09》§3-2／§6）
+	"bury",
 ]
 
 # 本輪真正有實作的動作。其餘動作驗證會過，但執行層要回 NOT_IMPLEMENTED，
@@ -86,7 +88,11 @@ const ALLOWED_ACTIONS := [
 #
 # drink 是 #163 接上的：跟 eat 同一套「呼叫一次就完成」模式，寫法照抄
 # _pursue_eat_task()（見 agent.gd::_pursue_drink_task()）
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade"]
+#
+# bury 是 #380 接上的：跟 attack 同一套「目標是另一個角色、一次執行完就退出
+# 任務池」模式（_pursue_bury_task()），差別是目標必須是已死亡且尚未安葬的
+# 屍體，且雙方都要在墓園錨點附近，見 Character.bury() 的檢查順序
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -296,17 +302,23 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 	if task.has("params") and not task["params"] is Dictionary:
 		return _fail(ERROR_BAD_SHAPE)
 
-	# talk／attack／give 是目前有逐欄位驗證 params 的動作（talk 見 #90，
-	# attack 見 #159，give 見 #264；其餘動作還沒有）：沒有 target 的任務會被
+	# talk／attack／bury／give 是目前有逐欄位驗證 params 的動作（talk 見 #90，
+	# attack 見 #159，give 見 #264，bury 見 #380）：沒有 target 的任務會被
 	# 各自的 _pursue_*_task() 誤判成「目標不存在」一路帶進任務池才發現，
 	# 不如在這一層就擋掉，跟這個檔案「外來內容一律不信任」的原則一致，
-	# 不等到執行層才發現資料是空的。give 的 target 檢查獨立成下面一段，
-	# 因為它還要多驗 count 的範圍，跟 talk／attack 共用的這段不同形狀
-	if ["talk", "attack"].has(action):
+	# 不等到執行層才發現資料是空的。bury 的 target 是要安葬的屍體（另一個
+	# 角色的名字），跟 attack 同一種「單純一個 target 字串」形狀，不需要
+	# 像 give 那樣多驗 count。give 的 target 檢查獨立成下面一段，
+	# 因為它還要多驗 count 的範圍，跟 talk／attack／bury 共用的這段不同形狀
+	if ["talk", "attack", "bury"].has(action):
 		var talk_params: Dictionary = task.get("params", {})
 		var target: Variant = talk_params.get("target")
 		if not target is String or (target as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
+		# 存回去的是修剪過的值——_find_character_by_name() 用精確比對，
+		# LLM 輸出偶爾帶前後空白的話，不修剪會讓合法目標在執行層被誤判成
+		# 「找不到這個人」（CodeRabbit review 抓到）
+		talk_params["target"] = (target as String).strip_edges()
 
 	# give 動作的 params 驗證（#264）：target 比照 talk，缺失／非字串／
 	# 空字串在這一層就擋掉，不要等到 _pursue_give_task() 才被動吸收成
@@ -890,6 +902,37 @@ static func checkpoint_response_schema() -> Dictionary:
 					"continue": {"type": "boolean"},
 				},
 				"required": ["continue"],
+			},
+		},
+	}
+
+
+# 死亡當下的臨終遺言（#379，《規格書09》§2）：跟 reasoning／inner_monologue／
+# summary 同一種選填字串慣例——本機 llama-server 的 json_schema 支援度有限
+# （見 ai_config.gd::supports_json_schema 附近說明），這批既有欄位全部刻意
+# 避開 nullable／聯合型別寫法，用「空字串代表沒有」統一表示，這裡沿用同一套，
+# 不引入這個代碼庫沒有先例的 schema 寫法。角色資料層的 last_words（character.gd）
+# 仍然是 String｜null——null 只在「根本沒問到（打不到/驗證失敗）」時出現，
+# 「AI 決定沒話說」在這裡回空字串，跟《規格書09》§2「來不及開口」語意相容：
+# 面板顯示規則只在意「有沒有內容」，空字串跟 null 是同一種「沒有」
+static func validate_last_words(data: Dictionary) -> Dictionary:
+	var last_words: Variant = _validated_optional_line(data, "last_words")
+	if last_words == null:
+		return _fail(ERROR_BAD_SHAPE)
+	return _ok({"last_words": last_words})
+
+
+static func last_words_response_schema() -> Dictionary:
+	return {
+		"type": "json_schema",
+		"json_schema": {
+			"name": "last_words_response",
+			"schema": {
+				"type": "object",
+				"properties": {
+					"last_words": {"type": "string", "maxLength": MAX_LINE_CHARS},
+				},
+				"required": ["last_words"],
 			},
 		},
 	}
