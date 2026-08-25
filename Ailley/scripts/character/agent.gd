@@ -137,6 +137,12 @@ var current_state := "idle"
 # 沒有這張表的話，走出視野再走回來就會再驚訝一次
 var _noticed := {}
 
+# 今天已經對誰觸發過跟丟反應（#405）。跟 _noticed（終身只驚訝一次）不同：
+# 這是單純的量級控制，每天由 _on_day_changed() 清空，不分認不認識——同一人
+# 一天內反覆進出視野（走近又走遠）不會每次都排事實句洗版、拖爆 LLM 呼叫量，
+# 但隔天還是會再觸發，不會變成終身只通知一次
+var _lost_reacted := {}
+
 # 上一次真的呼叫 move_to()（或判定「已經到了」「走不到」）的地點。
 # _pursue_current_task() 每個遊戲分鐘都會跑，靠這個分辨「還在處理同一個地點」
 # 與「地點換了要重新起步」
@@ -291,6 +297,25 @@ var _next_llm_task_id := 0
 var _today_plan: Array[Dictionary] = []		# [{id, text, is_done}]
 var _next_plan_id := 0
 
+## 目前有效的約定（#479，《10》§5.5）。同時間只追蹤一筆，新宣告直接整筆
+## 覆蓋舊的——跟 _apply_today_plan() 的「整份取代」語意一致，不是陣列累加。
+## null 代表目前沒有約定。形狀：{with, location, game_time, game_time_minutes,
+## reminder_sent, waiting_since}——後兩者是引擎自己記帳用的階段旗標
+## （waiting_since = -1 代表還沒進入「時間到、自己在場、等對方出現」那個階段），
+## 不是模型填的
+var _appointment: Variant = null
+
+## 約定前置提醒與逾時等待的分鐘數（《10》§5.5：「約定前 30 遊戲分鐘」提醒、
+## 「等到 12:30」＝約定時間 +30 分鐘的等待期滿）
+const APPOINTMENT_REMINDER_MINUTES_BEFORE := 30
+const APPOINTMENT_WAIT_MINUTES := 30
+
+## 爽約當下若自己在睡眠中，先記著、等 _on_time_changed() 偵測到睡醒轉換時
+## 才補送（《10》§5.5「爽約方若當時處於睡眠或昏迷，改為醒來後首次決策時
+## 給予」）——跟其餘系統通知一律走 _pending_fact_lines 是同一套做法，這裡
+## 只是多一個「先別送，等醒了」的暫存點
+var _appointment_broken_pending_line := ""
+
 ## 今天做過什麼（#172，《15》§2-5「新增機制」）：給玩家看的今日摘要面板下半段，
 ## 跟 _today_plan（自我回報的意圖）是兩回事——這裡是引擎寫的客觀執行紀錄。
 ## 也跟 _daily_events（agent.gd 另一處，睡前送給 LLM 評分用）不是同一份：
@@ -432,6 +457,7 @@ func get_today_log() -> Array[Dictionary]:
 
 func _on_day_changed(_day: int) -> void:
 	_today_log.clear()
+	_lost_reacted.clear()
 
 ## 收尾清空 _current_task 前先記一筆 today_log（#172）。集中在這一個 helper
 ## 而不是在每個呼叫端各自 push，是因為 _current_task 被清空的地方分散在
@@ -619,6 +645,7 @@ func _ready() -> void:
 
 	if vision != null:
 		vision.spotted.connect(_on_spotted)
+		vision.lost.connect(_on_lost)
 
 	noise_heard.connect(_on_noise_heard)
 	move_finished.connect(_on_move_finished)
@@ -735,10 +762,18 @@ func _is_own_pursuit_target(world_position: Vector2) -> bool:
 const ACTUAL_PLACE_RADIUS := 32.0
 
 func _resolve_actual_place() -> String:
+	return _actual_place_of(self)
+
+# 跟 _resolve_actual_place() 同一套即時位置反查，但吃任意角色——約定機制
+# （#479）判定「對方是否在場」時，對方可能是 Player（沒有 current_place
+# 這個 Agent 專屬欄位，只有 Character 都有的 get_body_position()），不能沿用
+# current_place（那是任務目的地，不是即時座標，見 _push_daily_event() 的
+# 說明；同樣的理由，判定「自己在不在場」也改用這個而不是 current_place）
+func _actual_place_of(character: Character) -> String:
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
 	if anchors == null:
 		return ""
-	return anchors.resolve_from_position(get_body_position(), ACTUAL_PLACE_RADIUS)
+	return anchors.resolve_from_position(character.get_body_position(), ACTUAL_PLACE_RADIUS)
 
 # 先問資料檔這隻角色被指派了哪份行程，沒有指派才用場景裡的 @export 後備值。
 # 順序不能反過來：@export 一定有值（agent.tscn 的預設），反過來的話 assignments 永遠不生效
@@ -895,8 +930,14 @@ func exit_conversation() -> void:
 		# 觸發 2：意圖全數完成）——這裡也是「一筆任務完成」的事件，talk
 		# 剛好完成的這一刻如果 today_plan 已經全部做完，同樣該給重寫的機會，
 		# 不用等到下一次 duration 到期或睡醒才補上
+		#
+		# allow_appointment=true（#479，《12》§2.4「對話情境中且在場有其他
+		# 角色」）：這裡是唯一真正對應那個條件的觸發點——剛講完話，對方
+		# 剛剛還在眼前，適合問「要不要跟這個人約下次見面」。super() 已經把
+		# _conversation 清成 null，不能再靠 is_in_conversation() 現算，改由
+		# 呼叫端（這裡）直接宣告，跟 allow_update_plan 同一種做法
 		if was_llm and llm_decision_enabled and not _awaiting_decision:
-			_request_next_decision(_today_plan_needs_new_goal())
+			_request_next_decision(_today_plan_needs_new_goal(), true)
 
 	_reevaluate()
 
@@ -1134,7 +1175,14 @@ func _request_last_words(cause: String) -> void:
 ## 之一」（呼叫端各自的理由見各呼叫處的註解）。這裡另外 or 上
 ## _plan_update_requested：上一輪模型如果申請過，這裡兌現、用完就消費掉——
 ## 不管呼叫端這次是為了什麼理由觸發，欠的那次都在這裡還
-func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
+##
+## allow_appointment（#479）一樣是呼叫端自己判斷、不是這裡讀 is_in_conversation()
+## 現算——《12》§2.4「對話情境中且在場有其他角色」在這個仲裁器裡唯一真正成立
+## 的時刻是 exit_conversation() 剛講完話那一刻，而那個呼叫點在 super() 把
+## _conversation 清成 null 之後才觸發下一次決策（CodeRabbit review 抓到），
+## 這裡現算 is_in_conversation() 永遠讀到 false。改成跟 allow_update_plan
+## 同一種做法：呼叫端自己知道「這通是不是剛結束一場對話」，這裡只負責照做
+func _request_next_decision(allow_update_plan: bool = false, allow_appointment: bool = false) -> Dictionary:
 	# 死屍不建立新的決策請求（CodeRabbit review 抓到）：跟下面 await 之後的
 	# is_dead 判斷是兩件事——那道只擋「套用已經送出去的回應」，這裡擋在送出
 	# 請求之前，避免死亡後還被 _pending_reaction_lines 補問邏輯（見本函式
@@ -1182,10 +1230,10 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 	var visible: Array[Character] = vision.get_visible_characters() if vision != null else []
 	var envelope := PromptBuilder.build_plan_envelope(
 		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan,
-		_fact_lines_summary(), had_pending_persuade, current_place
+		_fact_lines_summary(), had_pending_persuade, current_place, allow_appointment
 	)
 	var validator := func(data: Dictionary) -> Dictionary:
-		return AISchema.validate_tasks(data, effective_allow_update_plan, now_minutes)
+		return AISchema.validate_tasks(data, effective_allow_update_plan, now_minutes, allow_appointment)
 
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	_awaiting_decision = false
@@ -1267,6 +1315,20 @@ func _request_next_decision(allow_update_plan: bool = false) -> Dictionary:
 		if update_plan != null:
 			_apply_today_plan(update_plan)
 
+		# appointment（#479）：null 代表這次沒有新約定（不管是沒開放還是模型
+		# 選擇不用），有值就整筆取代舊的——跟 update_plan 同一種「明確給了才動」
+		# 判斷。驗證層（AISchema._validate_appointment()）用的是送出信封那一刻
+		# 的 now_minutes（見上面 var now_minutes := _now_minutes() 那行），但
+		# 這裡是 await 網路往返回來之後——重試、逾時都可能讓時間走到約定時刻
+		# 之後，用當初那個時間點驗證仍會通過，套用後下一個 tick 立刻判定爽約
+		# 這種一出生就過期的約定沒有意義（CodeRabbit review 抓到）。用現在
+		# 重新查一次 _now_minutes() 把關，過期就整筆丟棄，不重試——跟這一整段
+		# 「世代不符、驗證失敗都直接放棄這輪」的態度一致，不特別為這一個欄位
+		# 開一條回頭路
+		var new_appointment: Variant = data.get("appointment")
+		if new_appointment != null and int(new_appointment.get("game_time_minutes", 0)) > _now_minutes():
+			_apply_appointment(new_appointment)
+
 		if had_pending_persuade:
 			_resolve_pending_persuade(data)
 
@@ -1320,6 +1382,144 @@ func _apply_today_plan(items: Array[Dictionary]) -> void:
 			"text": item.get("text", ""),
 			"is_done": item.get("is_done", false),
 		})
+
+## 存檔還原用的形狀檢查（CodeRabbit review 抓到）：只接受包含
+## with／location／game_time／game_time_minutes 且型別正確的 Dictionary，
+## 其餘一律當作沒有約定——_process_appointment() 每分鐘都直接讀這幾個欄位，
+## 一份形狀不對的存檔（例如空 Dictionary）會在讀檔後的下一個 tick 就出錯。
+## reminder_sent／waiting_since／plan_id 不在這裡檢查：三者都是引擎自己
+## 記帳用的階段旗標，_process_appointment()／_clear_appointment_plan_entry()
+## 讀取時本來就用 .get() 給預設值，缺了也不會出錯
+static func _is_valid_appointment_shape(data: Dictionary) -> bool:
+	if not data.get("with") is String or (data["with"] as String).is_empty():
+		return false
+	if not data.get("location") is String or (data["location"] as String).is_empty():
+		return false
+	if not data.get("game_time") is String or (data["game_time"] as String).is_empty():
+		return false
+	var minutes: Variant = data.get("game_time_minutes")
+	return minutes is int or minutes is float
+
+## 移除目前 _appointment 對應的 _today_plan 摘要（CodeRabbit review 抓到）：
+## 覆蓋、赴約成功、爽約、等待逾時都是「這筆約定結束了」，_apply_appointment()
+## 產生的那筆摘要不該繼續留著顯示成一筆永遠沒做完的意圖，也不該讓
+## _today_plan_needs_new_goal() 誤判「還有事沒做完」。呼叫端要在真的清掉／
+## 換掉 _appointment 之前呼叫這個，用 plan_id 精準比對只移除那一筆——今日
+## 計畫可能同時有別的、跟約定無關的項目，不能整批清
+func _clear_appointment_plan_entry() -> void:
+	if _appointment == null:
+		return
+	var plan_id: Variant = _appointment.get("plan_id")
+	if plan_id == null:
+		return
+	for i in range(_today_plan.size() - 1, -1, -1):
+		if _today_plan[i].get("id") == plan_id:
+			_today_plan.remove_at(i)
+			return
+
+## 套用一筆新約定（#479，《10》§5.5）。整筆取代，不跟舊約定合併——跟
+## _apply_today_plan() 同一種「重寫」語意，同時間只有一筆有效，換新的之前先
+## 清掉舊約定留下的 today_plan 摘要（見 _clear_appointment_plan_entry()）。
+## 同步把新約定併入 _today_plan 顯示（《10》§5.5「產生約定時，引擎自動將該筆
+## 約定併入 today_plan 顯示，不另外詢問 AI」）——這裡直接 append 一筆，不透過
+## update_plan 那套「整份取代」機制，兩件事各自獨立
+func _apply_appointment(data: Dictionary) -> void:
+	_clear_appointment_plan_entry()
+	_next_plan_id += 1
+	var plan_id := _next_plan_id
+	_appointment = {
+		"with": data.get("with", ""),
+		"location": data.get("location", ""),
+		"game_time": data.get("game_time", ""),
+		"game_time_minutes": int(data.get("game_time_minutes", 0)),
+		"reminder_sent": false,
+		"waiting_since": -1,
+		"plan_id": plan_id,
+	}
+	_today_plan.append({
+		"id": plan_id,
+		"text": "跟 %s 約在「%s」見面（%s）" % [
+			_appointment["with"], _appointment["location"], _appointment["game_time"]
+		],
+		"is_done": false,
+	})
+
+## 絕對分鐘數轉「HH:MM」，跨日只留當天時分——爽約／等待事實句的措辭跟《10》
+## §5.5 的範例（「等到 12:30」）同一種只講時分不講第幾天的簡短度
+static func _format_clock(total_minutes: int) -> String:
+	var minute_of_day := total_minutes % 1440
+	return "%02d:%02d" % [minute_of_day / 60, minute_of_day % 60]
+
+## 爽約通知（#479，《10》§5.5）。睡眠中先暫存，交給 _on_time_changed() 的
+## 「剛睡醒」分支補送（見那裡的說明）——《10》§5.5 原文「爽約方若當時處於
+## 睡眠或昏迷，改為醒來後首次決策時給予」，本版死亡／昏迷狀態機尚未接上
+## （見 #379），先只處理睡眠這一種
+func _notify_appointment_broken(now_minutes: int) -> void:
+	var line := "現在是%s，你和 %s 約好在「%s」見面，但你人不在那裡。" % [
+		_format_clock(now_minutes), _appointment["with"], _appointment["location"]
+	]
+	if current_state == "sleep":
+		_appointment_broken_pending_line = line
+	else:
+		_pending_fact_lines.append(line)
+	_clear_appointment_plan_entry()
+	_appointment = null
+
+## 約定機制的每分鐘檢查（#479，《10》§5.5）。跟 _apply_action_recovery() 一樣
+## 掛在 GameClock.time_changed，在 _reevaluate() 之前跑。三個時點依序檢查：
+##   1. 約定前 30 分鐘：提醒事實句（只給宣告方，見 _apply_appointment()）
+##   2. 約定時間到：自己不在場＝爽約，立刻（或睡醒後）通知；在場則進入等待
+##   3. 等待期滿（+30 分鐘）：對方仍沒出現才通知「等到」；出現了就悄悄結束，
+##      不用另外通知——《10》§5.5 沒有規定「赴約成功」要給事實句
+## 三種通知都走 _pending_fact_lines，跟《10》§5.2「暫存後於下一次決策一併
+## 給予」同一套既有機制，不另開一條路。
+##
+## 「單方面宣告的約定」（《10》§5.5）不需要額外處理：這整個函式只讀
+## self._appointment，未答應的一方從沒呼叫過 _apply_appointment()，自然
+## 不會收到任何提醒——不對稱本來就是設計本身，不是這裡要補的邊界情況
+func _process_appointment(now_minutes: int) -> void:
+	if _appointment == null:
+		return
+	var appointment: Dictionary = _appointment
+	var deadline := int(appointment["game_time_minutes"])
+	var with_name := str(appointment["with"])
+	var location := str(appointment["location"])
+
+	# reminder_sent／waiting_since 一律用 .get() 讀，不用 []：這兩個是引擎自己
+	# 記帳用的階段旗標，_apply_appointment() 產生的 Dictionary 一定有，但這裡
+	# 不能假設——GDScript 對 Dictionary 缺 key 的 [] 存取是執行期錯誤，會直接
+	# 中斷整個決策迴圈，親自用 game_eval 灌一份缺這兩個欄位的資料重現過
+	# （不是理論上的疑慮）。跟 _is_valid_appointment_shape() 只驗證 AI 會填的
+	# 那四個欄位是同一個立場：這兩個欄位缺席就當作「還沒開始」，不因此整包
+	# 拒絕
+	if not appointment.get("reminder_sent", false) and now_minutes >= deadline - APPOINTMENT_REMINDER_MINUTES_BEFORE:
+		appointment["reminder_sent"] = true
+		_pending_fact_lines.append("你和 %s 約好%s在「%s」見面。" % [
+			with_name, str(appointment["game_time"]), location
+		])
+
+	if int(appointment.get("waiting_since", -1)) < 0:
+		if now_minutes < deadline:
+			return
+		if _actual_place_of(self) != location:
+			_notify_appointment_broken(now_minutes)
+			return
+		appointment["waiting_since"] = now_minutes
+		return
+
+	# 等待階段：對方出現在同一地點就算赴約成功，悄悄結束，不用另外通知
+	var other := _find_character_by_name(with_name)
+	if other != null and _actual_place_of(other) == location:
+		_clear_appointment_plan_entry()
+		_appointment = null
+		return
+
+	if now_minutes >= deadline + APPOINTMENT_WAIT_MINUTES:
+		_pending_fact_lines.append("你在「%s」等到%s，%s 沒有出現。" % [
+			location, _format_clock(deadline + APPOINTMENT_WAIT_MINUTES), with_name
+		])
+		_clear_appointment_plan_entry()
+		_appointment = null
 
 ## today_plan 是不是「沒事可做，需要新目標」（#89 觸發時機之一）：一片空白
 ## 也算——開場或剛被清空過，跟「全部項目都做完了」是同一種狀況，都需要
@@ -1500,9 +1700,16 @@ func _on_action_interrupted() -> void:
 # 地點用 _on_action_interrupted() 存的快照，不是這裡當下的 current_place——
 # 見 _push_daily_event() 的 location_override 說明
 func _on_attacked(attacker: Character) -> void:
+	super._on_attacked(attacker)
 	_push_daily_event(
 		"你被 %s 攻擊了" % attacker.character_name, [attacker.character_id], _place_before_interrupt
 	)
+
+# 被救助記成事實句，跟 _on_attacked() 同一個理由（純客觀事件，不貼標籤，見
+# CLAUDE.md「遊戲機制規格：AI 自主性自檢」）。搬運中角色不是自己在移動，
+# 不需要比照 _on_attacked() 那樣取中斷前快照，直接用 current_place 就是對的
+func _on_rescued(hauler: Character) -> void:
+	_push_daily_event("你被 %s 救助了，脫離昏迷" % hauler.character_name, [hauler.character_id])
 
 # 基底的快照加上行程表這一段。schedule/current_place/current_state 宣告在這裡，
 # 所以是這裡負責放進去 —— 基底不必去猜誰有行程表
@@ -1536,6 +1743,7 @@ func get_save_data() -> Dictionary:
 	data["words_to_creator"] = words_to_creator
 	data["life_highlights"] = life_highlights.duplicate()
 	data["today_plan"] = _today_plan.duplicate(true)
+	data["appointment"] = _appointment.duplicate(true) if _appointment is Dictionary else null
 	return data
 
 
@@ -1579,6 +1787,19 @@ func load_save_data(data: Dictionary) -> void:
 			for item in raw_plan:
 				if item is Dictionary:
 					_today_plan.append((item as Dictionary).duplicate(true))
+
+	# appointment（#479）：跟 today_plan 同一個「省略 key＝不動」語意。存檔裡
+	# 的 null（沒有約定）跟合法的 Dictionary 都要能還原，形狀不對（例如存檔
+	# 損毀留下的 {}）一律當沒有約定，不是照單全收——_process_appointment()
+	# 每分鐘都直接讀 game_time_minutes／with／location，形狀不對的資料撐不
+	# 到下一個 tick 就會出錯（CodeRabbit review 抓到）
+	if data.has("appointment"):
+		var raw_appointment: Variant = data.get("appointment")
+		if raw_appointment is Dictionary and _is_valid_appointment_shape(raw_appointment as Dictionary):
+			_appointment = (raw_appointment as Dictionary).duplicate(true)
+		else:
+			_appointment = null
+	_appointment_broken_pending_line = ""
 
 # 第一次看到某個陌生人的反應。
 #
@@ -1641,6 +1862,36 @@ func _react_to_spotted_fallback() -> void:
 	# 這次重算會重新起步
 	if not is_in_conversation():
 		_reevaluate()
+
+# 視野裡跟丟某個人（issue #405）。
+#
+# 不分認不認識都處理（2026-08-24 拿掉原本的 has_met() 篩選——CLAUDE.md
+# 「AI 自主性自檢」認定那是引擎替 AI 判斷「這件事不重要」，AI 連表態機會
+# 都沒有；「認識的人本來就常常走出視野」是頻率論證，不是重要性論證，兩者
+# 不能互相替代，見該次全專案盤點的審查結論）。事實句一律排給模型，
+# 要不要在意、在意多少交給 AI 自己判斷。
+#
+# _lost_reacted 是量級控制，不是相關性判斷：同一人一天只觸發一次跟丟反應，
+# 避免頻繁進出視野的人（不論認不認識）洗版事實句、把 LLM 呼叫量拖爆。
+# 每天由 _on_day_changed() 清空，不是永久只給一次——拿掉 has_met() 篩選後
+# 若還維持終身只觸發一次，天天見面的熟人實質上會跟沒接這個訊號一樣。
+# _noticed 不在這裡清除——見 note/技術/視覺感測.md 已驗證的「走出視野再走
+# 回來不會重複驚訝」，跟丟不代表要重新觸發陌生人反應。
+#
+# 不像 _on_spotted／_on_noise_heard 有寫死的 fallback 台詞可退——「跟丟了」
+# 沒有通用的驚呼可以套，schedule 模式（llm_decision_enabled 關著）就不處理，
+# 只在有 LLM 可問時把事實句排進下一次決策，要不要有反應交給模型自己判斷
+func _on_lost(other: Character) -> void:
+	if is_in_conversation():
+		return
+	if not llm_decision_enabled:
+		return
+	if _lost_reacted.has(other.character_id):
+		return
+	_lost_reacted[other.character_id] = true
+
+	_queue_reaction_fact_line("你看不到 %s 了，要不要有反應由你自己決定" % other.character_name)
+	await _request_next_decision()
 
 # 範圍內有人發出聲音（見 character.gd 的 make_noise()）。
 # 跟 _on_spotted 不同，這裡不記錄「已經反應過」——聲音是一次性事件，
@@ -1742,6 +1993,7 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 	_apply_action_recovery()
 	if _pending_save_retry:
 		_autosave_on_wake()
+	_process_appointment(_now_minutes())
 	_reevaluate()
 
 # 力竭時強制進入休息，直到 stamina 恢復
@@ -1997,6 +2249,12 @@ func _reevaluate_once() -> void:
 		# 存檔機制，長時間無人值守的驗證只要沒人記得手動下 `save` 指令，
 		# 執行期資料在 stop 的當下就整批消失，這是實際發生過的事故
 		_autosave_on_wake()
+		# 爽約通知的延後補送（#479，《10》§5.5）：睡眠中爽約時 _notify_appointment_broken()
+		# 只暫存文字，不直接進 _pending_fact_lines——這裡才是「醒來後」，補進佇列讓
+		# 下面的 _request_next_decision(true) 一起帶上
+		if not _appointment_broken_pending_line.is_empty():
+			_pending_fact_lines.append(_appointment_broken_pending_line)
+			_appointment_broken_pending_line = ""
 		if llm_decision_enabled and not _awaiting_decision:
 			_request_next_decision(true)
 

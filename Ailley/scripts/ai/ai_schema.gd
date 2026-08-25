@@ -437,6 +437,72 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 	})
 
 
+# appointment.game_time 的固定格式「第D天 HH:MM」（《06》範例、
+# PromptBuilder 的措辭一致要求這個格式）。手動切字串，不用 RegEx——跟這個
+# 檔案其餘手動解析（例如 _window_end_minutes() 風格的時間字串）同一種做法，
+# 格式不對回傳 ok=false，呼叫端整包拒絕
+static func _parse_appointment_game_time(text: String) -> Dictionary:
+	if not text.begins_with("第"):
+		return {"ok": false}
+	var day_end := text.find("天")
+	if day_end <= 1:
+		return {"ok": false}
+	var day_part := text.substr(1, day_end - 1)
+	if not day_part.is_valid_int():
+		return {"ok": false}
+	var rest := text.substr(day_end + 1).strip_edges()
+	var time_parts := rest.split(":")
+	# 時／分兩段都要求剛好兩位數（CodeRabbit review 抓到）：只驗證數字內容會
+	# 放行 "9:00"／"09:0" 這種跟提示詞承諾的固定格式「HH:MM」對不上的寫法，
+	# 之後憑字串比對／顯示這個 game_time 的地方（_process_appointment() 的
+	# 提醒事實句）會直接照抄，格式不一致會讓事實句讀起來怪
+	if time_parts.size() != 2 or time_parts[0].length() != 2 or time_parts[1].length() != 2 \
+			or not time_parts[0].is_valid_int() or not time_parts[1].is_valid_int():
+		return {"ok": false}
+
+	var day := int(day_part)
+	var hour := int(time_parts[0])
+	var minute := int(time_parts[1])
+	if day < 1 or hour < 0 or hour > 23 or minute < 0 or minute > 59:
+		return {"ok": false}
+
+	return {"ok": true, "minutes": day * 1440 + hour * 60 + minute}
+
+
+# appointment 條件式欄位驗證（#479，《10》§5.5）。with／location 跟 talk 的
+# target、buy 的 place 同一種寬鬆度——只驗證非空字串，不驗證對象是否真的
+# 存在或在場，那是 agent.gd 套用時的事（跟這個檔案「v1 不逐欄位驗證語意」
+# 的一貫立場一致）。game_time 有固定格式且必須指向未來，格式錯或指到
+# 過去/現在整包拒絕——不接受「約在剛才」這種語意上不成立的約定
+static func _validate_appointment(data: Variant, now_minutes: int) -> Dictionary:
+	if not data is Dictionary:
+		return _fail(ERROR_BAD_SHAPE)
+	var appointment := data as Dictionary
+
+	var with_name: Variant = appointment.get("with")
+	if not with_name is String or (with_name as String).strip_edges().is_empty():
+		return _fail(ERROR_BAD_SHAPE)
+
+	var location: Variant = appointment.get("location")
+	if not location is String or (location as String).strip_edges().is_empty():
+		return _fail(ERROR_BAD_SHAPE)
+
+	var game_time: Variant = appointment.get("game_time")
+	if not game_time is String:
+		return _fail(ERROR_BAD_SHAPE)
+	var game_time_text: String = (game_time as String).strip_edges()
+	var parsed := _parse_appointment_game_time(game_time_text)
+	if not parsed["ok"] or int(parsed["minutes"]) <= now_minutes:
+		return _fail(ERROR_BAD_SHAPE)
+
+	return _ok({
+		"with": (with_name as String).strip_edges(),
+		"location": (location as String).strip_edges(),
+		"game_time": game_time_text,
+		"game_time_minutes": int(parsed["minutes"]),
+	})
+
+
 # persuade 專屬的 params 驗證（#227）：target／reason 必填非空字串，
 # proposed_task 選填——有填就重用 _validate_task_shape() 驗證它的形狀
 # （跟一般任務同一套邊界），不驗證內容合理性。reason 是說服的理由，自由
@@ -508,7 +574,9 @@ static func _validate_persuade_params(params: Variant, now_minutes: int) -> Dict
 # 正是這個 PR 要擋的「實質永不過期」退化情況，寧可漏傳時直接編譯期報錯，
 # 也不要靜默吃一個看似合法、實際上錯誤的預設值（GDScript 規則：有預設值
 # 的參數後面不能接沒預設值的，allow_update_plan 只好跟著一起拿掉預設值）
-static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minutes: int) -> Dictionary:
+static func validate_tasks(
+	data: Dictionary, allow_update_plan: bool, now_minutes: int, allow_appointment: bool = false
+) -> Dictionary:
 	if not data.has("tasks") or not data["tasks"] is Array:
 		return _fail(ERROR_BAD_SHAPE)
 
@@ -564,6 +632,18 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minute
 		if not data["request_plan_update"] is bool:
 			return _fail(ERROR_BAD_SHAPE)
 		request_plan_update = data["request_plan_update"]
+
+	# appointment（#479，《10》§5.5／《12》§2.4）：跟 update_plan 同一種條件式
+	# 欄位態度——allow_appointment 為假時模型硬塞了這個欄位也整包忽略，不影響
+	# 其餘欄位。但欄位真的存在時的格式錯誤（game_time 不是「第D天 HH:MM」、
+	# 或指到過去/現在）讓整份回應失敗，不是單獨吞掉這一個欄位放行其餘部分
+	# ——跟 update_plan 陣列格式錯的立場一致，見 _validate_appointment()
+	var appointment: Variant = null
+	if allow_appointment and data.has("appointment"):
+		var appointment_result := _validate_appointment(data["appointment"], now_minutes)
+		if not appointment_result["ok"]:
+			return _fail(appointment_result["error"])
+		appointment = appointment_result["data"]
 
 	# update_plan：只有 allow_update_plan 為真時才驗證／放行。allow_update_plan
 	# 為假時就算模型硬塞了這個欄位也整包忽略、不因此讓回應失敗——模型不該
@@ -689,6 +769,7 @@ static func validate_tasks(data: Dictionary, allow_update_plan: bool, now_minute
 		"emotion": emotion,
 		"current_goal": current_goal,
 		"current_goal_provided": current_goal_provided,
+		"appointment": appointment,
 	})
 
 
@@ -980,7 +1061,9 @@ static func _validated_optional_line(data: Dictionary, key: String, max_chars: i
 # 有意義，但這裡不細分「這筆待回應是行動說服還是純思想說服」——兩種都一起
 # 給這三個欄位，多給的那兩個模型不會用到就好，不值得為了少給兩個欄位
 # 多一個判斷維度，見 issue #227 討論串
-static func plan_response_schema(allow_update_plan: bool = false, has_pending_persuade: bool = false) -> Dictionary:
+static func plan_response_schema(
+	allow_update_plan: bool = false, has_pending_persuade: bool = false, allow_appointment: bool = false
+) -> Dictionary:
 	var properties := {
 		"reasoning": {"type": "string", "maxLength": MAX_REASONING_CHARS},
 		"inner_monologue": {"type": "string"},
@@ -1039,6 +1122,24 @@ static func plan_response_schema(allow_update_plan: bool = false, has_pending_pe
 		properties["persuaded"] = {"type": "boolean"}
 		properties["importance"] = {"type": "number", "minimum": 0, "maximum": 100}
 		properties["valence"] = {"type": "string", "enum": VALID_VALENCES}
+
+	# appointment 是條件式欄位（#479，《10》§5.5，加入條件見《12》§2.4：對話
+	# 情境中且在場有其他角色）——跟 update_plan 同一種「文法層面就不存在這個
+	# 選項」做法，不是叫模型不要填。game_time 沒有用 pattern 約束格式：GBNF
+	# 轉換器目前只處理型別/enum/min-max 這類結構性約束（見上面 priority／
+	# duration 那段說明），字串格式靠 prompt 措辭（PromptBuilder）＋驗證層
+	# （_validate_appointment()）兩層把關，跟 reasoning／current_goal 這些
+	# 自由字串欄位同一個處理方式
+	if allow_appointment:
+		properties["appointment"] = {
+			"type": "object",
+			"properties": {
+				"with": {"type": "string"},
+				"location": {"type": "string"},
+				"game_time": {"type": "string"},
+			},
+			"required": ["with", "location", "game_time"],
+		}
 
 	return {
 		"type": "json_schema",

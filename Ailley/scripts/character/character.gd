@@ -229,6 +229,11 @@ var current_goal := ""
 var _hauling_target: Character = null		# 目前正在搬運誰
 var _hauled_by: Array[Character] = []		# 目前正被誰搬運
 var _speed_multiplier := 1.0				# 速度倍率（搬運時為 50%）
+## 這次昏迷事件裡已經拿過搬運者救助 trust 的名單，避免第一位搬運者救到人、
+## _end_incapacitation() 已經跑過後，稍後才加入的第二位搬運者被
+## set_being_carried() 的 has_condition(CONDITION_INCAPACITATED) 判斷擋掉、
+## 拿不到獎勵（CodeRabbit review 抓到）。新一輪昏迷開始時歸零
+var _rescued_haulers: Array[Character] = []
 
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
@@ -559,6 +564,7 @@ func _start_incapacitation() -> void:
 	_set_condition(CONDITION_INCAPACITATED, true)
 	_incapacitation_start_minute = GameClock.hour * 60 + GameClock.minute
 	_is_being_carried = false
+	_rescued_haulers.clear()
 	stop_moving()  # 立即停止移動
 	print_debug("Character %s 進入昏迷，計時器已啟動" % character_name)
 
@@ -601,13 +607,41 @@ func _end_incapacitation() -> void:
 	if stats != null:
 		stats.set_value("health", 10.0)
 
+	# 被救助：通知每個搬運者的救助鉤子（見 _on_rescued()）。搬運者只會被
+	# stop_haul() 從 _hauled_by 移除，沒有 _exit_tree() 清理時，搬運者若被
+	# queue_free() 直接砍掉，_hauled_by 會留著已釋放的殘留參照——!= null
+	# 擋不住這個，已釋放的 Object 不會自動變成 null，要用 is_instance_valid()
+	# （CodeRabbit review 抓到）。_rescued_haulers 仍要記——不是為了擋重複扣／
+	# 加 trust（已拿掉，見 _on_rescued() 說明），是擋同一位搬運者的事實句被
+	# 重複記兩次
+	for hauler in _hauled_by:
+		if is_instance_valid(hauler) and not _rescued_haulers.has(hauler):
+			_on_rescued(hauler)
+			_rescued_haulers.append(hauler)
+
 	print_debug("Character %s 昏迷已結束（被搬走）" % character_name)
 
+## 被搬運者救助的收尾鉤子（含 _attach_haul() 補發的晚到搬運者）。基底只是
+## 掛點，跟 _on_attacked() 同一個理由——Player 沒有記憶系統可寫，只有 Agent
+## 需要記事實句。
+##
+## 刻意不在這裡直接加 trust（2026-08-24 拿掉，見全專案盤點的原則二／三審查）：
+## 跟 _on_attacked() 同一個問題——引擎用固定公式（+15）幫「被救助」這件事
+## 定性成該加多少信任，AI 沒機會表態；trust 也沒有任何公式拿它當輸入。事件
+## 本身照樣要記成事實句給 AI（見 agent.gd 覆寫），該不該信任由 AI 自己判斷
+func _on_rescued(_hauler: Character) -> void:
+	pass
+
 ## 由搬運動作（#161 haul）調用，標記此角色正在被搬運。
-## 若該角色昏迷，搬運會立即結束昏迷計時器（《99》P-27）
+## 若該角色昏迷，搬運會立即結束昏迷（《99》P-27）——不能只設旗標等下一次
+## _update_incapacitation()（每遊戲分鐘才跑一次）才處理：stop_haul() 若搶在
+## 下一個 time_changed 之前執行，_is_being_carried 會被重設回 false，
+## _end_incapacitation() 永遠不會被呼叫到，角色維持昏迷、也拿不到 health
+## 恢復與搬運者 trust 獎勵（CodeRabbit review 抓到）
 func set_being_carried(is_carried: bool) -> void:
 	if is_carried and has_condition(CONDITION_INCAPACITATED):
 		_is_being_carried = true
+		_end_incapacitation()
 	elif not is_carried:
 		_is_being_carried = false
 
@@ -1432,8 +1466,15 @@ func attack(other: Character) -> String:
 	return ATTACK_OK
 
 ## 被攻擊的收尾鉤子。基底只是掛點——Player 沒有記憶系統可寫，只有 Agent
-## 需要把這件事記成事實句給下次決策／反思用（見 agent.gd 覆寫）
-func _on_attacked(_attacker: Character) -> void:
+## 需要把這件事記成事實句給下次決策／反思用（見 agent.gd 覆寫）。
+##
+## 刻意不在這裡直接扣 trust（2026-08-24 拿掉，見全專案盤點的原則二／三審查）：
+## 引擎用固定公式幫「被攻擊」這件事定性成「值 -50 信任」，AI 完全沒機會表態，
+## 跟《00》原則二「引擎只給事件，不給情緒」相反；而且 trust 目前沒有任何公式
+## 拿它當輸入（只餵給 LLM 讀），不符合《00》原則三的留存門檻。事件本身照樣
+## 完整記成事實句給 AI（見 agent.gd 覆寫），該不該信任由 AI 自己判斷、記在
+## 自己的記憶系統裡
+func _on_attacked(attacker: Character) -> void:
 	pass
 
 ## 強制中斷目前行動，不徵詢 interruptible／能不能被搭話打斷——跟仲裁器的
@@ -1975,8 +2016,38 @@ func _attach_haul(hauler: Character) -> void:
 	if not _hauled_by.has(hauler):
 		_hauled_by.append(hauler)
 
+	# 這位是第一位搬運者已經觸發過 _end_incapacitation() 之後才加入的第二位——
+	# set_being_carried(true) 的 has_condition(CONDITION_INCAPACITATED) 判斷這時
+	# 已經是 false，不會再幫他跑一次救助流程，這裡補發他這次事件該記的事實句
+	# （見 _on_rescued()）。_rescued_haulers 非空才代表「這次真的發生過救助」，
+	# 不是隨便一次沒昏迷的搬運（例如搬天神之石這種一般 carryable 物件）也誤記
+	if not _rescued_haulers.is_empty() and not _rescued_haulers.has(hauler):
+		_on_rescued(hauler)
+		_rescued_haulers.append(hauler)
+
 func _detach_haul(hauler: Character) -> void:
 	_hauled_by.erase(hauler)
+	# 最後一位搬運者放手時清掉這次事件的獎勵名單——不清的話，A 救到人放手後，
+	# 之後任何人（B）再搬運同一個已經不昏迷的角色，_attach_haul() 會誤判
+	# 「這次事件還在補發獎勵」而錯發一次 trust（CodeRabbit review 抓到）
+	if _hauled_by.is_empty():
+		_rescued_haulers.clear()
+
+## 離開場景樹前放掉搬運關係的兩個方向——GameManager 可以直接對角色呼叫
+## queue_free()，不經過 stop_haul()：
+## 1. 自己正在搬別人：stop_haul() 處理，會通知對方的 _hauled_by 移除自己
+## 2. 自己正被別人搬：對方的 _hauling_target 還指著即將消失的 self，
+##    對方之後呼叫 stop_haul() 會對已釋放的目標呼叫 _detach_haul()；
+##    _hauled_by[0] 剛好是自己的話，_follow_hauler() 也會繼續朝著已釋放
+##    的目標跟隨。逐一通知每個搬運者放手，再清空自己這邊的紀錄
+##（CodeRabbit review 抓到，原本只處理了第 1 種方向）
+func _exit_tree() -> void:
+	stop_haul()
+	for hauler in _hauled_by.duplicate():
+		if is_instance_valid(hauler) and hauler._hauling_target == self:
+			hauler.stop_haul()
+	_hauled_by.clear()
+	_is_being_carried = false
 
 
 # ---- 長動作檢查點的依附者（issue #336，《02》§3） ----
