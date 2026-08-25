@@ -422,9 +422,9 @@ Godot 操控層                房主機                    llama-server
 | `disabled` | AI 功能關閉（設定檔 `enabled=false`） |
 | `no_requester_id` | 呼叫端沒給 `requester_id` |
 | `no_provider` | 指定的 provider 不存在或設定不完整（`has_valid_provider()` 不成立） |
-| `rate_limited` | 撞到 `min_interval_sec`（30 秒）／`max_calls_per_game_day`（每日 20 次）／`max_dialogue_calls_per_game_day`（每日 30 次）任一節流閘門——`dialogue` 呼叫豁免同角色冷卻與 `max_calls_per_game_day`，只受自己專用的每日配額限制（`ai_config.gd`） |
-| `daily_quota` | 每日呼叫額度用盡 |
-| `timeout` | `HTTPRequest` 逾時（`provider.timeout`，設定檔可調，不是寫死的 5／15 秒） |
+| `rate_limited` | 撞到 `min_interval_sec`（同角色冷卻，30 秒）——`_check_rate_limit()` 唯一回這個 identifier 的分支 |
+| `daily_quota` | 撞到每日額度：一般呼叫撞 `max_calls_per_game_day`（每日 20 次），`dialogue` 呼叫豁免冷卻與這條、改撞自己專用的 `max_dialogue_calls_per_game_day`（每日 30 次）——兩種額度都回 `daily_quota`，不是 `rate_limited`（`ai_service.gd::_check_rate_limit()`） |
+| `timeout` | `HTTPRequest` 逾時——`ai_config.gd::DEFAULT_TIMEOUT`（10 秒）是沒設定或設定非正值時的預設／後備值，provider 設定檔給的正值 `timeout` 會覆蓋它（`_parse_provider()`／`ai_service.gd::_send()`）；不是《99》P-11 舊決定寫的 LocalLLM 5 秒／RemoteLLM 15 秒／event 8 秒各自寫死，那組數字已被現況取代，見《99》P-11 |
 | `network` | `HTTPRequest` 本身失敗（DNS／連線層錯誤） |
 | `http` | HTTP 狀態碼非 2xx（格式 `http_<code> <回應內容前 200 字>`） |
 | `bad_json` | provider 回應不是合法 JSON——固定重試 1 次（`ai_service.gd::RETRY_LIMIT`），跟下面 AISchema 層依 `provider.max_validation_retries()` 的驗證重試是兩個獨立計數器，不共用次數 |
@@ -439,7 +439,7 @@ Godot 操控層                房主機                    llama-server
 | `bad_shape` | 欄位缺漏／型別錯／超出範圍，逐欄位規則見各 `validate_*()` |
 | `action_not_allowed` | `action` 不在 `ALLOWED_ACTIONS` 白名單 |
 
-**房主機收到失敗時的行為**：一律回 `{"ok": false}`，沒有統一合成一筆 `{"action": "idle", ...}` 寫回、也沒有玩家可讀訊息對照表這一層——每種呼叫類型各自決定怎麼收尾：
+**房主機收到失敗時的行為**：一律回 `{"ok": false}`，沒有統一合成一筆 `{"action": "idle", ...}` 寫回、也沒有玩家可讀訊息對照表這一層——每種呼叫類型各自決定怎麼收尾。《13》§5「AI 呼叫失敗兜底」保證的是這裡帶出的**結果**（角色永遠有下一步可走，不會卡死或憑空消失），不是要求統一寫死 `idle` 這個手段：
 
 | 呼叫類型 | 失敗時的行為 |
 | --- | --- |
