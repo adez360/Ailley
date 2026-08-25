@@ -79,10 +79,12 @@ func _on_interact_area_body_exited(body: Node2D) -> void:
 ## 結果顯示出來，要不要理會是玩家自己的事（跟《00》原則二「引擎只給事件，
 ## 不給情緒」對到的是 AI 那一側，這裡對應的是把感測結果曝光給操作者本人）。
 ## 對話中不冒泡：跟 agent.gd 的 _on_noise_heard() 同一個理由，避免打斷正在
-## 顯示的對話內容。make_noise() 本身已經排除自己（見 Character.make_noise()），
-## 這裡不用再另外判斷來源是不是自己
+## 顯示的對話內容。死屍不反應（CodeRabbit review 抓到，同 agent.gd 的
+## _on_noise_heard() 一致）——這是 character.gd::make_noise() 直接觸發的外部
+## 事件回呼，不會自動被別處的死亡判斷擋掉。make_noise() 本身已經排除自己
+## （見 Character.make_noise()），這裡不用再另外判斷來源是不是自己
 func _on_noise_heard(_source: Character) -> void:
-	if is_in_conversation():
+	if is_dead or is_in_conversation():
 		return
 	say(L10n.t("DLG_NOISE_ALERT"))
 
