@@ -576,13 +576,20 @@ func _wait_for_sleep_reflections_to_settle() -> void:
 func _notification(what: int) -> void:
 	if what != NOTIFICATION_WM_CLOSE_REQUEST:
 		return
-	if _has_active_game_session():
-		var result := save_all()
-		for character_name in result["character_failures"]:
-			push_error("離開遊戲存檔失敗：%s" % character_name)
-		if not result["world_ok"]:
-			push_error("離開遊戲存檔失敗：世界 %s" % DEFAULT_WORLD_ID)
+	save_before_leaving()
 	get_tree().quit()
+
+# 離開目前對局共用的存檔收尾——關視窗（上面的 _notification）、Esc 選單
+# 「回主選單」都算「離開遊戲」（#359 存檔時機之一），走同一條路避免兩處
+# 各自維護一份存檔＋錯誤處理
+func save_before_leaving() -> void:
+	if not _has_active_game_session():
+		return
+	var result := save_all()
+	for character_name in result["character_failures"]:
+		push_error("離開遊戲存檔失敗：%s" % character_name)
+	if not result["world_ok"]:
+		push_error("離開遊戲存檔失敗：世界 %s" % DEFAULT_WORLD_ID)
 
 # data 缺欄位一律用預設值補，不當成錯誤（跟 character.gd 同一條規則）。
 # 場景裡目前找到的角色直接套用；存檔裡有記載但場景沒有的角色會被重新生成

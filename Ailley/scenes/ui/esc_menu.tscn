@@ -1,0 +1,34 @@
+[gd_scene load_steps=3 format=3 uid="uid://biaxj6silb5o8"]
+
+[ext_resource type="Theme" uid="uid://dktke2k785jv0" path="res://assets/ui/ailley_theme.tres" id="1_guea3"]
+[ext_resource type="Script" uid="uid://brjm6ev01geb" path="res://scripts/ui/esc_menu.gd" id="2_1apln"]
+
+[node name="EscMenu" type="PanelContainer"]
+offset_top = -2.0
+offset_right = 178.0
+offset_bottom = 140.0
+theme = ExtResource("1_guea3")
+script = ExtResource("2_1apln")
+
+[node name="MarginContainer" type="MarginContainer" parent="."]
+layout_mode = 2
+theme_type_variation = &"MenuMargin"
+
+[node name="VBoxContainer" type="VBoxContainer" parent="MarginContainer"]
+layout_mode = 2
+theme_type_variation = &"MenuVBoxContainer"
+
+[node name="Resume" type="Button" parent="MarginContainer/VBoxContainer"]
+custom_minimum_size = Vector2(124, 24)
+layout_mode = 2
+text = "UI_MENU_RESUME"
+
+[node name="Setting" type="Button" parent="MarginContainer/VBoxContainer"]
+custom_minimum_size = Vector2(124, 24)
+layout_mode = 2
+text = "UI_MENU_SETTINGS"
+
+[node name="Exit" type="Button" parent="MarginContainer/VBoxContainer"]
+custom_minimum_size = Vector2(124, 24)
+layout_mode = 2
+text = "UI_MENU_EXIT"
