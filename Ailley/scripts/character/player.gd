@@ -53,7 +53,6 @@ func _ready() -> void:
 	super()
 	add_to_group("player")
 	line_submitted.connect(_on_line_submitted)
-	noise_heard.connect(_on_noise_heard)
 
 	# 半徑動態算 maxf(...)，不能寫死：WORK_RANGE／TALK_RANGE／BUY_RANGE 是三個
 	# 故意保持獨立可調的常數（見 note/技術/販賣機.md），這裡只是先撈進一個
@@ -72,19 +71,6 @@ func _on_interact_area_body_entered(body: Node2D) -> void:
 
 func _on_interact_area_body_exited(body: Node2D) -> void:
 	_nearby_interactables.erase(body)
-
-## 範圍內有人 make_noise()／shout 時（issue #376），玩家跟 agent.gd 非 LLM
-## 模式下的 fallback 走同一條路——冒 !?。玩家沒有 LLM 決策迴圈可以問「要不要
-## 有反應」，這裡不是引擎替玩家決定了什麼感受，只是把「有事發生」這個感測
-## 結果顯示出來，要不要理會是玩家自己的事（跟《00》原則二「引擎只給事件，
-## 不給情緒」對到的是 AI 那一側，這裡對應的是把感測結果曝光給操作者本人）。
-## 對話中不冒泡：跟 agent.gd 的 _on_noise_heard() 同一個理由，避免打斷正在
-## 顯示的對話內容。make_noise() 本身已經排除自己（見 Character.make_noise()），
-## 這裡不用再另外判斷來源是不是自己
-func _on_noise_heard(_source: Character) -> void:
-	if is_in_conversation():
-		return
-	say(L10n.t("DLG_NOISE_ALERT"))
 
 # 打字是「這一輪有結果了」的其中一種來源，另一種是對話結束（見 exit_conversation()）。
 # 兩者收斂成同一個訊號，next_line() 才只要等一個東西。

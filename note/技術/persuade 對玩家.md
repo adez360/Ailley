@@ -111,6 +111,4 @@ main.tscn 那個測試用 Player 節點，再從 `player.tscn` 重新 `instantia
 - [[記憶與睡眠反思]] —— `player.memory.add_candidate()` 寫入的記憶目前不會被
   任何 prompt 讀取（玩家沒有 LLM 決策迴圈），純粹是資料，之後有功能要讀
   再接
-- [[give attack shout 對玩家]] —— 同一個玩家化身群組，NPC 對玩家發起
-  give／attack／shout 的相容性驗證與反應補完
 - [[Ailley]] —— 筆記庫入口
