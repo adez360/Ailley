@@ -25,7 +25,11 @@ extends Node
 ## alcohol/injury 是事件累積型（預設 0，靠外部事件推高），is_need 故意留 false，
 ## 不參與 get_lowest_need()/needs_attention()（見《99》P-32 追加決策）；
 ## hygiene/health 雖然也是「越高越好」，但目前沒有對應的 place 可去，
-## 同樣不參與這兩個函式，只靠 drift 自然變化或由外部事件寫入
+## 同樣不參與這兩個函式，只靠外部事件寫入——hygiene 2026-08-24 起也拿掉 drift，
+## 不再自然漂移，改成打獵/採集/表演等工作動作直接扣（見《99》P-65、agent.gd
+## 之後要新增的 ACTION_DIRTY 表；那三個動作本身都還沒進 IMPLEMENTED_ACTIONS
+## 白名單，這裡先把 drift 歸零，等它們接上時 ACTION_DIRTY 才會真的把 hygiene
+## 往下扣，在那之前 hygiene 會維持在 start 值不動）
 
 const MIN := 0.0
 const MAX := 100.0
@@ -36,7 +40,7 @@ const SPEC := {
 	"hydration": {"label": "STAT_HYDRATION", "drift": 2.0, "toward": 0.0, "start": 80.0, "is_need": true, "place": "tavern"},
 	"stamina": {"label": "STAT_STAMINA", "drift": 1.0, "toward": 0.0, "start": 80.0, "is_need": true, "place": "home"},
 	"wakefulness": {"label": "STAT_WAKEFULNESS", "drift": 1.2, "toward": 0.0, "start": 90.0, "is_need": true, "place": "home"},
-	"hygiene": {"label": "STAT_HYGIENE", "drift": 0.5, "toward": 0.0, "start": 70.0, "is_need": false, "place": ""},
+	"hygiene": {"label": "STAT_HYGIENE", "drift": 0.0, "toward": 0.0, "start": 70.0, "is_need": false, "place": ""},
 	"alcohol": {"label": "STAT_ALCOHOL", "drift": 3.0, "toward": 0.0, "start": 0.0, "is_need": false, "place": ""},
 	"health": {"label": "STAT_HEALTH", "drift": 0.0, "toward": 100.0, "start": 100.0, "is_need": false, "place": ""},
 	"injury": {"label": "STAT_INJURY", "drift": 0.5, "toward": 0.0, "start": 0.0, "is_need": false, "place": ""},
