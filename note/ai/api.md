@@ -81,7 +81,7 @@ ui_cancel                Esc（Godot 內建，project.godot 沒有覆寫）
 
 ---
 
-## Character — scripts/character/character.gd · class_name · CharacterBody2D
+## Character — Ailley/scripts/character/character.gd · class_name · CharacterBody2D
 
 ```gdscript
 signal move_finished(reached: bool)          # 走完 true / 卡住放棄 false
