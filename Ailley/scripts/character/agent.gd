@@ -1500,9 +1500,16 @@ func _on_action_interrupted() -> void:
 # 地點用 _on_action_interrupted() 存的快照，不是這裡當下的 current_place——
 # 見 _push_daily_event() 的 location_override 說明
 func _on_attacked(attacker: Character) -> void:
+	super._on_attacked(attacker)
 	_push_daily_event(
 		"你被 %s 攻擊了" % attacker.character_name, [attacker.character_id], _place_before_interrupt
 	)
+
+# 被救助記成事實句，跟 _on_attacked() 同一個理由（純客觀事件，不貼標籤，見
+# CLAUDE.md「遊戲機制規格：AI 自主性自檢」）。搬運中角色不是自己在移動，
+# 不需要比照 _on_attacked() 那樣取中斷前快照，直接用 current_place 就是對的
+func _on_rescued(hauler: Character) -> void:
+	_push_daily_event("你被 %s 救助了，脫離昏迷" % hauler.character_name, [hauler.character_id])
 
 # 基底的快照加上行程表這一段。schedule/current_place/current_state 宣告在這裡，
 # 所以是這裡負責放進去 —— 基底不必去猜誰有行程表
