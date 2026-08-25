@@ -184,7 +184,7 @@ updated: 2026-08-24
 }
 ```
 
-#### 欄位說明
+#### plan 回應欄位說明
 
 | 欄位 | 必填 | 說明 |
 | --- | --- | --- |
@@ -362,7 +362,7 @@ AI 回應裡本來就**沒有** `retries` 欄位回報（重試次數如果真�
 
 每個角色各自獨立、非同步發起，不是全體 NPC 在同一個時間點被送出批次。下圖為單一角色的一次決策；5 個角色可能同時各自處於流程中的不同階段。
 
-```
+```text
 Godot 操控層                房主機                    llama-server
   │                           │                          │
   │  角色完成當前動作          │                          │
@@ -390,7 +390,7 @@ Godot 操控層                房主機                    llama-server
 
 範圍內每個候選角色**各自獨立**擲骰、各自打一次 `words_to_creator_choice` 呼叫——不是一次請求打包全部角色、換回一批反應（見 §4-4）。下圖只畫其中一個角色：
 
-```
+```text
 玩家                Godot                候選角色（各自獨立）      llama-server
  │                    │                         │                     │
  │── 輸入文字 ───────►│                         │                     │
@@ -422,12 +422,12 @@ Godot 操控層                房主機                    llama-server
 | `disabled` | AI 功能關閉（設定檔 `enabled=false`） |
 | `no_requester_id` | 呼叫端沒給 `requester_id` |
 | `no_provider` | 指定的 provider 不存在或設定不完整（`has_valid_provider()` 不成立） |
-| `rate_limited` | 撞到 `min_interval_sec`／`max_calls_per_game_day`／`max_dialogue_calls_per_game_day` 任一節流閘門 |
+| `rate_limited` | 撞到 `min_interval_sec`（30 秒）／`max_calls_per_game_day`（每日 20 次）／`max_dialogue_calls_per_game_day`（每日 30 次）任一節流閘門——`dialogue` 呼叫豁免同角色冷卻與 `max_calls_per_game_day`，只受自己專用的每日配額限制（`ai_config.gd`） |
 | `daily_quota` | 每日呼叫額度用盡 |
 | `timeout` | `HTTPRequest` 逾時（`provider.timeout`，設定檔可調，不是寫死的 5／15 秒） |
 | `network` | `HTTPRequest` 本身失敗（DNS／連線層錯誤） |
 | `http` | HTTP 狀態碼非 2xx（格式 `http_<code> <回應內容前 200 字>`） |
-| `bad_json` | provider 回應不是合法 JSON |
+| `bad_json` | provider 回應不是合法 JSON——固定重試 1 次（`ai_service.gd::RETRY_LIMIT`），跟下面 AISchema 層依 `provider.max_validation_retries()` 的驗證重試是兩個獨立計數器，不共用次數 |
 
 **AISchema 層**（`ai_schema.gd` 的 `ERROR_*`，格式／驗證失敗；`_decide_with_retry()` 依 `provider.max_validation_retries()` 自動重試，重試次數用完才把最後一次的失敗原因往上回）
 
@@ -445,7 +445,7 @@ Godot 操控層                房主機                    llama-server
 | --- | --- |
 | `plan` | 這輪不產生新 `tasks`，角色留在既有任務池，不特別寫 `last_action_result` |
 | `dialogue` | `conversation.gd::_finish_with_fallback()` 改說一句 `DialogueLines.closing()` 收尾 |
-| `words_to_creator_choice`／`creation`／`reflection`／`checkpoint` | 直接 `return`，這次呼叫當作沒發生——fire-and-forget，不重試、不降級成別的內容 |
+| `words_to_creator_choice`／`creation`／`reflection`／`checkpoint` | 直接 `return`，呼叫端不做額外內容重試或降級成別的內容；`AIService` 仍依上面 §6 的傳輸層規則對可重試錯誤（HTTP 5xx、特定網路錯誤）自動重試 1 次，不受這裡影響 |
 
 HTTP 5xx、逾時都落在上面 AIService 層的 `http`／`timeout` identifier 裡，不是獨立分類；本文件先前設想的「`request_id`／`protocol_version` 不符」這類檢查也不存在——請求裡本來就沒有這兩個欄位（見 §4）。
 
