@@ -43,7 +43,8 @@ func _ready() -> void:
 ## 一隻壞掉不該連累其他隻。
 ##
 ## 要開啟的 Agent 呼叫 debug_set_llm_decision(true) 但不逐隻 await——
-## AIService 的節點池＋佇列（POOL_SIZE=3，FIFO）本來就會把超出池子的請求
+## AIService 的節點池＋佇列（POOL_SIZE=3，CONVERSATION 優先於 SCHEDULED、
+## 同優先權內維持進場順序，見《10》§5.1）本來就會把超出池子的請求
 ## 排隊處理，這裡不用自己手動錯開；逐隻 await 反而會把 5 隻角色的第一次
 ## 決策強制序列化，開場等待時間從一次 3-4 秒的網路延遲被拖成 5 次疊加
 func _apply_startup_ai_state() -> void:
