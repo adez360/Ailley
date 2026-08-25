@@ -215,7 +215,7 @@ animations = [{
 }]
 
 [sub_resource type="CircleShape2D" id="CircleShape2D_k443m"]
-radius = 6.0
+radius = 3.0
 
 [sub_resource type="CircleShape2D" id="CircleShape2D_6u2qc"]
 radius = 80.0
@@ -229,10 +229,11 @@ script = ExtResource("1_mbysm")
 
 [node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="."]
 sprite_frames = SubResource("SpriteFrames_nmuq1")
-animation = &"idle_front"
+animation = &"idle_back"
+offset = Vector2(0, -7.954)
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
-position = Vector2(0, 6)
+position = Vector2(0, 2)
 shape = SubResource("CircleShape2D_k443m")
 
 [node name="Stats" type="Node" parent="."]

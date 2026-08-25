@@ -1,4 +1,4 @@
-[gd_scene load_steps=9 format=3 uid="uid://bianwxowjctjk"]
+[gd_scene load_steps=8 format=3 uid="uid://bianwxowjctjk"]
 
 [ext_resource type="PackedScene" uid="uid://v21qv1icuh5m" path="res://scenes/player.tscn" id="1_ljsu2"]
 [ext_resource type="Script" uid="uid://bxtstp8huotpd" path="res://scripts/core/main_scene.gd" id="1_o6xl0"]
@@ -11,34 +11,38 @@
 [node name="Node" type="Node"]
 script = ExtResource("1_o6xl0")
 
-[node name="Level" parent="." instance=ExtResource("1_tefeu")]
+[node name="World" type="Node2D" parent="."]
+y_sort_enabled = true
 
-[node name="PersistentUI" parent="." instance=ExtResource("13_trceg")]
+[node name="Level" parent="World" instance=ExtResource("1_tefeu")]
 
-[node name="Player" parent="." instance=ExtResource("1_ljsu2")]
-z_index = 1
+[node name="Player" parent="World" instance=ExtResource("1_ljsu2")]
 position = Vector2(0, -12)
 character_name = "player"
 
-[node name="Agent" parent="." instance=ExtResource("6_nnngi")]
+[node name="Agent" parent="World" instance=ExtResource("6_nnngi")]
 position = Vector2(40, -8)
 
-[node name="Agent2" parent="." instance=ExtResource("6_nnngi")]
+[node name="Agent2" parent="World" instance=ExtResource("6_nnngi")]
+visible = false
 position = Vector2(133, -21)
 
-[node name="Agent3" parent="." instance=ExtResource("6_nnngi")]
+[node name="Agent3" parent="World" instance=ExtResource("6_nnngi")]
+visible = false
 position = Vector2(-90, -60)
 
-[node name="Agent4" parent="." instance=ExtResource("6_nnngi")]
+[node name="Agent4" parent="World" instance=ExtResource("6_nnngi")]
+visible = false
 position = Vector2(-60, -60)
 
-[node name="Agent5" parent="." instance=ExtResource("6_nnngi")]
+[node name="Agent5" parent="World" instance=ExtResource("6_nnngi")]
+visible = false
 position = Vector2(-30, -60)
 
-[node name="Workstation" parent="." instance=ExtResource("12_0ld40")]
+[node name="Workstation" parent="World" instance=ExtResource("12_0ld40")]
 position = Vector2(-88, 88)
 
-[node name="VendingMachine" parent="." instance=ExtResource("13_yc10j")]
+[node name="VendingMachine" parent="World" instance=ExtResource("13_yc10j")]
 position = Vector2(185, 50)
 catalog = {
 "ale": 10.0,
@@ -49,9 +53,11 @@ catalog = {
 "water": 2.0
 }
 
-[node name="VendingMachineHerbShop" parent="." instance=ExtResource("13_yc10j")]
+[node name="VendingMachineHerbShop" parent="World" instance=ExtResource("13_yc10j")]
 position = Vector2(-120, 88)
 catalog = {
 "herb_soup": 15.0,
 "medicine": 45.0
 }
+
+[node name="PersistentUI" parent="." instance=ExtResource("13_trceg")]
