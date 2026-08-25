@@ -898,6 +898,7 @@ func _erect_unmarked_grave() -> void:
 		return
 	is_buried = true
 	grave_id = "grave_%s" % character_id
+	buried_by = null
 	buried_tick = _current_tick()
 	is_anonymous = true
 	print_debug("Character %s 腐壞見底，自動立無名碑" % character_name)
