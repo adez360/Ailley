@@ -10,7 +10,7 @@ signal move_finished(reached: bool)
 signal noise_heard(source: Character)		# 收到的那一方會發，見 make_noise()
 signal spoke(line: String)			# 講出任何一句話都會發，日後寫逐字稿/記憶系統的接點
 
-const SPEED = 80.0
+const SPEED = 60.0		# 2026-08-24 從 80 調降，原速 5 格/秒（16px/格）偏快
 const ARRIVE_DISTANCE = 2.0		# 距離 waypoint 多近算抵達
 const STUCK_TIME = 1.0			# 卡住多久就放棄目前路徑
 
