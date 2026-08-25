@@ -2,7 +2,7 @@
 tags:
   - moc
 status: 現況
-updated: 2026-08-18
+updated: 2026-08-24
 ---
 
 # Ailley
@@ -48,7 +48,7 @@ Ailley 是由 LLM 驅動的 2D 像素村莊（Godot 4.5.1）。
 | [[村莊地圖]] | MVP 5 個地點的錨點座標、TileMapDual 填色陷阱 | 已實作 |
 | [[工作站]] | `work` 動作、距離判定、佔用卡位、GameClock 計時 | 已實作 |
 | [[販賣機]] | `buy` 動作、扣款與加入背包的補償式交易、商品選單 | 已實作 |
-| [[昏迷狀態機制]] | health ≤ 0 觸發昏迷、30 分鐘無人搬走自動送醫、60 分鐘治療恢復 | 進行中 |
+| [[昏迷狀態機制]] | health ≤ 0 觸發昏迷、30 分鐘無人搬走轉入死亡流程（#379）、60 分鐘治療恢復 | 進行中 |
 | [[天神之石輸入機制]] | 點石頭開輸入框、6 格廣播事實句、`words_to_creator` 骰中後問 AI 要不要說 | 已實作 |
 | [[角色資訊面板]] | 點角色彈出三分頁：狀態／今日（`today_plan`＋新增的 `today_log`）／物品 | 已實作 |
 | [[存檔]] | 角色／世界兩層切分、序列化規則、兩個前置 | 規劃中 |
@@ -59,6 +59,8 @@ Ailley 是由 LLM 驅動的 2D 像素村莊（Godot 4.5.1）。
 | [[角色庫與投放]] | 動態生成角色的身分系統，官方模板庫 + 投放機制 | 已實作 |
 | [[平行 Worktree 與 Godot MCP]] | 多 worktree 平行跑 issue 時的 godot-ai session 隔離、相依 issue 重造重複的坑 | 現況 |
 | [[persuade 對玩家]] | NPC 對玩家發起 persuade 時的 Y/N 彈窗，跟 #227 LLM 決策路徑的分流、waypoint 導引與記憶效果 | 已實作 |
+| [[場景組織]] | `main.tscn`（只放拍板定案內容）與 `sandbox.tscn`（新功能先做這裡）的分工 | 已實作 |
+| [[give attack shout 對玩家]] | give／attack 對玩家目標本來就相容（驗證用測試涵蓋）；shout／make_noise() 補上玩家的 !? 反應 | 已實作 |
 
 ### ai
 

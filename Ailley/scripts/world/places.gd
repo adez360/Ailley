@@ -57,6 +57,7 @@ const DISPLAY_NAME_KEYS := {
 	"tavern": "UI_LOC_TAVERN",
 	"pavilion": "UI_LOC_PAVILION",
 	"god_stone": "UI_GOD_STONE_TITLE",
+	"cemetery": "UI_LOC_CEMETERY",
 }
 
 
