@@ -11,6 +11,10 @@ extends Node
 ## 現行 schema 對不上（不只缺 NOT NULL）的既有資料庫，migration 會中止
 ## 而不是用 SELECT * 靜默複製到錯的欄位。
 ##
+## issue #566／P-59：也驗證主鍵「已經是 NULL」的舊資料列——memories 是
+## 根表（主鍵不是外鍵），NULL 主鍵要補新 UUID 保留；npc_appearance 主鍵
+## 同時是外鍵（指向 npc），NULL 沒辦法補，migration 要中止。
+##
 ## 使用方式：
 ## 1. 將本檔放到：
 ##      res://scripts/database/MigrationV3Test.gd
@@ -147,6 +151,8 @@ func _run() -> void:
 	)
 
 	_run_column_shape_mismatch_test()
+	_run_null_pk_repair_test()
+	_run_null_pk_reject_test()
 
 	_finish()
 
@@ -233,6 +239,183 @@ func _run_column_shape_mismatch_test() -> void:
 	_delete_test_db()
 
 
+## memories 是根表——memory_id 不是外鍵，NULL 主鍵可以安全補新 UUID
+## （issue #566／P-59）。種一筆 memory_id 是 NULL 的舊資料列，跑完
+## migration 後驗證：migration 成功、列數保留、NULL 那筆補到一個合法的
+## UUID（不是空字串，格式對），其他欄位（content）內容沒有被搞壞。
+func _run_null_pk_repair_test() -> void:
+	if db != null:
+		db.close_db()
+		db = null
+
+	_delete_test_db()
+
+	db = SQLite.new()
+	db.path = TEST_DB_PATH
+	db.foreign_keys = true
+
+	if not db.open_db():
+		_fail("null_pk_repair/open_db", db.error_message)
+		return
+
+	var statements := [
+		"CREATE TABLE npc (npc_id TEXT PRIMARY KEY);",
+		"""
+		CREATE TABLE memories (
+			memory_id TEXT PRIMARY KEY,
+			npc_id TEXT NOT NULL,
+			level INTEGER NOT NULL DEFAULT 1,
+			content TEXT NOT NULL,
+			valence TEXT NOT NULL DEFAULT 'neutral',
+			importance INTEGER NOT NULL DEFAULT 0,
+			decay_value INTEGER NOT NULL DEFAULT 100,
+			created_tick INTEGER NOT NULL,
+			created_day INTEGER NOT NULL,
+			location_id TEXT,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			embedding TEXT,
+			FOREIGN KEY (npc_id) REFERENCES npc(npc_id) ON DELETE CASCADE
+		);
+		""",
+		"""
+		CREATE TABLE memory_related_npcs (
+			memory_id TEXT,
+			npc_id TEXT,
+			PRIMARY KEY (memory_id, npc_id),
+			FOREIGN KEY (memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE,
+			FOREIGN KEY (npc_id) REFERENCES npc(npc_id) ON DELETE CASCADE
+		);
+		"""
+	]
+
+	for sql in statements:
+		if not db.query(sql):
+			_fail("null_pk_repair/seed", db.error_message)
+			return
+
+	if not db.query_with_bindings("INSERT INTO npc (npc_id) VALUES (?);", [NPC_A]):
+		_fail("null_pk_repair/seed npc", db.error_message)
+		return
+
+	if not db.query_with_bindings(
+		"""
+		INSERT INTO memories
+			(memory_id, npc_id, level, content, created_tick, created_day)
+		VALUES (?, ?, ?, ?, ?, ?);
+		""",
+		[MEMORY_A, NPC_A, 1, "正常那筆", 1, 1]
+	) or not db.query_with_bindings(
+		"""
+		INSERT INTO memories
+			(memory_id, npc_id, level, content, created_tick, created_day)
+		VALUES (?, ?, ?, ?, ?, ?);
+		""",
+		[null, NPC_A, 1, "主鍵是 NULL 的那筆", 2, 1]
+	):
+		_fail("null_pk_repair/seed memories", db.error_message)
+		return
+
+	if not db.query("PRAGMA user_version = 2;"):
+		_fail("null_pk_repair/set user_version", db.error_message)
+		return
+
+	_check(
+		"memories 有 NULL 主鍵列時 migration 仍然成功（根表可以補新 ID）",
+		DatabaseSchema.initialize(db),
+		"initialize() 回傳 false"
+	)
+
+	_check(
+		"memories 列數保留（NULL 主鍵那筆沒被丟掉）",
+		_count_rows("memories") == 2,
+		"got %d, expected 2" % _count_rows("memories")
+	)
+
+	_check(
+		"NULL 主鍵那筆補到一個合法的 UUID",
+		_null_pk_row_repaired(),
+		"content='主鍵是 NULL 的那筆' 那一列查不到，或補上去的 memory_id 不像 UUID"
+	)
+
+	db.close_db()
+	db = null
+	_delete_test_db()
+
+
+## npc_appearance 的主鍵同時是外鍵（指向 npc），NULL 代表「不知道這筆屬於
+## 哪個 npc」，這個資訊已經遺失，不能補新 ID（issue #566／P-59）。種一筆
+## npc_id 是 NULL 的舊資料列，驗證 migration 中止、ROLLBACK、原資料沒被
+## 動過。
+func _run_null_pk_reject_test() -> void:
+	if db != null:
+		db.close_db()
+		db = null
+
+	_delete_test_db()
+
+	db = SQLite.new()
+	db.path = TEST_DB_PATH
+	db.foreign_keys = true
+
+	if not db.open_db():
+		_fail("null_pk_reject/open_db", db.error_message)
+		return
+
+	var statements := [
+		"CREATE TABLE npc (npc_id TEXT PRIMARY KEY);",
+		"""
+		CREATE TABLE npc_appearance (
+			npc_id TEXT PRIMARY KEY,
+			hair_id TEXT DEFAULT '',
+			face_id TEXT DEFAULT '',
+			clothes_id TEXT DEFAULT '',
+			decoration1_id TEXT DEFAULT '',
+			decoration2_id TEXT DEFAULT '',
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (npc_id) REFERENCES npc(npc_id) ON DELETE CASCADE
+		);
+		"""
+	]
+
+	for sql in statements:
+		if not db.query(sql):
+			_fail("null_pk_reject/seed", db.error_message)
+			return
+
+	if not db.query_with_bindings(
+		"INSERT INTO npc_appearance (npc_id, hair_id) VALUES (?, ?);",
+		[null, "test_hair_null_pk"]
+	):
+		_fail("null_pk_reject/seed npc_appearance", db.error_message)
+		return
+
+	if not db.query("PRAGMA user_version = 2;"):
+		_fail("null_pk_reject/set user_version", db.error_message)
+		return
+
+	_check(
+		"npc_appearance 有 NULL 主鍵列時 migration 中止（PK 同時是外鍵，不能亂補）",
+		not DatabaseSchema.initialize(db),
+		"initialize() 回傳 true——NULL 主鍵卻放行了"
+	)
+
+	_check(
+		"中止後 user_version 保持在 2（ROLLBACK，不是半套）",
+		_get_user_version() == 2,
+		"got %d, expected 2" % _get_user_version()
+	)
+
+	_check(
+		"中止後 npc_appearance 舊資料仍在原表",
+		_null_pk_reject_row_survived(),
+		"npc_appearance 裡查不到 seed 時插入的 hair_id='test_hair_null_pk'"
+	)
+
+	db.close_db()
+	db = null
+	_delete_test_db()
+
+
 # =====================================================
 # 舊版 schema（缺 NOT NULL 主鍵）＋ 種子資料
 # =====================================================
@@ -242,7 +425,31 @@ func _seed_legacy_schema() -> bool:
 		# 最小化父表，只給下面幾張子表滿足 FK 用，跟這次 migration 無關。
 		"CREATE TABLE npc (npc_id TEXT PRIMARY KEY);",
 		"CREATE TABLE location (location_id TEXT PRIMARY KEY);",
-		"CREATE TABLE item (item_id TEXT PRIMARY KEY);",
+
+		# item 不能用一欄的最小化 stub——user_version 從 2 開始，
+		# DatabaseSchema.initialize() 這裡會把 migration 3～6 全部套用，
+		# migration 6 也會重建 item，欄位形狀要跟現行 ItemSchema.gd 一致
+		# （只故意省略 item_id 的 NOT NULL），否則會撞
+		# _migrate_rebuild_verify_column_shape() 的形狀檢查而中止。
+		"""
+		CREATE TABLE item (
+			item_id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			item_type TEXT NOT NULL DEFAULT 'misc',
+			description TEXT DEFAULT '',
+			base_price INTEGER NOT NULL DEFAULT 0,
+			max_stack INTEGER NOT NULL DEFAULT 30,
+			is_consumable INTEGER NOT NULL DEFAULT 0,
+			is_perishable INTEGER NOT NULL DEFAULT 0,
+			decay_rate REAL NOT NULL DEFAULT 0,
+			durability_cost INTEGER NOT NULL DEFAULT 0,
+			effect_satiety INTEGER NOT NULL DEFAULT 0,
+			effect_hydration INTEGER NOT NULL DEFAULT 0,
+			effect_alcohol INTEGER NOT NULL DEFAULT 0,
+			effect_injury INTEGER NOT NULL DEFAULT 0,
+			is_active INTEGER NOT NULL DEFAULT 1
+		);
+		""",
 
 		# --- memories（舊版：memory_id 缺 NOT NULL）---
 		"""
@@ -347,7 +554,7 @@ func _seed_legacy_schema() -> bool:
 	) or not db.query_with_bindings(
 		"INSERT INTO location (location_id) VALUES (?);", [LOCATION_A]
 	) or not db.query_with_bindings(
-		"INSERT INTO item (item_id) VALUES (?);", [ITEM_A]
+		"INSERT INTO item (item_id, name) VALUES (?, ?);", [ITEM_A, "測試道具"]
 	):
 		push_error("[MigrationV3Test] seed 父表資料失敗: " + db.error_message)
 		return false
@@ -486,6 +693,37 @@ func _can_insert_orphan_related_npc() -> bool:
 		"INSERT INTO memory_related_npcs (memory_id, npc_id) VALUES (?, ?);",
 		["__migration_v3_test_nonexistent_memory", NPC_A]
 	)
+
+
+func _count_rows(table: String) -> int:
+	if not db.query("SELECT COUNT(*) AS c FROM %s;" % table):
+		return -1
+
+	return int(db.query_result[0].get("c", -1))
+
+
+## UUID v4 是 36 字元、4 個連字號（8-4-4-4-12）。不驗證精確演算法，
+## 只驗證「看起來像 UUID」——這裡的重點是主鍵補上了合法值、資料沒對錯欄位。
+func _null_pk_row_repaired() -> bool:
+	if not db.query_with_bindings(
+		"SELECT memory_id FROM memories WHERE content = ?;", ["主鍵是 NULL 的那筆"]
+	):
+		return false
+
+	if db.query_result.is_empty():
+		return false
+
+	var repaired_id: String = db.query_result[0].get("memory_id", "")
+	return repaired_id.length() == 36 and repaired_id.count("-") == 4
+
+
+func _null_pk_reject_row_survived() -> bool:
+	if not db.query_with_bindings(
+		"SELECT hair_id FROM npc_appearance WHERE hair_id = ?;", ["test_hair_null_pk"]
+	):
+		return false
+
+	return not db.query_result.is_empty()
 
 
 func _column_shape_mismatch_row_survived() -> bool:
