@@ -1,5 +1,10 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 reviews:
+  # repo 裡存在這份 yaml 之後，CodeRabbit 改用檔案內容為準，沒寫到的欄位
+  # 落回 CodeRabbit 自己的預設值，不是 dashboard 先前設定的值——
+  # request_changes_workflow 沒明講會落回 false，review 一律只送
+  # COMMENT，看不出「這個版本可以了」還是「還有東西要改」（issue #608）。
+  request_changes_workflow: true
   path_instructions:
     - path: "note/規格書/**/*.md"
       instructions: |
