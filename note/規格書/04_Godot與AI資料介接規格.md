@@ -1,7 +1,7 @@
 ---
 tags: [規格書, 架構]
 status: 大致定案
-updated: 2026-08-17
+updated: 2026-08-24
 ---
 
 # 04_Godot與AI資料介接規格
@@ -77,43 +77,38 @@ updated: 2026-08-17
 
 ---
 
-## 3. 端點清單
+## 3. 訊息類型
 
 事件驅動架構下，決策請求以**單一角色**為單位發起，不再是每 tick 批次送出全體 NPC（見《10》§5.1、《12》§5.1）。
 
-**這些是 `AIService` 對外呈現的邏輯操作，不是獨立行程的網路端點**——`decide`／`event`／`generate/words`／`memory/reflect` 各自組好 prompt/schema 後，一律送進同一個 `LocalLLM`／`RemoteLLM` 的 chat completion 呼叫，差別只在 prompt 內容與 schema，不是不同 URL。下表沿用端點命名只是方便對照「這次呼叫要做什麼」，實際 wire format 見《技術/LLM 串接與 AI 服務層》。
+**這些不是獨立行程的網路端點**——`AIService` 一律打同一個 `LocalLLM`／`RemoteLLM` 的 `/v1/chat/completions`。`AIService` 內部維護一個 `POOL_SIZE := 3` 的 `HTTPRequest` 節點池（跟 llama-server 的 `--parallel 3` 對齊），佇列裡的請求依序分派給空閒節點，可以同時有 3 筆在飛，不是單一節點依序排隊。差別只在 `PromptBuilder` 組出來的 `envelope.payload.type`（決定 system prompt、要不要帶 `response_format`），不是不同 URL——下表沿用「訊息類型」只是方便對照「這次呼叫要做什麼」，實際 wire format 見《技術/LLM 串接與 AI 服務層》與 `Ailley/scripts/ai/prompt_builder.gd`。
 
-| 操作 | 用途 |
-| --- | --- |
-| `health` | 啟動時檢查 `LocalLLM`／`RemoteLLM` 是否就緒 |
-| `decide` | 單一角色的決策請求（角色完成動作後發起） |
-| `event` | 推送即時事件（天神之石） |
-| `generate/words` | 建角時生成 `words_to_creator` |
-| `memory/reflect` | 睡眠反思、記憶壓縮 |
+啟動就緒檢查也不是獨立端點：`AIService._probe_models()` 打 provider 標準的 `GET {base_url}/models`（OpenAI 相容 API 既有端點，順便驗證 API 金鑰是否有效），不是下面曾經設想過的 `/health`——`ai_service.gd`／`ai_config.gd` 的註解都明講「刻意不用《04》§4-1 想像的 `/health`，那是沒有的」。
+
+| `payload.type` | 用途 | 對應 `PromptBuilder` |
+| --- | --- | --- |
+| `plan` | 單一角色的決策請求，回一組 `tasks[]`（角色完成動作後發起，或事件觸發） | `build_plan_envelope()` |
+| `dialogue` | 對話逐輪生成，一次一句 | `build_dialogue_envelope()` |
+| `words_to_creator_choice` | 天神之石事件觸發後，判斷「現在要不要把想對造物主說的話說出口」 | `build_words_to_creator_envelope()` |
+| `creation` | 建角完成當下生成 `words_to_creator` | `build_creation_envelope()` |
+| `reflection` | 睡眠反思、記憶壓縮 | `build_reflection_envelope()` |
+| `checkpoint` | 長動作固定間隔檢查點（issue #336）：問「繼續還是放棄」 | `build_checkpoint_envelope()` |
 
 ---
 
 ## 4. 封包格式
 
-### 4-1 `/health`
+所有請求共用同一個信封形狀：`{"system": "<system prompt 字串>", "payload": {...}, "response_format": {...}}`（`response_format` 選填，只有 provider 支援 `json_schema` 時才會真的送出，見 §8）。下面每節只列 `payload` 與 AI 回應本體，信封外殼不重複寫。`self` 區塊（角色自身狀態）由 `plan`／`dialogue`／`reflection`／`checkpoint` 四種類型共用，形狀統一，見 4-2 第一次出現處，後面章節不重複列全部欄位。
 
-**回應**
+### 4-1 就緒檢查
 
-```json
-{
-  "status": "ready",
-  "model": "local-7b",
-  "slots_total": 5,
-  "slots_busy": 0,
-  "protocol_version": "1.0"
-}
-```
+**Godot → AI**：`GET {base_url}/models`（OpenAI 相容 API 標準端點，本機／雲端同一條路徑），不帶 payload。
 
-`status` 為 `ready` / `loading` / `error`。Godot 啟動時先打這支，未 ready 前不開始接受決策請求。
+**判定**：HTTP 2xx 視為就緒；3xx（通常代表 `base_url` 設錯）與其餘狀態碼一律視為未就緒。沒有本文件先前設想的 `status: ready/loading/error` 欄位——這支端點本身就不是本專案的自訂 API，回應格式由 provider（llama-server／雲端 API）決定，Godot 端只看 HTTP 狀態碼。
 
 ---
 
-### 4-2 `/decide`　單一角色決策請求
+### 4-2 `plan`　單一角色決策請求
 
 **Godot → AI**
 
@@ -121,62 +116,36 @@ updated: 2026-08-17
 
 ```json
 {
-  "protocol_version": "1.0",
-  "request_id": "req_00001234",
-  "tick": 4210,
-  "game_time": { "day": 30, "hour": 14, "minute": 20 },
-  "npc_id": "npc_017",
-  "snapshot": {
-    "physical": {
-      "hunger":     { "value": 62, "label": "很餓" },
+  "type": "plan",
+  "self": {
+    "id": "npc_017",
+    "name": "NEON",
+    "stats": {
+      "hunger":     { "value": 62, "label": "有點餓" },
       "thirst":     { "value": 38, "label": "有點渴" },
-      "stamina":    { "value": 45, "label": "有點累" },
+      "stamina":    { "value": 55, "label": "有點累" },
       "sleepiness": { "value": 20, "label": "清醒" },
-      "hygiene":    { "value": 55, "label": "還算乾淨" },
+      "hygiene":    { "value": 70, "label": "還算乾淨" },
       "alcohol":    { "value": 0,  "label": "清醒" },
       "health":     { "value": 88, "label": "健康強壯" },
-      "injury":     { "value": 12, "label": "輕微擦傷" }
+      "injury":     { "value": 0,  "label": "沒有受傷" }
     },
-    "emotion": {
-      "type": "anger", "intensity": 78, "duration_left": 6
-    },
-    "conditions": [ { "type": "injured", "turns_left": 8 } ],
-    "current_goal": "把藥草賣掉，換錢買一把好一點的刀",
-    "today_plan": [
-      { "text": "採藥草", "done": true },
-      { "text": "找 TAMMY 聊天", "done": false },
-      { "text": "修屋頂", "done": false }
-    ],
-    "last_action_result": {
-      "action": "steal",
-      "target": "npc_003",
-      "success": false,
-      "reason": "現場有兩名目擊者，你臨陣退縮了"
-    },
-    "location": {
-      "id": "loc_herb_field",
-      "name": "藥草叢",
-      "desc": "一片半人高的草叢，泥土有點濕。"
-    },
-    "fact_lines": [
-      "你已經大半天沒和任何人說過話了。"
-    ],
-    "present_npcs": [
-      {
-        "npc_id": "npc_003",
-        "name": "NEON",
-        "appearance_text": "他綁著一頭紅色長髮，穿著沾滿油汙的工作服。",
-        "relation": { "trust": 15 }
-      }
-    ],
-    "available_actions": ["gather", "move", "talk", "rest", "eat", "steal"],
-    "economy": {
-      "money": 300,
-      "inventory": [
-        { "item_id": "herb", "count": 4, "decay": 22, "durability": 100 }
-      ]
-    },
-    "injected_lines": []
+    "time": { "day": 30, "hour": 14, "minute": 20 },
+    "place": "loc_herb_field",
+    "current_action": "idle",
+    "last_action_result": "",
+    "money": 300,
+    "inventory": { "herb": 4 },
+    "emotion": { "type": "neutral", "intensity": 0 },
+    "conditions": [],
+    "current_goal": "把藥草賣掉，換錢買一把好一點的刀"
+  },
+  "context": {
+    "visible": [ { "name": "TAMMY", "trust": 15, "met_count": 3 } ],
+    "pool": [ "…Agent._task_pool_summary() 摘要" ],
+    "today_plan": "You intended to do today: 採藥草 (done), 找 TAMMY 聊天.",
+    "fact_lines": [ "你已經大半天沒和任何人說過話了。" ],
+    "memory": { "recent": [ "…" ], "core": [ "…" ] }
   }
 }
 ```
@@ -185,17 +154,17 @@ updated: 2026-08-17
 
 | 欄位 | 必填 | 說明 |
 | --- | --- | --- |
-| `protocol_version` | ✔ | 版號不合時 AI 端回 `400` |
-| `request_id` | ✔ | 房主機產生，回應必須帶回同一個 |
-| `tick` | ✔ | 全域 tick 計數，僅供時間顯示，不是觸發依據（見《00》§3） |
-| `npc_id` | ✔ | 本次決策請求的角色，單一角色一次 |
-| `physical.*.value` | ✔ | 數值本體。這裡的 `hunger`／`thirst`／`sleepiness` 是**換算過的顯示概念**（飢餓度／口渴度／睡意），不是內部儲存欄位名——內部儲存分別叫 `satiety`／`hydration`／`wakefulness`，方向相反（見《01》§4-1）。換算式：`hunger = 100 − satiety`、`thirst = 100 − hydration`、`sleepiness = 100 − wakefulness`。`stamina`／`hygiene`／`alcohol`／`health`／`injury` 內部與顯示同名同方向，直接傳原始值（見《99》P-07） |
-| `physical.*.label` | ✔ | **中文形容詞，缺一不可**，5 級距對照表見《99》P-07 |
-| `today_plan[].done` | ✔ | 每筆標記完成／未完成，不限筆數（見《10》§5.4） |
-| `fact_lines` | ✔ | 引擎產生的事實句陣列，無則傳 `[]` |
-| `present_npcs` | ✔ | **只放在場的人**，無則傳 `[]` |
-| `available_actions` | ✔ | 依《07》§5 過濾：只拿掉「角色狀態不允許／缺前置物品」等**客觀做不到**的選項；社會性限制（名聲過低、被禁止進入等）**保留選項**，AI 能選，由引擎在套用階段判定失敗並給理由（《00》原則一「引擎只決定做不做得到」） |
-| `injected_lines` | ✔ | 特殊注入行（如 `words_to_creator` 觸發），無則傳 `[]` |
+| `self.stats.*.value` | ✔ | 數值本體。`hunger`／`thirst`／`sleepiness` 是**換算過的顯示概念**，不是內部儲存欄位名——內部儲存分別叫 `satiety`／`hydration`／`wakefulness`，方向相反（見《01》§4-1）。換算式：`hunger = 100 − satiety`、`thirst = 100 − hydration`、`sleepiness = 100 − wakefulness`。其餘 5 項內部與顯示同名同方向，直接傳原始值（見《99》P-07） |
+| `self.stats.*.label` | ✔ | **中文形容詞，缺一不可**，5 級距對照表見《99》P-07（`prompt_builder.gd` 的 `PHYSICAL_LABELS`） |
+| `self.money`／`self.inventory` | ✔ | `inventory` 是 `{item_id: 總數量}` 摘要，不是逐格陣列，不帶 decay／durability（#339） |
+| `self.conditions` | ✔ | 只帶 `type` 字串陣列，不帶倒數細節，無則傳 `[]` |
+| `context.fact_lines` | ✔ | 引擎產生的事實句陣列，無則傳 `[]` |
+| `context.visible` | ✔ | **只放在場的人**，無則傳 `[]`，形狀是 `{name, trust, met_count}`——只送 `trust`，好感／熟悉／虧欠三維已拿掉（《01》3-1） |
+| `context.memory` | ✔ | L2（近期）依連結展開篩選、L4（核心）固定全量帶入（#360），只帶 `content` 字串 |
+
+沒有本文件先前設想的 `available_actions` 陣列、`present_npcs` 的 `appearance_text`、`location.desc`——可選動作清單是寫死在 system prompt 文字裡的 `AISchema.IMPLEMENTED_ACTIONS`（`Ailley/scripts/ai/ai_schema.gd`，由 `PromptBuilder._plan_system()` 動態組進提示詞），不是每次動態依前提條件過濾出來的陣列。
+
+《07 地點與行動》§5 描述的「Godot 端依地點／角色狀態／持有物過濾 `available_actions`」是還沒落地的目標設計，不是文件寫錯——issue #477（`Task.preconditions` 評估）就是在追蹤這個缺口，目前 `Task.preconditions` 一律通過，過濾這一層完全沒做。兩份文件不衝突：《07》講的是設計終點，這裡講的是現在打出去的請求實際長什麼樣，#477 落地前不要照《07》的措辭去對接實作。
 
 > ⚠️ **每次決策只讀請求發起當下的快照**。套用階段在房主機序列處理，避免 race condition（見《00》§7）。
 
@@ -203,199 +172,187 @@ updated: 2026-08-17
 
 ```json
 {
-  "protocol_version": "1.0",
-  "request_id": "req_00001234",
-  "npc_id": "npc_017",
-  "decision": {
-    "action": "gather",
-    "target": null,
-    "location_id": "loc_herb_field",
-    "monologue": "藥草再不採就要被別人拿光了。",
-    "speech": null,
-    "speech_volume": "normal",
-    "emotion": { "type": "neutral", "intensity": 30 },
-    "current_goal": "把藥草賣掉，換錢買一把好一點的刀",
-    "update_plan": null,
-    "appointment": null
-  },
-  "meta": {
-    "source_model": "local-7b",
-    "latency_ms": 820
+  "reasoning": "藥草再不採就要被別人拿光了，而且我有點餓，先解決吃飯問題比較划算。",
+  "inner_monologue": "先吃飽再去採藥草好了。",
+  "request_plan_update": false,
+  "emotion": { "type": "neutral", "intensity": 30 },
+  "current_goal": "把藥草賣掉，換錢買一把好一點的刀",
+  "tasks": [
+    { "action": "eat", "params": {}, "priority": 20, "duration": 10 },
+    { "action": "gather", "params": {}, "priority": 15, "duration": 30 }
+  ]
+}
+```
+
+#### plan 回應欄位說明
+
+| 欄位 | 必填 | 說明 |
+| --- | --- | --- |
+| `reasoning` | ✔ | 上限 100 字，寫在 `tasks` 之前——因果鏈，不是選項清單 |
+| `emotion` | ✔ | `type` 固定 8 值 enum，`intensity` 0–100，AI 每次都要宣告（#351） |
+| `tasks` | ✔（可空陣列） | 最多 5 筆，`{"action", "params", "priority", "duration", "expires_in_minutes"?}`。`action` 是 `ALLOWED_ACTIONS` 靜態 enum；`priority` 整數 0–125（10–110 是一般偏好，門檻以上留給真緊急事件）；`duration` 整數 1–1440（遊戲分鐘）；`expires_in_minutes` 選填，模型填的是**相對時長**（1–10080 分鐘），房主機自己換算成絕對 `expires_at`，不是要求模型算絕對時間（#268／#290）。空陣列＝這輪不改任何行程 |
+| `inner_monologue` | 選填 | 自由文字，缺席視為空字串 |
+| `request_plan_update` | 選填 | 缺席視為 `false`；沒開放 `update_plan` 的這輪，模型想申請下次能改就設 `true` |
+| `current_goal` | 選填 | 上限 40 字。省略＝維持原樣；明確傳空字串＝主動清除，兩者語意不同（#352） |
+| `update_plan` | 條件式 | 只在《10》§5.4 列出的開放時機才存在於 schema／system prompt，不是模型自己判斷要不要填（見《12》§2.4） |
+| `persuaded`／`importance`／`valence` | 條件式 | 只在 `context.fact_lines` 帶有待回應的說服事實句時，schema 才含這三個欄位（#227）。省略 `persuaded` 視同不被說動 |
+| `appointment` | 尚未實作 | 《10》§5.5 已拍板設計，但 `ai_schema.gd`／`prompt_builder.gd` 都還沒接上這個欄位，見 issue #479 |
+
+`action == "persuade"` 的那筆 `tasks[]` 項目，`params` 另外多兩個欄位：`target`（必填，非空字串）、`reason`（必填，非空字串，說服理由，不驗證內容合不合理）、`proposed_task`（選填）：
+
+- **省略 `proposed_task`**：純思想說服——只想改變對方相信什麼，不要求對方做什麼
+- **給一個合法的 task 物件**（跟 `tasks[]` 裡一筆任務同一個形狀，遞迴驗證，但不可再是 `persuade`）：行動說服。被說服者下一輪決策回應 `persuaded: true` 時（`agent.gd::_resolve_pending_persuade()`），這筆 `proposed_task` 才會被插進它自己的任務池；`persuaded: false` 或省略則不插入，只留一句事實句記錄被拒絕，`persuaded` 本身怎麼判斷見上方那列
+- **傳 `null`、`{}`，或任務驗證不過**：整包 `plan` 回應直接判失敗，不是只丟掉這一筆 `persuade` 任務——`_validate_persuade_params()` 在 `validate_tasks()` 的逐筆迴圈裡，失敗會讓整個回應被拒收，見 §6。錯誤碼依失敗原因而定：`null`／`{}`／巢狀 `persuade`／欄位形狀錯誤是 `ERROR_BAD_SHAPE`；`proposed_task.action` 不在 `ALLOWED_ACTIONS` 白名單則是 `ERROR_ACTION_NOT_ALLOWED`，不是一律同一個錯誤碼
+
+失敗（逾時／格式錯誤／驗證不過）時房主機不會收到上面這個形狀，改走 §6。
+
+> ⚠️ 回應中**不得包含任何數值變更**。Provider 不可回傳 `satiety`、`money`、`relations` 等欄位——那些一律由房主機計算，AISchema 也只挑驗證過的欄位複製出來，不會原樣放行整包回應。
+
+---
+
+### 4-3 `dialogue`　對話逐輪生成
+
+**Godot → AI**（`speaker` 一定是本機 Agent，玩家的台詞不經過這裡）
+
+```json
+{
+  "type": "dialogue",
+  "self": { "…同 4-2 的 self 區塊" },
+  "context": {
+    "listener": { "name": "TAMMY", "trust": 42, "met_count": 5 },
+    "turns": [ { "speaker": "NEON", "text": "最近好嗎？" } ],
+    "max_turns": 10,
+    "memory": { "recent": [ "…" ], "core": [ "…" ] }
   }
 }
 ```
 
-#### 欄位說明
+沒有 `response_format`——`validate_dialogue()` 是這條路徑唯一的硬保證，system prompt 只用文字要求「純 JSON」。
 
-| 欄位 | 型別 | 說明 |
+**AI → Godot**
+
+```json
+{ "line": "還不錯，你呢？", "end": false }
+```
+
+| 欄位 | 必填 | 說明 |
 | --- | --- | --- |
-| `action` | enum | schema 靜態 enum 約束，轉 GBNF 見《12》§2.1 |
-| `target` | string \| null | 目標角色或物品 ID，schema 動態 enum |
-| `location_id` | string \| null | 移動目的地，schema 動態 enum |
-| `monologue` | string | **必填**，內心獨白 |
-| `speech` | string \| null | **可為 null**——AI 自己決定說不說、說多長 |
-| `speech_volume` | enum | `whisper` / `normal` / `shout`，靜態 enum |
-| `emotion` | object | AI 自行宣告 |
-| `current_goal` | string | AI 可隨時改寫，上限 40 字 |
-| `update_plan` | array \| 不存在 | 僅在《10》§5.4 列出的時機，schema 才含此欄位（見《12》§2.4） |
-| `appointment` | object \| null | `with` / `location` / `game_time`，結構見《10》§5.5 |
-| `persuaded` | boolean \| 不存在 | 僅在 `fact_lines` 含待回應的說服事實句時，schema 才含此欄位（本例無待回應事實句，故不出現，不傳 `null`）；語意比照 `believed`（見 §4-3），AI 自行判斷、房主機不驗證、不二次判定。回應省略此欄位時視同「不被說動」，待回應記錄照常清除，不重複注入同一句事實句（見《00》原則四、《01-2》§3-1） |
-| `meta.source_model` | string | Provider 實際使用的模型名稱，供《10》B33 結算揭露 |
+| `line` | ✔ | 非空字串，超過 200 字截斷不拒絕 |
+| `end` | 選填 | 布林，省略視為 `false`（沒說要收尾就當作還沒講完） |
 
-失敗（逾時／格式錯誤／模型失效）時房主機不會收到 `decision`，改依《12》§6 走 `DecisionError` 流程，見本文件 §6。
-
-> ⚠️ 回應中**不得包含任何數值變更**。Provider 不可回傳 `satiety`、`money`、`relations` 等欄位——那些一律由房主機計算。
-> 
+對話輪數沒有設計上的硬上限，改用軟壓力＋`SAFETY_MAX_TURNS`（工程安全閥，值 10）兜底，見《技術/LLM 串接與 AI 服務層》§界線。
 
 ---
 
-### 4-3 `/event`　天神之石事件
+### 4-4 `words_to_creator_choice`　天神之石：這句話現在要不要說出口
+
+跟本文件曾經設想的「單一 `/event` 請求打包 `audience[]`、換回一批 `reactions[]`」不同——天神之石事件觸發後，**範圍內**（`god_stone_input.gd` 的 `HEAR_RADIUS`＝96px＝6 格，跟 note/技術/天神之石輸入機制.md 一致）每個候選角色**各自獨立擲骰、各自打一次這種呼叫**（`agent.gd::maybe_speak_to_creator()`），不是一次請求換一批反應。擲骰本身（情緒強度 ≥70 時 40% 機率，否則 25%）是 Godot 端純機率判定，不經 AI；AI 只回答「骰中之後，這句我早就想好的話，現在要不要說出口」這個是非題。
 
 **Godot → AI**
 
-```json
-{
-  "protocol_version": "1.0",
-  "event_id": "evt_1043",
-  "event_type": "divine_stone",
-  "tick": 4210,
-  "content": "北邊的井裡有東西",
-  "credibility": 0.5,
-  "audience": [
-    {
-      "npc_id": "npc_017",
-      "snapshot": { "…": "同 /decide 的 snapshot 結構" },
-      "words_to_creator": {
-        "triggered": true,
-        "content": "你把我設計成連話都懶得講，那你現在是想聽什麼？"
-      }
-    }
-  ]
-}
-```
-
-| 欄位 | 說明 |
-| --- | --- |
-| `content` | 玩家原句，未經處理 |
-| `credibility` | Event Parser 給的可信度 0.0–1.0，AI 自行決定信不信 |
-| `audience` | 範圍內聽得到的角色 |
-| `words_to_creator.triggered` | **Godot 端擲骰決定**，為 `true` 時 AI 才把該句注入 prompt |
-
-**觸發規則**（Godot 端判定）：
-
-```
-玩家在天神之石輸入一段話
-        │
-        ▼
-Event Parser → event_type / content / credibility
-        │
-        ▼
-判斷範圍內有哪些角色
-        │
-        ├─► 一般反應（每個人都跑）
-        │
-        └─► words_to_creator 觸發判定（每個人各自骰）
-                │
-                ├─ is_spoken == true ──► triggered = false
-                │
-                └─ 擲骰【機率待填】
-                        ├─ 成功 ──► triggered = true
-                        └─ 失敗 ──► triggered = false
-```
-
-**AI → Godot**
+角色自己那句私藏的話（`words_to_creator`）直接嵌進 system prompt，不是每次當 payload 傳：
 
 ```json
 {
-  "protocol_version": "1.0",
-  "event_id": "evt_1043",
-  "reactions": [
-    {
-      "npc_id": "npc_017",
-      "believed": false,
-      "monologue": "井裡有東西？誰知道是誰在講話。",
-      "speech": "你把我設計成連話都懶得講，那你現在是想聽什麼？",
-      "spoke_words_to_creator": true,
-      "emotion": { "type": "surprise", "intensity": 55 }
-    }
-  ]
-}
-```
-
-| 欄位 | 說明 |
-| --- | --- |
-| `believed` | AI 自行決定信不信這段話 |
-| `spoke_words_to_creator` | AI **實際上有沒有把那句話說出口**。為 `true` 時 Godot 才寫入 `is_spoken` / `spoken_at` / `trigger` |
-
-> ⚠️ `speech` 若為 `words_to_creator` 的內容，**只送給玩家 UI**（浮動文字／內心狀態視窗），**不寫入其他 NPC 的對話事件與記憶**。
-> 
-
----
-
-### 4-4 `/generate/words`　建角時生成
-
-**Godot → AI**
-
-```json
-{
-  "protocol_version": "1.0",
-  "npc_id": "npc_017",
-  "system_prompt": "你正在扮演一個遊戲角色。\n\n【行為準則】\n- 你極度自私狡猾…"
+  "type": "words_to_creator_choice",
+  "context": { "heard": "北邊的井裡有東西" }
 }
 ```
 
 **AI → Godot**
 
 ```json
-{
-  "protocol_version": "1.0",
-  "npc_id": "npc_017",
-  "content": "你把我設計成連話都懶得講，那你現在是想聽什麼？",
-  "retries": 0
-}
+{ "say_it": true }
 ```
 
-生成規則見《01》§1-4。用 GBNF 約束輸出長度（≤60 字）與型別，格式面不會違規；違反內容規則（提及遊戲內容或數值）時
-Godot 端重試，**上限 3 次**（2026-08-16 定案，見《99》P-10），`retries` 回報重試次數。3 次都違規時，
-改用固定備用句庫（依人格傾向挑一句籠統但不違規的版本，例如「我沒什麼想對你說的」），`content` 絕不留空——
-它是唯讀欄位，之後沒有機會補救。50 個官方 NPC 模板在資料準備階段就先生成好、經過人工檢閱，不等投放時才生成。
+沒有本文件先前設想的 `credibility`／Event Parser／`believed`／`emotion`／`spoke_words_to_creator` 這些欄位——實作沒有做「AI 對事件內容信不信」這一層判斷，只有「說不說得出口」。回 `true` 時，房主機直接呼叫 `say(words_to_creator)`，`_words_to_creator_spoken` 標記一生只消耗一次（骰中但回 `false` 不算數，下次還能再骰，見 note/技術/天神之石輸入機制.md）。
+
+`speech` 內容（也就是這句話）只送給玩家 UI（浮動文字／內心狀態視窗），不寫入其他 NPC 的對話事件與記憶——這一點跟原設計一致。
 
 ---
 
-### 4-5 `/memory/reflect`　睡眠反思
+### 4-5 `creation`　建角時生成 `words_to_creator`
+
+**Godot → AI**
+
+```json
+{ "type": "creation" }
+```
+
+system prompt 是 `character.system_prompt`（人格段）接上固定的收尾指示，不是 payload 帶 `system_prompt` 欄位。
+
+**AI → Godot**
+
+```json
+{ "words_to_creator": "我天生就是個怕生的傢伙，也是沒辦法。" }
+```
+
+生成規則見《01》§1-4。**違反內容規則時重試 3 次、3 次都不過改用固定備用句庫**是《99》P-10 已拍板的目標設計（2026-08-16 定案），但目前**沒有實作**——`agent.gd::_generate_words_to_creator()`／`game_manager.gd::_generate_words_to_creator()` 兩處都只呼叫一次 `AIService.request()`，`AISchema.validate_creation(result["data"])` 沒過就直接 `return`，沒有內容驗證重試迴圈、也沒有備用句庫。實際行為是：這次生成失敗，`words_to_creator` 就停在空字串——不是「絕不留空」。
+
+AI 回應裡本來就**沒有** `retries` 欄位回報（重試次數如果真的做了，也只會是呼叫端自己數的迴圈次數，不會是 AI 回應的一部分）。50 個官方 NPC 模板在資料準備階段就先生成好、經過人工檢閱，不等投放時才生成，這件事不受上面這個缺口影響。
+
+> ⚠️ `AIService` 本身對部分可重試的傳輸層錯誤（HTTP 5xx、特定網路錯誤）會自動重試 1 次（`RETRY_LIMIT := 1`），但那是**傳輸層**重試，跟這裡在講的「內容違規要不要重打」是兩回事——傳輸重試對所有呼叫類型都生效，不是 `creation` 專屬的行為，見 §6。
+
+---
+
+### 4-6 `reflection`　睡眠反思
 
 **Godot → AI**
 
 ```json
 {
-  "protocol_version": "1.0",
-  "npc_id": "npc_017",
-  "day": 30,
-  "events": [ { "…": "當日事件流" } ],
-  "personality": { "…": "10 項現值" }
+  "type": "reflection",
+  "self": { "…同 4-2 的 self 區塊" },
+  "context": {
+    "events": [ { "id": 12, "content": "採了藥草但沒賣掉" } ]
+  }
 }
 ```
+
+跟本文件先前設想的差別：請求不單獨帶 `day`／`personality` 這兩個欄位——日期已經在 `self.time.day` 裡，人格現值不需要送進去，模型只要給「變動量」（delta），不需要看當前分數。
 
 **AI → Godot**
 
 ```json
 {
-  "protocol_version": "1.0",
-  "npc_id": "npc_017",
-  "summary": "今天採了藥草但沒賣掉，跟 NEON 又吵了一架。",
+  "summary": "今天採了藥草但沒賣掉，跟 TAMMY 又吵了一架。",
+  "events": [
+    { "id": 12, "content": "採了藥草但沒賣掉", "valence": "negative", "importance": 40 }
+  ],
   "personality_delta": { "grudge": 2, "sociability": -1 },
-  "today_plan": [
-    { "text": "去藥草鋪賣掉藥草", "done": false },
-    { "text": "避開 NEON", "done": false },
-    { "text": "晚上去餐酒館", "done": false }
-  ]
+  "today_plan": [ { "text": "去藥草鋪賣掉藥草", "is_done": false } ]
 }
 ```
 
-| 欄位 | 說明 |
-| --- | --- |
-| `personality_delta` | **單項絕對值上限 3**。超過時房主機夾制，不採信 |
-| `today_plan` | 睡眠反思是《10》§5.4 開放 `update_plan` 的時機之一，此處重寫整份，不限筆數 |
+| 欄位 | 必填 | 說明 |
+| --- | --- | --- |
+| `events` | ✔（可空陣列） | **一定要逐筆帶回 `id`**（`agent.gd` 靠它判斷哪幾筆真的被評過分、可以從緩衝區移除）；`valence`／`importance` 是 LLM 自己判斷，房主機不重算，只夾制 `importance` 到 0–100（本文件先前的範例漏了這塊逐筆評分） |
+| `personality_delta` | 選填 | 只列有變動的維度，單項絕對值上限 3（超過房主機夾制） |
+| `today_plan` | 選填 | 整份取代，不限筆數（上限 `MAX_PLAN_ITEMS`＝10） |
+
+---
+
+### 4-7 `checkpoint`　長動作固定間隔檢查點
+
+本文件先前完全沒有這個訊息類型（issue #336，《02》§3）：長動作（`duration` 較長的任務）進行到一半，每 `LONG_ACTION_CHECKPOINT_INTERVAL := 10` 遊戲分鐘（跟 `MIN_ACTION_DURATION` 取同一個值，《99》P-14 #9）固定問一次「繼續還是放棄」，不是完整重新規劃，所以只帶 `self`（自身狀態），不帶 `visible`／`pool`／`memory`。放棄時若這個角色正在被別人依附（目前唯一情形是搬運中的目標，`get_checkpoint_dependents()`），依附者也會一併收到通知（`on_dependent_checkpoint()`），但通知走的是引擎內部呼叫，不是另一次 AI 請求。
+
+**Godot → AI**
+
+```json
+{
+  "type": "checkpoint",
+  "self": { "…同 4-2 的 self 區塊" },
+  "context": { "action": "gather", "elapsed_minutes": 15, "params": {} }
+}
+```
+
+**AI → Godot**
+
+```json
+{ "continue": true }
+```
+
+`continue: false` 代表放棄——已經花掉的時間與體力不退還，這個動作原本能拿到的東西也拿不到，措辭在 system prompt 裡講清楚，房主機不二次判定。
 
 ---
 
@@ -405,21 +362,24 @@ Godot 端重試，**上限 3 次**（2026-08-16 定案，見《99》P-10），`r
 
 每個角色各自獨立、非同步發起，不是全體 NPC 在同一個時間點被送出批次。下圖為單一角色的一次決策；5 個角色可能同時各自處於流程中的不同階段。
 
-```
+```text
 Godot 操控層                房主機                    llama-server
   │                           │                          │
   │  角色完成當前動作          │                          │
   │── 通知決策已就緒 ─────────►│                          │
   │                           │  ① 更新生理數值            │
   │                           │  ② 產生事實句              │
-  │                           │  ③ 截取快照、組 prompt+schema│
-  │                           │── POST /decide ─────────►│
-  │                           │   （schema→GBNF，《12》§2）│
+  │                           │  ③ 截取快照、組 payload     │
+  │                           │── chat completion ───────►│
+  │                           │   （payload.type=plan，   │
+  │                           │    json_schema→GBNF 由   │
+  │                           │    llama-server 自己轉，  │
+  │                           │    見《12》§8）           │
   │                           │◄── JSON ──────────────────│
   │                           │  ④ schema 驗證＋三條硬規定  │
   │                           │  ⑤ 計算成功率＋擲骰        │
   │                           │  ⑥ 套用結果（序列處理）    │
-  │◄── 已驗證的 decision ──────│                          │
+  │◄── 已驗證的 tasks ─────────│                          │
   │  ⑦ 尋路、播動畫            │                          │
   │  ⑧ 回報執行結果            │                          │
   │── 動作結束，回到頂端 ──────┤                          │
@@ -428,62 +388,68 @@ Godot 操控層                房主機                    llama-server
 
 ### 天神之石
 
-```
-玩家                Godot                    AI 後端
- │                    │                         │
- │── 輸入文字 ───────►│                         │
- │                    │  Event Parser           │
- │                    │  判斷範圍內角色          │
- │                    │  words_to_creator 擲骰   │
- │                    │                         │
- │                    │── POST /event ─────────►│
- │                    │                         │
- │                    │◄── 200 reactions[] ─────│
- │                    │                         │
- │                    │  套用情緒與記憶          │
- │◄── UI 顯示 ────────│                         │
- │   （吐槽句只給玩家）│                         │
+範圍內每個候選角色**各自獨立**擲骰、各自打一次 `words_to_creator_choice` 呼叫——不是一次請求打包全部角色、換回一批反應（見 §4-4）。下圖只畫其中一個角色：
+
+```text
+玩家                Godot                候選角色（各自獨立）      llama-server
+ │                    │                         │                     │
+ │── 輸入文字 ───────►│                         │                     │
+ │                    │  判斷範圍內角色          │                     │
+ │                    │── 逐一通知 ────────────►│                     │
+ │                    │                         │  各自擲骰決定       │
+ │                    │                         │  要不要打這通呼叫    │
+ │                    │                         │── chat completion ─►│
+ │                    │                         │   （words_to_       │
+ │                    │                         │    creator_choice） │
+ │                    │                         │◄── {"say_it":…} ────│
+ │                    │                         │  say_it=true 才     │
+ │                    │                         │  say(words_to_      │
+ │                    │                         │  creator())         │
+ │◄── UI 顯示 ────────┤                         │                     │
+ │   （只給玩家看）    │                         │                     │
 ```
 
 ---
 
 ## 6. 錯誤處理
 
-決策失敗一律映射為 `DecisionError`（見《12》§3.1），`reason` 對照玩家可讀訊息如下（《12》§6.3）：
+失敗分兩層，各自一組 identifier——不是本文件先前設想的單一 `DecisionError`／`reason` 對照玩家可讀訊息那張表，那張表目前沒有任何程式碼在維護。
 
-| `reason` | 觸發狀況 | 玩家端訊息 |
-| --- | --- | --- |
-| `timeout` | 逾時（`LocalLLM` > 5 秒／`RemoteLLM` > 15 秒，2026-08-16 定案，見《99》P-11／P-22） | 模型回應逾時 |
-| `invalid_format` | JSON 解析失敗、重試仍失敗 | 模型輸出格式不符 |
-| `model_missing` | 指定模型不存在 | 找不到指定的模型 |
-| `quota_exceeded` | 雲端模型額度用盡 | 模型額度不足 |
-| `rate_limited` | 呼叫過於頻繁 | 模型呼叫過於頻繁 |
-| `no_response` | 真人逾時未填表（見《12》§6.2） | 未在時限內做出決定 |
+**AIService 層**（`ai_service.gd` 的 `ERROR_*`，網路／額度／設定問題）
 
-| 狀況 | 房主機行為 |
+| identifier | 觸發狀況 |
 | --- | --- |
-| `/health` 未 ready | 不開始接受決策請求，顯示「模型載入中」 |
-| 任何 `DecisionError` | 該角色本次執行 `idle`，寫入 `last_action_result`，依《10》§6.4 走入眠流程 |
-| HTTP 5xx | 同上，寫入 log |
-| `request_id` 不符 | 丟棄該回應，視為 `timeout` |
-| `protocol_version` 不符 | 停止並顯示錯誤，不得靜默降級 |
-| Provider 回傳不存在的 `target` | 判定為失敗（三條硬規定，見《12》§4.2），`reason` 寫「你要找的人不在這裡」 |
-| Provider 回傳數值變更欄位 | **忽略該欄位**，寫入 log |
+| `disabled` | AI 功能關閉（設定檔 `enabled=false`） |
+| `no_requester_id` | 呼叫端沒給 `requester_id` |
+| `no_provider` | 指定的 provider 不存在或設定不完整（`has_valid_provider()` 不成立） |
+| `rate_limited` | 撞到 `min_interval_sec`（同角色冷卻，30 秒）——`_check_rate_limit()` 唯一回這個 identifier 的分支 |
+| `daily_quota` | 撞到每日額度：一般呼叫撞 `max_calls_per_game_day`（每日 20 次），`dialogue` 呼叫豁免冷卻與這條、改撞自己專用的 `max_dialogue_calls_per_game_day`（每日 30 次）——兩種額度都回 `daily_quota`，不是 `rate_limited`（`ai_service.gd::_check_rate_limit()`） |
+| `timeout` | `HTTPRequest` 逾時——`ai_config.gd::DEFAULT_TIMEOUT`（10 秒）是沒設定或設定非正值時的預設／後備值，provider 設定檔給的正值 `timeout` 會覆蓋它（`_parse_provider()`／`ai_service.gd::_send()`）；不是《99》P-11 舊決定寫的 LocalLLM 5 秒／RemoteLLM 15 秒／event 8 秒各自寫死，那組數字已被現況取代，見《99》P-11 |
+| `network` | `HTTPRequest` 本身失敗（DNS／連線層錯誤） |
+| `http` | HTTP 狀態碼非 2xx（格式 `http_<code> <回應內容前 200 字>`） |
+| `bad_json` | provider 回應不是合法 JSON——固定重試 1 次（`ai_service.gd::RETRY_LIMIT`），跟下面 AISchema 層依 `provider.max_validation_retries()` 的驗證重試是兩個獨立計數器，不共用次數 |
 
-### `idle` 兜底
+**AISchema 層**（`ai_schema.gd` 的 `ERROR_*`，格式／驗證失敗；`_decide_with_retry()` 依 `provider.max_validation_retries()` 自動重試，重試次數用完才把最後一次的失敗原因往上回）
 
-`DecisionError` 發生時，房主機寫入：
+| identifier | 觸發狀況 |
+| --- | --- |
+| `not_json` | `choices[0].message.content` 不是合法 JSON |
+| `not_object` | 解析出來不是 JSON object（例如模型回了一個陣列） |
+| `no_content` | provider 回應形狀不對，撈不到 `content` |
+| `bad_shape` | 欄位缺漏／型別錯／超出範圍，逐欄位規則見各 `validate_*()` |
+| `action_not_allowed` | `action` 不在 `ALLOWED_ACTIONS` 白名單 |
 
-```json
-{
-  "action": "idle",
-  "target": null,
-  "success": true,
-  "reason": null
-}
-```
+**房主機收到失敗時的行為**：一律回 `{"ok": false}`，沒有統一合成一筆 `{"action": "idle", ...}` 寫回、也沒有玩家可讀訊息對照表這一層——每種呼叫類型各自決定怎麼收尾。《13》§5「AI 呼叫失敗兜底」保證的是這裡帶出的**結果**（角色永遠有下一步可走，不會卡死或憑空消失），不是要求統一寫死 `idle` 這個手段：
 
-角色原地發呆，體力小幅回復。**絕不讓角色因為沒收到決策而卡住或消失。**
+| 呼叫類型 | 失敗時的行為 |
+| --- | --- |
+| `plan` | 這輪不產生新 `tasks`，角色留在既有任務池，不特別寫 `last_action_result` |
+| `dialogue` | `conversation.gd::_finish_with_fallback()` 改說一句 `DialogueLines.closing()` 收尾 |
+| `words_to_creator_choice`／`creation`／`reflection`／`checkpoint` | 直接 `return`，呼叫端不做額外內容重試或降級成別的內容；`AIService` 仍依上面 §6 的傳輸層規則對可重試錯誤（HTTP 5xx、特定網路錯誤）自動重試 1 次，不受這裡影響。`creation`（`words_to_creator` 生成）的「內容違規重試 3 次、仍失敗改用固定備用句庫」是《99》P-10 已定案的目標行為，尚未實作——現行行為就是本表這一列 |
+
+HTTP 5xx、逾時都落在上面 AIService 層的 `http`／`timeout` identifier 裡，不是獨立分類；本文件先前設想的「`request_id`／`protocol_version` 不符」這類檢查也不存在——請求裡本來就沒有這兩個欄位（見 §4）。
+
+> ⚠️ Provider 回傳數值變更欄位（`satiety`、`money`、`relations` 等）：AISchema 的驗證邏輯只挑白名單內的欄位複製出來，多出來的欄位單純不會出現在驗證後的結果裡，不需要額外的「忽略並寫 log」處理。
 
 ---
 
@@ -505,7 +471,7 @@ Godot 操控層                房主機                    llama-server
 | --- | --- |
 | 1 | Godot 的 `JSON.parse_string()` 會把所有 number 轉成 `float`。整數欄位取值後要 `int()` 轉回 |
 | 2 | 中文字串一律 UTF-8，不做 escape |
-| 3 | `null` 與空字串 `""` 意義不同：`speech: null` = 不說話，`speech: ""` = 錯誤格式 |
+| 3 | `null` 與空字串 `""` 意義不同，也跟「欄位不存在」不同：以 `update_plan` 為例，房主機收到 `null`（模型沒填這輪的 `update_plan`）代表「這次沒有更新」，跟合法的空陣列 `[]`（模型明確要清空 today_plan）是兩回事，見 `validate_tasks()` |
 | 4 | 時間戳一律 ISO 8601 UTC（`2026-08-08T10:00:00Z`） |
 
 ---
@@ -516,16 +482,16 @@ Godot 操控層                房主機                    llama-server
 
 | 欄位 | 約束方式 |
 | --- | --- |
-| `action` | 靜態 enum |
+| `action` | 靜態 enum（`ALLOWED_ACTIONS`） |
 | `emotion.type` | 靜態 enum（8 值） |
-| `speech_volume` | 靜態 enum（3 值） |
-| `target` | **動態產生**，每次呼叫前由 `build_schema_for_call()` 依在場角色與物品組成 |
-| `location_id` | **動態產生**，依可移動地點組成 |
-| `monologue` / `speech` | 不約束內容，只約束型別（string / null） |
+| `priority`／`duration`／`expires_in_minutes` | 靜態數值範圍（`integer` + `minimum`/`maximum`，見 §4-2） |
+| `params` | **不約束**，schema 只宣告成 `{"type": "object"}`——`target`（talk／attack／give）與 `item_id`／`place`（buy）等欄位靠 §3 提到的 AISchema 驗證層逐動作檢查是否為非空字串，不是動態 GBNF enum。§7.1 原本規劃的 `build_schema_for_call()`（依在場角色／物品動態組 `target`／`location_id` 的 enum）已被 §8 簡化路線取代，沒有實作 |
 | `update_plan` | **條件式欄位**，僅特定時機加入 schema（《10》§5.4、《12》§2.4） |
-| `appointment` | **條件式欄位**，僅對話情境且在場有其他角色時加入 schema（《12》§2.4） |
+| `persuaded`／`importance`／`valence` | **條件式欄位**，僅這輪帶有待回應說服事實句時加入 schema（#227） |
 
-> 動態規則必須在每次呼叫前重建。若沿用上一次的 schema，AI 可能指向已經離場的角色。RemoteLLM（雲端模型）的 schema 約束為盡力而為，非文法層強制，房主機收到後仍須完整驗證（《12》§4）。
+`appointment`（《10》§5.5）、`speech_volume`（`dialogue` 的 `line` 沒有分音量）都是尚未實作的欄位，不在目前的 schema 裡，見 §4-2／§9。
+
+> 動態能力目前只剩「條件式欄位存不存在」這一層，不再有依在場角色/物品即時產生的動態 enum。RemoteLLM（雲端模型）的 schema 約束為盡力而為，非文法層強制，房主機收到後仍須完整驗證（《12》§4）。
 > 
 
 ---
@@ -537,7 +503,8 @@ Godot 操控層                房主機                    llama-server
 | 1 | ~~連接埠與逾時秒數定案~~ | 後端 | ☑ 2026-08-16，見《99》P-11 |
 | 2 | 是否縮減傳送項目讓 AI 判斷更聚焦 | AI・後端 | 《99》P-03（MVP 定案走方案 A，見該項） |
 | 3 | ~~`words_to_creator` 天神之石觸發機率~~ | 遊戲邏輯 | ☑ 2026-08-16，見《99》P-10 |
-| 4 | `available_actions` 完整清單 | 遊戲邏輯 | 《07》 |
-| 5 | Godot 端 `HTTPRequest` 封裝與重試邏輯 | 前端 | — |
+| 4 | 依前提條件動態過濾可選動作（原設想的 `available_actions`） | 遊戲邏輯 | 未實作，見 issue #477（`Task.preconditions` 目前一律通過） |
+| 5 | ~~Godot 端 `HTTPRequest` 封裝與重試邏輯~~ | 前端 | ☑ 已實作，見 `ai_service.gd` |
 | 6 | ~~單一角色決策請求的併發上限~~ | 後端 | ☑ 2026-08-16，見《99》P-11 |
-| 7 | `build_schema_for_call()` / `DecisionProvider` 重構六項任務 | AI・後端 | 《12》§7.1 |
+| 7 | ~~`build_schema_for_call()` / `DecisionProvider` 重構六項任務~~ | AI・後端 | ☑ 已改走 §8 簡化路線，不需要這六項（《12》§8，issue #245） |
+| 8 | `creation` 內容違規重試 3 次＋固定備用句庫（《99》P-10 已拍板） | AI・後端 | 未實作，`agent.gd`／`game_manager.gd` 的 `_generate_words_to_creator()` 目前只打一次，失敗就留空字串，見 §4-5 |
