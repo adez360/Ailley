@@ -3206,10 +3206,11 @@ func _pursue_gather_task() -> void:
 		stop_moving()
 		_pursued_place = ""
 		_pursuit_done = false
-		_current_task = {}
-		current_place = ""
-		current_state = "idle"
 		last_action_result = "這裡沒有藥草可以採"
+		# 用 _clear_current_task() 取代手動重設三個欄位——手動寫法漏呼叫
+		# _log_task_ended()，這筆失敗的 gather 不會出現在 today_log／每日摘要
+		# 裡（CodeRabbit review 抓到，跟 eat／drink／buy 的收尾方式看齊）
+		_clear_current_task(false)
 		if failed_task_source == "llm":
 			_remove_task(failed_task_id)
 		if llm_decision_enabled and not _awaiting_decision:
@@ -3274,9 +3275,9 @@ func _pursue_gather_task() -> void:
 		_remove_task(_current_task.get("id", ""))
 	_pursued_place = ""
 	_pursuit_done = false
-	_current_task = {}
-	current_place = ""
-	current_state = "idle"
+	# 同上：用 _clear_current_task() 取代手動重設，補上 today_log 紀錄
+	# （CodeRabbit review 抓到）
+	_clear_current_task(last_action_result == Character.GATHER_OK)
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
