@@ -445,7 +445,7 @@ Godot 操控層                房主機                    llama-server
 | --- | --- |
 | `plan` | 這輪不產生新 `tasks`，角色留在既有任務池，不特別寫 `last_action_result` |
 | `dialogue` | `conversation.gd::_finish_with_fallback()` 改說一句 `DialogueLines.closing()` 收尾 |
-| `words_to_creator_choice`／`creation`／`reflection`／`checkpoint` | 直接 `return`，呼叫端不做額外內容重試或降級成別的內容；`AIService` 仍依上面 §6 的傳輸層規則對可重試錯誤（HTTP 5xx、特定網路錯誤）自動重試 1 次，不受這裡影響 |
+| `words_to_creator_choice`／`creation`／`reflection`／`checkpoint` | 直接 `return`，呼叫端不做額外內容重試或降級成別的內容；`AIService` 仍依上面 §6 的傳輸層規則對可重試錯誤（HTTP 5xx、特定網路錯誤）自動重試 1 次，不受這裡影響。`creation`（`words_to_creator` 生成）的「內容違規重試 3 次、仍失敗改用固定備用句庫」是《99》P-10 已定案的目標行為，尚未實作——現行行為就是本表這一列 |
 
 HTTP 5xx、逾時都落在上面 AIService 層的 `http`／`timeout` identifier 裡，不是獨立分類；本文件先前設想的「`request_id`／`protocol_version` 不符」這類檢查也不存在——請求裡本來就沒有這兩個欄位（見 §4）。
 
