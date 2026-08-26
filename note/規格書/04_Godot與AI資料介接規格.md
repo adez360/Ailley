@@ -1,7 +1,7 @@
 ---
 tags: [規格書, 架構]
 status: 大致定案
-updated: 2026-08-23
+updated: 2026-08-26
 ---
 
 # 04_Godot與AI資料介接規格
@@ -452,7 +452,7 @@ Godot 操控層                房主機                    llama-server
 
 | `reason` | 觸發狀況 | 玩家端訊息 |
 | --- | --- | --- |
-| `timeout` | 逾時。**現況（2026-08-23）**：`Ailley/scripts/ai/ai_config.gd` 的 `DEFAULT_TIMEOUT` 是單一全域值 **10 秒**，`LocalLLM`／`RemoteLLM`／`/event` 共用，不是原規劃（2026-08-16，見《99》P-11／P-22）分開的 5 秒／15 秒／8 秒——程式碼註解說明是刻意設計：`HTTPRequest` 節點池是共用的，timeout 是節點屬性不是逐請求參數，做成逐 provider 不同值不會真的生效 | 模型回應逾時 |
+| `timeout` | 逾時。**現況（2026-08-26 查證）**：`AIConfig._parse_provider()` 讀取各 provider 設定檔裡的正數 `timeout`，缺值或非正值才退回 `Ailley/scripts/ai/ai_config.gd` 的 `DEFAULT_TIMEOUT`（10 秒）；`AIService._send()`／`_probe_models()` 送出請求前把 `provider.timeout` 設到當次 `HTTPRequest.timeout`，逐 provider 的值確實生效，不是共用單一全域值。不是原規劃（2026-08-16，見《99》P-11／P-22）分開的 5 秒／15 秒／8 秒——目前是「可各自設定但預設都落回 10 秒」，不是完全沒有分開的機制 | 模型回應逾時 |
 | `invalid_format` | JSON 解析失敗、重試仍失敗 | 模型輸出格式不符 |
 | `model_missing` | 指定模型不存在 | 找不到指定的模型 |
 | `quota_exceeded` | 雲端模型額度用盡 | 模型額度不足 |
