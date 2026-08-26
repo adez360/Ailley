@@ -1,4 +1,4 @@
-[gd_scene load_steps=17 format=3 uid="uid://wo0a0v2y4gj1"]
+[gd_scene load_steps=18 format=3 uid="uid://wo0a0v2y4gj1"]
 
 [ext_resource type="PackedScene" uid="uid://cyrnw30ddh16r" path="res://scenes/debug_console.tscn" id="1_mphia"]
 [ext_resource type="PackedScene" uid="uid://q38st5oy2nj" path="res://scenes/chat_input.tscn" id="2_0m4u7"]
@@ -13,6 +13,7 @@
 [ext_resource type="Script" uid="uid://djdfer2luq3s5" path="res://scripts/ui/pause.gd" id="10_iypfu"]
 [ext_resource type="PackedScene" uid="uid://d3no1g5djdk2s" path="res://scenes/god_stone_input.tscn" id="11_0m4u7"]
 [ext_resource type="PackedScene" uid="uid://ccx0ctgkyuok1" path="res://scenes/persuade_dialog.tscn" id="13_5n1hp"]
+[ext_resource type="PackedScene" uid="uid://c8x8h4qofhqg2" path="res://scenes/tip_menu.tscn" id="14_tipmn"]
 
 [sub_resource type="StyleBoxTexture" id="StyleBoxTexture_jbj1t"]
 texture = ExtResource("5_eld54")
@@ -320,3 +321,5 @@ columns = 9
 [node name="GodStoneInput" parent="." instance=ExtResource("11_0m4u7")]
 
 [node name="PersuadeDialog" parent="." instance=ExtResource("13_5n1hp")]
+
+[node name="TipMenu" parent="." instance=ExtResource("14_tipmn")]

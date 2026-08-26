@@ -100,7 +100,11 @@ const ALLOWED_ACTIONS := [
 # 重新算移動目標」模式（_pursue_follow_task()），差別是沒有終點——只要
 # 還在 follow 狀態就持續逼近，停不停止完全交給跟隨者自己下一次決策判斷，
 # 引擎不寫死任何距離／逾時門檻（見 agent.gd 的 following_id 欄位說明）
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "follow"]
+#
+# perform 是 #575 接上的：跟 work 同一套「立刻回傳 OK、協程跑完才收尾」的
+# 長動作模式（_pursue_perform_task()），差別是不用先到工作站——任意地點皆可，
+# 只認背包裡有沒有 instrument
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "follow", "perform"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -513,6 +517,36 @@ static func _validate_appointment(data: Variant, now_minutes: int) -> Dictionary
 	})
 
 
+## 打賞金額夾制範圍（#575）。上界參考 vending_machine.gd 既有商品定價量級
+## （2～25），下界取 1（不接受 0 元的「假打賞」，那該用 give=false 表達）。
+## 沒有跟 WORK_PAYMENT（50，一次工作的收入）同量級——打賞是路人隨興給的
+## 小錢，不該比認真做一次工作賺得還多
+const TIP_MIN_AMOUNT := 1
+const TIP_MAX_AMOUNT := 20
+
+# tip 條件式欄位驗證（#575），跟 _validate_appointment() 同一種立場：give
+# 型別錯直接拒絕整包；give=false 時 amount 不重要，正規化成 0，不強制要求
+# 模型省略它。give=true 時 amount 必填且是有限數字，範圍外用 clampi() 夾制，
+# 不整包拒絕——理由跟 importance／intensity 那組「主觀強度不是安全問題」一樣，
+# 金額只是玩家/NPC 給多給少的偏好，不是需要嚴格把關的格式錯誤
+static func _validate_tip(data: Variant) -> Dictionary:
+	if not data is Dictionary:
+		return _fail(ERROR_BAD_SHAPE)
+	var tip := data as Dictionary
+
+	if not tip.has("give") or not tip["give"] is bool:
+		return _fail(ERROR_BAD_SHAPE)
+	var give: bool = tip["give"]
+	if not give:
+		return _ok({"give": false, "amount": 0})
+
+	var amount_value: Variant = tip.get("amount")
+	if not (amount_value is int or amount_value is float) or not is_finite(float(amount_value)):
+		return _fail(ERROR_BAD_SHAPE)
+
+	return _ok({"give": true, "amount": clampi(int(amount_value), TIP_MIN_AMOUNT, TIP_MAX_AMOUNT)})
+
+
 # persuade 專屬的 params 驗證（#227）：target／reason 必填非空字串，
 # proposed_task 選填——有填就重用 _validate_task_shape() 驗證它的形狀
 # （跟一般任務同一套邊界），不驗證內容合理性。reason 是說服的理由，自由
@@ -585,7 +619,8 @@ static func _validate_persuade_params(params: Variant, now_minutes: int) -> Dict
 # 也不要靜默吃一個看似合法、實際上錯誤的預設值（GDScript 規則：有預設值
 # 的參數後面不能接沒預設值的，allow_update_plan 只好跟著一起拿掉預設值）
 static func validate_tasks(
-	data: Dictionary, allow_update_plan: bool, now_minutes: int, allow_appointment: bool = false
+	data: Dictionary, allow_update_plan: bool, now_minutes: int, allow_appointment: bool = false,
+	allow_perform_tip: bool = false
 ) -> Dictionary:
 	if not data.has("tasks") or not data["tasks"] is Array:
 		return _fail(ERROR_BAD_SHAPE)
@@ -654,6 +689,16 @@ static func validate_tasks(
 		if not appointment_result["ok"]:
 			return _fail(appointment_result["error"])
 		appointment = appointment_result["data"]
+
+	# tip（#575）：跟 appointment 同一種條件式欄位態度——allow_perform_tip 為假
+	# 時模型硬塞了這個欄位也整包忽略，不影響其餘欄位；欄位真的存在時格式錯誤
+	# 讓整份回應失敗，不是單獨吞掉這一個欄位放行其餘部分
+	var tip: Variant = null
+	if allow_perform_tip and data.has("tip"):
+		var tip_result := _validate_tip(data["tip"])
+		if not tip_result["ok"]:
+			return _fail(tip_result["error"])
+		tip = tip_result["data"]
 
 	# update_plan：只有 allow_update_plan 為真時才驗證／放行。allow_update_plan
 	# 為假時就算模型硬塞了這個欄位也整包忽略、不因此讓回應失敗——模型不該
@@ -780,6 +825,7 @@ static func validate_tasks(
 		"current_goal": current_goal,
 		"current_goal_provided": current_goal_provided,
 		"appointment": appointment,
+		"tip": tip,
 	})
 
 
@@ -1072,7 +1118,8 @@ static func _validated_optional_line(data: Dictionary, key: String, max_chars: i
 # 給這三個欄位，多給的那兩個模型不會用到就好，不值得為了少給兩個欄位
 # 多一個判斷維度，見 issue #227 討論串
 static func plan_response_schema(
-	allow_update_plan: bool = false, has_pending_persuade: bool = false, allow_appointment: bool = false
+	allow_update_plan: bool = false, has_pending_persuade: bool = false, allow_appointment: bool = false,
+	allow_perform_tip: bool = false
 ) -> Dictionary:
 	var properties := {
 		"reasoning": {"type": "string", "maxLength": MAX_REASONING_CHARS},
@@ -1149,6 +1196,16 @@ static func plan_response_schema(
 				"game_time": {"type": "string"},
 			},
 			"required": ["with", "location", "game_time"],
+		}
+
+	if allow_perform_tip:
+		properties["tip"] = {
+			"type": "object",
+			"properties": {
+				"give": {"type": "boolean"},
+				"amount": {"type": "integer", "minimum": TIP_MIN_AMOUNT, "maximum": TIP_MAX_AMOUNT},
+			},
+			"required": ["give"],
 		}
 
 	return {

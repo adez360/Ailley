@@ -144,6 +144,17 @@ var following_id := ""
 # 沒有這張表的話，走出視野再走回來就會再驚訝一次
 var _noticed := {}
 
+# 這一輪表演已經問過要不要打賞的表演者（#575）。跟 _noticed 不同，這裡刻意
+# 「對方不再表演就從表裡移除」（見 _scan_for_performers()）——同一個人下次
+# 再表演，是新的一場演出，值得再問一次要不要打賞，不是終身只問一次
+var _tip_prompted_performers := {}
+
+# 目前這一輪 tip 決策問的是誰（#575）。_request_next_decision() 回應回來時
+# 靠這個 id 找到打賞對象——跟 appointment 的 with 不同，tip 決策本身沒有
+# target 欄位（模型只回 give／amount，「給誰」是引擎自己知道的事，不需要
+# 模型再講一次），所以要由呼叫端（_scan_for_performers()）自己記住問的是誰
+var _tip_target_id := ""
+
 # 今天已經對誰觸發過跟丟反應（#405）。跟 _noticed（終身只驚訝一次）不同：
 # 這是單純的量級控制，每天由 _on_day_changed() 清空，不分認不認識——同一人
 # 一天內反覆進出視野（走近又走遠）不會每次都排事實句洗版、拖爆 LLM 呼叫量，
@@ -1196,7 +1207,9 @@ func _request_last_words(cause: String) -> void:
 ## _conversation 清成 null 之後才觸發下一次決策（CodeRabbit review 抓到），
 ## 這裡現算 is_in_conversation() 永遠讀到 false。改成跟 allow_update_plan
 ## 同一種做法：呼叫端自己知道「這通是不是剛結束一場對話」，這裡只負責照做
-func _request_next_decision(allow_update_plan: bool = false, allow_appointment: bool = false) -> Dictionary:
+func _request_next_decision(
+	allow_update_plan: bool = false, allow_appointment: bool = false, allow_perform_tip: bool = false
+) -> Dictionary:
 	# 死屍不建立新的決策請求（CodeRabbit review 抓到）：跟下面 await 之後的
 	# is_dead 判斷是兩件事——那道只擋「套用已經送出去的回應」，這裡擋在送出
 	# 請求之前，避免死亡後還被 _pending_reaction_lines 補問邏輯（見本函式
@@ -1244,10 +1257,12 @@ func _request_next_decision(allow_update_plan: bool = false, allow_appointment: 
 	var visible: Array[Character] = vision.get_visible_characters() if vision != null else []
 	var envelope := PromptBuilder.build_plan_envelope(
 		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan,
-		_fact_lines_summary(), had_pending_persuade, current_place, allow_appointment
+		_fact_lines_summary(), had_pending_persuade, current_place, allow_appointment, allow_perform_tip
 	)
 	var validator := func(data: Dictionary) -> Dictionary:
-		return AISchema.validate_tasks(data, effective_allow_update_plan, now_minutes, allow_appointment)
+		return AISchema.validate_tasks(
+			data, effective_allow_update_plan, now_minutes, allow_appointment, allow_perform_tip
+		)
 
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	_awaiting_decision = false
@@ -1342,6 +1357,13 @@ func _request_next_decision(allow_update_plan: bool = false, allow_appointment: 
 		var new_appointment: Variant = data.get("appointment")
 		if new_appointment != null and int(new_appointment.get("game_time_minutes", 0)) > _now_minutes():
 			_apply_appointment(new_appointment)
+
+		# tip（#575）：null 代表這次沒有打賞（不管是沒開放、模型選擇不給，還是
+		# give=false）——跟 appointment 同一種「明確給了才動」判斷，引擎只執行
+		# AI 已經決定好的金額，不自己另外骰一個數字出來
+		var tip_data: Variant = data.get("tip")
+		if allow_perform_tip and tip_data != null and bool(tip_data.get("give", false)):
+			_apply_perform_tip(int(tip_data.get("amount", 0)))
 
 		if had_pending_persuade:
 			_resolve_pending_persuade(data)
@@ -1463,6 +1485,32 @@ func _apply_appointment(data: Dictionary) -> void:
 static func _format_clock(total_minutes: int) -> String:
 	var minute_of_day := total_minutes % 1440
 	return "%02d:%02d" % [minute_of_day / 60, minute_of_day % 60]
+
+## 真的把打賞的錢從自己身上轉給表演者（#575）。引擎只執行 AI 已經決定好的
+## amount，不自己另外算——但「錢夠不夠」是這個世界的物理限制，不是 AI 決策
+## 的一部分，量到不夠付時夾成「有多少給多少」，不透支成負債（跟 buy_from()
+## 「錢不夠就整筆拒絕」不同：打賞不是一手交錢一手交貨的交易，AI 已經表態
+## 要給，量力而為比整包作廢更貼近「打賞」這個行為的精神）。金額 <= 0（含
+## amount 驗證失敗被夾成 0 的 give=false 情形，理論上不會走到這裡，見呼叫端
+## 的 give 判斷，這裡多一層防呆）直接不動作
+func _apply_perform_tip(amount: int) -> void:
+	if amount <= 0 or inventory == null:
+		return
+
+	var performer := _find_character_by_id(_tip_target_id)
+	if performer == null or not is_instance_valid(performer) or not performer.is_performing():
+		return
+	if performer.inventory == null:
+		return
+
+	var affordable := mini(amount, inventory.get_money())
+	if affordable <= 0:
+		return
+	if inventory.spend(affordable) != Inventory.MONEY_OK:
+		return
+
+	performer.inventory.add_money(affordable)
+	_push_daily_event("你打賞了 %s %d 元。" % [performer.character_name, affordable])
 
 ## 爽約通知（#479，《10》§5.5）。睡眠中先暫存，交給 _on_time_changed() 的
 ## 「剛睡醒」分支補送（見那裡的說明）——《10》§5.5 原文「爽約方若當時處於
@@ -1670,6 +1718,20 @@ func _on_work_finished() -> void:
 	# 觸發，那種情況沒有真的撥款（見 character.gd 的 _run_work()／_end_work()），
 	# 寫死賺錢金額會變成一句不一定為真的事實句
 	_push_daily_event("你剛結束了一段工作站的工作")
+	_reevaluate()
+
+## 表演結束後同理（#575）：跟 eat／drink 這種「呼叫一次就完成」不同，perform
+## 是長動作，_pursue_perform_task() 開始表演成功後就先返回，不清任務——這裡
+## 才是真正的收尾點（_run_perform() 協程跑完 PERFORM_DURATION_MINUTES 後呼叫）。
+## llm 來源才移除任務，跟 eat／drink 收尾同一套規則：schedule 來源的任務不能
+## 被移除，得靠 window 自然退場
+func _on_perform_finished() -> void:
+	if _current_task.get("source", "") == "llm":
+		_remove_task(_current_task.get("id", ""))
+	_clear_current_task(true)
+	_push_daily_event("你的表演結束了。")
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
 
 # 被攻擊等外部事件強制中斷（《02》§3 中斷規則）時的收尾。跟
@@ -1938,6 +2000,45 @@ func _on_noise_heard(_source: Character) -> void:
 func _queue_reaction_fact_line(line: String) -> void:
 	_pending_reaction_lines.append(line)
 
+## 掃視野內有沒有人正在表演（#575），每個遊戲分鐘跟其他 _on_time_changed()
+## 收尾一起跑。跟 _on_spotted() 不一樣：後者只在「第一次看到這個人」那一刻
+## 觸發一次，沒辦法涵蓋「早就認識、但現在剛好開始表演」這種情況，所以另外
+## 開一輪獨立的偵測，不共用 _noticed 那張表。
+##
+## 每個人的表演只問一次（_tip_prompted_performers 記住已經問過的 id），問完
+## 之後若對方還在表演，不會每分鐘重問一次——跟 _noticed 的「問過就不再問」
+## 同一種態度，但這裡是「這一場表演問過就不再問」，對方一旦不再表演（結束、
+## 或走出視野）就從表裡移除，讓下一場表演可以重新被注意到
+func _scan_for_performers() -> void:
+	if is_dead or is_in_conversation() or not llm_decision_enabled or vision == null:
+		return
+
+	var visible := vision.get_visible_characters()
+	var still_performing := {}
+	for other in visible:
+		if not is_instance_valid(other) or other == self:
+			continue
+		var performer := other as Character
+		if performer == null or not performer.is_performing():
+			continue
+
+		still_performing[performer.character_id] = true
+		if _tip_prompted_performers.has(performer.character_id):
+			continue
+
+		_tip_prompted_performers[performer.character_id] = true
+		_tip_target_id = performer.character_id
+		_queue_reaction_fact_line(
+			"你看到 %s 正在表演，要不要打賞、打賞多少由你自己決定。" % performer.character_name
+		)
+		if not _awaiting_decision:
+			_request_next_decision(false, false, true)
+
+	# 不再表演（或走出視野）的對象從表裡移除，讓下一場表演可以重新觸發詢問
+	for id in _tip_prompted_performers.keys():
+		if not still_performing.has(id):
+			_tip_prompted_performers.erase(id)
+
 ## 回復類動作每遊戲分鐘回多少（目標欄位＋數量，#214）。《07》§2-3 只給相對
 ## 關係——sleep 回復量最大、nap「與睡覺同模組但較低」、rest「小幅回復」——
 ## 沒有給數字，所以這三個值是待實跑校準的暫定值，不是規格定案。#118 只校準了
@@ -2008,6 +2109,7 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 	if _pending_save_retry:
 		_autosave_on_wake()
 	_process_appointment(_now_minutes())
+	_scan_for_performers()
 	_reevaluate()
 
 # 力竭時強制進入休息，直到 stamina 恢復
@@ -2541,6 +2643,13 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			if follow_matches.size() > 1:
 				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
 			return {"success": true, "reason": ""}
+		"perform":
+			# perform 在 SUCCESS_PARAMS 上（見那張表），會落進下面的 _roll_success()
+			# 真的擲骰——這裡只做「這個世界裡真的能不能做到」的硬規則檢查，跟
+			# eat／drink 檢查背包同一個道理：沒有 instrument 連嘗試的資格都沒有，
+			# 不該讓它有機會擲出成功
+			if inventory == null or not inventory.has_item("instrument"):
+				return {"success": false, "reason": "身上沒有樂器，沒辦法表演"}
 		# move_to/sleep/nap/rest/wash/idle/eat/shout 目前都沒有額外的硬規則要擋
 		# （eat 落地後要在這裡加「宣稱吃了背包裡沒有的食物」的檢查，見 #114；
 		# shout 沒有目標、沒有前提，天生沒有硬規則可擋）
@@ -2671,6 +2780,11 @@ func _pursue_current_task() -> void:
 	if is_working():
 		return
 
+	# 表演中同理：_run_perform() 自己跑完 PERFORM_DURATION_MINUTES 才收尾，
+	# 這裡不該在協程進行中又重新選一次任務把它打斷
+	if is_performing():
+		return
+
 	# 對陌生人「！」的那 2 秒刻意站著不動
 	if _reacting:
 		return
@@ -2738,6 +2852,12 @@ func _pursue_current_task() -> void:
 	# work 是長動作，執行協程會自己跑 5 分鐘，只能呼叫一次（#358）
 	if current_state == "work":
 		_pursue_work_task()
+		return
+
+	# perform 跟 work 同理，是長動作、只能呼叫一次（#575）；不像 work 要先走到
+	# 工作站，任意地點皆可，不落進下面的地點判斷
+	if current_state == "perform":
+		_pursue_perform_task()
 		return
 
 	if current_place.is_empty():
@@ -3100,6 +3220,40 @@ func _pursue_work_task() -> void:
 		current_state = "idle"
 		if llm_decision_enabled and not _awaiting_decision:
 			_request_next_decision(_today_plan_needs_new_goal())
+
+# perform 任務的執行（#575）：跟 eat／drink 一樣先用 resolve() 判定（perform
+# 在 SUCCESS_PARAMS 上，這裡才是真正擲骰的那一刻，只呼叫一次，不是每個
+# 遊戲分鐘都重骰——理由見 resolve() 開頭那段對「一次決策一次骰」的說明）。
+# 擲成功才呼叫 Character.perform()，跟 work 一樣是長動作：perform() 立刻
+# 回傳 OK、協程在背景跑完 PERFORM_DURATION_MINUTES，任務要留在 _current_task
+# 上（不在這裡清掉），收尾交給 _on_perform_finished()（_run_perform() 結束時
+# 呼叫）
+func _pursue_perform_task() -> void:
+	stop_moving()
+	var proceed := true
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		proceed = result["success"]
+		if not proceed:
+			_track_action_result_for_facts("perform", false)
+
+	if proceed:
+		var reason := perform()
+		last_action_result = reason
+		_track_action_result_for_facts("perform", reason == Character.PERFORM_OK)
+		if reason == Character.PERFORM_OK:
+			_push_daily_event("你開始表演。")
+			return
+		push_warning("Agent %s: perform 失敗（%s）" % [character_name, reason])
+		_mark_schedule_retry_backoff(_current_task)
+
+	if _current_task.get("source", "") == "llm":
+		_remove_task(_current_task.get("id", ""))
+	_clear_current_task(false)
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
+	_reevaluate()
 
 # buy 任務的執行（#340）：先找到販賣機並移動到其位置，再呼叫 buy_from()。
 # 販賣機透過 params.place 指定（餐酒館或藥草鋪）
@@ -3960,9 +4114,11 @@ func _find_character_by_name(target_name: String) -> Character:
 			return node as Character
 	return null
 
-# 按 character_id 找角色（issue #576）：following_id 存的是身分而不是顯示
-# 名字，才不會在跟隨對象改名／撞名時追丟——跟 _find_character_by_name() 用
-# 同一個 "characters" 群組，不分玩家／Agent
+# 按 character_id 找角色：following_id（#576）存的是身分而不是顯示名字，
+# 才不會在跟隨對象改名／撞名時追丟；打賞轉帳（#575）也要精準指到當初排隊
+# 事實句的那個 performer，不能像 talk 那樣憑顯示名找——顯示名可能撞名，
+# id 不會。跟 _find_character_by_name() 用同一個 "characters" 群組，
+# 不分玩家／Agent
 func _find_character_by_id(target_id: String) -> Character:
 	if target_id.is_empty():
 		return null

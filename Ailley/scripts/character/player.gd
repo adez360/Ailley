@@ -169,6 +169,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		vending_menu.open(machine, self)
 		return
 
+	# 對方正在表演時，E 開的是打賞選單而不是搭話——玩家（天神）主動打賞是
+	# 全新的 UI 互動，直接呼叫 Inventory.add_money()，不走 AI 決策（#575 拍板）。
+	# tip_menu 理論上一定找得到（場景裡固定掛著），跟 vending_menu 同一種
+	# 「多防一手」寫法，避免場景漏掛時直接炸掉
+	var tip_menu := get_tree().get_first_node_in_group("tip_menu")
+	if other != null and other.is_performing() and tip_menu != null:
+		tip_menu.open(other, self)
+		return
+
 	var talk_reason := talk_to(other)
 	if talk_reason != TALK_OK:
 		report_action_failure("talk_to", talk_reason)
