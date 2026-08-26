@@ -166,12 +166,20 @@ func _run() -> void:
 		"指向不存在 npc_id 的資料竟然插入成功，FK 沒生效"
 	)
 
-	for table in DEPENDENT_TABLES:
+	for table in _all_user_tables():
 		_check(
 			"%s 外鍵沒有殘留指向暫存表" % table,
 			not _foreign_key_targets_stale_table(table),
 			"PRAGMA foreign_key_list(%s) 有外鍵仍指向 *__migrate_rebuild_old" % table
 		)
+
+	_check(
+		"沒有殘留的 __migrate_rebuild_old 暫存表",
+		_all_user_tables().filter(
+			func(t: String): return t.ends_with("__migrate_rebuild_old")
+		).is_empty(),
+		"sqlite_master 還留著重建用的暫存表"
+	)
 
 	_check(
 		"PRAGMA foreign_key_check 沒有違規",
@@ -757,6 +765,20 @@ func _can_insert_orphan_npc_wallet() -> bool:
 		"INSERT INTO npc_wallet (npc_id) VALUES (?);",
 		["__migration_v8_test_nonexistent_npc"]
 	)
+
+
+## 回傳資料庫裡所有應用程式 table（排除 sqlite_ 內部表）。用查詢代替
+## 硬寫清單（REBUILT_TABLES／DEPENDENT_TABLES）——漏掉某張依附表時，
+## 硬寫的清單也會一起漏掉，正好驗不到「表被 CASCADE 清空」這個最危險
+## 的情形；REBUILT_TABLES 本身也可能帶外鍵（npc.home_location_id 指向
+## location），查全部 table 才會連它們一起驗到。
+func _all_user_tables() -> Array:
+	if not db.query(
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';"
+	):
+		return []
+
+	return (db.query_result as Array).map(func(row): return String(row.get("name", "")))
 
 
 ## PRAGMA foreign_key_list 的 "table" 欄位是這個外鍵目前實際指向的表名。
