@@ -1427,16 +1427,19 @@ func _run_perform(session_id: int) -> void:
 		await GameClock.time_changed
 		if session_id != _perform_session_id:
 			return
-	_end_perform()
+	_end_perform(true)
 
-func _end_perform() -> void:
+## completed：跑滿 PERFORM_DURATION_MINUTES 自然結束傳 true，force_interrupt()
+## 中途打斷傳 false（CodeRabbit review 抓到：兩種原本都會落進同一個
+## _on_perform_finished()，被打斷的表演會被誤記成正常結束）
+func _end_perform(completed: bool) -> void:
 	_performing = false
 	_perform_session_id += 1
-	_on_perform_finished()
+	_on_perform_finished(completed)
 
 ## 表演結束的收尾鉤子，基底 no-op——跟 _on_work_finished() 同一個理由，Player
 ## 沒有行程可言，只有 Agent 需要清目前任務並重新問決策
-func _on_perform_finished() -> void:
+func _on_perform_finished(_completed: bool) -> void:
 	pass
 
 
@@ -1581,7 +1584,7 @@ func force_interrupt() -> void:
 	if _working:
 		_end_work(_current_workstation)
 	if _performing:
-		_end_perform()
+		_end_perform(false)
 	_on_action_interrupted()
 
 ## 中斷後的收尾鉤子，讓子類別決定要不要重新規劃行程。基底不用管——

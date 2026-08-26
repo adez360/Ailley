@@ -903,7 +903,11 @@ func is_talk_interruptible() -> bool:
 # 為了緊急需求主動放棄工作」這類語意判斷留給《AI自主性審查清單》PM 拍板後
 # 的後續 issue，屆時兩個判斷要各自往哪個方向改會很清楚，這裡不動它
 func _is_preemptible() -> bool:
-	return not _working and _current_task.get("interruptible", true)
+	# 表演中同理 _working（CodeRabbit review 抓到）：_consider_switch() 原本
+	# 只擋 _working，_performing 期間沒被擋住的話，_current_task 可能在
+	# _run_perform() 協程還在跑的時候被換成別的任務——_on_perform_finished()
+	# 收尾時清掉／記錄的就不是真正的表演任務，是搶占進來的那筆
+	return not _working and not _performing and _current_task.get("interruptible", true)
 
 # 對話結束後重算一次「現在該做什麼」，而不是接續原本那條路 ——
 # 對話期間可能已經跨過了行程的整點
@@ -1724,8 +1728,18 @@ func _on_work_finished() -> void:
 ## 是長動作，_pursue_perform_task() 開始表演成功後就先返回，不清任務——這裡
 ## 才是真正的收尾點（_run_perform() 協程跑完 PERFORM_DURATION_MINUTES 後呼叫）。
 ## llm 來源才移除任務，跟 eat／drink 收尾同一套規則：schedule 來源的任務不能
-## 被移除，得靠 window 自然退場
-func _on_perform_finished() -> void:
+## 被移除，得靠 window 自然退場。
+##
+## completed=false（被 force_interrupt() 打斷，CodeRabbit review 抓到）比照
+## _on_work_finished() 對半途離開工作站的處理：只留輕量事實句，不重複清任務／
+## 問下一次決策——force_interrupt() 呼叫完 _end_perform(false) 之後緊接著會
+## 呼叫 _on_action_interrupted()，那邊已經統一做了 _clear_current_task()／
+## _request_next_decision()／_reevaluate()，這裡若也做一次，_request_next_decision()
+## 會在同一次中斷裡被觸發兩次
+func _on_perform_finished(completed: bool) -> void:
+	if not completed:
+		_push_daily_event("你的表演被打斷了")
+		return
 	if _current_task.get("source", "") == "llm":
 		_remove_task(_current_task.get("id", ""))
 	_clear_current_task(true)
@@ -2025,14 +2039,21 @@ func _scan_for_performers() -> void:
 		still_performing[performer.character_id] = true
 		if _tip_prompted_performers.has(performer.character_id):
 			continue
+		# 已經有一通決策在飛（CodeRabbit review 抓到）：_tip_target_id
+		# 只有一個欄位，同一輪掃到多個表演者時，這裡若不擋，後面的表演者
+		# 會在還沒真的送出請求前就搶先把 _tip_target_id 蓋掉，等第一通回應
+		# 回來時 _apply_perform_tip() 就會把錢轉給搶跑的那個人，不是真正
+		# 決策問的對象；標記成「問過」也要跟著延後，不然這個人這場表演
+		# 永遠不會被真的問到，下個遊戲分鐘的 scan 會再試一次
+		if _awaiting_decision:
+			continue
 
 		_tip_prompted_performers[performer.character_id] = true
 		_tip_target_id = performer.character_id
 		_queue_reaction_fact_line(
 			"你看到 %s 正在表演，要不要打賞、打賞多少由你自己決定。" % performer.character_name
 		)
-		if not _awaiting_decision:
-			_request_next_decision(false, false, true)
+		_request_next_decision(false, false, true)
 
 	# 不再表演（或走出視野）的對象從表裡移除，讓下一場表演可以重新觸發詢問
 	for id in _tip_prompted_performers.keys():
@@ -2633,15 +2654,16 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 		"follow":
 			# 跟 persuade 同一套「硬規則過了就直接放行」——follow 沒有成敗
 			# 可言（不是說服、不是攻擊骰命中率），純粹是「這個目標現在還
-			# 找不找得到」的存在性／歧義檢查，每個 tick 由
-			# _pursue_follow_task() 重新問一次，因為目標可能隨時離開視野
-			# 或被其他角色頂替同名（撞名）
-			var follow_target_name: String = str(params.get("target", ""))
-			var follow_matches := _find_all_characters_by_name(follow_target_name)
-			if follow_matches.is_empty():
+			# 找不找得到」的存在性檢查，每個 tick 由 _pursue_follow_task()
+			# 重新問一次。查的是 following_id 不是 params.target 的顯示
+			# 名字（CodeRabbit review 抓到）：名字在 _select() 那次解析完
+			# following_id 之後可能改變（改名），繼續用名字查每 tick 都要
+			# 重新過一次撞名檢查，改名的話會被誤判成「跟丟」，即使
+			# following_id 其實還能找到同一個人。id 是唯一值，不會撞名，
+			# 不需要另外的歧義檢查
+			var follow_target := _find_character_by_id(following_id)
+			if follow_target == null:
 				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
-			if follow_matches.size() > 1:
-				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
 			return {"success": true, "reason": ""}
 		"perform":
 			# perform 在 SUCCESS_PARAMS 上（見那張表），會落進下面的 _roll_success()

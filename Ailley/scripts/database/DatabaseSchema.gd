@@ -685,7 +685,27 @@ static func _migrate_v6_action_history_composite_index(db) -> bool:
 ## NOT NULL／索引形狀變更，不需要整張表重建——SQLite 的 ALTER TABLE ADD
 ## COLUMN 本身就支援帶 REFERENCES 的欄位，只要沒有非 NULL 的預設值就不會
 ## 卡既有資料列，直接 ALTER TABLE 就夠。
+## 先查欄位存不存在才 ALTER TABLE（CodeRabbit review 抓到）：user_version <= 6
+## 的既有資料庫，initialize() 會先跑 migration 7（整表重建 world_character_state），
+## 這次改動後 WorldCharacterStateSchema.create() 的 CREATE TABLE 本身就帶
+## following_npc_id，重建出來的新表已經有這個欄位——接著跑到 migration 8 若
+## 不查就直接 ALTER TABLE ADD COLUMN，會撞 duplicate column 錯誤，整個
+## migration rollback。user_version 剛好是 7（還沒跑過 migration 7 重建、
+## 或本來就在這個版位）的資料庫才需要真的 ALTER TABLE
 static func _migrate_v8_add_following_npc_id(db) -> bool:
+	if not db.query("PRAGMA table_info(world_character_state);"):
+		push_error(
+			"[DatabaseSchema] Migration 8: Failed to read columns of world_character_state: "
+			+ db.error_message
+		)
+		return false
+
+	var existing_columns: Array = (db.query_result as Array).map(
+		func(row): return row.get("name", "")
+	)
+	if existing_columns.has("following_npc_id"):
+		return true
+
 	if not db.query(
 		"ALTER TABLE world_character_state ADD COLUMN following_npc_id TEXT REFERENCES npc(npc_id) ON DELETE SET NULL;"
 	):

@@ -130,6 +130,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	if vending_menu != null and vending_menu.is_open():
 		return
 
+	# tip_menu 開著時同理 vending_menu（CodeRabbit review 抓到）：漏了這道
+	# guard 的話，Player 這裡會搶先吃掉 interact／ui_cancel 事件、呼叫
+	# set_input_as_handled()，tip_menu.gd 自己的 _unhandled_input() 永遠輪
+	# 不到、選單關不掉
+	var tip_menu := get_tree().get_first_node_in_group("tip_menu")
+	if tip_menu != null and tip_menu.is_open():
+		return
+
 	get_viewport().set_input_as_handled()
 
 	if is_in_conversation():
@@ -172,8 +180,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	# 對方正在表演時，E 開的是打賞選單而不是搭話——玩家（天神）主動打賞是
 	# 全新的 UI 互動，直接呼叫 Inventory.add_money()，不走 AI 決策（#575 拍板）。
 	# tip_menu 理論上一定找得到（場景裡固定掛著），跟 vending_menu 同一種
-	# 「多防一手」寫法，避免場景漏掛時直接炸掉
-	var tip_menu := get_tree().get_first_node_in_group("tip_menu")
+	# 「多防一手」寫法，避免場景漏掛時直接炸掉。變數在函式開頭已經宣告過
+	# 一次（給上面關閉選單那道 guard 用），這裡直接沿用，不重複宣告
 	if other != null and other.is_performing() and tip_menu != null:
 		tip_menu.open(other, self)
 		return
