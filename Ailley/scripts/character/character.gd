@@ -79,6 +79,11 @@ const DRINK_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法喝�
 const DRINK_NO_DRINK := "NO_DRINK"		# 背包裡沒有 ItemDatabase 分類為 drink 的物品
 const DRINK_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 hydration，不能先扣飲品
 
+## gather() 的失敗原因碼，形狀比照 BUY_*：除了 NO_INVENTORY，背包滿了直接
+## 原樣轉傳 Inventory 的 ADD_NO_SPACE，不重新取名（#574）
+const GATHER_OK := ""
+const GATHER_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法採集
+
 const GIVE_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE 一樣的距離門檻，2 格
 
 ## give_to() 的失敗原因碼，形狀比照 TALK_*／BUY_*。除了這四個，give_to()
@@ -1273,6 +1278,19 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 		money_popup.show_change(-price)
 
 	return BUY_OK
+
+
+# ---- 採集 ----
+
+# 在藥草叢採集一份藥草（#574）：跟 buy_from() 一樣只管「把東西塞進背包」——
+# 地點對不對、擲不擲得過成功率是 resolve() 的事（見 agent.gd 的 SUCCESS_PARAMS／
+# _roll_success()），這裡假設呼叫端已經確認過那兩件事才會呼叫。add_item()
+# 內部已處理堆疊規則，回傳值直接轉傳（ADD_OK 剛好也是空字串，跟 GATHER_OK
+# 同一個值，不用另外映射）
+func gather() -> String:
+	if inventory == null:
+		return GATHER_NO_INVENTORY
+	return inventory.add_item("herb")
 
 
 # ---- 人格 ----

@@ -92,7 +92,13 @@ const ALLOWED_ACTIONS := [
 # bury 是 #380 接上的：跟 attack 同一套「目標是另一個角色、一次執行完就退出
 # 任務池」模式（_pursue_bury_task()），差別是目標必須是已死亡且尚未安葬的
 # 屍體，且雙方都要在墓園錨點附近，見 Character.bury() 的檢查順序
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury"]
+#
+# gather 是 #574 接上的：跟 buy 同一套「先走到地點才執行」模式
+# （_pursue_gather_task()），差別是沒有販賣機這種場景物件——place 直接對應
+# PlaceAnchors 底下的「herb_field」錨點。跟 eat／drink／buy 不同的是 gather
+# 在 agent.gd 的 SUCCESS_PARAMS 上，resolve() 對它是真的擲骰，不是恆成功的
+# 硬規則檢查
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "gather"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -363,6 +369,17 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 		if not place is String or (place as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
 		buy_params["place"] = (place as String).strip_edges()
+
+	# gather 動作的 params 驗證（#574）：跟 buy 同一套「place 是必填字串」——
+	# 藥草叢目前是唯一的採集地點，但仍要求 LLM 明講去哪裡，place 錯了在
+	# 執行層才失敗、給理由（見 agent.gd::resolve() 的 "gather" 分支），跟這
+	# 個檔案不在驗證層幫忙補值的一貫做法一致
+	if action == "gather":
+		var gather_params: Dictionary = task.get("params", {})
+		var gather_place: Variant = gather_params.get("place")
+		if not gather_place is String or (gather_place as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+		gather_params["place"] = (gather_place as String).strip_edges()
 
 	# #268／#290：expires_in_minutes（模型填的相對時長）現在有跟
 	# priority/duration 同一套量級上限，不再只有 is_finite()——
