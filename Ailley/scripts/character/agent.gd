@@ -3217,7 +3217,14 @@ func _pursue_gather_task() -> void:
 		_pursuit_done = false
 		if not move_to(target):
 			push_warning("Agent %s: 走不到 %s" % [character_name, place])
-			_pursuit_done = true
+			# 跟 _pursue_buy_task() 同一套：llm 任務沒有 window 這條退路，只設
+			# _pursuit_done 的話會一直卡在 gather 狀態，永遠等不到失敗結果、
+			# 也不會請求下一個決策（CodeRabbit review 抓到）
+			if _current_task.get("source", "") == "llm":
+				last_action_result = "走不到藥草叢，無法採集"
+				_finish_task_and_request_next()
+			else:
+				_pursuit_done = true
 		return
 
 	# 已到達藥草叢，執行採集
@@ -3225,13 +3232,16 @@ func _pursue_gather_task() -> void:
 	_pursued_place = current_place
 	_pursuit_done = true
 
-	var proceed := true
-	if _current_task.get("source", "") == "llm":
-		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
-		last_action_result = result["reason"]
-		proceed = result["success"]
-		if not proceed:
-			_track_action_result_for_facts("gather", false)
+	# resolve() 不分來源都要呼叫——跟 eat／drink／buy
+	# 不同的是，gather 在 SUCCESS_PARAMS 上，resolve() 對它是真的擲骰，不是
+	# 「重驗前置條件」的純函式；只在 llm 來源才骰的話，schedule 來源的 gather
+	# （目前 npc_schedule.json 沒有，但介面上合法）會完全跳過擲骰、直接必中，
+	# 違反《01-2》§2 的成功率公式（CodeRabbit review 抓到）
+	var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+	last_action_result = result["reason"]
+	var proceed: bool = result["success"]
+	if not proceed:
+		_track_action_result_for_facts("gather", false)
 
 	if proceed:
 		var reason := gather()
