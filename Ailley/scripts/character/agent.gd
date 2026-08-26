@@ -133,6 +133,13 @@ var _current_task_started_at := 0
 var current_place := ""
 var current_state := "idle"
 
+# 正在跟隨的角色 character_id，空字串代表沒在跟隨任何人（issue #576）。
+# 跟 current_place／current_state 同一層——這屬於「這個角色在這個世界裡的
+# 行程狀態」，見 WorldCharacterStateSchema.gd 的 following_npc_id 說明。
+# 要不要停止跟隨完全交給跟隨者自己的 AI 下一次決策判斷，這裡只負責存放
+# 狀態，不寫任何距離／逾時門檻
+var following_id := ""
+
 # 這一場已經對誰驚訝過。Vision 只回報「看到誰」，要不要有反應是這裡決定的；
 # 沒有這張表的話，走出視野再走回來就會再驚訝一次
 var _noticed := {}
@@ -202,6 +209,13 @@ var _persuade_pursuit_last_distance := INF
 # bury 任務用的卡住偵測（#380），跟 _attack_pursuit_* 同一套理由與收尾方式
 var _bury_pursuit_stuck_ticks := 0
 var _bury_pursuit_last_distance := INF
+
+# follow 任務用的卡住偵測（issue #576），跟 _talk_pursuit_* 同一套理由——
+# 目標每 tick 都在動，每次都要重新 move_to()。卡住只警告不放棄，跟 talk
+# 同一種態度：目標是不是要繼續被跟隨完全交給跟隨者自己下一次決策判斷，
+# 不該讓引擎自己的卡住偵測代為決定放棄
+var _follow_pursuit_stuck_ticks := 0
+var _follow_pursuit_last_distance := INF
 
 # 送達（已對目標開口，不論對方是否忙碌拒絕）後設 true，擋掉 _pursue_persuade_task()
 # 後續每個 tick 重複呼叫 try_record_pending_persuade()／move_to()（P-09，
@@ -2514,6 +2528,19 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			if matches.size() > 1:
 				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
 			return {"success": true, "reason": ""}
+		"follow":
+			# 跟 persuade 同一套「硬規則過了就直接放行」——follow 沒有成敗
+			# 可言（不是說服、不是攻擊骰命中率），純粹是「這個目標現在還
+			# 找不找得到」的存在性／歧義檢查，每個 tick 由
+			# _pursue_follow_task() 重新問一次，因為目標可能隨時離開視野
+			# 或被其他角色頂替同名（撞名）
+			var follow_target_name: String = str(params.get("target", ""))
+			var follow_matches := _find_all_characters_by_name(follow_target_name)
+			if follow_matches.is_empty():
+				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
+			if follow_matches.size() > 1:
+				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
+			return {"success": true, "reason": ""}
 		# move_to/sleep/nap/rest/wash/idle/eat/shout 目前都沒有額外的硬規則要擋
 		# （eat 落地後要在這裡加「宣稱吃了背包裡沒有的食物」的檢查，見 #114；
 		# shout 沒有目標、沒有前提，天生沒有硬規則可擋）
@@ -2558,6 +2585,19 @@ func _select(task: Dictionary, now_minutes: int, outgoing_ok: bool = true) -> vo
 	current_place = str(task.get("params", {}).get("place", ""))
 	current_state = str(task.get("action", ""))
 
+	# following_id 的生命週期跟著這裡收斂（issue #576）：新任務不是 follow
+	# 就清掉——「要不要停止跟隨」交給跟隨者自己的下一次決策，只要那次決策
+	# 選了別的動作（或壓根沒有 follow），這裡就是它被「執行」的那一刻，
+	# 順勢清掉狀態，不用另外在別處輪詢判斷。新任務是 follow 的話，跟
+	# talk／persuade 同一種做法在這裡先用名字找一次目標存 id——找不到／
+	# 撞名的情形留給 _pursue_follow_task() 第一個 tick 呼叫 resolve() 時
+	# 用同一套 target 存在性／歧義檢查收尾，這裡不重複判斷
+	if current_state == "follow":
+		var follow_target := _find_character_by_name(str(task.get("params", {}).get("target", "")))
+		following_id = follow_target.character_id if follow_target != null else ""
+	elif not following_id.is_empty():
+		following_id = ""
+
 	# #428：只記 llm 來源的動作切換，給 #418 重複率量測用——schedule 來源
 	# 本來就設計成會重複（例如每天固定去上班），混進去會稀釋掉真正想量的東西
 	# （已拍板）。_select() 是仲裁器唯一真正把 _current_task 換成新任務的地方
@@ -2584,6 +2624,8 @@ func _select(task: Dictionary, now_minutes: int, outgoing_ok: bool = true) -> vo
 	_persuade_delivered = false
 	_bury_pursuit_stuck_ticks = 0
 	_bury_pursuit_last_distance = INF
+	_follow_pursuit_stuck_ticks = 0
+	_follow_pursuit_last_distance = INF
 	# 排程任務的 id 是穩定的 schedule_%d，同一筆 buy 任務會在下一個遊戲日
 	# 重用同一個 id——不歸零的話，前一天走不到販賣機留下的 _buy_pursuit_task_id
 	# 與 _pursuit_done=true 會讓新一天同 id 的任務直接被守衛判定「已處理過」，
@@ -2674,6 +2716,13 @@ func _pursue_current_task() -> void:
 	# persuade（#227）跟 talk／give 同理：目標是會動的角色，不是固定地點
 	if current_state == "persuade":
 		_pursue_persuade_task()
+		return
+
+	# follow（issue #576）跟 talk／persuade 同理：目標是會動的角色，而且
+	# 移動目標要每個 tick 重新算——不能落進下面的地點判斷，那條路徑只會
+	# 走一次固定座標，追不上會動的跟隨對象
+	if current_state == "follow":
+		_pursue_follow_task()
 		return
 
 	# drink 跟 eat 同一種「呼叫一次就完成」（#163）
@@ -3602,6 +3651,56 @@ func _pursue_persuade_task() -> void:
 	# 那一分鐘就結束）。_persuade_delivered 擋掉 duration 還沒走完前，
 	# 後續每個 tick 重複呼叫 try_record_pending_persuade()
 
+# follow 任務的執行（issue #576）：目標是會動的角色，移動目標動態改成
+# 跟隨對象目前的位置——每個 tick 都重新問一次「他現在在哪」再重下
+# move_to()，不是只算一次路徑就不管（跟 _pursue_talk_task() 同一種「目標
+# 會動」的追逐節奏，但 talk 到範圍內就停下開口，follow 沒有這種終點，
+# 只要還在 follow 狀態就持續逼近）。
+#
+# 要不要停止跟隨完全交給跟隨者自己的 AI 模型在下一次決策時判斷——這裡
+# 不寫任何距離／逾時門檻，following_id 只在下面兩種情況清除：目標透過
+# resolve() 判定不存在／撞名，或是 _select() 換上了別的任務（見 _select()
+# 的 following_id 收斂邏輯）
+func _pursue_follow_task() -> void:
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		if not result["success"]:
+			_track_action_result_for_facts("follow", false)
+			following_id = ""
+			_finish_task_and_request_next()
+			return
+
+	var target := _find_character_by_id(following_id)
+	if target == null:
+		last_action_result = "找不到要跟隨的人，可能已經離開了"
+		_track_action_result_for_facts("follow", false)
+		following_id = ""
+		_finish_task_and_request_next()
+		return
+
+	var target_pos: Vector2 = target.get_body_position()
+
+	# 已經走到跟隨對象身邊——停下來，不用每個 tick 都重新起步一次 A*
+	# 尋徑；對方下一步移動時距離會再拉開，下個 tick 自然會離開這個分支
+	if _has_arrived_at(target_pos):
+		stop_moving()
+		_follow_pursuit_stuck_ticks = 0
+		_follow_pursuit_last_distance = INF
+		return
+
+	if not move_to(target_pos):
+		push_warning("Agent %s: 走不到跟隨對象 %s" % [character_name, target.character_name])
+		return
+
+	var distance := get_body_position().distance_to(target_pos)
+	var progress := _pursuit_stuck_progress(distance, _follow_pursuit_last_distance, _follow_pursuit_stuck_ticks)
+	_follow_pursuit_stuck_ticks = progress["stuck_ticks"]
+	_follow_pursuit_last_distance = distance
+
+	if progress["threshold_reached"]:
+		push_warning("Agent %s: 追不上跟隨對象 %s，可能被卡住" % [character_name, target.character_name])
+
 # 給發起者呼叫，把說服嘗試寫進自己的待回應記錄（#227）。已有待回應記錄時
 # 直接拒絕（忙碌拒絕，比照 talk_to() 的 TALK_TARGET_BUSY），不覆蓋、不排隊
 # ——避免舊記錄被靜默蓋掉，讓第一個說服者的嘗試無聲消失、自己完全不知道
@@ -3669,6 +3768,23 @@ func _fact_lines_summary() -> Array[String]:
 	# 問題只在文字內容沒有跟著次數更新）
 	if _consecutive_failure_count >= FACT_CONSECUTIVE_FAILURE_THRESHOLD:
 		lines.append("你已經連續 %d 次沒能完成「%s」。" % [_consecutive_failure_count, _consecutive_failure_action])
+
+	# 跟隨狀態（issue #576）：只要 following_id 還設著就每次決策都注入，
+	# 跟社交沉默／目標拖延同一種「條件持續成立就持續提醒」寫法——引擎不會
+	# 自己決定停止跟隨，模型要靠這句話才知道自己正在跟著誰、對方目前在
+	# 哪裡，才有材料判斷這一輪要不要繼續 follow
+	if not following_id.is_empty():
+		var follow_target := _find_character_by_id(following_id)
+		if follow_target != null:
+			# Player 沒有 current_place 這個欄位，get() 對它回傳 null——
+			# 跟 game_manager.gd::get_world_save_data() 判斷 Agent 專屬欄位
+			# 同一種寫法，先判 null 再轉字串，不能直接 str(null) 印出 "<null>"
+			var follow_place_value: Variant = follow_target.get("current_place")
+			var follow_place: String = "" if follow_place_value == null else str(follow_place_value)
+			if follow_place.is_empty():
+				lines.append("你正在跟著 %s。" % follow_target.character_name)
+			else:
+				lines.append("你正在跟著 %s，他現在在「%s」。" % [follow_target.character_name, follow_place])
 
 	return lines
 
@@ -3841,6 +3957,17 @@ func _find_character_by_name(target_name: String) -> Character:
 		return null
 	for node in get_tree().get_nodes_in_group("characters"):
 		if node != self and node.character_name == target_name:
+			return node as Character
+	return null
+
+# 按 character_id 找角色（issue #576）：following_id 存的是身分而不是顯示
+# 名字，才不會在跟隨對象改名／撞名時追丟——跟 _find_character_by_name() 用
+# 同一個 "characters" 群組，不分玩家／Agent
+func _find_character_by_id(target_id: String) -> Character:
+	if target_id.is_empty():
+		return null
+	for node in get_tree().get_nodes_in_group("characters"):
+		if node != self and (node as Character).character_id == target_id:
 			return node as Character
 	return null
 

@@ -34,7 +34,7 @@ extends RefCounted
 ## CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
-const CURRENT_VERSION := 7
+const CURRENT_VERSION := 8
 
 
 ## 版本落後時依序套用的變更，每個 entry：
@@ -77,6 +77,11 @@ const MIGRATIONS: Array[Dictionary] = [
 		"version": 7,
 		"name": "Rebuild world/item/npc_state/npc_emotion/npc_goal with NOT NULL primary keys",
 		"apply": Callable(DatabaseSchema, "_migrate_v7_notnull_primary_keys")
+	},
+	{
+		"version": 8,
+		"name": "Add world_character_state.following_npc_id (issue #576)",
+		"apply": Callable(DatabaseSchema, "_migrate_v8_add_following_npc_id")
 	}
 ]
 
@@ -643,6 +648,8 @@ static func _migrate_v7_notnull_primary_keys(db) -> bool:
 		{"table": "npc_home_storage", "schema": NPCHomeStorageSchema},
 		{"table": "item_transaction", "schema": ItemTransactionSchema}
 	])
+
+
 ## Migration 6：npc_action_history 是同一輪開發（#428）才新增的表，
 ## NPCActionHistorySchema.gd 最初把 idx_npc_action_history_npc 只建在
 ## (npc_id)，後來（#511 CodeRabbit review）才發現重複率分析需要
@@ -665,6 +672,25 @@ static func _migrate_v6_action_history_composite_index(db) -> bool:
 	):
 		push_error(
 			"[DatabaseSchema] Migration 6: Failed to recreate idx_npc_action_history_npc: "
+			+ db.error_message
+		)
+		return false
+
+	return true
+
+
+## Migration 8：world_character_state 新增 following_npc_id（issue #576，
+## 「跟隨誰」的持續狀態，見 WorldCharacterStateSchema.gd 檔頭說明）。純新增
+## 一個允許 NULL、預設值也是 NULL 的欄位，不像 migration 3／6／7 那樣涉及
+## NOT NULL／索引形狀變更，不需要整張表重建——SQLite 的 ALTER TABLE ADD
+## COLUMN 本身就支援帶 REFERENCES 的欄位，只要沒有非 NULL 的預設值就不會
+## 卡既有資料列，直接 ALTER TABLE 就夠。
+static func _migrate_v8_add_following_npc_id(db) -> bool:
+	if not db.query(
+		"ALTER TABLE world_character_state ADD COLUMN following_npc_id TEXT REFERENCES npc(npc_id) ON DELETE SET NULL;"
+	):
+		push_error(
+			"[DatabaseSchema] Migration 8: Failed to add following_npc_id: "
 			+ db.error_message
 		)
 		return false

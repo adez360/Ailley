@@ -457,6 +457,14 @@ func get_world_save_data() -> Dictionary:
 		if character.get("current_place") != null:
 			entry["current_place"] = character.get("current_place")
 			entry["current_state"] = character.get("current_state")
+		# following_id 跟 current_place／current_state 同一種條件——只有
+		# Agent 才有這個欄位（issue #576），Player 沒有。空字串代表沒在
+		# 跟隨任何人，跟 GameManager/SqliteSaveService 對 current_place
+		# 的空字串規則一致，不用另外判斷 null
+		if character.get("following_id") != null:
+			var following_id: String = character.get("following_id")
+			if not following_id.is_empty():
+				entry["following_id"] = following_id
 		characters[character.character_id] = entry
 
 	# "player" 分組只會有玩家目前操控的那一個節點（player.gd::_ready() 裡
@@ -693,6 +701,11 @@ func _apply_character_entry(character: Character, entry: Dictionary) -> void:
 	if entry.has("current_place") and character.get("current_place") != null:
 		character.set("current_place", entry.get("current_place", ""))
 		character.set("current_state", entry.get("current_state", "idle"))
+
+	# following_id 讀回：跟 current_place 同一種條件式套用，缺欄位（沒在
+	# 跟隨任何人）就維持 Agent 預設值（空字串），不用另外清一次
+	if entry.has("following_id") and character.get("following_id") != null:
+		character.set("following_id", entry.get("following_id", ""))
 
 # 存檔裡有記載、但場景裡目前沒有對應節點的角色——重新生成後套用存檔資料
 # （#344）。只有角色庫（character_library）還記得住身分的角色會被生出來：

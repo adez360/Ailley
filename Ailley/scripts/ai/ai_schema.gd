@@ -48,6 +48,9 @@ const ALLOWED_ACTIONS := [
 	"haul", "struggle",
 	# F 安葬類（#380，《規格書09》§3-2／§6）
 	"bury",
+	# G 邀約同行類（#576）：邀請另一個角色一起去某處，目標是會動的角色，
+	# 跟 talk／attack／bury 同一種「單純一個 target 字串」形狀
+	"follow",
 ]
 
 # 本輪真正有實作的動作。其餘動作驗證會過，但執行層要回 NOT_IMPLEMENTED，
@@ -92,7 +95,12 @@ const ALLOWED_ACTIONS := [
 # bury 是 #380 接上的：跟 attack 同一套「目標是另一個角色、一次執行完就退出
 # 任務池」模式（_pursue_bury_task()），差別是目標必須是已死亡且尚未安葬的
 # 屍體，且雙方都要在墓園錨點附近，見 Character.bury() 的檢查順序
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury"]
+#
+# follow 是 #576 接上的：跟 talk／persuade 同一套「目標會動、每個 tick
+# 重新算移動目標」模式（_pursue_follow_task()），差別是沒有終點——只要
+# 還在 follow 狀態就持續逼近，停不停止完全交給跟隨者自己下一次決策判斷，
+# 引擎不寫死任何距離／逾時門檻（見 agent.gd 的 following_id 欄位說明）
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "follow"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -302,15 +310,17 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 	if task.has("params") and not task["params"] is Dictionary:
 		return _fail(ERROR_BAD_SHAPE)
 
-	# talk／attack／bury／give 是目前有逐欄位驗證 params 的動作（talk 見 #90，
-	# attack 見 #159，give 見 #264，bury 見 #380）：沒有 target 的任務會被
-	# 各自的 _pursue_*_task() 誤判成「目標不存在」一路帶進任務池才發現，
-	# 不如在這一層就擋掉，跟這個檔案「外來內容一律不信任」的原則一致，
-	# 不等到執行層才發現資料是空的。bury 的 target 是要安葬的屍體（另一個
-	# 角色的名字），跟 attack 同一種「單純一個 target 字串」形狀，不需要
+	# talk／attack／bury／follow／give 是目前有逐欄位驗證 params 的動作（talk
+	# 見 #90，attack 見 #159，give 見 #264，bury 見 #380，follow 見 #576）：
+	# 沒有 target 的任務會被各自的 _pursue_*_task() 誤判成「目標不存在」
+	# 一路帶進任務池才發現，不如在這一層就擋掉，跟這個檔案「外來內容一律
+	# 不信任」的原則一致，不等到執行層才發現資料是空的。bury 的 target 是
+	# 要安葬的屍體、follow 的 target 是要跟隨的對象（都是另一個角色的
+	# 名字），跟 attack 同一種「單純一個 target 字串」形狀，不需要
 	# 像 give 那樣多驗 count。give 的 target 檢查獨立成下面一段，
-	# 因為它還要多驗 count 的範圍，跟 talk／attack／bury 共用的這段不同形狀
-	if ["talk", "attack", "bury"].has(action):
+	# 因為它還要多驗 count 的範圍，跟 talk／attack／bury／follow 共用的
+	# 這段不同形狀
+	if ["talk", "attack", "bury", "follow"].has(action):
 		var talk_params: Dictionary = task.get("params", {})
 		var target: Variant = talk_params.get("target")
 		if not target is String or (target as String).strip_edges().is_empty():
