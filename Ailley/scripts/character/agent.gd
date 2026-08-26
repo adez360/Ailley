@@ -3198,6 +3198,11 @@ func _pursue_gather_task() -> void:
 		var failed_task_source: String = str(_current_task.get("source", ""))
 		var failed_task_id: String = str(_current_task.get("id", ""))
 		push_warning("Agent %s: 沒有這個採集地點 %s" % [character_name, place])
+		# 排程來源的 place 打錯字是靜態資料，每個遊戲分鐘重算都會撞上同一個
+		# 失敗，不退避就是《99》issue #505 修過的「排程失敗每分鐘瘋狂重試」
+		# 重演（原案例是 eat 排程沒食物），這裡要在 _current_task 被清空、
+		# 拿不到任務物件之前先標記
+		_mark_schedule_retry_backoff(_current_task)
 		stop_moving()
 		_pursued_place = ""
 		_pursuit_done = false
@@ -3254,10 +3259,16 @@ func _pursue_gather_task() -> void:
 		last_action_result = reason
 		if reason != Character.GATHER_OK:
 			push_warning("Agent %s: gather 失敗（%s）" % [character_name, reason])
-			_mark_schedule_retry_backoff(_current_task)
 		else:
 			_push_daily_event("你採集到了一份%s。" % ItemDatabase.get_display_name("herb"))
 		_track_action_result_for_facts("gather", reason == Character.GATHER_OK)
+
+	# 排程來源不論擲骰失敗、gather() 失敗、還是成功，都要退避到窗期結束——
+	# 跟 eat／drink 只在失敗時退避的理由不同：eat／drink 有 satiety 這種會隨
+	# 動作完成自然下降的分數，吃飽了下一輪自然選不到；gather 沒有這種內建
+	# 抑制，同一個排程窗期內每個遊戲分鐘都可能被 _reevaluate() 立即重選中，
+	# 擲骰成功也一樣會無限重跑、每分鐘多產一份 herb（CodeRabbit review 抓到）
+	_mark_schedule_retry_backoff(_current_task)
 
 	if _current_task.get("source", "") == "llm":
 		_remove_task(_current_task.get("id", ""))
