@@ -29,7 +29,8 @@ extends Node
 ## 不再自然漂移，改成打獵/採集/表演等工作動作直接扣（見《99》P-65、agent.gd
 ## 之後要新增的 ACTION_DIRTY 表；那三個動作本身都還沒進 IMPLEMENTED_ACTIONS
 ## 白名單，這裡先把 drift 歸零，等它們接上時 ACTION_DIRTY 才會真的把 hygiene
-## 往下扣，在那之前 hygiene 會維持在 start 值不動）
+## 往下扣）。沒有 drift 不等於數值凍結不動——`wash` 已經是既有的
+## `ACTION_RECOVERY` 項目，會直接把 hygiene 往上加，drift 只是不再自己往下掉
 
 const MIN := 0.0
 const MAX := 100.0
