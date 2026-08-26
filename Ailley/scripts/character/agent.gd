@@ -3188,7 +3188,13 @@ func _pursue_gather_task() -> void:
 	var place: String = str(_current_task.get("params", {}).get("place", ""))
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
 
-	if anchors == null or place.is_empty() or not anchors.has(place):
+	# 藥草叢是目前唯一的採集地點：place 不是 herb_field，或場景根本沒建這個
+	# 錨點，都直接判定失敗，不用先走過去才發現——跟 _pursue_buy_task() 同一套
+	# 「先驗證地點合不合理，再決定要不要走過去」的順序（CodeRabbit review 抓到：
+	# 原本只檢查「這個名字有沒有對應到任何錨點」，place 給一個真實存在但不是
+	# herb_field 的地點（例如 tavern）時會先走過去，抵達後才靠 resolve() 判定
+	# 失敗，等於明知走錯地方還是先走過去，浪費遊戲時間）
+	if place != "herb_field" or anchors == null or not anchors.has(place):
 		var failed_task_source: String = str(_current_task.get("source", ""))
 		var failed_task_id: String = str(_current_task.get("id", ""))
 		push_warning("Agent %s: 沒有這個採集地點 %s" % [character_name, place])
@@ -3198,7 +3204,7 @@ func _pursue_gather_task() -> void:
 		_current_task = {}
 		current_place = ""
 		current_state = "idle"
-		last_action_result = "那裡沒有藥草可以採"
+		last_action_result = "這裡沒有藥草可以採"
 		if failed_task_source == "llm":
 			_remove_task(failed_task_id)
 		if llm_decision_enabled and not _awaiting_decision:
