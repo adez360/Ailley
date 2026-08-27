@@ -29,11 +29,13 @@ PR #557（全專案稽核分支）裡，還沒進 main。**這則 PR 刻意不�
 - [x] `Ailley/scripts/character/relationships.gd`（commit `edb4197`）：拿掉 trust
   欄位、`get_trust()`/`add_trust()`、`TRUST_MIN`/`MAX`，`load_save_data()` 已清理
 - [x] `NPCRelationsSchema.gd`：移除 `relations_trust` 欄位＋CHECK
-- [x] `DatabaseSchema.gd`：`CURRENT_VERSION` 7→8，新增 migration v8
-  `_migrate_v8_drop_relations_trust`（改名→重建→明確列欄位複製→刪暫存表，
-  不能用 `_migrate_rebuild_single_table` 因為欄位數變了）。**版號 8 跟 PR #607
-  撞號**，先合併者保留、另一個 rebase 重編（照 repo v6/v7 撞號慣例）
-- [x] `MigrationV8Test.gd`（新增，比照 `MigrationV6Test.gd`）：headless 跑過 12 項全 PASS
+- [x] `DatabaseSchema.gd`：`CURRENT_VERSION` 8→9，新增 migration v9
+  `_migrate_v9_drop_relations_trust`（改名→重建→明確列欄位複製→刪暫存表，
+  不能用 `_migrate_rebuild_single_table` 因為欄位數變了）。開發時版號跟 PR #607
+  撞號取 8，#607 先合併，rebase 時重編為 9（照 repo v6/v7 撞號慣例）
+- [x] `MigrationV9Test.gd`（新增，比照 `MigrationV6Test.gd`）：17 項全 PASS，
+  含驗證 v7 舊資料庫（真的帶 `relations_trust` 資料）一路跑過 migration 8／9
+  不中止的完整鏈測試
 - [x] `sqlite_save_service.gd`：`get_character()`／`_replace_relationships()`／docstring 拿掉 trust 映射
 - [x] `prompt_builder.gd`：`_listener_block()` 移除 trust
 - [x] `character.gd`：`get_state_snapshot()` 的 `relations` 拿掉 trust；相關 `_on_rescued`/
