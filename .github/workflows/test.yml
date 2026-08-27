@@ -1,0 +1,60 @@
+name: Godot Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+env:
+  GODOT_VERSION: "4.5.1-stable"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv（godot_ai 外掛啟動 MCP server 需要）
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Xvfb + 軟體渲染
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgl1-mesa-dri jq
+
+      - name: 下載 Godot ${{ env.GODOT_VERSION }}
+        run: |
+          curl -L -o godot.zip \
+            "https://github.com/godotengine/godot/releases/download/${{ env.GODOT_VERSION }}/Godot_v${{ env.GODOT_VERSION }}_linux.x86_64.zip"
+          unzip -q godot.zip
+          chmod +x "Godot_v${{ env.GODOT_VERSION }}_linux.x86_64"
+          echo "GODOT_BIN=$(pwd)/Godot_v${{ env.GODOT_VERSION }}_linux.x86_64" >> "$GITHUB_ENV"
+
+      - name: 起 Xvfb 虛擬顯示
+        run: |
+          Xvfb :99 -screen 0 1280x720x24 &
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+
+      - name: 首次匯入（讓 .godot/ 快取就緒，避免第一次開機同時匯入拖慢 MCP handshake）
+        run: "$GODOT_BIN" --headless --path Ailley --import
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+
+      - name: 跑 test_run（透過 godot-ai MCP server）
+        run: .github/scripts/run_godot_tests.sh
+        env:
+          GODOT_BIN: ${{ env.GODOT_BIN }}
+          PROJECT_PATH: ${{ github.workspace }}/Ailley
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          BOOT_TIMEOUT_SEC: "120"
+          TEST_TIMEOUT_SEC: "180"
+
+      - name: 上傳編輯器 log（失敗時排錯用）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-editor-log
+          path: /tmp/godot_editor.log
+          if-no-files-found: ignore
