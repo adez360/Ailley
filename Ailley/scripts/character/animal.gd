@@ -45,6 +45,8 @@ func _physics_process(_delta: float) -> void:
 
 
 func _on_wander_timer_timeout() -> void:
+	if _wandering:
+		return
 	_wander_timer.wait_time = randf_range(WANDER_INTERVAL_MIN, WANDER_INTERVAL_MAX)
 	var offset := Vector2(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0))
 	_wander_target = _home_position + offset.normalized() * randf_range(0.0, WANDER_RADIUS)
