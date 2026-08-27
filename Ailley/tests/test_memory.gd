@@ -8,7 +8,7 @@ extends McpTestSuite
 ## `add_candidate()` 本身直接讀 `GameClock.day` 蓋一個 `created_day` 欄位——
 ## 跟 test_corpse_decay.gd 踩過的「Invalid access to property」是同一種
 ## autoload 未實例化的問題，在 test_run 這個 @tool 環境下呼叫必炸，不在這個
-## 套件的涵蓋範圍內（見 note/技術/自動化測試（McpTestSuite）.md）。本套件用
+## 套件的涵蓋範圍內（見 note/技術/自動化測試.md）。本套件用
 ## `_make_entry()` 手動組出跟 add_candidate() 產生的形狀一致的 entry，繞過
 ## GameClock 依賴，直接測 entries 陣列上的其餘邏輯（decay/檢索/分級/存讀檔）。
 

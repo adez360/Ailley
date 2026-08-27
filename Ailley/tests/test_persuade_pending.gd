@@ -9,7 +9,7 @@ extends McpTestSuite
 ##
 ## 送達後注入哪句事實句（`_fact_lines_summary()`）依賴 `_now_minutes()`
 ## → GameClock，在 test_run 這個 @tool 環境呼叫會炸（見
-## note/技術/自動化測試（McpTestSuite）.md），不在本套件涵蓋範圍內。
+## note/技術/自動化測試.md），不在本套件涵蓋範圍內。
 
 func suite_name() -> String:
 	return "persuade_pending"
