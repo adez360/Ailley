@@ -182,6 +182,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		vending_menu.open(machine, self)
 		return
 
+	# 死人不能搭話——對著石化的屍體按 E 是要復活他，不是要跟他聊天
+	# （issue #386，《規格書09》§8）。其他人（活人）走原本的搭話路徑
+	if other != null and other.is_dead:
+		var revive_reason := revive(other)
+		if revive_reason != REVIVE_OK:
+			report_action_failure("revive", revive_reason)
+		return
+
 	var talk_reason := talk_to(other)
 	if talk_reason != TALK_OK:
 		report_action_failure("talk_to", talk_reason)
