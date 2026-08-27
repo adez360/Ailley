@@ -17,10 +17,18 @@ const MAIN_MENU_SCENE := "res://scenes/main_menu.tscn"
 func _ready() -> void:
 	resume_button.pressed.connect(_on_resume_pressed)
 	exit_button.pressed.connect(_on_exit_pressed)
+	_pause.visibility_changed.connect(_on_pause_visibility_changed)
 
 
 func _on_resume_pressed() -> void:
 	_pause.set_paused(false)
+
+
+# 選單顯示時把焦點放到 Resume——不設的話玩家一開啟選單就得先用滑鼠點一下
+# 某顆按鈕，方向鍵／搖桿 D-pad 才有辦法開始導覽（CodeRabbit review on #587 抓到）
+func _on_pause_visibility_changed() -> void:
+	if _pause.visible:
+		resume_button.grab_focus()
 
 
 # 回主選單跟關視窗一樣算「離開遊戲」，存檔邏輯共用 game_manager.gd 的
@@ -29,7 +37,7 @@ func _on_resume_pressed() -> void:
 # 不會自動把 paused 重設回 false——不先解除的話主選單場景會在暫停狀態下
 # 開場，按鈕收不到輸入。
 func _on_exit_pressed() -> void:
-	if not GameManager.save_before_leaving():
+	if not await GameManager.save_before_leaving():
 		return
 	get_tree().paused = false
 	get_tree().change_scene_to_file(MAIN_MENU_SCENE)
