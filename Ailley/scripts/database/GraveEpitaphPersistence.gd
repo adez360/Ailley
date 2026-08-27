@@ -21,8 +21,12 @@ extends RefCounted
 ## grave.npc_id／grave.buried_by 都是 npc(npc_id) 外鍵——corpse 自己跟安葬者
 ## 都要先有 npc 記錄才建得起 grave，不能只顧著同步悼詞作者（CodeRabbit review
 ## 抓到，PR #622）。corpse 一定要同步成功；buried_by 找不到對應的活節點
-## （例如那個角色已經離場）就跳過，不因此整個放棄——grave.buried_by 本身
-## 允許 NULL，這裡沒有必要因為安葬者不在場就連累新的墓碑建不起來
+## （例如那個角色已經離場）不能因此整個放棄——grave.buried_by 本身允許
+## NULL，這裡沒有必要因為安葬者不在場就連累新的墓碑建不起來，但也不能
+## 找不到活節點就照樣把這個 id 字串塞進 grave_data：如果那個 npc 記錄真的
+## 不存在（不是「離場了但之前同步過」，是「從沒被同步過」），一樣會撞外鍵
+## （CodeRabbit review 第二輪抓到，同一個 PR）。改成實際查一次 npc 表決定
+## 這個外鍵最終要不要寫，不是看「找不找得到活節點」這個間接訊號
 static func ensure_grave_id(corpse: Character) -> int:
 	if corpse == null or not corpse.is_buried:
 		return -1
@@ -32,10 +36,13 @@ static func ensure_grave_id(corpse: Character) -> int:
 		return -1
 
 	var buried_by_id: String = corpse.buried_by if corpse.buried_by != null else ""
+	var effective_buried_by: Variant = null
 	if not buried_by_id.is_empty():
 		var buried_by_character := _find_character(corpse, buried_by_id)
 		if buried_by_character != null:
 			persistence.sync_character(buried_by_character)
+		if not DatabaseManager.select_where("npc", "npc_id = ?", [buried_by_id], ["npc_id"]).is_empty():
+			effective_buried_by = buried_by_id
 
 	var npc_id := corpse.character_id
 	var existing := DatabaseManager.select_where("grave", "npc_id = ?", [npc_id], ["grave_id"])
@@ -49,7 +56,7 @@ static func ensure_grave_id(corpse: Character) -> int:
 	var grave_data := {
 		"npc_id": npc_id,
 		"location_id": location_id,
-		"buried_by": corpse.buried_by,
+		"buried_by": effective_buried_by,
 		"buried_tick": corpse.buried_tick,
 	}
 	if not DatabaseManager.insert("grave", grave_data):
