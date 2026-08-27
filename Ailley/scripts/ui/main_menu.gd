@@ -86,6 +86,8 @@ func _on_continue_pressed() -> void:
 
 func _on_start_pressed() -> void:
 	GameManager.continue_requested = false
+	# 開場時間拉回設計預期值，不讓主選單掛機時間流進新遊戲（#606）
+	GameClock.reset_to_new_game_start()
 	get_tree().change_scene_to_file(MAIN_SCENE)
 
 

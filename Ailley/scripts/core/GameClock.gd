@@ -18,6 +18,19 @@ var minute := 0
 var day := 1
 var _timer := 0.0
 
+## 開始新遊戲時呼叫（#606）。_process() 沒有暫停開關，開機後只要引擎在跑
+## 就一直累加，停在主選單也不例外——「繼續遊戲」不受影響，因為讀檔會把
+## day/hour/minute 整個覆蓋回存檔值（見 apply_world_save_data()），但「開始
+## 新遊戲」原本沒有對應的重置，玩家在主選單多待一段時間才按開始，一進場
+## 時間就已經被選單掛機的時間推走。單一真相來源集中在這裡，不要讓
+## main_menu.gd 自己去戳三個變數
+func reset_to_new_game_start() -> void:
+	day = 1
+	hour = 8
+	minute = 0
+	_timer = 0.0
+
+
 func _process(delta: float) -> void:
 	_timer += delta
 	if _timer >= seconds_per_game_minute:
