@@ -459,8 +459,22 @@ func activate_llm_decision_if_ready(character: Character) -> void:
 	if not is_instance_valid(agent):
 		return
 	var readiness := AIService.get_readiness(agent.get_provider_name())
-	if readiness.get("ready", false):
-		agent.debug_set_llm_decision(true)
+	if not readiness.get("ready", false):
+		return
+
+	# agent.gd::_ready() 剛剛可能已經 fire-and-forget 打過一次
+	# _generate_words_to_creator()（words_to_creator 沒預填才會真的送），
+	# 跟第一次決策共用同一個 requester_id／冷卻池——這裡不等冷卻結束就開
+	# 決策，第一次決策會被同步擋下 ERROR_RATE_LIMITED，決策迴圈靜默卡住到
+	# 下一次仲裁。main_scene.gd::_apply_startup_ai_state() 開場已經在等
+	# 這個冷卻，這裡跟著等同一套（CodeRabbit review 抓到）
+	var cooldown_left := float(AIService.get_usage(agent.character_id).get("cooldown_left", 0.0))
+	if cooldown_left > 0.0:
+		await get_tree().create_timer(cooldown_left).timeout
+		if not is_instance_valid(agent):
+			return
+
+	agent.debug_set_llm_decision(true)
 
 
 # ---- 存檔 ----
