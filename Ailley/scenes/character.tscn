@@ -1,0 +1,184 @@
+[gd_scene load_steps=12 format=3 uid="uid://dv2awnrkam36p"]
+
+[ext_resource type="Script" uid="uid://cqx2masxgq7si" path="res://scripts/character/character.gd" id="1_0dpix"]
+[ext_resource type="Script" uid="uid://clx4a8kt1td2c" path="res://scripts/character/stats.gd" id="2_2hyy3"]
+[ext_resource type="Script" uid="uid://b4eisddipih7n" path="res://scripts/character/relationships.gd" id="3_irmqu"]
+[ext_resource type="Script" uid="uid://rojhhinafyq2" path="res://scripts/character/inventory.gd" id="4_7eonc"]
+[ext_resource type="Script" uid="uid://l3boughq0c6q" path="res://scripts/character/memory.gd" id="5_50cep"]
+[ext_resource type="Script" uid="uid://xne7q5cyfgre" path="res://scripts/character/vision.gd" id="6_8yvht"]
+[ext_resource type="PackedScene" uid="uid://bu84ty6ven6ig" path="res://scenes/bubble.tscn" id="7_lagn4"]
+[ext_resource type="Script" uid="uid://cebdk6kq4c7ip" path="res://scripts/ui/work_progress.gd" id="8_x8k1v"]
+[ext_resource type="Script" uid="uid://t6axa01hiamc" path="res://scripts/ui/money_popup.gd" id="9_ih8y6"]
+
+[sub_resource type="SpriteFrames" id="SpriteFrames_0dpix"]
+animations = [{
+"frames": [{
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}],
+"loop": true,
+"name": &"idle_back",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}],
+"loop": true,
+"name": &"idle_front",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}],
+"loop": true,
+"name": &"idle_right",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}],
+"loop": true,
+"name": &"walk_back",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}],
+"loop": true,
+"name": &"walk_front",
+"speed": 5.0
+}, {
+"frames": [{
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}, {
+"duration": 1.0,
+"texture": null
+}],
+"loop": true,
+"name": &"walk_right",
+"speed": 5.0
+}]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_rbud2"]
+radius = 80.0
+
+[node name="Character" type="CharacterBody2D"]
+collision_layer = 2
+script = ExtResource("1_0dpix")
+
+[node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="."]
+sprite_frames = SubResource("SpriteFrames_0dpix")
+animation = &"idle_front"
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+
+[node name="State" type="Node" parent="."]
+
+[node name="Stats" type="Node" parent="State"]
+script = ExtResource("2_2hyy3")
+
+[node name="Relationships" type="Node" parent="State"]
+script = ExtResource("3_irmqu")
+
+[node name="Inventory" type="Node" parent="State"]
+script = ExtResource("4_7eonc")
+
+[node name="Memory" type="Node" parent="State"]
+script = ExtResource("5_50cep")
+
+[node name="Sensing" type="Node" parent="."]
+
+[node name="Vision" type="Area2D" parent="Sensing"]
+position = Vector2(0, 6)
+collision_layer = 0
+collision_mask = 2
+script = ExtResource("6_8yvht")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Sensing/Vision"]
+shape = SubResource("CircleShape2D_rbud2")
+
+[node name="UI" type="Node" parent="."]
+
+[node name="Bubble" parent="UI" instance=ExtResource("7_lagn4")]
+z_index = 10
+position = Vector2(0, -10)
+
+[node name="WorkProgress" type="Node2D" parent="UI"]
+z_index = 10
+position = Vector2(0, -14)
+script = ExtResource("8_x8k1v")
+
+[node name="Background" type="ColorRect" parent="UI/WorkProgress"]
+mouse_filter = 2
+
+[node name="Fill" type="ColorRect" parent="UI/WorkProgress"]
+mouse_filter = 2
+
+[node name="MoneyPopup" type="Node2D" parent="UI"]
+z_index = 10
+position = Vector2(0, -18)
+script = ExtResource("9_ih8y6")
+
+[node name="Label" type="Label" parent="UI/MoneyPopup"]
+offset_left = -14.0
+offset_top = -7.0
+offset_right = 14.0
+offset_bottom = 7.0
+horizontal_alignment = 1
+vertical_alignment = 1
