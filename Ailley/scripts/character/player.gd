@@ -351,9 +351,14 @@ func _set_highlighted_other(target: Character) -> void:
 
 # 讀取 WASD 輸入，回傳正規化後的方向（斜向不會加速）
 func get_input_direction() -> Vector2:
-	# 有 UI 拿到焦點時（例如 debug 輸入框）不吃移動鍵，
-	# 因為 Input.get_axis() 讀的是全域輸入狀態，不會被 LineEdit 攔下來
-	if get_viewport().gui_get_focus_owner() != null:
+	# 有文字輸入框拿到焦點時（例如 debug 輸入框）不吃移動鍵，
+	# 因為 Input.get_axis() 讀的是全域輸入狀態，不會被 LineEdit 攔下來。
+	# 只認 LineEdit/TextEdit，不是任意拿到焦點的 Control——Button 預設
+	# focus_mode 就是 FOCUS_ALL，點過場上任何一顆按鈕（esc 選單、工具列……）
+	# 之後只要沒人主動 release_focus()，焦點會一直留著，用「有沒有 Control
+	# 拿焦點」當條件會讓玩家點過一次按鈕後就永久走不動
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	if focus_owner is LineEdit or focus_owner is TextEdit:
 		return Vector2.ZERO
 
 	return Vector2(
