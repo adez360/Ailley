@@ -2679,9 +2679,14 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			# perform 在 SUCCESS_PARAMS 上（見那張表），會落進下面的 _roll_success()
 			# 真的擲骰——這裡只做「這個世界裡真的能不能做到」的硬規則檢查，跟
 			# eat／drink 檢查背包同一個道理：沒有 instrument 連嘗試的資格都沒有，
-			# 不該讓它有機會擲出成功
+			# 不該讓它有機會擲出成功。stats == null 也要在這裡擋（CodeRabbit
+			# review 抓到）：不擋的話會落進 _roll_success() 讀 character.stats.get_value()，
+			# 對 null 呼叫方法直接崩潰，Character.perform() 本來就有的
+			# PERFORM_NO_STATS 防呆永遠沒有機會被回報，因為根本走不到那裡
 			if inventory == null or not inventory.has_item("instrument"):
 				return {"success": false, "reason": "身上沒有樂器，沒辦法表演"}
+			if stats == null:
+				return {"success": false, "reason": "沒有身體狀態資料，沒辦法表演"}
 		# move_to/sleep/nap/rest/wash/idle/eat/shout 目前都沒有額外的硬規則要擋
 		# （eat 落地後要在這裡加「宣稱吃了背包裡沒有的食物」的檢查，見 #114；
 		# shout 沒有目標、沒有前提，天生沒有硬規則可擋）
@@ -3881,10 +3886,14 @@ func _pursue_follow_task() -> void:
 		_follow_pursuit_last_distance = INF
 		return
 
-	if not move_to(target_pos):
+	var move_ok := move_to(target_pos)
+	if not move_ok:
 		push_warning("Agent %s: 走不到跟隨對象 %s" % [character_name, target.character_name])
-		return
 
+	# move_to() 失敗也要算進卡住偵測（CodeRabbit review 抓到）：原本失敗時
+	# 提早 return，_follow_pursuit_stuck_ticks 永遠不會累積，導致下面「追不上，
+	# 可能被卡住」這個門檻警告永遠不會在這個情境觸發，只有每個 tick 都印一次
+	# 「走不到」的雜訊，沒有真正的卡住偵測
 	var distance := get_body_position().distance_to(target_pos)
 	var progress := _pursuit_stuck_progress(distance, _follow_pursuit_last_distance, _follow_pursuit_stuck_ticks)
 	_follow_pursuit_stuck_ticks = progress["stuck_ticks"]
@@ -3968,11 +3977,13 @@ func _fact_lines_summary() -> Array[String]:
 	if not following_id.is_empty():
 		var follow_target := _find_character_by_id(following_id)
 		if follow_target != null:
-			# Player 沒有 current_place 這個欄位，get() 對它回傳 null——
-			# 跟 game_manager.gd::get_world_save_data() 判斷 Agent 專屬欄位
-			# 同一種寫法，先判 null 再轉字串，不能直接 str(null) 印出 "<null>"
-			var follow_place_value: Variant = follow_target.get("current_place")
-			var follow_place: String = "" if follow_place_value == null else str(follow_place_value)
+			# 用即時位置反查，不是 current_place（CodeRabbit review 抓到）：
+			# current_place 是任務目的地，跟隨對象還在半路走過去時，這個欄位
+			# 已經先變成目的地了，模型會被告知一個對方根本還沒到的地方。
+			# _actual_place_of() 是既有的「反查真實座標對應到哪個地點錨點」
+			# 工具（見 _resolve_actual_place()／約定機制同一套），Player 沒有
+			# 地點錨點覆蓋範圍時一樣回傳空字串，跟原本的空字串 fallback 行為一致
+			var follow_place := _actual_place_of(follow_target)
 			if follow_place.is_empty():
 				lines.append("你正在跟著 %s。" % follow_target.character_name)
 			else:
