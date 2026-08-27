@@ -413,10 +413,25 @@ func _replace_world_characters(world_id: String, characters: Dictionary) -> bool
 		# following_id（issue #576）空字串代表沒在跟隨任何人，跟
 		# GameManager.get_world_save_data() 存進來的規則一致（見那邊
 		# following_id.is_empty() 判斷），這裡才不寫入 following_npc_id，
-		# 讓 row 沿用 INSERT 時的隱含 NULL
+		# 讓 row 沿用 INSERT 時的隱含 NULL。
+		#
+		# 跟隨對象存不存在也要先查（CodeRabbit review 抓到，跟
+		# _replace_relationships() 對 target_id 同一套防呆）：跟隨對象可能
+		# 在下次存檔前就離開世界（npc 表裡已經沒有這筆），這裡的外鍵是
+		# ON DELETE SET NULL，但那只保護「已經存進去之後，對方後來被刪」
+		# 這個情境，保護不了「這次 INSERT 當下對方就已經不在」——直接塞一個
+		# 查無此人的 npc_id 會讓這筆 INSERT 違反外鍵限制，害整個
+		# _replace_world_characters() 的整批覆蓋 rollback
 		var following_id = entry.get("following_id")
 		if following_id != null and not String(following_id).is_empty():
-			row["following_npc_id"] = String(following_id)
+			var following_npc_id := String(following_id)
+			if DatabaseManager.select("npc", "npc_id = '%s'" % _esc(following_npc_id)).is_empty():
+				push_warning(
+					"SqliteSaveService: world_character_state 的 %s following_id 跳過，%s 不在 npc 表裡"
+					% [npc_id, following_npc_id]
+				)
+			else:
+				row["following_npc_id"] = following_npc_id
 
 		if not DatabaseManager.insert("world_character_state", row):
 			return false

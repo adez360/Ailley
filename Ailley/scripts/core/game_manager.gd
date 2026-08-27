@@ -702,10 +702,22 @@ func _apply_character_entry(character: Character, entry: Dictionary) -> void:
 		character.set("current_place", entry.get("current_place", ""))
 		character.set("current_state", entry.get("current_state", "idle"))
 
-	# following_id 讀回：跟 current_place 同一種條件式套用，缺欄位（沒在
-	# 跟隨任何人）就維持 Agent 預設值（空字串），不用另外清一次
-	if entry.has("following_id") and character.get("following_id") != null:
-		character.set("following_id", entry.get("following_id", ""))
+	# following_id 讀回（CodeRabbit review 抓到）：不能只在 entry 有這個欄位
+	# 時才套用——場上已經存在的 Agent（debug console 的 load 指令套用到
+	# 目前還活著的角色）可能在讀檔前正在跟隨某人，缺欄位代表存檔當下沒在
+	# 跟隨任何人，這裡要主動清成空字串，不是維持讀檔前殘留的舊值。型別不是
+	# String 的髒資料一律當作沒在跟隨，不把不明型別的 Variant 直接塞進去
+	if character.get("following_id") != null:
+		var raw_following_id: Variant = entry.get("following_id", "")
+		if raw_following_id is String:
+			character.set("following_id", raw_following_id)
+		else:
+			if entry.has("following_id"):
+				push_error(
+					"apply_world_save_data: %s 的 following_id 不是字串，已清空"
+					% character.character_id
+				)
+			character.set("following_id", "")
 
 # 存檔裡有記載、但場景裡目前沒有對應節點的角色——重新生成後套用存檔資料
 # （#344）。只有角色庫（character_library）還記得住身分的角色會被生出來：

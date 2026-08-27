@@ -621,6 +621,59 @@ static func _migrate_v5_drop_death_grave_highlights(db) -> bool:
 ##
 ## `npc`（近 20 張依附表）與 `npc`／`location` 之間的重建順序問題不在這次
 ## 範圍內，見《99》P-55、issue #561。
+## Migration 7 當年重建 world_character_state 時的表結構凍結版（CodeRabbit
+## review 抓到）：不能直接傳目前的 WorldCharacterStateSchema 進
+## _migrate_rebuild_table_group()——那個 schema 後來（issue #576）加了
+## following_npc_id 欄位，用「現在的形狀」去對「user_version<=6、根本還沒
+## 有這個欄位」的舊資料庫做 _migrate_rebuild_verify_column_shape()，新舊
+## 欄位數對不上，驗證直接判定失敗、整個 migration 7 中止，migration 8
+## 永遠跑不到。這裡凍結 migration 7 完成當下（issue #576 之前）真正的表
+## 形狀，讓 migration 7 對舊資料庫還是能重建成功；之後 migration 8 的
+## ALTER TABLE ADD COLUMN following_npc_id（已經有查 PRAGMA table_info 擋
+## 重複欄位）才是唯一負責把這個新欄位補上去的地方
+class _WorldCharacterStateSchemaV7RebuildShape:
+	extends RefCounted
+
+	static func create(db) -> bool:
+		var sql := """
+		CREATE TABLE IF NOT EXISTS world_character_state (
+
+			world_id TEXT NOT NULL,
+			npc_id TEXT NOT NULL,
+
+			pos_x REAL NOT NULL DEFAULT 0.0,
+			pos_y REAL NOT NULL DEFAULT 0.0,
+
+			current_place TEXT,
+			current_state TEXT,
+
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+			PRIMARY KEY (world_id, npc_id),
+
+			FOREIGN KEY (world_id)
+				REFERENCES world(world_id)
+				ON DELETE CASCADE,
+
+			FOREIGN KEY (npc_id)
+				REFERENCES npc(npc_id)
+				ON DELETE CASCADE
+		);
+
+		CREATE INDEX IF NOT EXISTS
+		idx_world_character_state_npc
+		ON world_character_state(npc_id);
+		"""
+
+		if not db.query(sql):
+			push_error(
+				"[DatabaseSchema] Migration 7: Failed to recreate world_character_state (v7 shape)."
+			)
+			return false
+
+		return true
+
+
 static func _migrate_v7_notnull_primary_keys(db) -> bool:
 	var single_table_schemas := [
 		{"table": "npc_state", "schema": NPCStateSchema},
@@ -636,9 +689,11 @@ static func _migrate_v7_notnull_primary_keys(db) -> bool:
 	# world_character_state／npc_inventory／npc_home_storage／item_transaction
 	# 這幾張子表維持預設 false——它們的主鍵本來就不在原本 11 個缺 NOT NULL
 	# 的欄位裡（見 P-55 背景），這裡的檢查對它們只是防禦性的。
+	# world_character_state 傳的是上面凍結的 v7 形狀，不是目前的
+	# WorldCharacterStateSchema（原因見那個類別的註解）
 	if not _migrate_rebuild_table_group(db, [
 		{"table": "world", "schema": WorldSchema, "repair_null_pk": true},
-		{"table": "world_character_state", "schema": WorldCharacterStateSchema}
+		{"table": "world_character_state", "schema": _WorldCharacterStateSchemaV7RebuildShape}
 	]):
 		return false
 

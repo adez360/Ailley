@@ -1515,6 +1515,14 @@ func _apply_perform_tip(amount: int) -> void:
 
 	performer.inventory.add_money(affordable)
 	_push_daily_event("你打賞了 %s %d 元。" % [performer.character_name, affordable])
+	# 表演者這一側也要留一句事實句（CodeRabbit review 抓到）：不然表演者的
+	# AI 完全不知道自己被打賞過，睡前反思／下一次決策都讀不到這件事。跟
+	# give_to() 對收禮方的對稱記錄同一個道理。Player 不是 Agent，沒有
+	# _push_daily_event()，只有對方是 Agent 才記
+	if performer is Agent:
+		(performer as Agent)._push_daily_event(
+			"%s 打賞了你 %d 元。" % [character_name, affordable], [character_id]
+		)
 
 ## 爽約通知（#479，《10》§5.5）。睡眠中先暫存，交給 _on_time_changed() 的
 ## 「剛睡醒」分支補送（見那裡的說明）——《10》§5.5 原文「爽約方若當時處於
