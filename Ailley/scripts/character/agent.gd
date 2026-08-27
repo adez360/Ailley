@@ -2393,6 +2393,14 @@ func _reevaluate_once() -> void:
 	for i in range(_tasks.size() - 1, -1, -1):
 		if _is_expired(_tasks[i], now_minutes):
 			var expired_task := _tasks[i]
+			# 表演中的當前任務不能被這個過期清除迴圈動到（CodeRabbit review
+			# 抓到）：expires_in_minutes 可以低到 1，但 PERFORM_DURATION_MINUTES
+			# 是 10，任務過期不代表表演做完了。提早清空 _current_task 會讓下面
+			# _consider_switch() 選中別的候選頂上來，_run_perform() 背景協程
+			# 卻還在跑同一個 session，跑完呼叫 _on_perform_finished(true) 時
+			# 會把「頂上來的那個任務」誤判成表演完成
+			if is_performing() and expired_task.get("id", "") == _current_task.get("id", ""):
+				continue
 			_tasks.remove_at(i)
 			if expired_task.get("id", "") == _current_task.get("id", ""):
 				_clear_current_task(false)
