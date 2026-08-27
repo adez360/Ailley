@@ -52,6 +52,18 @@ const DEFAULT_MAX_CALLS_PER_GAME_DAY := 20
 ## 對話呼叫已經走一般 max_calls_per_game_day 路徑，不需要疊加第二層限制
 const DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY := 30
 
+## L3 語意檢索的 embedding 端點設定（issue #571，《03》§7）。刻意放在頂層、
+## 不塞進 providers 字典——providers 代表玩家自己選的聊天 provider（Local／
+## Cloud 二選一），而 embedding 永遠打本機的 embedding-only llama-server，
+## 跟玩家選了哪個聊天 provider 無關，兩者是獨立的設定面。預設值指向專案內
+## 已驗證可用的本機 embedding server（bge-small-zh-v1.5-q8_0.gguf，
+## `llama-server --embedding --pooling cls`），沒填這個區塊時就套用這組預設值，
+## 不是留白——EmbeddingService 本來就是軟失敗設計（連不上就回空結果，不擋
+## 遊戲），沒必要在設定層再擋一次
+const DEFAULT_EMBEDDING_BASE_URL := "http://127.0.0.1:8081/v1"
+const DEFAULT_EMBEDDING_MODEL := "bge-small-zh-v1.5-q8_0.gguf"
+const DEFAULT_EMBEDDING_TIMEOUT := 10.0
+
 ## 對話輪次要不要豁免上面兩條限制。預設豁免 ——
 ## MIN_INTERVAL_SEC 是為「行程重排」訂的，而對話輪次是秒級間隔，
 ## 套上去會從第二輪起全部回 rate_limited，等於對話根本接不起來。
@@ -142,6 +154,10 @@ var min_interval_sec := DEFAULT_MIN_INTERVAL_SEC
 var max_calls_per_game_day := DEFAULT_MAX_CALLS_PER_GAME_DAY
 var dialogue_exempt := DEFAULT_DIALOGUE_EXEMPT
 var max_dialogue_calls_per_game_day := DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY
+
+var embedding_base_url := DEFAULT_EMBEDDING_BASE_URL
+var embedding_model := DEFAULT_EMBEDDING_MODEL
+var embedding_timeout := DEFAULT_EMBEDDING_TIMEOUT
 
 
 # 內建 sidecar 的本機連線預設值（《16》§2.2 決定隨安裝包附上的 llama-server，
@@ -249,6 +265,24 @@ func _apply(data: Dictionary) -> void:
 	max_dialogue_calls_per_game_day = maxi(0, int(
 		data.get("max_dialogue_calls_per_game_day", DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY)
 	))
+
+	# embedding 區塊跟上面幾個速率限制欄位一樣，在 enabled 判斷之前就先讀——
+	# 這個區塊管的是 L3 語意檢索，跟聊天 provider 的 enabled/disabled 狀態無關，
+	# 玩家沒開聊天 AI 一樣可能想要記憶檢索照常運作（雖然沒有 LLM 決策迴圈會用到
+	# 它，但 Memory.search_l3() 不該因為這裡提早 return 而讀到沒套用過的預設值）
+	var raw_embedding: Variant = data.get("embedding", {})
+	if raw_embedding is Dictionary:
+		var embedding_data := raw_embedding as Dictionary
+		embedding_base_url = str(embedding_data.get("base_url", DEFAULT_EMBEDDING_BASE_URL)).strip_edges().rstrip("/")
+		embedding_model = str(embedding_data.get("model", DEFAULT_EMBEDDING_MODEL)).strip_edges()
+		# 跟 _parse_provider() 的 timeout 處理同一個理由：<= 0 代表「不設逾時」，
+		# 設定檔手滑填 0 或負值時退回預設值，不信任非正值
+		var raw_embedding_timeout := float(embedding_data.get("timeout", DEFAULT_EMBEDDING_TIMEOUT))
+		embedding_timeout = raw_embedding_timeout if raw_embedding_timeout > 0.0 else DEFAULT_EMBEDDING_TIMEOUT
+	else:
+		embedding_base_url = DEFAULT_EMBEDDING_BASE_URL
+		embedding_model = DEFAULT_EMBEDDING_MODEL
+		embedding_timeout = DEFAULT_EMBEDDING_TIMEOUT
 
 	default_provider = str(data.get("default_provider", "")).strip_edges()
 
