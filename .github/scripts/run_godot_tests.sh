@@ -72,12 +72,12 @@ curl -s -X POST "$MCP_URL" \
 	-H "Mcp-Session-Id: $SESSION_ID" \
 	-d '{"jsonrpc":"2.0","id":2,"method":"notifications/initialized"}' > /dev/null
 
-echo "== 呼叫 test_run（timeout_budget_sec=${TEST_TIMEOUT_SEC}）=="
+echo "== 呼叫 test_run =="
 RAW=$(curl -s --max-time "$((TEST_TIMEOUT_SEC + 15))" -X POST "$MCP_URL" \
 	-H "Content-Type: application/json" \
 	-H "Accept: application/json, text/event-stream" \
 	-H "Mcp-Session-Id: $SESSION_ID" \
-	-d "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"test_run\",\"arguments\":{\"suite\":\"\",\"verbose\":false,\"timeout_budget_sec\":${TEST_TIMEOUT_SEC}}}}")
+	-d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"test_run","arguments":{"suite":"","verbose":false}}}')
 
 # streamable-http 回應是 SSE 格式（event: message\ndata: {...}），只取 data 那行的 JSON
 JSON_LINE=$(echo "$RAW" | grep '^data:' | sed 's/^data: //')
@@ -92,7 +92,14 @@ echo "$JSON_LINE" > /tmp/test_run_result.json
 echo "== test_run 原始結果 =="
 echo "$JSON_LINE" | jq .
 
+IS_ERROR=$(echo "$JSON_LINE" | jq -r '.result.isError // false')
 RESULT_TEXT=$(echo "$JSON_LINE" | jq -r '.result.content[0].text // empty')
+
+if [ "$IS_ERROR" = "true" ]; then
+	echo "test_run 呼叫失敗：$RESULT_TEXT" >&2
+	exit 1
+fi
+
 if [ -z "$RESULT_TEXT" ]; then
 	ERROR_MSG=$(echo "$JSON_LINE" | jq -r '.error.message // "未知錯誤"')
 	echo "test_run 呼叫失敗：$ERROR_MSG" >&2
