@@ -2293,9 +2293,17 @@ func _reevaluate_once() -> void:
 	# elapsed % INTERVAL == 0 不需要額外記「上次問過哪一分鐘」：_on_time_changed
 	# 每個遊戲分鐘只呼叫一次，elapsed 每次重算剛好前進 1，同一個間隔倍數只會
 	# 撞上一次
+	# is_performing() 排除（CodeRabbit review 抓到）：perform 任務擲成功後
+	# _current_task 會繼續留著（source 還是 "llm"），交給 Character._run_perform()
+	# 背景協程跑滿 PERFORM_DURATION_MINUTES 後才由 _on_perform_finished() 收尾。
+	# 這裡的檢查點／duration 完成判定是給「沒有自己收尾機制」的通用 llm 任務用的
+	# 兜底邏輯，如果不排除表演中的任務，會在真正表演結束前就搶先問檢查點、甚至
+	# 判定「做完了」觸發 _remove_task()／_request_next_decision()，跟
+	# _on_perform_finished() 真正的收尾撞在一起
 	if llm_decision_enabled and not _awaiting_decision and not _checkpoint_decision_pending \
 			and _current_task.get("source", "") == "llm" \
-			and _current_task.get("id", "") != _active_talk_task_id:
+			and _current_task.get("id", "") != _active_talk_task_id \
+			and not is_performing():
 		var elapsed := now_minutes - _current_task_started_at
 		var duration := int(_current_task.get("duration", 0.0))
 		if elapsed > 0 and elapsed < duration and elapsed % LONG_ACTION_CHECKPOINT_INTERVAL == 0:
@@ -2317,6 +2325,7 @@ func _reevaluate_once() -> void:
 	if llm_decision_enabled and not _awaiting_decision \
 			and _current_task.get("source", "") == "llm" \
 			and _current_task.get("id", "") != _active_talk_task_id \
+			and not is_performing() \
 			and now_minutes - _current_task_started_at >= int(ceil(_effective_action_duration(_current_task.get("duration", 0.0)))):
 		# 做完的那筆要先離開池子。llm 任務沒有 window，不像 schedule 靠時間窗
 		# 自然退場——留著的話它會用原本的分數繼續參加下一輪算分，被重新選中，
