@@ -146,7 +146,12 @@ func _rank_l3_candidates(query_embedding: PackedFloat32Array, max_results: int) 
 	var scored: Array[Dictionary] = []
 	for entry in get_by_level(3):
 		var embedding: PackedFloat32Array = entry.get("embedding", PackedFloat32Array())
-		if embedding.is_empty():
+		# 維度對不上（CodeRabbit review 抓到）：_cosine_similarity() 本來就會
+		# 對長度不符回傳 0.0，不會炸掉，但讓維度不合的候選混進 scored 陣列跟著
+		# 真正相關的候選一起排序沒有意義，這裡先篩掉更直接——理論上不該發生
+		# （同一個 embedding server／model 應該永遠同一個維度），但存檔可能被
+		# 手改過，或設定檔中途換過 embedding model，見 _cosine_similarity() 註解
+		if embedding.is_empty() or embedding.size() != query_embedding.size():
 			continue
 		scored.append({"entry": entry, "score": _cosine_similarity(query_embedding, embedding)})
 
@@ -197,6 +202,11 @@ func _demote_oldest_l4_if_full() -> void:
 		if e["created_day"] < oldest["created_day"]:
 			oldest = e
 	oldest["level"] = 3
+	# 降級成 L3 之後一樣要能被 search_l3() 檢索到（CodeRabbit review 抓到）：
+	# L4 entries 從來沒有被 embedding 過（只有 add_candidate() 產生 level==3
+	# 的當下才會觸發），降級後如果不補這一步，這筆記憶會永遠帶著空
+	# embedding，search_l3() 篩選時直接跳過，等於降級了卻永遠檢索不到
+	_embed_l3_entry(oldest)
 
 
 ## 每遊戲日呼叫一次（見 _on_day_changed()）。grudge 由呼叫端傳入——人格資料

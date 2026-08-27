@@ -545,15 +545,16 @@ var _consecutive_failure_count := 0
 ## 觸發語意檢索，跟這個函式本身既有的「新地點」判斷（_visited_places 只記
 ## 第一次）用同一個條件，不另外開一個「每次抵達」的判斷——後者代表每個遊戲
 ## tick 只要角色待在同一地點就可能重複觸發，違背《03》§7「不是每 tick 都檢索」
-## 的精神。call-and-forget：呼叫端（_pursue_current_task()／_pursue_talk_task()）
-## 本來就不 await 這個函式，這裡加的 await 只是讓 _queue_recalled() 排隊寫入
-## _pending_recalled 在背景完成，不影響呼叫端的同步行為
+## 的精神。call-and-forget（CodeRabbit review 抓到：先前誤加了 await，
+## 會讓這裡真的等 embedding API 回應才往下走，等於拖慢了呼叫端本來的同步
+## 流程）——不 await，_queue_recalled() 在背景完成，_pending_recalled
+## 是排隊寫入，下一輪決策自然讀得到，不需要等它
 func _note_place_visited(place: String) -> void:
 	if place.is_empty() or _visited_places.has(place):
 		return
 	_visited_places[place] = true
 	_pending_fact_lines.append("你以前沒有來過「%s」。" % place)
-	await _queue_recalled(place)
+	_queue_recalled(place)
 
 func _track_action_result_for_facts(action: String, success: bool) -> void:
 	if success:
@@ -574,9 +575,10 @@ func hear_god_stone(line: String) -> void:
 		return
 	_push_daily_event("你在天神之石附近聽到一個聲音，說：「%s」" % line)
 	# 《03》§7 觸發時機表「天神之石事件」（issue #571）：以事件內容本身（玩家
-	# 說的那句話）為查詢——call-and-forget，不擋 maybe_speak_to_creator()
-	# 原本就有的機率骰與 AI 詢問流程
-	await _queue_recalled(line)
+	# 說的那句話）為查詢——call-and-forget（不 await，CodeRabbit review 抓到
+	# 先前誤加的 await 會拖住這裡），不擋 maybe_speak_to_creator() 原本就有的
+	# 機率骰與 AI 詢問流程
+	_queue_recalled(line)
 	maybe_speak_to_creator(line)
 
 ## #164 + 《99》P-10：25% 機率觸發（情緒強度 ≥70 時 40%），中了才問 AI 要不要
@@ -1117,9 +1119,10 @@ func request_sleep_reflection() -> Dictionary:
 	last_reflection_summary = data["summary"]
 
 	# 《03》§7 觸發時機表「睡眠反思」（issue #571）：以剛產出的當日摘要為查詢，
-	# 排進 _pending_recalled 給角色醒來後的下一輪決策用——call-and-forget，
+	# 排進 _pending_recalled 給角色醒來後的下一輪決策用——call-and-forget
+	# （不 await，CodeRabbit review 抓到先前誤加的 await 會拖住這裡），
 	# 不影響這裡剩下的評分/人格套用/today_plan 流程
-	await _queue_recalled(last_reflection_summary)
+	_queue_recalled(last_reflection_summary)
 
 	var scored_ids := {}
 	for event in data["events"]:
@@ -1856,8 +1859,10 @@ func _on_spotted(other: Character) -> void:
 	# has_met() 的早退之前——這裡問的是「最近 8 條記憶視窗裡有沒有這個人」，
 	# 跟下面 has_met() 問的「這輩子見沒見過」是兩個不同的條件，先前見過面
 	# 但很久沒在 L1 裡出現過，一樣值得檢索
+	# call-and-forget（不 await，CodeRabbit review 抓到先前誤加的 await 會
+	# 拖住這裡，延誤下面 has_met() 判斷與跟丟／反應流程）
 	if not _seen_in_l1(other.character_name):
-		await _queue_recalled(other.character_name)
+		_queue_recalled(other.character_name)
 
 	if relationships != null and relationships.has_met(other.character_id):
 		return
