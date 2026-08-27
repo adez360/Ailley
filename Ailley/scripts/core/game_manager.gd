@@ -291,7 +291,10 @@ func _generate_words_to_creator(entry: Dictionary) -> void:
 	var result: Dictionary = await AIService.request(envelope, entry["id"], AIService.Policy.SCHEDULED)
 	if not result["ok"]:
 		return
-	var validated := AISchema.validate_creation(result["data"])
+	var parsed := AISchema.parse_completion(result["data"])
+	if not parsed["ok"]:
+		return
+	var validated := AISchema.validate_creation(parsed["data"])
 	if not validated["ok"]:
 		return
 	entry["words_to_creator"] = validated["data"]["words_to_creator"]
