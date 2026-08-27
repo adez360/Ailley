@@ -991,7 +991,7 @@ const HUNT_NO_SPACE := "NO_SPACE"
 ## 這裡的檢查只是防呆（動物在擲骰之後、真正執行之前的這段空窗期跑走／被
 ## 別人先獵走），不是機率判定
 func hunt(animal: Animal) -> String:
-	if animal == null or not is_instance_valid(animal):
+	if animal == null or not is_instance_valid(animal) or animal.is_queued_for_deletion():
 		return HUNT_TARGET_NOT_FOUND
 	if get_body_position().distance_to(animal.global_position) > HUNT_RANGE:
 		return HUNT_TOO_FAR
