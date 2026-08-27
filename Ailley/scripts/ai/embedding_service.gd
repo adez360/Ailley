@@ -51,6 +51,10 @@ func request_embedding(text: String) -> PackedFloat32Array:
 	var http := HTTPRequest.new()
 	http.timeout = _config.embedding_timeout
 	http.use_threads = true
+	# 停用重導向：_config.embedding_base_url 已經過 loopback 檢查，但沒擋住
+	# loopback 伺服器自己回 301/302/303 把請求導去遠端網址——HTTPRequest 預設
+	# max_redirects=8 會照走，等於繞過前面那層 loopback 驗證
+	http.max_redirects = 0
 	add_child(http)
 
 	var headers := PackedStringArray(["Content-Type: application/json"])
