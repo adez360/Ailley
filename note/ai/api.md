@@ -832,6 +832,29 @@ get_usage -> {game_day, calls_today, max_calls, dialogue_today, max_dialogue, to
 → 技術/LLM 串接與 AI 服務層
 ```
 
+## EmbeddingService — scripts/ai/embedding_service.gd · autoload · Node
+
+```gdscript
+func reload_config() -> void
+func request_embedding(text: String) -> PackedFloat32Array   # 一律 await
+```
+
+```text
+request_embedding("<text>") -> PackedFloat32Array  # 失敗一律回空陣列（未設定/逾時/連不上/格式不對），不 push_error、不丟例外
+
+† 跟 AIService 分開是刻意的：AIService 打玩家自己選的聊天 provider（Local／Cloud
+  二選一），這裡永遠打本機的 embedding-only llama-server，跟玩家選了哪個聊天
+  provider 無關——NPC 記憶內容送去語意檢索不該因為玩家選了雲端聊天 provider
+  就跟著送去雲端
+† 只信任 loopback 位址（_is_loopback_url()）：embedding.base_url 設定非本機位址
+  一律拒絕、退回 DEFAULT_EMBEDDING_BASE_URL，避免不知情下對雲端端點產生費用
+† max_redirects=0：loopback 伺服器自己回 301/302/303 導去外部網址時直接判定失敗，
+  不追蹤過去，避免繞過上面那條 loopback 限制
+† 呼叫頻率遠低於 AIService，不用它那套節點池／佇列／速率限制——每次呼叫各自建
+  一個 HTTPRequest 節點，用完即丟
+→ 技術/LLM 串接與 AI 服務層「Embedding」
+```
+
 ## DecisionContext — scripts/ai/decision_context.gd · class_name · RefCounted
 
 ```gdscript
