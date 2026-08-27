@@ -92,6 +92,19 @@ const PERFORM_BUSY := "BUSY"					# 已經在表演、工作、對話中，或移
 ## 表演已經結束了，永遠等不到任何人打賞
 const PERFORM_DURATION_MINUTES := 10
 
+## use_selected_item() 的失敗原因碼，形狀比照 EAT_*／DRINK_*（#611）。除了這四個，
+## use_selected_item() 還會**原樣轉傳** Inventory.use_item() 自己的原因碼
+## （`NOT_CONSUMABLE`、`INVALID_EFFECT`、`REMOVE_FAILED`……），跟 buy_from() 轉傳
+## `NOT_ENOUGH`／`NO_SPACE` 同一個理由，不重新取名
+const USE_ITEM_OK := ""
+const USE_ITEM_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法使用道具
+const USE_ITEM_NO_SELECTION := "NO_SELECTION"	# 快捷欄沒選格，或選到的是空格
+const USE_ITEM_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復數值
+const USE_ITEM_IS_DEAD := "IS_DEAD"		# 死屍不能使用道具（CodeRabbit review 抓到，PR #615）——
+						# 跟 talk_to() 擋自己是死屍發起搭話同一種漏洞：is_dead
+						# 之後沒有任何地方會停用玩家的 _unhandled_input()，
+						# 死屍照樣能吃/喝
+
 const GIVE_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE 一樣的距離門檻，2 格
 
 ## give_to() 的失敗原因碼，形狀比照 TALK_*／BUY_*。除了這四個，give_to()
@@ -156,6 +169,8 @@ const FAILURE_MESSAGE_KEYS := {
 	"NOT_ENOUGH": "FAIL_NOT_ENOUGH",
 	"INVALID_AMOUNT": "FAIL_INVALID_AMOUNT",
 	"NO_SPACE": "FAIL_NO_SPACE",
+	"NO_SELECTION": "FAIL_NO_SELECTION",
+	"IS_DEAD": "FAIL_IS_DEAD",
 }
 
 ## 滑鼠指到時套在 sprite 上的描邊
@@ -1441,6 +1456,37 @@ func _end_perform(completed: bool) -> void:
 ## 沒有行程可言，只有 Agent 需要清目前任務並重新問決策
 func _on_perform_finished(_completed: bool) -> void:
 	pass
+
+# ---- 使用背包目前選取的道具 ----
+
+# 玩家按下 use_item 鍵時，使用快捷欄目前選取格裡的東西（#611）。跟 eat()／
+# drink() 的差異：那兩個是「自動找背包裡第一個符合分類的物品」，這裡固定用
+# 玩家自己選的那一格——選到的不是食物/飲品就直接失敗，不會幫忙跳去找別的。
+# 是不是消耗品交給 inventory.use_item() 的 is_consumable 參數判斷，這裡只
+# 負責把分類轉成布林值；其餘原因碼直接轉傳，見上面 USE_ITEM_* 常數的說明
+func use_selected_item() -> String:
+	if is_dead:
+		return USE_ITEM_IS_DEAD
+	if inventory == null:
+		return USE_ITEM_NO_INVENTORY
+
+	var slot := inventory.get_slot(inventory.get_selected_index())
+	if slot.is_empty():
+		return USE_ITEM_NO_SELECTION
+	if stats == null:
+		return USE_ITEM_NO_STATS
+
+	var item_id: String = slot["item_id"]
+	var item := ItemDatabase.get_item(item_id)
+	var category: String = item.get("category", "")
+	var is_consumable := category == "food" or category == "drink"
+
+	var use_reason := inventory.use_item(item_id, stats, item, is_consumable)
+	if use_reason != Inventory.USE_OK:
+		return use_reason
+
+	apply_personality_delta(item.get("personality_delta", {}))
+	return USE_ITEM_OK
 
 
 # ---- 送禮 ----

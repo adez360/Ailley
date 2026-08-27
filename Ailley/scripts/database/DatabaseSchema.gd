@@ -34,7 +34,7 @@ extends RefCounted
 ## CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
-const CURRENT_VERSION := 8
+const CURRENT_VERSION := 9
 
 
 ## 版本落後時依序套用的變更，每個 entry：
@@ -82,6 +82,11 @@ const MIGRATIONS: Array[Dictionary] = [
 		"version": 8,
 		"name": "Add world_character_state.following_npc_id (issue #576)",
 		"apply": Callable(DatabaseSchema, "_migrate_v8_add_following_npc_id")
+	},
+	{
+		"version": 9,
+		"name": "Rebuild npc/location and all their dependent tables with NOT NULL primary keys",
+		"apply": Callable(DatabaseSchema, "_migrate_v9_notnull_primary_keys")
 	}
 ]
 
@@ -620,7 +625,7 @@ static func _migrate_v5_drop_death_grave_highlights(db) -> bool:
 ## world／item。
 ##
 ## `npc`（近 20 張依附表）與 `npc`／`location` 之間的重建順序問題不在這次
-## 範圍內，見《99》P-55、issue #561。
+## 範圍內，見《99》P-55、issue #561、migration 9。
 ## Migration 7 當年重建 world_character_state 時的表結構凍結版（CodeRabbit
 ## review 抓到）：不能直接傳目前的 WorldCharacterStateSchema 進
 ## _migrate_rebuild_table_group()——那個 schema 後來（issue #576）加了
@@ -771,6 +776,85 @@ static func _migrate_v8_add_following_npc_id(db) -> bool:
 		return false
 
 	return true
+
+
+## Migration 9：既有資料庫的 npc／location 補 NOT NULL 主鍵——P-55 最後
+## 剩下的 2 張表，issue #561。原訂版號 8，rebase 到 main 時發現 8 已被
+## world_character_state.following_npc_id（issue #576）佔用；following_npc_id
+## 那個 migration 改成 ALTER TABLE ADD COLUMN，必須排在這裡的
+## world_character_state 整表重建之前——重建時 world_character_state 用的是
+## 目前（已含 following_npc_id）的 WorldCharacterStateSchema，若這裡先跑，
+## 舊資料庫的 world_character_state 還沒有這個欄位，
+## _migrate_rebuild_verify_column_shape() 新舊欄位數對不上會直接判定失敗。
+##
+## 這兩張比 migration 7 處理過的 world／item 複雜得多：location 有 7 張表
+## 外鍵指向它（npc 本身也是其中一張，透過 home_location_id），npc 則有
+## 近 20 張表外鍵指向它。改名 location／npc 時，SQLite 會把「全部」指向
+## 它們的外鍵定義自動改指向暫存表名——不是只有 migration 7 那種 1-2 層，
+## 這裡有 grave → grave_epitaphs、memories → memory_related_npcs 這種
+## 兩層鏈，這些子表的子表也要跟著重建，否則它們的外鍵會停留在暫存表名，
+## 最後 DROP 暫存表時 CASCADE 子表被隱含清空、RESTRICT 子表擋下 DROP。
+##
+## 所以這裡不是「npc／location 各自一組」，而是把 location／npc 與全部
+## 直接或間接依附它們的表全部放進同一個 _migrate_rebuild_table_group()，
+## 依「父表在前」拓樸排序：
+##   location → npc（npc.home_location_id 依附 location，location 要先）
+##   → grave（依附 npc／location）→ memories（依附 npc／location）
+##   → grave_epitaphs（依附 grave／npc，要在 grave 之後）
+##   → memory_related_npcs（依附 memories／npc，要在 memories 之後）
+##   → 其餘只依附 npc（部分也依附 location）的表，彼此順序無關
+## _migrate_rebuild_table_group() 會依反序（子表先、父表後）DROP 暫存表，
+## 不需要另外處理。
+##
+## npc_action_history（#428／migration 6 才新增，ON DELETE CASCADE 指向
+## npc）在原始設計之後才出現，一併掃進「只依附 npc」的那組，理由跟其他
+## 同組表一樣——不掃進來的話，npc 改名時它的外鍵會停在暫存表名，最後
+## DROP 暫存 npc 時被隱含 CASCADE 清空，悄悄丟光整張表的資料。
+##
+## repair_null_pk 只給 location／npc——兩者的主鍵是這張表自己的獨立身分
+## （不是外鍵），NULL 可以安全補新 UUID，跟 migration 7 的 world／item
+## 同一套判斷。其餘表要嘛主鍵是 INTEGER PRIMARY KEY AUTOINCREMENT（SQLite
+## 不會真的存 NULL 進去，不會踩到這個問題），要嘛主鍵已經在 migration 3／7
+## 補過 NOT NULL（npc_appearance／npc_last_action／npc_occupation／
+## npc_state／npc_emotion／npc_goal）——這裡被掃進同一組重建純粹是因為
+## 它們的外鍵指向 npc／location，不是因為它們自己的主鍵有缺口，維持預設
+## false（找到 NULL 主鍵列才會中止，正常情況下不會發生）。
+##
+## npc_inventory／npc_home_storage／item_transaction／world_character_state
+## 這 4 張在 migration 7 已經因為 world／item 重建過一輪，這裡因為 npc
+## 重建又要再重建一次——不是重複勞動，是因為兩次重建各自針對不同的父表
+## （item／world vs. npc），沒有先後可以合併的空間。
+static func _migrate_v9_notnull_primary_keys(db) -> bool:
+	return _migrate_rebuild_table_group(db, [
+		{"table": "location", "schema": LocationSchema, "repair_null_pk": true},
+		{"table": "npc", "schema": NPCSchema, "repair_null_pk": true},
+		{"table": "grave", "schema": GraveSchema},
+		{"table": "memories", "schema": MemorySchema},
+		{"table": "grave_epitaphs", "schema": GraveEpitaphSchema},
+		# MemorySchema.create() 一次建 memories 與 memory_related_npcs，
+		# 這裡再列一次是為了讓 memory_related_npcs 也走 rename／copy／drop
+		# 三個階段；重複的 create() 靠 CREATE TABLE IF NOT EXISTS 變成 no-op。
+		{"table": "memory_related_npcs", "schema": MemorySchema},
+		{"table": "money_transaction", "schema": MoneyTransactionSchema},
+		{"table": "item_transaction", "schema": ItemTransactionSchema},
+		{"table": "npc_action_history", "schema": NPCActionHistorySchema},
+		{"table": "npc_appearance", "schema": NPCAppearanceSchema},
+		{"table": "npc_condition", "schema": NPCConditionSchema},
+		{"table": "npc_daily_plan", "schema": NPCDailyPlanSchema},
+		{"table": "npc_emotion", "schema": NPCEmotionSchema},
+		{"table": "npc_goal", "schema": NPCGoalSchema},
+		{"table": "npc_home_storage", "schema": NPCHomeStorageSchema},
+		{"table": "npc_inventory", "schema": NPCInventorySchema},
+		{"table": "npc_last_action", "schema": NPCLastActionSchema},
+		{"table": "npc_occupation", "schema": NPCOccupationSchema},
+		{"table": "npc_personality", "schema": NPCPersonalitySchema},
+		{"table": "npc_relations", "schema": NPCRelationsSchema},
+		{"table": "npc_schedule", "schema": NPCScheduleSchema},
+		{"table": "npc_state", "schema": NPCStateSchema},
+		{"table": "npc_taboo", "schema": NPCTabooSchema},
+		{"table": "npc_wallet", "schema": NPCWalletSchema},
+		{"table": "world_character_state", "schema": WorldCharacterStateSchema}
+	])
 
 
 static func initialize(db) -> bool:
