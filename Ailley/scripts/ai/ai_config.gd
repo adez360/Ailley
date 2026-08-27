@@ -284,9 +284,13 @@ func _apply(data: Dictionary) -> void:
 		if _is_loopback_url(raw_embedding_base_url):
 			embedding_base_url = raw_embedding_base_url
 		else:
+			# 不把 raw_embedding_base_url 整個印進錯誤訊息（CodeRabbit review
+			# 抓到）：這個值來自玩家可寫入的設定檔，可能夾帶 URI userinfo 或
+			# query string 裡的帳密／token，寫進 log 就是把這些資料留在使用者
+			# 看得到、可能被分享出去除錯的地方——這裡只需要讓玩家知道「這個
+			# 設定被拒絕了」，不需要把被拒絕的值本身複誦一次
 			push_error(
-				"[AIConfig] embedding.base_url 不是本機位址（%s），拒絕使用、退回預設值——"
-				% raw_embedding_base_url
+				"[AIConfig] embedding.base_url 不是本機位址，拒絕使用、退回預設值——"
 				+ "embedding 設計上一律走本機，避免玩家不知情下對雲端端點產生費用"
 			)
 			embedding_base_url = DEFAULT_EMBEDDING_BASE_URL
@@ -374,8 +378,24 @@ static func _is_loopback_url(url: String) -> bool:
 	# 「[:」）。有括號時改成找右括號位置，port（如果有）保證在它後面
 	if host.begins_with("["):
 		var bracket_end := host.find("]")
-		if bracket_end != -1:
-			host = host.substr(0, bracket_end + 1)
+		if bracket_end == -1:
+			return false
+
+		# 右括號後面的內容要嘛是空字串、要嘛是合法的 ":<port>"（CodeRabbit
+		# review 抓到）："[::1]evil.example" 這種寫法，右括號後面直接接一個
+		# 網域名稱，不是 port——先前這裡只保留 "[::1]" 那一段去比對，等於
+		# 完全忽略了右括號後面還有東西，讓這種偽裝成 loopback 的字串通過
+		# 驗證；但 _apply() 實際存起來、後續 EmbeddingService 真正拿去打的
+		# 是原始未截斷的 raw_embedding_base_url，不是這裡截斷過的 host，兩者
+		# 對不上
+		var suffix := host.substr(bracket_end + 1)
+		if not suffix.is_empty():
+			if not suffix.begins_with(":"):
+				return false
+			if not suffix.substr(1).is_valid_int():
+				return false
+
+		host = host.substr(0, bracket_end + 1)
 	else:
 		var colon_index := host.rfind(":")
 		if colon_index != -1:

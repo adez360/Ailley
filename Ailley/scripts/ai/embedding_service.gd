@@ -54,7 +54,11 @@ func request_embedding(text: String) -> PackedFloat32Array:
 	add_child(http)
 
 	var headers := PackedStringArray(["Content-Type: application/json"])
-	var body := JSON.stringify({"input": text})
+	# model 要帶進請求（CodeRabbit review 抓到）：先前只送 input，設定檔裡的
+	# embedding.model 存了卻沒用到，改 model 完全不會影響實際打的請求——
+	# llama-server --embedding 單模型模式下忽略這個欄位也能正常運作，但一旦
+	# 換成多模型的 embedding 服務，AIConfig.embedding_model 這個設定就是死的
+	var body := JSON.stringify({"input": text, "model": _config.embedding_model})
 
 	var err := http.request(_config.embedding_base_url + "/embeddings", headers, HTTPClient.METHOD_POST, body)
 	if err != OK:
