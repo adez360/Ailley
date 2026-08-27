@@ -52,6 +52,27 @@ LLM 一律走 `AIService`（`scripts/ai/ai_service.gd`）→ Godot ↔ Sidecar
   本機 llama-server 與 OpenRouter 兩條
 - 每次呼叫帶一份含 Agent 狀態與人格的 JSON，回傳也要 JSON
 
+### Embedding（L3 語意記憶檢索，issue #571）：獨立於對話 provider
+
+2026-08-26 拍板：embedding 是獨立於「玩家對話走 Local 還是 Cloud」的第三條線，
+**不管玩家選哪個對話 provider，embedding 一律走本機**。理由：embedding 模型
+遠比對話模型輕量（bge-small 幾百 MB、CPU 就能跑），Cloud 玩家也負擔得起在
+自己機器常駐這一支，換來的是兩種玩家的記憶內容都不出本機，隱私一致，也不用
+每次寫入記憶都多一筆對外 API 呼叫的延遲與費用。
+
+- 模型：`bge-small-zh-v1.5-q8_0.gguf`，`llama-server --embedding --pooling cls`
+  服務 OpenAI 相容的 `/v1/embeddings`。這組模型檔案原本就在遠端 GPU 機器
+  （見「遠端 GPU 機器連線手冊」）留著沒清掉，不用重新下載
+- 檢索本身用暴力法 cosine similarity，不引入向量 DB／延伸套件——L3 記憶量級
+  （單一 NPC 頂多幾十筆）用不上 ANN 索引，多一個套件只會增加打包風險
+- `ai_config.json` 新增一個跟 `providers` **平行**的頂層 `embedding` 區塊
+  （不是 `providers` 字典裡的一個 provider）——這條線不受玩家的 Local/Cloud
+  選擇影響，混在一起會讓語意不清楚
+- 開發期驗證：本機沒有 GPU，改在遠端 GPU 機器（`desktop-h9aniv5`）常駐這支
+  embedding server（沿用既有筆記記載的 `neonardooo@100.85.79.25:2222` SSH
+  存取方式），本機用 `ssh -N -L 8081:127.0.0.1:8081 ...` 建 tunnel 連過去測。
+  **這條 tunnel 是本機行程，機器關機／重開會中止**，下次要驗證前得重新建立
+
 ## 協定：HTTP，不是 WebSocket
 
 > [!important] 這題沒得選
