@@ -294,7 +294,11 @@ func _apply(data: Dictionary) -> void:
 				+ "embedding 設計上一律走本機，避免玩家不知情下對雲端端點產生費用"
 			)
 			embedding_base_url = DEFAULT_EMBEDDING_BASE_URL
-		embedding_model = str(embedding_data.get("model", DEFAULT_EMBEDDING_MODEL)).strip_edges()
+		# 跟下面 timeout 同一個理由：空字串／全空白不是合法的模型名稱，
+		# 設定檔手滑填 "" 或 "   " 時退回預設值，不然 EmbeddingService
+		# 會拿空字串當 model 送出請求（CodeRabbit review 抓到）
+		var raw_embedding_model := str(embedding_data.get("model", DEFAULT_EMBEDDING_MODEL)).strip_edges()
+		embedding_model = raw_embedding_model if not raw_embedding_model.is_empty() else DEFAULT_EMBEDDING_MODEL
 		# 跟 _parse_provider() 的 timeout 處理同一個理由：<= 0 代表「不設逾時」，
 		# 設定檔手滑填 0 或負值時退回預設值，不信任非正值
 		var raw_embedding_timeout := float(embedding_data.get("timeout", DEFAULT_EMBEDDING_TIMEOUT))
