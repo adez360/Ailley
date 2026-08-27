@@ -17,9 +17,25 @@ extends RefCounted
 
 
 ## 找 corpse 對應的 grave_id，沒有就建立一筆。回傳 -1 代表失敗或未安葬。
+##
+## grave.npc_id／grave.buried_by 都是 npc(npc_id) 外鍵——corpse 自己跟安葬者
+## 都要先有 npc 記錄才建得起 grave，不能只顧著同步悼詞作者（CodeRabbit review
+## 抓到，PR #622）。corpse 一定要同步成功；buried_by 找不到對應的活節點
+## （例如那個角色已經離場）就跳過，不因此整個放棄——grave.buried_by 本身
+## 允許 NULL，這裡沒有必要因為安葬者不在場就連累新的墓碑建不起來
 static func ensure_grave_id(corpse: Character) -> int:
 	if corpse == null or not corpse.is_buried:
 		return -1
+
+	var persistence := DatabaseManager.get_node_or_null("CharacterStatePersistence")
+	if persistence == null or not persistence.sync_character(corpse):
+		return -1
+
+	var buried_by_id: String = corpse.buried_by if corpse.buried_by != null else ""
+	if not buried_by_id.is_empty():
+		var buried_by_character := _find_character(corpse, buried_by_id)
+		if buried_by_character != null:
+			persistence.sync_character(buried_by_character)
 
 	var npc_id := corpse.character_id
 	var existing := DatabaseManager.select_where("grave", "npc_id = ?", [npc_id], ["grave_id"])
@@ -43,6 +59,16 @@ static func ensure_grave_id(corpse: Character) -> int:
 	if inserted.is_empty():
 		return -1
 	return int(inserted[0]["grave_id"])
+
+
+## 依 character_id 字串找場上目前活著的節點，找不到回 null。跟
+## character.gd::_find_id_holder() 同一種寫法，只是這裡是 static 函式沒有
+## 自己的 get_tree()，借 from（一定是場上真實節點）的 get_tree() 來查
+static func _find_character(from: Node, character_id: String) -> Character:
+	for other in from.get_tree().get_nodes_in_group("characters"):
+		if other.character_id == character_id:
+			return other as Character
+	return null
 
 
 ## grave.location_id 外鍵指向 location(location_id)，但 SQL 的 location 表
