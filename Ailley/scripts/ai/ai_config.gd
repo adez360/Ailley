@@ -357,9 +357,19 @@ static func _is_loopback_url(url: String) -> bool:
 	var slash_index := host.find("/")
 	if slash_index != -1:
 		host = host.substr(0, slash_index)
-	var colon_index := host.rfind(":")
-	if colon_index != -1:
-		host = host.substr(0, colon_index)
+
+	# 括號包住的 IPv6 字面值（CodeRabbit review 抓到）：[::1] 或 [::1]:port，
+	# port 只會出現在右括號之後——不能像下面非括號的情形直接找「最後一個
+	# 冒號」去切，[::1] 本身內部就有冒號，會把左括號內容切壞（[::1] 被切成
+	# 「[:」）。有括號時改成找右括號位置，port（如果有）保證在它後面
+	if host.begins_with("["):
+		var bracket_end := host.find("]")
+		if bracket_end != -1:
+			host = host.substr(0, bracket_end + 1)
+	else:
+		var colon_index := host.rfind(":")
+		if colon_index != -1:
+			host = host.substr(0, colon_index)
 
 	return host == "127.0.0.1" or host == "localhost" or host == "[::1]" or host == "::1"
 

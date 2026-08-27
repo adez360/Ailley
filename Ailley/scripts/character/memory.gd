@@ -316,6 +316,25 @@ func get_save_data() -> Dictionary:
 ## 不假設它沒被手改過，但也不用像 Stats.SPEC 那樣逐欄位補值，因為這裡的欄位
 ## 全部由引擎自己的 add_candidate() 產生，不是模型輸出。驗證完才一次替換
 ## entries／_next_id，中途不動本體，避免格式錯誤只套用到一半
+## embedding 存檔時是 JSON 陣列（float 元素），讀回來要轉成 PackedFloat32Array
+## 才能參與 _cosine_similarity()。型別不是 Array，或裡面有非數字元素，就
+## 回退成空陣列，不炸掉呼叫端——content/importance/valence 等其餘欄位依然
+## 有效，只是這一筆會被視為「沒有向量」。拆成獨立的靜態函式（CodeRabbit
+## review 間接促成：test_memory_l3.gd 需要單獨測這段純解析邏輯，不透過
+## load_save_data() 整條路徑——後者現在會連帶觸發 _embed_l3_entry() 重新
+## 排隊算 embedding，那段會打 EmbeddingService，這個專案的 MCP 編輯器內
+## test_run 環境對 autoload 只有 placeholder，一測就崩潰，見 test_memory_l3.gd
+## 開頭的環境限制說明）
+static func _parse_stored_embedding(raw_embedding: Variant) -> PackedFloat32Array:
+	var floats := PackedFloat32Array()
+	if raw_embedding is Array:
+		for v in (raw_embedding as Array):
+			if not (v is float or v is int):
+				return PackedFloat32Array()
+			floats.append(float(v))
+	return floats
+
+
 func load_save_data(data: Dictionary) -> void:
 	l1.clear()
 
@@ -329,25 +348,18 @@ func load_save_data(data: Dictionary) -> void:
 			var entry: Dictionary = (raw_entry as Dictionary).duplicate(true)
 			if entry.get("level") != 2 and entry.get("level") != 3 and entry.get("level") != 4:
 				continue
-			# embedding 存檔時是 JSON 陣列（float 元素），讀回來要轉成
-			# PackedFloat32Array 才能參與 _cosine_similarity()。型別不是 Array，
-			# 或裡面有非數字元素，就只丟掉這個欄位（回退成空陣列），不整筆
-			# entry 一起丟——content/importance/valence 等其餘欄位依然有效，
-			# 只是這一筆不會再被 search_l3() 選中
-			var raw_embedding: Variant = entry.get("embedding")
-			var floats := PackedFloat32Array()
-			if raw_embedding is Array:
-				var valid := true
-				for v in (raw_embedding as Array):
-					if not (v is float or v is int):
-						valid = false
-						break
-					floats.append(float(v))
-				if not valid:
-					floats = PackedFloat32Array()
-			entry["embedding"] = floats
+			entry["embedding"] = _parse_stored_embedding(entry.get("embedding"))
 			parsed.append(entry)
 			next_id = maxi(next_id, int(entry.get("id", 0)))
 
 	entries = parsed
 	_next_id = next_id
+
+	# 讀檔回來的 L3 記憶如果 embedding 是空的，要重新排隊算一次（CodeRabbit
+	# review 抓到）：空 embedding 不一定代表「這筆記憶天生沒有語意」，可能是
+	# 存檔當下 _embed_l3_entry() 還沒算完、或當時 embedding server 連不上——
+	# 不重新觸發的話，這筆記憶會永遠被 _rank_l3_candidates() 跳過，語意檢索
+	# 讀不到它。已經有合法向量的記憶不動，只補救空的
+	for entry in entries:
+		if entry.get("level") == 3 and (entry.get("embedding", PackedFloat32Array()) as PackedFloat32Array).is_empty():
+			_embed_l3_entry(entry)
