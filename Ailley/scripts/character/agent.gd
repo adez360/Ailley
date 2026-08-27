@@ -2039,15 +2039,27 @@ func _queue_reaction_fact_line(line: String) -> void:
 ## 同一種態度，但這裡是「這一場表演問過就不再問」，對方一旦不再表演（結束、
 ## 或走出視野）就從表裡移除，讓下一場表演可以重新被注意到
 func _scan_for_performers() -> void:
-	if is_dead or is_in_conversation() or not llm_decision_enabled or vision == null:
+	if is_dead or not llm_decision_enabled or vision == null:
 		# 整輪掃描都跳過時，_tip_prompted_performers 也要清空（CodeRabbit
 		# review 抓到）：不清的話，某個表演者的舊標記會一直卡著——如果他
 		# 這段跳過期間表演結束又重新開始一場新的，等掃描恢復時，下面
 		# 「不再表演的對象從表裡移除」那段清理邏輯根本沒機會跑到，新的
 		# 這場表演會被誤判成「已經問過」，永遠不會真的觸發打賞決策。這裡
 		# 沒辦法在跳過時照常判斷誰還在表演（vision 可能是 null），乾脆全部
-		# 清空，讓掃描恢復時當作全新一輪重新判斷
+		# 清空，讓掃描恢復時當作全新一輪重新判斷。這三個跳過原因都是比較
+		# 「終局」的狀態（死亡不會再掃、llm_decision_enabled 關掉短期內也不會
+		# 再掃、vision 是 null 正常情況下不會發生），清空不會誤傷還在進行中的
+		# 表演
 		_tip_prompted_performers.clear()
+		return
+
+	if is_in_conversation():
+		# 對話中不清空（CodeRabbit review 抓到）：跟上面三個不一樣，對話是
+		# 暫時性狀態，不代表期間所有表演都結束了——清空的話，對方在對話期間
+		# 仍在同一場表演，對話結束後下一次掃描會誤判成「還沒問過」，同一場
+		# 表演重新觸發一次打賞決策，變成收到兩次打賞。標記留著，等對話結束、
+		# 真正掃描恢復時，下面「不再表演的對象從表裡移除」那段清理邏輯自然會
+		# 處理掉真的已經結束的表演
 		return
 
 	var visible := vision.get_visible_characters()
@@ -2171,6 +2183,16 @@ func _force_rest_until_recovered(now_minutes: int) -> void:
 		leave_conversation()
 	if is_working():
 		_end_work(_current_workstation)
+	# 表演中同理 is_working()（CodeRabbit review 抓到）：不結束的話 _performing
+	# 會繼續是 true，_select() 換成 exhaustion_rest 之後，背景的 _run_perform()
+	# 協程還在跑，跑完自然觸發 _on_perform_finished(true)，那時候 _current_task
+	# 已經是 exhaustion_rest（不是真正的表演任務）——會誤把 exhaustion_rest
+	# 收尾掉（_clear_current_task()），力竭恢復到一半被打斷，而且原本的
+	# perform 任務還留在 _tasks 裡沒被清乾淨。_end_perform(false) 當作「被
+	# 打斷」處理（不是正常表演完），呼叫端只會補一則事實句，不會動
+	# _current_task，讓後面的 _select(rest_task) 接手一個乾淨的狀態
+	if is_performing():
+		_end_perform(false)
 
 	var rest_task: Dictionary = {
 		"id": "exhaustion_rest",
