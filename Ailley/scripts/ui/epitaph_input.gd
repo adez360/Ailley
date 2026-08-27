@@ -1,38 +1,35 @@
 extends CanvasLayer
 
-## 對已安葬角色留悼詞（#385，《規格書09》§4-5）。
+## 墓碑查看面板（issue #385 改範圍，見 note/技術/墓碑查看面板.md）。原本的悼詞留言
+## 功能整段拆掉——改成點擊已安葬角色，唯讀顯示三件事：
+##
+## - **個性**：`Character.personality` 現有的 10 項引擎數值，含睡前反思
+##   （`apply_personality_delta()`）累積調整的漂移。死後決策迴圈已停，
+##   讀到的就是死掉當下的狀態，不用另外拍照存一份
+## - **生平**：`Agent.life_highlights`（#381），引擎彙整、絕不讓 LLM 潤飾
+## - **臨終遺言**：`Character.last_words`，死者自己的 LLM 產生，可能是 null
+##   （來不及開口）
 ##
 ## 開關方式跟 status_panel.gd 同一套：點擊偵測走 _input()（不是
 ## _unhandled_input），且不 set_input_as_handled()——空地點擊要繼續傳給
-## selection.gd 取消選取，跟 status_panel.gd 的理由一致。共用同一顆
-## selection.character_at() 找點到誰，但這裡只對「已安葬」的角色開面板——
-## 未安葬的屍體沒有墓碑可以留言（見《規格書09》§4-3「未安葬不顯示
-## 遺言/生平」同一種「沒有墓碑」的語意，這裡延伸到悼詞）。
-##
-## 讀寫走 GraveEpitaphPersistence（SQLite grave／grave_epitaphs 兩張表），
-## 不是 JsonSaveService——見《99》P-50：epitaphs 是「一對多」，刻意留在
-## SQLite，跟 last_words 等「一份墓一筆」欄位分開存。preload 而不是靠
-## class_name 全域識別字：新增的 class_name 剛建立時，編輯器的全域類別表
-## 不保證即時同步（godot-ai filesystem_manage scan 也未必補得齊），preload
-## 直接指向檔案路徑，不吃這個時序問題。
-##
-## 這則是「R 先做出功能版」（issue #385）：只做表單邏輯與讀寫，沒有查看
-## 完整墓碑內容（last_words／life_highlights／既有悼詞列表）的面板，
-## 排版與視覺留給後續（issue 本身拆兩段做）。
+## selection.gd 取消選取，跟 status_panel.gd 同一個理由（也因此買帳同一個
+## 既有現象：點擊已安葬角色時 StatusPanel 也會一起開，這不是這裡新造成的，
+## 兩邊都不吃掉點擊事件本來就會疊加）。只對「已安葬」的角色開面板——未安葬
+## 的屍體沒有墓碑（《規格書09》§4-3「未安葬不顯示遺言/生平」）。
 
-const MAX_LENGTH := 40
-const GraveEpitaphPersistence := preload("res://scripts/database/GraveEpitaphPersistence.gd")
+const EMPTY_PLACEHOLDER := "—"		# 《15》§1-1：沒資料一律顯示這個，不留空白不顯示假值
+const BARK := Color("2F2522")
 
 @onready var panel: Panel = $Panel
-@onready var input: LineEdit = $Panel/Input
-@onready var status_label: Label = $Panel/StatusLabel
+@onready var title_label: Label = $Panel/TitleLabel
+@onready var hint_label: Label = $Panel/StatusLabel
+@onready var content_vbox: VBoxContainer = $Panel/ContentScroll/ContentVBox
 
 var _corpse: Character = null
 
 
 func _ready() -> void:
-	input.max_length = MAX_LENGTH
-	input.text_submitted.connect(_on_submitted)
+	hint_label.text = L10n.t("UI_GRAVE_CLOSE_HINT")
 	panel.hide()
 
 func _input(event: InputEvent) -> void:
@@ -45,8 +42,8 @@ func _input(event: InputEvent) -> void:
 	if mouse == null or not (mouse.pressed and mouse.button_index == MOUSE_BUTTON_LEFT):
 		return
 
-	# 面板開著時，面板範圍內的點擊留給 GUI 的 _gui_input 處理，不能被下面的
-	# 世界選取邏輯搶走（跟 status_panel.gd 同一個理由）
+	# 面板開著時，面板範圍內的點擊（例如捲軸）留給 GUI 的 _gui_input 處理，
+	# 不能被下面的世界選取邏輯搶走（跟 status_panel.gd 同一個理由）
 	if panel.visible and panel.get_global_rect().has_point(mouse.position):
 		return
 
@@ -65,42 +62,83 @@ func _pick_character(screen_pos: Vector2) -> Character:
 
 func _open(corpse: Character) -> void:
 	_corpse = corpse
-	input.clear()
-	input.editable = true
-	status_label.text = L10n.t("UI_EPITAPH_HINT")
+	title_label.text = corpse.character_name
+	_refresh_content()
 	panel.show()
-	input.grab_focus()
 
 func _close() -> void:
 	panel.hide()
-	input.release_focus()
 	_corpse = null
 
-## 失敗時不清空輸入框（CodeRabbit review，PR #622 抓到）：原本一進來就
-## input.clear()，寫入失敗時面板留著開但玩家剛打的字已經沒了，得重打一次。
-## 改成只在真的要關面板的路徑（成功、或本來就沒東西可寫）才清空；DB 寫入
-## 失敗那條路徑把內容放回 input，讓玩家可以直接修改重試，不用重新輸入
-func _on_submitted(text: String) -> void:
-	var content := text.strip_edges()
+func _refresh_content() -> void:
+	_clear_children(content_vbox)
+	_add_section_header("UI_GRAVE_SECTION_PERSONALITY")
+	_add_personality_lines()
+	_add_section_header("UI_GRAVE_SECTION_LIFE")
+	_add_life_highlights_lines()
+	_add_section_header("UI_GRAVE_SECTION_LAST_WORDS")
+	_add_last_words_line()
 
-	if content.is_empty() or _corpse == null:
-		input.clear()
-		_close()
+## personality 沒資料（identity 沒帶 hexaco，見 Personality.from_identity()）
+## 時是空字典，不是每個角色都保證有這 10 項——一律用 has() 檢查，缺的略過，
+## 不是顯示 0（0 是合法數值，代表「沒資料」跟「這項是 0」語意不同）
+func _add_personality_lines() -> void:
+	var personality: Dictionary = _corpse.personality
+	if personality.is_empty():
+		_add_placeholder_line()
 		return
+	for key in Personality.PERSONALITY_KEYS:
+		if not personality.has(key):
+			continue
+		var label := Label.new()
+		label.text = "%s：%d" % [L10n.t(Personality.PERSONALITY_LABELS[key]), int(round(float(personality[key])))]
+		label.add_theme_color_override("font_color", BARK)
+		content_vbox.add_child(label)
 
-	# 悼詞的作者一律是操作者本人——這個面板是玩家點擊觸發的，不是 AI 任務
-	var player := get_tree().get_first_node_in_group("player") as Character
-	if player == null:
-		input.clear()
-		_close()
+## life_highlights 只有 Agent 才有這個欄位（#381）——場景固定 NPC／角色庫
+## 投放都是 Agent，Player 死亡（若發生）沒有這份資料，顯示佔位文案而非報錯，
+## 跟 status_panel.gd 的 today_plan／today_log 對 Player 的處理同一個理由
+func _add_life_highlights_lines() -> void:
+	var agent := _corpse as Agent
+	var highlights: Array[String] = agent.life_highlights if agent != null else []
+	if highlights.is_empty():
+		var label := Label.new()
+		label.text = L10n.t("UI_GRAVE_NO_LIFE_HIGHLIGHTS")
+		label.add_theme_color_override("font_color", BARK)
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD
+		content_vbox.add_child(label)
 		return
+	for line in highlights:
+		var label := Label.new()
+		label.text = "・%s" % line
+		label.add_theme_color_override("font_color", BARK)
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD
+		content_vbox.add_child(label)
 
-	var reason: String = GraveEpitaphPersistence.write_epitaph(player, _corpse, content)
-	if reason.is_empty():
-		input.clear()
-		_close()
-	else:
-		push_warning("EpitaphInput: 留悼詞失敗（%s）" % reason)
-		status_label.text = L10n.t("UI_EPITAPH_FAIL")
-		input.text = content
-		input.grab_focus()
+## last_words 是 String 或 null（來不及開口，見 character.gd 欄位註解）——
+## null 不是「沒資料」，是死亡本身的一種狀態，用專屬文案跟 EMPTY_PLACEHOLDER
+## 那種「這個角色沒有這項資料」的泛用佔位語意分開
+func _add_last_words_line() -> void:
+	var label := Label.new()
+	var words: Variant = _corpse.last_words
+	label.text = str(words) if words is String else L10n.t("UI_GRAVE_NO_LAST_WORDS")
+	label.add_theme_color_override("font_color", BARK)
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	content_vbox.add_child(label)
+
+func _add_section_header(label_key: String) -> void:
+	var label := Label.new()
+	label.text = L10n.t(label_key)
+	label.add_theme_color_override("font_color", BARK)
+	content_vbox.add_child(label)
+
+func _add_placeholder_line() -> void:
+	var label := Label.new()
+	label.text = EMPTY_PLACEHOLDER
+	label.add_theme_color_override("font_color", BARK)
+	content_vbox.add_child(label)
+
+func _clear_children(container: Node) -> void:
+	for child in container.get_children():
+		container.remove_child(child)
+		child.queue_free()
