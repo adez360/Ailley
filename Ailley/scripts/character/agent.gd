@@ -1328,7 +1328,30 @@ func _request_next_decision(allow_update_plan: bool = false, allow_appointment: 
 		# 開一條回頭路
 		var new_appointment: Variant = data.get("appointment")
 		if new_appointment != null and int(new_appointment.get("game_time_minutes", 0)) > _now_minutes():
-			_apply_appointment(new_appointment)
+			# location 正規化（issue #644）：_validate_appointment() 只驗證非空
+			# 字串，不驗證這個地點真的存在——那需要場景樹的 PlaceAnchors，
+			# ai_schema.gd 是純靜態工具、拿不到，跟 talk 的 target／buy 的 place
+			# 同一個理由留給套用這層處理。_process_appointment() 是逐字跟
+			# PlaceAnchors.resolve_from_position() 回傳的裸地點名比對，這裡先
+			# 對不到已知地點就整筆丟棄，比照上面 game_time 過期的既有處理
+			# 方式：不逼模型整包重答（那要在 schema 層才做得到，這裡已經是
+			# 網路回來、_decide_with_retry() 早就判定這輪回應整體合法之後），
+			# 靜默放棄這個約定，等模型下次決策再試
+			var anchors := get_tree().get_first_node_in_group("place_anchors")
+			var raw_location: String = str(new_appointment.get("location", ""))
+			var normalized_location := ""
+			if anchors != null:
+				for known_place in anchors.list():
+					if known_place.to_lower() == raw_location.strip_edges().to_lower():
+						normalized_location = known_place
+						break
+			if not normalized_location.is_empty():
+				new_appointment["location"] = normalized_location
+				_apply_appointment(new_appointment)
+			else:
+				push_warning("Agent %s: 約定地點「%s」不是已知地點，丟棄這筆約定" % [
+					character_name, raw_location
+				])
 
 		if had_pending_persuade:
 			_resolve_pending_persuade(data)

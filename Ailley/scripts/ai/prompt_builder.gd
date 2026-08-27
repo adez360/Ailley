@@ -52,8 +52,14 @@ You cannot rewrite today_plan this turn. If you want the chance to on your next 
 ## 時間（day/hour/minute），讓模型有基準能算出一個真的在未來的時間點，
 ## 不用它自己亂猜「現在是第幾天」；格式要求跟 AISchema._validate_appointment()
 ## 的解析格式一致，改一邊要記得改另一邊
+## location 的措辭原本只寫 "<a place you both know>"，完全沒有格式限制
+## （issue #644）：agent.gd::_process_appointment() 拿它逐字跟
+## PlaceAnchors.resolve_from_position() 回傳的裸地點名比對，模型自由發揮的
+## 任何措辭幾乎都對不上，整個約定機制形同虛設。改成明講「必須是這幾個之一」
+## 並把 PlaceAnchors.list() 動態帶進來——跟 IMPLEMENTED_ACTIONS 動態組同一個
+## 理由，寫死的清單遲早跟真實地點漂移
 const PLAN_SYSTEM_APPOINTMENT_TEMPLATE := """
-You may arrange a future meeting by including "appointment": {"with": "<exact name>", "location": "<a place you both know>", "game_time": "<a moment after right now>"} in your reply. Right now is day %d, %02d:%02d. "game_time" must be written exactly as "第D天 HH:MM" (e.g. "第3天 09:00" means day 3, 09:00) and the day/time it names must come strictly after right now — never right now itself. Omit "appointment" entirely if you're not setting one up this turn."""
+You may arrange a future meeting by including "appointment": {"with": "<exact name>", "location": "<must be exactly one of: %s>", "game_time": "<a moment after right now>"} in your reply. Right now is day %d, %02d:%02d. "game_time" must be written exactly as "第D天 HH:MM" (e.g. "第3天 09:00" means day 3, 09:00) and the day/time it names must come strictly after right now — never right now itself. Omit "appointment" entirely if you're not setting one up this turn."""
 
 ## persuaded 是條件式欄位（#227），跟 update_plan 同一套「只在有待回應事實句
 ## 時才加進 schema」做法。措辭刻意不逼模型一定要在同一輪的 tasks 裡反映
@@ -156,14 +162,19 @@ static func _plan_system_tail() -> String:
 ## 一次完全空轉的決策輪次。不在這裡另外抄一份字串，兩份清單各自維護遲早會漂移，
 ## 常數改了這裡忘記跟著改，模型看到的清單就會跟引擎實際做得到的不一樣
 static func _plan_system(
-	allow_update_plan: bool, has_pending_persuade: bool = false, allow_appointment: bool = false
+	character: Character, allow_update_plan: bool, has_pending_persuade: bool = false,
+	allow_appointment: bool = false
 ) -> String:
 	var body := PLAN_SYSTEM_BASE % ", ".join(AISchema.IMPLEMENTED_ACTIONS)
 	body += PLAN_SYSTEM_UPDATE_PLAN_ALLOWED if allow_update_plan else PLAN_SYSTEM_UPDATE_PLAN_LOCKED
 	if has_pending_persuade:
 		body += PLAN_SYSTEM_PERSUADE
 	if allow_appointment:
-		body += PLAN_SYSTEM_APPOINTMENT_TEMPLATE % [GameClock.day, GameClock.hour, GameClock.minute]
+		var anchors := character.get_tree().get_first_node_in_group("place_anchors")
+		var place_names: PackedStringArray = anchors.list() if anchors != null else PackedStringArray()
+		body += PLAN_SYSTEM_APPOINTMENT_TEMPLATE % [
+			", ".join(place_names), GameClock.day, GameClock.hour, GameClock.minute
+		]
 	return body + _plan_system_tail()
 
 ## today_plan 陣列壓成一句自然語言，不是丟原始欄位列表給模型——見 #89 的
@@ -385,7 +396,7 @@ static func build_plan_envelope(
 		present_npc_ids.append(other.character_id)
 
 	return {
-		"system": _system(character, _plan_system(allow_update_plan, has_pending_persuade, allow_appointment)),
+		"system": _system(character, _plan_system(character, allow_update_plan, has_pending_persuade, allow_appointment)),
 		"payload": {
 			"type": "plan",
 			"self": _self_block(character),
@@ -467,6 +478,25 @@ static func _inventory_summary(character: Character) -> Dictionary:
 		totals[item_id] = int(totals.get(item_id, 0)) + int(slot["count"])
 	return totals
 
+## 販賣機清單摘要：{place: {item_id: price}}（issue #605）。原本 buy 動作的
+## schema 要求填 item_id／place，但 prompt 完全沒告訴模型有哪些販賣機、
+## 賣什麼、多少錢，模型只能瞎猜，buy 幾乎不會被選中，NPC 明明有錢卻活活
+## 餓死。全村目前只有 2 台（酒館／藥草鋪），先列全部，不特別篩「附近」——
+## 之後村莊擴大到會撞到 token 成本或選擇混亂時再收斂。place 值刻意跟
+## _find_vending_machine_at_place() 的判斷邏輯同一套（節點名含 "herb" 才是
+## 藥草鋪，其餘算酒館），維持全庫唯一一份「地點名怎麼定」的判斷依據
+static func _shop_summary(character: Character) -> Dictionary:
+	var shops := {}
+	for machine in character.get_tree().get_nodes_in_group("vending_machines"):
+		if not machine is VendingMachine:
+			continue
+		var place: String = "herb_shop" if str(machine.name).to_lower().contains("herb") else "tavern"
+		var catalog := {}
+		for item_id in machine.list_items():
+			catalog[item_id] = machine.get_price(item_id)
+		shops[place] = catalog
+	return shops
+
 ## conditions 只帶 type，不帶 turns_left——跟 _memory_block() 不帶 decay_value
 ## 同一個理由：模型只需要知道自己現在有哪些異常狀態，不需要知道引擎內部的
 ## 倒數細節（#352）
@@ -505,6 +535,7 @@ static func _self_block(character: Character) -> Dictionary:
 		# resolve() 對 eat/give 都有「背包裡有沒有東西」的硬規則檢查
 		"money": snapshot.get("money", 0),
 		"inventory": _inventory_summary(character),
+		"shop": _shop_summary(character),
 		# emotion（#351，《02》§1）：只帶 type／intensity，不帶 duration_left／
 		# cause_event_id——模型只需要知道自己現在是什麼情緒、多強烈，不需要
 		# 知道還剩幾個 tick 才會恢復中性，那是引擎自己的倒數細節
