@@ -3594,7 +3594,7 @@ func _find_nearest_animal(game_type: String) -> Animal:
 		if not node is Animal:
 			continue
 		var animal := node as Animal
-		if animal.game_type != game_type:
+		if animal.game_type != game_type or animal.is_queued_for_deletion():
 			continue
 		var distance := get_body_position().distance_to(animal.global_position)
 		if distance < nearest_distance:
