@@ -1514,7 +1514,9 @@ func _apply_perform_tip(amount: int) -> void:
 		return
 
 	performer.inventory.add_money(affordable)
-	_push_daily_event("你打賞了 %s %d 元。" % [performer.character_name, affordable])
+	_push_daily_event(
+		"你打賞了 %s %d 元。" % [performer.character_name, affordable], [performer.character_id]
+	)
 	# 表演者這一側也要留一句事實句（CodeRabbit review 抓到）：不然表演者的
 	# AI 完全不知道自己被打賞過，睡前反思／下一次決策都讀不到這件事。跟
 	# give_to() 對收禮方的對稱記錄同一個道理。Player 不是 Agent，沒有
