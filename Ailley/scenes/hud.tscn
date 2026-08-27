@@ -1,4 +1,4 @@
-[gd_scene load_steps=17 format=3 uid="uid://wo0a0v2y4gj1"]
+[gd_scene load_steps=19 format=3 uid="uid://wo0a0v2y4gj1"]
 
 [ext_resource type="PackedScene" uid="uid://cyrnw30ddh16r" path="res://scenes/debug_console.tscn" id="1_mphia"]
 [ext_resource type="PackedScene" uid="uid://q38st5oy2nj" path="res://scenes/chat_input.tscn" id="2_0m4u7"]
@@ -13,6 +13,7 @@
 [ext_resource type="Script" uid="uid://djdfer2luq3s5" path="res://scripts/ui/pause.gd" id="10_iypfu"]
 [ext_resource type="PackedScene" uid="uid://d3no1g5djdk2s" path="res://scenes/god_stone_input.tscn" id="11_0m4u7"]
 [ext_resource type="PackedScene" uid="uid://ccx0ctgkyuok1" path="res://scenes/persuade_dialog.tscn" id="13_5n1hp"]
+[ext_resource type="Script" uid="uid://lutrmlqpql7v" path="res://scripts/ui/epitaph_input.gd" id="14_eld54"]
 
 [sub_resource type="StyleBoxTexture" id="StyleBoxTexture_jbj1t"]
 texture = ExtResource("5_eld54")
@@ -36,6 +37,14 @@ content_margin_top = 6.0
 content_margin_right = 6.0
 content_margin_bottom = 6.0
 bg_color = Color(0.05, 0.05, 0.07, 0.6)
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_nylkq"]
+texture = ExtResource("5_eld54")
+texture_margin_left = 6.0
+texture_margin_top = 28.0
+texture_margin_right = 6.0
+texture_margin_bottom = 6.0
+region_rect = Rect2(11, 12, 106, 122)
 
 [node name="PersistentUI" type="Control"]
 layout_mode = 3
@@ -320,3 +329,63 @@ columns = 9
 [node name="GodStoneInput" parent="." instance=ExtResource("11_0m4u7")]
 
 [node name="PersuadeDialog" parent="." instance=ExtResource("13_5n1hp")]
+
+[node name="EpitaphInput" type="CanvasLayer" parent="." instance=ExtResource("11_0m4u7")]
+script = ExtResource("14_eld54")
+
+[node name="Panel" type="Panel" parent="EpitaphInput"]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -130.0
+offset_top = -42.0
+offset_right = 130.0
+offset_bottom = 42.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxTexture_nylkq")
+
+[node name="TitleBg" type="ColorRect" parent="EpitaphInput/Panel"]
+layout_mode = 0
+anchor_right = 1.0
+offset_left = 6.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = 24.0
+mouse_filter = 2
+color = Color(0.8627451, 0.7254902, 0.5411765, 1)
+
+[node name="TitleLabel" type="Label" parent="EpitaphInput/Panel"]
+layout_mode = 0
+anchor_right = 1.0
+offset_left = 6.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = 24.0
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+text = "UI_EPITAPH_TITLE"
+horizontal_alignment = 1
+vertical_alignment = 1
+clip_text = true
+
+[node name="Input" type="LineEdit" parent="EpitaphInput/Panel"]
+layout_mode = 0
+anchor_right = 1.0
+offset_left = 10.0
+offset_top = 32.0
+offset_right = -10.0
+offset_bottom = 54.0
+
+[node name="StatusLabel" type="Label" parent="EpitaphInput/Panel"]
+layout_mode = 0
+anchor_right = 1.0
+offset_left = 10.0
+offset_top = 60.0
+offset_right = -10.0
+offset_bottom = 76.0
+theme_override_colors/font_color = Color(0.3647059, 0.2901961, 0.21960784, 1)
+horizontal_alignment = 1
+clip_text = true
