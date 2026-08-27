@@ -92,7 +92,12 @@ const ALLOWED_ACTIONS := [
 # bury 是 #380 接上的：跟 attack 同一套「目標是另一個角色、一次執行完就退出
 # 任務池」模式（_pursue_bury_task()），差別是目標必須是已死亡且尚未安葬的
 # 屍體，且雙方都要在墓園錨點附近，見 Character.bury() 的檢查順序
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury"]
+#
+# hunt_small／hunt_large 是 #573 接上的：目標不是角色而是場上的 Animal 節點，
+# 一樣「走到旁邊、一次執行完就退出任務池」（_pursue_hunt_task()），但這兩個
+# 動作在 SUCCESS_PARAMS 表上——會擲骰，不是像 attack／bury 那樣硬規則過了就
+# 直接放行，見 agent.gd::resolve() 的對應分支
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "hunt_small", "hunt_large"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、

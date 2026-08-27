@@ -203,6 +203,11 @@ var _persuade_pursuit_last_distance := INF
 var _bury_pursuit_stuck_ticks := 0
 var _bury_pursuit_last_distance := INF
 
+# hunt_small／hunt_large 任務用的卡住偵測（#573），跟 _attack_pursuit_* 同一套
+# 理由與收尾方式——目標是會動的 Animal 節點，不是 place 錨點
+var _hunt_pursuit_stuck_ticks := 0
+var _hunt_pursuit_last_distance := INF
+
 # 送達（已對目標開口，不論對方是否忙碌拒絕）後設 true，擋掉 _pursue_persuade_task()
 # 後續每個 tick 重複呼叫 try_record_pending_persuade()／move_to()（P-09，
 # CodeRabbit review 抓到：persuade 原本送達當下就 _finish_task_and_request_next()，
@@ -2118,6 +2123,8 @@ func _reevaluate_once() -> void:
 		_persuade_pursuit_last_distance = INF
 		_bury_pursuit_stuck_ticks = 0
 		_bury_pursuit_last_distance = INF
+		_hunt_pursuit_stuck_ticks = 0
+		_hunt_pursuit_last_distance = INF
 
 	# 剛睡醒的偵測要在這裡的任何選任務邏輯跑之前先記下「進來的時候是不是
 	# 在睡」——選任務邏輯本身就可能把 current_state 從 sleep 換掉，這個
@@ -2514,6 +2521,16 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			if matches.size() > 1:
 				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
 			return {"success": true, "reason": ""}
+		"hunt_small", "hunt_large":
+			# hunt_small／hunt_large 在 SUCCESS_PARAMS 表上，會擲骰——跟 attack／bury
+			# 不同，這裡的硬規則過了**不能**直接 return true，要落進下面的
+			# _roll_success()。硬規則只管「附近有沒有動物可獵」，_pursue_hunt_task()
+			# 已經先把角色走到動物旁邊才呼叫這裡，這關只是防呆（動物在移動完成
+			# 之後、resolve() 真正被呼叫之前的空窗期跑走／被別人先獵走）
+			var game_type := "small_game" if action == "hunt_small" else "large_game"
+			var animal := _find_nearest_animal(game_type)
+			if animal == null or get_body_position().distance_to(animal.global_position) > Character.HUNT_RANGE:
+				return {"success": false, "reason": "附近沒有可以獵的動物"}
 		# move_to/sleep/nap/rest/wash/idle/eat/shout 目前都沒有額外的硬規則要擋
 		# （eat 落地後要在這裡加「宣稱吃了背包裡沒有的食物」的檢查，見 #114；
 		# shout 沒有目標、沒有前提，天生沒有硬規則可擋）
@@ -2584,6 +2601,8 @@ func _select(task: Dictionary, now_minutes: int, outgoing_ok: bool = true) -> vo
 	_persuade_delivered = false
 	_bury_pursuit_stuck_ticks = 0
 	_bury_pursuit_last_distance = INF
+	_hunt_pursuit_stuck_ticks = 0
+	_hunt_pursuit_last_distance = INF
 	# 排程任務的 id 是穩定的 schedule_%d，同一筆 buy 任務會在下一個遊戲日
 	# 重用同一個 id——不歸零的話，前一天走不到販賣機留下的 _buy_pursuit_task_id
 	# 與 _pursuit_done=true 會讓新一天同 id 的任務直接被守衛判定「已處理過」，
@@ -2657,6 +2676,12 @@ func _pursue_current_task() -> void:
 	# bury（#380）跟 attack／give 同理：目標是另一個角色（屍體），不是固定地點
 	if current_state == "bury":
 		_pursue_bury_task()
+		return
+
+	# hunt_small／hunt_large（#573）跟 attack／bury 同理：目標是場上的 Animal
+	# 節點，不是固定地點
+	if current_state == "hunt_small" or current_state == "hunt_large":
+		_pursue_hunt_task()
 		return
 
 	# talk 任務的目標是另一個角色，不是固定地點——current_place 對它一律是空的
@@ -3497,6 +3522,102 @@ func _bury_failure_message(failure: String) -> String:
 			return "墓園的墓碑格滿了，安葬不了"
 		_:
 			return "安葬沒有成功"
+
+# hunt_small／hunt_large 任務的執行（#573）：目標是場上的 Animal 節點（不是
+# 角色），沿用跟 attack／bury 同一套「走一次、卡住偵測」節流。跟 attack／bury
+# 不同的是這兩個動作在 SUCCESS_PARAMS 表上會擲骰——《07》拍板的簡化版追逐是
+# 「走到動物旁邊、直接呼叫現成的成功率判定一次」，不做動物邊逃邊被追的即時
+# 互動，所以 resolve() 只在真正抵達、即將執行的這一刻呼叫一次，不是每個
+# pursue tick 都呼叫（那樣會變成每分鐘重骰一次，違反《01-2》§2「一次決策
+# 一次骰」）
+func _pursue_hunt_task() -> void:
+	var action: String = str(_current_task.get("action", ""))
+	var game_type := "small_game" if action == "hunt_small" else "large_game"
+	var animal := _find_nearest_animal(game_type)
+
+	if animal == null:
+		last_action_result = "附近沒有可以獵的動物"
+		_track_action_result_for_facts(action, false)
+		_finish_task_and_request_next()
+		return
+
+	var distance := get_body_position().distance_to(animal.global_position)
+	if distance > Character.HUNT_RANGE:
+		if not move_to(animal.global_position):
+			push_warning("Agent %s: 走不到獵物" % character_name)
+			last_action_result = "靠近不了獵物，獵不到"
+			_track_action_result_for_facts(action, false)
+			_finish_task_and_request_next()
+			return
+
+		if distance >= _hunt_pursuit_last_distance - 1.0:
+			_hunt_pursuit_stuck_ticks += 1
+		else:
+			_hunt_pursuit_stuck_ticks = 0
+		_hunt_pursuit_last_distance = distance
+
+		if _hunt_pursuit_stuck_ticks >= 3:
+			push_warning("Agent %s: 獵物卡住走不到，放棄" % character_name)
+			last_action_result = "靠近不了獵物，獵不到"
+			_track_action_result_for_facts(action, false)
+			_finish_task_and_request_next()
+		return
+
+	stop_moving()
+
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(action, _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		if not result["success"]:
+			_track_action_result_for_facts(action, false)
+			_finish_task_and_request_next()
+			return
+
+	var item_id := animal.game_type
+	var hunt_failure := hunt(animal)
+	last_action_result = _hunt_failure_message(hunt_failure)
+	_track_action_result_for_facts(action, hunt_failure == Character.HUNT_OK)
+
+	if hunt_failure == Character.HUNT_OK:
+		_push_daily_event("你獵到了一隻%s。" % ItemDatabase.get_display_name(item_id))
+
+	_finish_task_and_request_next()
+
+# 場上距離最近、type 相符的活體 Animal——跟 _pursue_work_task() 找最近工作站
+# 同一套寫法。不限定在森林範圍內找：目前只有森林會擺 Animal 節點，之後若有
+# 其他地點也放動物，這裡不用改
+func _find_nearest_animal(game_type: String) -> Animal:
+	var nearest: Animal = null
+	var nearest_distance := INF
+
+	for node in get_tree().get_nodes_in_group("animals"):
+		if not node is Animal:
+			continue
+		var animal := node as Animal
+		if animal.game_type != game_type:
+			continue
+		var distance := get_body_position().distance_to(animal.global_position)
+		if distance < nearest_distance:
+			nearest_distance = distance
+			nearest = animal
+
+	return nearest
+
+# hunt() 失敗原因碼轉中文，格式跟 _attack_failure_message() 一致
+func _hunt_failure_message(failure: String) -> String:
+	match failure:
+		Character.HUNT_OK:
+			return ""
+		Character.HUNT_TARGET_NOT_FOUND:
+			return "獵物已經跑走了"
+		Character.HUNT_TOO_FAR:
+			return "距離太遠，獵不到"
+		Character.HUNT_NO_INVENTORY:
+			return "沒有背包，沒辦法帶走獵物"
+		Character.HUNT_NO_SPACE:
+			return "背包滿了，帶不走獵物"
+		_:
+			return "打獵沒有成功"
 
 # persuade 任務的執行（#227）：目標跟 talk／give 一樣是會動的角色，走到範圍
 # 內才生效，不擲骰、恆送達——「送不送達」（有沒有走到、對方在不在）跟
