@@ -38,6 +38,13 @@ window/stretch/scale_mode="integer"
 
 enabled=PackedStringArray("res://addons/TileMapDual/plugin.cfg", "res://addons/godot_ai/plugin.cfg")
 
+[file_customization]
+
+folder_colors={
+"res://assets/": "orange",
+"res://scenes/": "green"
+}
+
 [gui]
 
 theme/custom="res://assets/ui/ailley_theme.tres"

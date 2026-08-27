@@ -1,3 +1,4 @@
+class_name Pause
 extends CanvasLayer
 
 ## ESC 暫停。

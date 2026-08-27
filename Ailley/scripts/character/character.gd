@@ -252,17 +252,17 @@ var _rescued_haulers: Array[Character] = []
 
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
-@onready var stats: Stats = get_node_or_null("Stats")
-@onready var relationships: Relationships = get_node_or_null("Relationships")
-@onready var bubble: Node2D = get_node_or_null("Bubble")
-@onready var vision: Vision = get_node_or_null("Vision")
-@onready var inventory: Inventory = get_node_or_null("Inventory")
-@onready var work_progress: WorkProgress = get_node_or_null("WorkProgress")
-@onready var money_popup: MoneyPopup = get_node_or_null("MoneyPopup")
-@onready var memory: Memory = get_node_or_null("Memory")
+@onready var stats: Stats = get_node_or_null("State/Stats")
+@onready var relationships: Relationships = get_node_or_null("State/Relationships")
+@onready var bubble: Node2D = get_node_or_null("UI/Bubble")
+@onready var vision: Vision = get_node_or_null("Sensing/Vision")
+@onready var inventory: Inventory = get_node_or_null("State/Inventory")
+@onready var work_progress: WorkProgress = get_node_or_null("UI/WorkProgress")
+@onready var money_popup: MoneyPopup = get_node_or_null("UI/MoneyPopup")
+@onready var memory: Memory = get_node_or_null("State/Memory")
 # 只有 Player 掛這個節點——NPC 不需要被引導去任何地方。get_node_or_null()
 # 在沒有這個節點的 Agent 實例上安靜回 null，呼叫端（#305）自己判斷要不要用
-@onready var waypoint_indicator: WaypointIndicator = get_node_or_null("WaypointIndicator")
+@onready var waypoint_indicator: WaypointIndicator = get_node_or_null("UI/WaypointIndicator")
 
 # 最後一次的面向：front / back / right，停下時用來挑 idle 動畫
 var facing := "front"

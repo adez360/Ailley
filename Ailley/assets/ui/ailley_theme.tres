@@ -1,32 +1,73 @@
-[gd_resource type="Theme" load_steps=12 format=3 uid="uid://dktke2k785jv0"]
+[gd_resource type="Theme" load_steps=26 format=3 uid="uid://dktke2k785jv0"]
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_s5seo"]
-content_margin_left = 8.0
-content_margin_top = 3.0
-content_margin_right = 8.0
-content_margin_bottom = 3.0
-bg_color = Color(0.459, 0.349, 0.235, 0.45)
+[ext_resource type="Texture2D" uid="uid://bayao7pw4ppnl" path="res://assets/ui/Sprite sheet for Basic Pack.png" id="1_tgcn8"]
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_60kxs"]
-content_margin_left = 8.0
-content_margin_top = 3.0
-content_margin_right = 8.0
-content_margin_bottom = 3.0
-bg_color = Color(0.459, 0.349, 0.235, 1)
+[sub_resource type="CompressedTexture2D" id="CompressedTexture2D_tgcn8"]
+load_path = "res://.godot/imported/Sprite sheet for Basic Pack.png-bf2b9bae7639a80c22ddd29682f75ee3.ctex"
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ge280"]
-content_margin_left = 8.0
-content_margin_top = 3.0
-content_margin_right = 8.0
-content_margin_bottom = 3.0
-bg_color = Color(0.365, 0.29, 0.22, 1)
+[sub_resource type="AtlasTexture" id="AtlasTexture_5ivoa"]
+atlas = SubResource("CompressedTexture2D_tgcn8")
+region = Rect2(11, 11, 26, 28)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ie1ck"]
-content_margin_left = 8.0
-content_margin_top = 3.0
-content_margin_right = 8.0
-content_margin_bottom = 3.0
-bg_color = Color(0.184, 0.145, 0.133, 1)
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_id50s"]
+texture = SubResource("AtlasTexture_5ivoa")
+texture_margin_left = 4.0
+texture_margin_top = 4.0
+texture_margin_right = 4.0
+texture_margin_bottom = 6.0
+
+[sub_resource type="CompressedTexture2D" id="CompressedTexture2D_5ivoa"]
+load_path = "res://.godot/imported/Sprite sheet for Basic Pack.png-bf2b9bae7639a80c22ddd29682f75ee3.ctex"
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_id50s"]
+atlas = SubResource("CompressedTexture2D_5ivoa")
+region = Rect2(11, 59, 26, 28)
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_h3elb"]
+texture = SubResource("AtlasTexture_id50s")
+texture_margin_left = 4.0
+texture_margin_top = 4.0
+texture_margin_right = 4.0
+texture_margin_bottom = 6.0
+
+[sub_resource type="CompressedTexture2D" id="CompressedTexture2D_h3elb"]
+load_path = "res://.godot/imported/Sprite sheet for Basic Pack.png-bf2b9bae7639a80c22ddd29682f75ee3.ctex"
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_60kxs"]
+atlas = SubResource("CompressedTexture2D_h3elb")
+region = Rect2(11, 155, 26, 28)
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_ie1ck"]
+texture = SubResource("AtlasTexture_60kxs")
+texture_margin_left = 4.0
+texture_margin_top = 4.0
+texture_margin_right = 4.0
+texture_margin_bottom = 6.0
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ge280"]
+atlas = ExtResource("1_tgcn8")
+region = Rect2(11, 107, 26, 28)
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_60kxs"]
+texture = SubResource("AtlasTexture_ge280")
+texture_margin_left = 4.0
+texture_margin_top = 4.0
+texture_margin_right = 4.0
+texture_margin_bottom = 6.0
+
+[sub_resource type="CompressedTexture2D" id="CompressedTexture2D_ie1ck"]
+load_path = "res://.godot/imported/Sprite sheet for Basic Pack.png-bf2b9bae7639a80c22ddd29682f75ee3.ctex"
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_s5seo"]
+atlas = SubResource("CompressedTexture2D_ie1ck")
+region = Rect2(11, 155, 26, 28)
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_s6qld"]
+texture = SubResource("AtlasTexture_s5seo")
+texture_margin_left = 4.0
+texture_margin_top = 4.0
+texture_margin_right = 4.0
+texture_margin_bottom = 6.0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_snxus"]
 content_margin_left = 6.0
@@ -56,17 +97,28 @@ content_margin_right = 0.0
 content_margin_bottom = 2.0
 bg_color = Color(0.459, 0.349, 0.235, 1)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_tgcn8"]
-content_margin_left = 12.0
-content_margin_top = 12.0
-content_margin_right = 12.0
-content_margin_bottom = 12.0
-bg_color = Color(0.851, 0.769, 0.604, 1)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
-border_color = Color(0.184, 0.145, 0.133, 1)
+[sub_resource type="AtlasTexture" id="AtlasTexture_i72qb"]
+atlas = ExtResource("1_tgcn8")
+region = Rect2(201, 105, 30, 30)
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_f4m0v"]
+texture = SubResource("AtlasTexture_i72qb")
+texture_margin_left = 7.0
+texture_margin_top = 7.0
+texture_margin_right = 7.0
+texture_margin_bottom = 7.0
+region_rect = Rect2(0, 0, 30, 30)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_vofe6"]
+atlas = ExtResource("1_tgcn8")
+region = Rect2(201, 105, 30, 30)
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_060gm"]
+texture = SubResource("AtlasTexture_vofe6")
+texture_margin_left = 7.0
+texture_margin_top = 7.0
+texture_margin_right = 7.0
+texture_margin_bottom = 7.0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_i72qb"]
 content_margin_left = 5.0
@@ -95,15 +147,18 @@ border_color = Color(0.184, 0.145, 0.133, 1)
 [resource]
 BubbleLabel/base_type = &"Label"
 BubbleLabel/colors/font_color = Color(0.13333334, 0.13333334, 0.13333334, 1)
-Button/colors/font_color = Color(0.98, 0.953, 0.91, 1)
-Button/colors/font_disabled_color = Color(0.459, 0.349, 0.235, 1)
-Button/colors/font_hover_color = Color(0.98, 0.953, 0.91, 1)
-Button/colors/font_pressed_color = Color(0.851, 0.769, 0.604, 1)
-Button/font_sizes/font_size = 11
-Button/styles/disabled = SubResource("StyleBoxFlat_s5seo")
-Button/styles/hover = SubResource("StyleBoxFlat_60kxs")
-Button/styles/normal = SubResource("StyleBoxFlat_ge280")
-Button/styles/pressed = SubResource("StyleBoxFlat_ie1ck")
+Button/colors/font_color = Color(0, 0, 0, 1)
+Button/colors/font_disabled_color = Color(0.34901962, 0.34901962, 0.34901962, 1)
+Button/colors/font_focus_color = Color(0.15294118, 0.15294118, 0.15294118, 1)
+Button/colors/font_hover_color = Color(0.15161854, 0.15161839, 0.15161842, 1)
+Button/colors/font_hover_pressed_color = Color(0.15294118, 0.15294118, 0.15294118, 1)
+Button/colors/font_pressed_color = Color(0, 0, 0, 1)
+Button/font_sizes/font_size = 12
+Button/styles/disabled = SubResource("StyleBoxTexture_id50s")
+Button/styles/hover = SubResource("StyleBoxTexture_h3elb")
+Button/styles/hover_pressed = SubResource("StyleBoxTexture_ie1ck")
+Button/styles/normal = SubResource("StyleBoxTexture_60kxs")
+Button/styles/pressed = SubResource("StyleBoxTexture_s6qld")
 ConsoleOutput/base_type = &"RichTextLabel"
 ConsoleOutput/styles/normal = SubResource("StyleBoxFlat_snxus")
 HSlider/constants/grabber_offset = 0
@@ -115,7 +170,23 @@ HUDLabel/colors/font_outline_color = Color(0, 0, 0, 1)
 HUDLabel/constants/outline_size = 4
 Label/font_sizes/font_size = 11
 LineEdit/font_sizes/font_size = 11
-PanelContainer/styles/panel = SubResource("StyleBoxFlat_tgcn8")
+MarginContainer/constants/margin_bottom = 5
+MarginContainer/constants/margin_left = 5
+MarginContainer/constants/margin_right = 5
+MarginContainer/constants/margin_top = 5
+MenuLabel/base_type = &"Label"
+MenuLabel/colors/font_shadow_color = Color(0, 0, 0, 0.09411765)
+MenuLabel/constants/shadow_offset_x = 1
+MenuLabel/font_sizes/font_size = 12
+MenuMargin/base_type = &"MarginContainer"
+MenuMargin/constants/margin_bottom = 20
+MenuMargin/constants/margin_left = 20
+MenuMargin/constants/margin_right = 20
+MenuMargin/constants/margin_top = 20
+MenuVBoxContainer/base_type = &"VBoxContainer"
+MenuVBoxContainer/constants/separation = 8
+Panel/styles/panel = SubResource("StyleBoxTexture_f4m0v")
+PanelContainer/styles/panel = SubResource("StyleBoxTexture_060gm")
 RichTextLabel/font_sizes/normal_font_size = 11
 TextEdit/colors/caret_color = Color(0.788, 0.424, 0.137, 1)
 TextEdit/colors/font_color = Color(0.184, 0.145, 0.133, 1)
