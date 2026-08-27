@@ -2221,8 +2221,6 @@ func _reevaluate_once() -> void:
 		# 每個遊戲分鐘都會被選回來重試一次，是這則 issue 要修的洗版問題本身
 		if now_minutes < int(task.get("_retry_blocked_until", -1)):
 			continue
-		if not _preconditions_met(task):
-			continue
 
 		var score := _score(task, now)
 		if score > best_score:
