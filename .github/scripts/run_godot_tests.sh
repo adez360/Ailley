@@ -72,6 +72,38 @@ curl -s -X POST "$MCP_URL" \
 	-H "Mcp-Session-Id: $SESSION_ID" \
 	-d '{"jsonrpc":"2.0","id":2,"method":"notifications/initialized"}' > /dev/null
 
+# HTTP server 就緒不代表編輯器真的連上了——godot_ai 外掛是透過 WebSocket
+# 橋接到這個 server，外掛開機、連線建立需要額外時間。session_manage(list)
+# 回報至少一個 session 才代表真的可以打 test_run，不然會拿到
+# PLUGIN_DISCONNECTED（實測踩過：initialize 立刻成功，但編輯器橋接還沒好）
+echo "== 等編輯器 WebSocket 橋接連上 MCP server =="
+bridged=""
+for i in $(seq 1 "$BOOT_TIMEOUT_SEC"); do
+	if ! kill -0 "$EDITOR_PID" 2>/dev/null; then
+		echo "編輯器行程提前結束，開機失敗，log：" >&2
+		cat /tmp/godot_editor.log >&2
+		exit 1
+	fi
+	SESSION_OUT=$(curl -s --max-time 3 -X POST "$MCP_URL" \
+		-H "Content-Type: application/json" \
+		-H "Accept: application/json, text/event-stream" \
+		-H "Mcp-Session-Id: $SESSION_ID" \
+		-d '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"session_manage","arguments":{"op":"list"}}}' \
+		2>/dev/null || true)
+	COUNT=$(echo "$SESSION_OUT" | grep '^data:' | sed 's/^data: //' | jq -r '.result.content[0].text // empty' | jq -r '.count // 0' 2>/dev/null || echo 0)
+	if [ "$COUNT" -gt 0 ] 2>/dev/null; then
+		bridged="1"
+		break
+	fi
+	sleep 1
+done
+
+if [ -z "$bridged" ]; then
+	echo "等超過 ${BOOT_TIMEOUT_SEC} 秒編輯器還沒橋接上 MCP server，開機 log：" >&2
+	cat /tmp/godot_editor.log >&2
+	exit 1
+fi
+
 echo "== 呼叫 test_run =="
 RAW=$(curl -s --max-time "$((TEST_TIMEOUT_SEC + 15))" -X POST "$MCP_URL" \
 	-H "Content-Type: application/json" \
