@@ -2864,6 +2864,16 @@ func _pursue_talk_task() -> void:
 			push_warning("Agent %s: 搭話 %s 失敗（%s）" % [
 				character_name, target.character_name, failure
 			])
+			# 失敗原因要寫回 last_action_result，下一輪決策的 _self_block()
+			# 才看得到剛才發生什麼事（issue #604）：原本這裡只 push_warning，
+			# LLM 完全不知道搭話失敗、更不知道為什麼，容易一直重選同一個
+			# 注定失敗的 talk。沿用既有 FAILURE_MESSAGE_KEYS／L10n 查表
+			# （跟 report_action_failure() 同一套），查不到就顯示原始碼，
+			# 這是餵給模型的資料不是玩家看的文案，一致的模板化格式比
+			# 手寫的細緻語氣更重要
+			var failure_key: String = FAILURE_MESSAGE_KEYS.get(failure, "")
+			var failure_text: String = L10n.t(failure_key) if not failure_key.is_empty() else failure
+			last_action_result = "跟 %s 搭話失敗：%s" % [target.character_name, failure_text]
 			_track_action_result_for_facts("talk", false)
 		return
 
@@ -3584,7 +3594,7 @@ func _pursue_persuade_task() -> void:
 		last_action_result = "你試著說服 %s，等他自己想清楚" % target.character_name
 		_track_action_result_for_facts("persuade", true)
 		_persuade_delivered = true
-		_ask_player_persuade(target as Player, reason, proposed_task)
+		_ask_player_persuade(target, reason, proposed_task)
 		return
 
 	var recorded: bool = (target as Agent).try_record_pending_persuade(character_name, character_id, reason, proposed_task)
@@ -3697,7 +3707,16 @@ func _describe_task_intent(task: Dictionary) -> String:
 # 不 await 這個函式，跟 persuade 本身「送達」與「被不被說動」是兩個時間點
 # 分開的既有設計一致——送達當下就讓任務照 duration 收尾，彈窗的結果晚點
 # 才會回來，兩者不互相卡
-func _ask_player_persuade(player: Player, reason: String, proposed_task: Dictionary) -> void:
+func _ask_player_persuade(player: Character, reason: String, proposed_task: Dictionary) -> void:
+	# 型別故意寫 Character 不寫 Player（issue #603）：agent.gd 對兄弟類別
+	# Player 做靜態型別依賴，若 agent.gd 解析時排在 player.gd 的全域
+	# class_name 註冊之前（快取過舊、冷啟動、CI 等情境），會直接編譯失敗，
+	# 連帶讓全部依賴 agent.gd 的腳本一起壞掉、所有 NPC 的 Vision 都掛不上。
+	# 用 has_method() 在執行期才檢查，不在編譯期建立跨檔案依賴
+	if not player.has_method("request_persuade_response"):
+		push_warning("Agent %s: 說服目標不是 Player，缺少 request_persuade_response()" % character_name)
+		return
+
 	var text: String
 	if proposed_task.is_empty():
 		text = "%s 試著說服你：%s，你被說動了嗎？" % [character_name, reason]
