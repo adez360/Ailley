@@ -36,8 +36,22 @@ func _on_pause_visibility_changed() -> void:
 # 情況下弄丟進度（CodeRabbit review on #587 抓到）。change_scene_to_file()
 # 不會自動把 paused 重設回 false——不先解除的話主選單場景會在暫停狀態下
 # 開場，按鈕收不到輸入。
+#
+# Pause 的 process_mode=3（見 hud.tscn），暫停期間按鈕仍會處理輸入——
+# await 存檔期間連續按 Exit 會疊出多個存檔流程，各自結束後都呼叫
+# change_scene_to_file()（CodeRabbit review on #587 抓到）。用旗標＋停用
+# 按鈕擋掉重入，存檔失敗要復原成可以再按一次
+var _exit_in_flight := false
+
+
 func _on_exit_pressed() -> void:
+	if _exit_in_flight:
+		return
+	_exit_in_flight = true
+	exit_button.disabled = true
 	if not await GameManager.save_before_leaving():
+		_exit_in_flight = false
+		exit_button.disabled = false
 		return
 	get_tree().paused = false
 	get_tree().change_scene_to_file(MAIN_MENU_SCENE)
