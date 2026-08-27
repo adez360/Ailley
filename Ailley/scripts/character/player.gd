@@ -36,7 +36,7 @@ var _pending_lines: Array[String] = []
 ## 還是「還沒輪到，先緩衝」（#207）
 var _turn_waiting := false
 
-@onready var interact_area: Area2D = $InteractArea
+@onready var interact_area: Area2D = $Sensing/InteractArea
 
 ## InteractArea 目前偵測到的候選（工作站／販賣機，靠 collision layer "interactable"
 ## 篩選，見 project.godot 的 layer_3）。角色候選不走這裡——直接沿用

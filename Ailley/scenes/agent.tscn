@@ -1,4 +1,4 @@
-[gd_scene load_steps=39 format=3 uid="uid://b5yxvqqruap3c"]
+[gd_scene load_steps=40 format=3 uid="uid://b5yxvqqruap3c"]
 
 [ext_resource type="Script" uid="uid://brs4ddsru544r" path="res://scripts/character/agent.gd" id="1_rthts"]
 [ext_resource type="Texture2D" uid="uid://pcq7ouq5pyt8" path="res://assets/characters/16x16 Idle-Sheet.png" id="2_ssbs3"]
@@ -9,6 +9,7 @@
 [ext_resource type="Script" uid="uid://xne7q5cyfgre" path="res://scripts/character/vision.gd" id="7_jln3r"]
 [ext_resource type="Script" uid="uid://rojhhinafyq2" path="res://scripts/character/inventory.gd" id="8_iuhnp"]
 [ext_resource type="Script" uid="uid://cebdk6kq4c7ip" path="res://scripts/ui/work_progress.gd" id="9_52ahs"]
+[ext_resource type="Texture2D" uid="uid://psuc66kghr5u" path="res://assets/ui/chatbox-1.png" id="10_f14ir"]
 [ext_resource type="Script" uid="uid://t6axa01hiamc" path="res://scripts/ui/money_popup.gd" id="10_y08pw"]
 [ext_resource type="Script" uid="uid://l3boughq0c6q" path="res://scripts/character/memory.gd" id="11_q3gef"]
 
@@ -233,51 +234,72 @@ offset = Vector2(0, -12)
 position = Vector2(0, 6)
 shape = SubResource("CircleShape2D_k443m")
 
-[node name="Stats" type="Node" parent="."]
+[node name="State" type="Node" parent="."]
+
+[node name="Stats" type="Node" parent="State"]
 script = ExtResource("4_gmg8n")
 
-[node name="Relationships" type="Node" parent="."]
+[node name="Relationships" type="Node" parent="State"]
 script = ExtResource("5_jln3r")
 
-[node name="Bubble" parent="." instance=ExtResource("6_porbj")]
-z_index = 10
-position = Vector2(0, -10)
+[node name="Inventory" type="Node" parent="State"]
+script = ExtResource("8_iuhnp")
 
-[node name="Vision" type="Area2D" parent="."]
+[node name="Memory" type="Node" parent="State"]
+script = ExtResource("11_q3gef")
+
+[node name="Sensing" type="Node" parent="."]
+
+[node name="Vision" type="Area2D" parent="Sensing"]
 position = Vector2(0, 6)
 collision_layer = 0
 collision_mask = 2
 script = ExtResource("7_jln3r")
 
-[node name="CollisionShape2D" type="CollisionShape2D" parent="Vision"]
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Sensing/Vision"]
 shape = SubResource("CircleShape2D_porbj")
 
-[node name="Inventory" type="Node" parent="."]
-script = ExtResource("8_iuhnp")
+[node name="UI" type="Node" parent="."]
 
-[node name="WorkProgress" type="Node2D" parent="."]
+[node name="Bubble" parent="UI" instance=ExtResource("6_porbj")]
+z_index = 10
+position = Vector2(0, -10)
+
+[node name="Box" type="NinePatchRect" parent="UI/Bubble"]
+texture = ExtResource("10_f14ir")
+region_rect = Rect2(7, 7, 37, 36)
+patch_margin_left = 10
+patch_margin_top = 9
+patch_margin_right = 11
+patch_margin_bottom = 12
+
+[node name="Label" type="Label" parent="UI/Bubble/Box"]
+layout_mode = 0
+theme_type_variation = &"BubbleLabel"
+horizontal_alignment = 1
+autowrap_mode = 3
+clip_text = true
+
+[node name="WorkProgress" type="Node2D" parent="UI"]
 z_index = 10
 position = Vector2(0, -14)
 script = ExtResource("9_52ahs")
 
-[node name="Background" type="ColorRect" parent="WorkProgress"]
+[node name="Background" type="ColorRect" parent="UI/WorkProgress"]
 mouse_filter = 2
 
-[node name="Fill" type="ColorRect" parent="WorkProgress"]
+[node name="Fill" type="ColorRect" parent="UI/WorkProgress"]
 mouse_filter = 2
 
-[node name="MoneyPopup" type="Node2D" parent="."]
+[node name="MoneyPopup" type="Node2D" parent="UI"]
 z_index = 10
 position = Vector2(0, -18)
 script = ExtResource("10_y08pw")
 
-[node name="Label" type="Label" parent="MoneyPopup"]
+[node name="Label" type="Label" parent="UI/MoneyPopup"]
 offset_left = -14.0
 offset_top = -7.0
 offset_right = 14.0
 offset_bottom = 7.0
 horizontal_alignment = 1
 vertical_alignment = 1
-
-[node name="Memory" type="Node" parent="."]
-script = ExtResource("11_q3gef")
