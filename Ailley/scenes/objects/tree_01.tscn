@@ -4,17 +4,17 @@
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_825fv"]
 atlas = ExtResource("1_cq36i")
-region = Rect2(0, 0, 16, 32)
+region = Rect2(1, 0, 14, 28)
 margin = Rect2(0, 2, 0, 0)
 
 [sub_resource type="CircleShape2D" id="CircleShape2D_jjgup"]
 radius = 3.1622777
 
-[node name="Node2D" type="Node2D"]
+[node name="Tree_01" type="Node2D"]
 
 [node name="Sprite2D" type="Sprite2D" parent="."]
 texture = SubResource("AtlasTexture_825fv")
-offset = Vector2(0, -11)
+offset = Vector2(0, -14)
 
 [node name="StaticBody2D" type="StaticBody2D" parent="."]
 
