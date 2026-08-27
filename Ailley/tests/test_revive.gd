@@ -130,7 +130,8 @@ func test_revive_after_free_window_insufficient_money_fails() -> void:
 	target.position = reviver.position
 	target.is_dead = true
 	target.death_at = _death_at_hours_ago(25.0)
-	# reviver 沒加錢，money 預設 0
+	# Inventory 預設有 DEFAULT_MONEY，先花光讓餘額真的不足
+	reviver.inventory.spend(reviver.inventory.get_money())
 
 	var result := reviver.revive(target)
 
