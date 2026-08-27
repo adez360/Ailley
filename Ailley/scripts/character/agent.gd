@@ -2322,6 +2322,13 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 
 	# current_still_valid：舊任務還在自己視窗內、沒過期，卻在這裡被換掉，
 	# 代表它是被 best 搶占的，not (自然結束)——today_log 記 ok=false（#366）
+	#
+	# 前提失效時 best 若是 idle 或沒有 place（CodeRabbit review）：_select()
+	# 只覆寫 _current_task，_pursue_current_task() 對這種任務直接 return，
+	# 不會呼叫 stop_moving()，角色會沿用舊任務留下的路徑繼續移動。這裡在
+	# 換任務前主動停下，讓「前提失效」跟其他讓位情形一樣立刻停止舊行為
+	if not current_still_valid:
+		stop_moving()
 	_select(best, now_minutes, not current_still_valid)
 
 ## 《01-2》§3 完整表格，數字照抄，含目前還沒接上執行邏輯的動作（等落地時

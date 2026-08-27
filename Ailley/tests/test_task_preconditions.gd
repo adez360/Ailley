@@ -154,3 +154,43 @@ func test_current_task_treated_as_invalid_when_preconditions_become_false() -> v
 
 	assert_eq(_agent._current_task.get("id", ""), "fallback",
 			"目前任務前提失效後，優先度較低的候選也應該能換上")
+
+
+func test_stops_moving_when_preconditions_fail_and_fallback_has_no_place() -> void:
+	# CodeRabbit review（PR #530）：fallback 是 idle／沒有 place 時，_select()
+	# 只覆寫 _current_task，_pursue_current_task() 對這種任務直接 return，
+	# 不會呼叫 stop_moving()——角色會沿用舊任務留下的路徑繼續移動。
+	# _consider_switch() 判定前提失效時要主動停下，不能靠 _pursue_current_task()
+	# 事後收尾
+	_agent.stats.values["satiety"] = 50.0
+	var current_task := {
+		"id": "current",
+		"action": "move_to",
+		"priority": 10.0,
+		"window": null,
+		"expires_at": 0,
+		"source": "llm",
+		"params": {"place": "loc_tavern"},
+		"preconditions": [{"field": "stats.satiety", "op": "<", "value": 80.0}],
+	}
+	_agent._current_task = current_task
+	_agent._current_task_started_at = 0
+	# 模擬「正在往舊任務的地點走」：路徑還沒走完
+	_agent._path = PackedVector2Array([Vector2.ZERO, Vector2(100.0, 0.0)])
+	_agent._path_index = 0
+	assert_true(_agent.is_moving(), "測試前置：角色應處於移動中")
+
+	var fallback_task := {
+		"id": "fallback",
+		"action": "idle",
+		"priority": 1.0,
+		"window": null,
+		"expires_at": 0,
+		"source": "schedule",
+		"preconditions": [],
+	}
+
+	_agent.stats.values["satiety"] = 90.0  # current 的前提從成立變成不成立
+	_agent._consider_switch(fallback_task, 1.0, "12:00", 720)
+
+	assert_false(_agent.is_moving(), "前提失效換成 idle fallback 後，舊路徑應立刻停止")
