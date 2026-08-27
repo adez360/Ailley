@@ -79,7 +79,7 @@ const DRINK_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法喝�
 const DRINK_NO_DRINK := "NO_DRINK"		# 背包裡沒有 ItemDatabase 分類為 drink 的物品
 const DRINK_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 hydration，不能先扣飲品
 
-## use_selected_item() 的失敗原因碼，形狀比照 EAT_*／DRINK_*（#611）。除了這三個，
+## use_selected_item() 的失敗原因碼，形狀比照 EAT_*／DRINK_*（#611）。除了這四個，
 ## use_selected_item() 還會**原樣轉傳** Inventory.use_item() 自己的原因碼
 ## （`NOT_CONSUMABLE`、`INVALID_EFFECT`、`REMOVE_FAILED`……），跟 buy_from() 轉傳
 ## `NOT_ENOUGH`／`NO_SPACE` 同一個理由，不重新取名
@@ -87,6 +87,10 @@ const USE_ITEM_OK := ""
 const USE_ITEM_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法使用道具
 const USE_ITEM_NO_SELECTION := "NO_SELECTION"	# 快捷欄沒選格，或選到的是空格
 const USE_ITEM_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復數值
+const USE_ITEM_IS_DEAD := "IS_DEAD"		# 死屍不能使用道具（CodeRabbit review 抓到，PR #615）——
+						# 跟 talk_to() 擋自己是死屍發起搭話同一種漏洞：is_dead
+						# 之後沒有任何地方會停用玩家的 _unhandled_input()，
+						# 死屍照樣能吃/喝
 
 const GIVE_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE 一樣的距離門檻，2 格
 
@@ -152,6 +156,7 @@ const FAILURE_MESSAGE_KEYS := {
 	"INVALID_AMOUNT": "FAIL_INVALID_AMOUNT",
 	"NO_SPACE": "FAIL_NO_SPACE",
 	"NO_SELECTION": "FAIL_NO_SELECTION",
+	"IS_DEAD": "FAIL_IS_DEAD",
 }
 
 ## 滑鼠指到時套在 sprite 上的描邊
@@ -1391,6 +1396,8 @@ func drink() -> String:
 # 是不是消耗品交給 inventory.use_item() 的 is_consumable 參數判斷，這裡只
 # 負責把分類轉成布林值；其餘原因碼直接轉傳，見上面 USE_ITEM_* 常數的說明
 func use_selected_item() -> String:
+	if is_dead:
+		return USE_ITEM_IS_DEAD
 	if inventory == null:
 		return USE_ITEM_NO_INVENTORY
 
