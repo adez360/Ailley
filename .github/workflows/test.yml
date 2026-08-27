@@ -1,8 +1,7 @@
 name: Godot Tests
 
 on:
-  push:
-    branches: [main]
+  push: {}
   pull_request:
   workflow_dispatch: {}
 
