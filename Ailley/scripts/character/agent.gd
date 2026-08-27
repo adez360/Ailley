@@ -1970,7 +1970,15 @@ func _queue_reaction_fact_line(line: String) -> void:
 func _queue_recalled(query: String) -> void:
 	if memory == null:
 		return
+	# await 之前先記住世代（CodeRabbit review 抓到）：跟 _request_next_decision()
+	# 等既有 my_generation 比對同一招——load_save_data() 讀檔時會遞增
+	# _decision_generation，這裡如果不比對，讀檔前排出去、讀檔後才回來的
+	# 語意檢索結果會混進讀檔後全新的狀態裡，變成一句跟目前記憶／人格對不上的
+	# 過期內容
+	var my_generation := _decision_generation
 	var hits: Array[Dictionary] = await memory.search_l3(query)
+	if is_dead or my_generation != _decision_generation:
+		return
 	if hits.is_empty():
 		_pending_recalled.append(PromptBuilder.L3_RECALL_FALLBACK)
 		return

@@ -55,10 +55,18 @@ LLM 一律走 `AIService`（`scripts/ai/ai_service.gd`）→ Godot ↔ Sidecar
 ### Embedding（L3 語意記憶檢索，issue #571）：獨立於對話 provider
 
 2026-08-26 拍板：embedding 是獨立於「玩家對話走 Local 還是 Cloud」的第三條線，
-**不管玩家選哪個對話 provider，embedding 一律走本機**。理由：embedding 模型
-遠比對話模型輕量（bge-small 幾百 MB、CPU 就能跑），Cloud 玩家也負擔得起在
-自己機器常駐這一支，換來的是兩種玩家的記憶內容都不出本機，隱私一致，也不用
-每次寫入記憶都多一筆對外 API 呼叫的延遲與費用。
+**不管玩家選哪個對話 provider，embedding 這個計算步驟本身一律走本機**。理由：
+embedding 模型遠比對話模型輕量（bge-small 幾百 MB、CPU 就能跑），Cloud 玩家
+也負擔得起在自己機器常駐這一支，換來的是「產生向量」這件事兩種玩家都不用
+多一筆對外 API 呼叫的延遲與費用，也不用把記憶內容送給第三方 embedding 服務。
+
+> [!warning] 這不是「記憶內容整體都不出本機」的保證
+> `search_l3()` 命中的記憶**文字內容**會被塞進 `context.memory.recalled`，
+> 跟既有的 `recent`(L2)／`core`(L4) 一樣，整包 envelope 送進 `AIService.request()`，
+> 送去玩家選的哪個對話 provider（Local／Cloud）就跟哪個一樣，這裡沒有額外
+> 攔截。跟 L2／L4 記憶內容既有的行為一致，不是 L3 才有的例外，也沒有計畫
+> 幫 L3 加特殊隔離——2026-08-27 拍板維持這個一致性，只修正這裡過度承諾的
+> 文件敘述，不改變傳輸行為（CodeRabbit review 抓到，見 issue #571 討論）
 
 - 模型：`bge-small-zh-v1.5-q8_0.gguf`，`llama-server --embedding --pooling cls`
   服務 OpenAI 相容的 `/v1/embeddings`。這組模型檔案原本就在遠端 GPU 機器
@@ -131,9 +139,13 @@ llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key
 		"local":      {"base_url": "http://127.0.0.1:8080/v1", "api_key": "", "model": "qwen2.5-7b-instruct", "timeout": 10.0, "format_guaranteed": true},
 		"openrouter": {"base_url": "https://openrouter.ai/api/v1", "api_key": "sk-or-v1-…", "model": "openai/gpt-4o-mini", "timeout": 10.0}
 	},
+	"embedding": {"base_url": "http://127.0.0.1:8081/v1", "model": "bge-small-zh-v1.5-q8_0.gguf", "timeout": 10.0},
 	"min_interval_sec": 30.0
 }
 ```
+
+`embedding` 是跟 `providers` 平行的頂層區塊（見上方「Embedding」一節），不是
+`providers` 字典裡的一個 provider——這條線不受 `default_provider` 選擇影響。
 
 `min_interval_sec` / `max_calls_per_game_day` / `dialogue_exempt` 維持全域，
 **不逐 provider**：那是角色的成本控管，算在 `requester_id` 上，同一隻角色不管
