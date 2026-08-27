@@ -427,6 +427,20 @@ func deploy_from_library(id: String, as_player: bool = false) -> Character:
 			character.rebuild_provider()
 
 	entry["deployed"] = true
+
+	# main_scene.gd::_apply_startup_ai_state() 只在開機時跑一次，只認開機
+	# 當下已經在 agents group 裡的節點——投放出來的角色那時候還不存在，
+	# 永遠不會被那個迴圈打開 llm_decision_enabled，會是完全靜止、不做任何
+	# 決策的殭屍角色（issue #598）。這裡比照它的 readiness 判斷，在投放
+	# 當下決定要不要開。不用等 AIService.await_readiness_settled()：世界
+	# 這時候早就跑起來了，開機那次探測老早就結算完畢。化身者（as_player）
+	# 是 Player 節點、沒有這個欄位，as Agent 轉型會是 null 自然跳過
+	var agent := character as Agent
+	if agent != null:
+		var readiness := AIService.get_readiness(agent.get_provider_name())
+		if readiness.get("ready", false):
+			agent.debug_set_llm_decision(true)
+
 	return character
 
 
