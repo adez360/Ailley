@@ -390,18 +390,35 @@ static func _is_loopback_url(url: String) -> bool:
 		# 對不上
 		var suffix := host.substr(bracket_end + 1)
 		if not suffix.is_empty():
-			if not suffix.begins_with(":"):
-				return false
-			if not suffix.substr(1).is_valid_int():
+			if not suffix.begins_with(":") or not _is_valid_port(suffix.substr(1)):
 				return false
 
 		host = host.substr(0, bracket_end + 1)
 	else:
 		var colon_index := host.rfind(":")
 		if colon_index != -1:
+			# 冒號後面也要驗證是合法 port 才能截掉（CodeRabbit review 抓到
+			# 的同一類問題，這裡原本完全沒驗證：is_valid_int() 連 ":-1" 這種
+			# 負數、":65536" 這種超出 TCP port 範圍的值都會判定通過，兩者都
+			# 不是真正能用的 port）——冒號後面不是合法 port 時，代表這整段
+			# 不是「host:port」的寫法，不能只取冒號前半段去比對，直接判定
+			# 不是 loopback
+			if not _is_valid_port(host.substr(colon_index + 1)):
+				return false
 			host = host.substr(0, colon_index)
 
 	return host == "127.0.0.1" or host == "localhost" or host == "[::1]" or host == "::1"
+
+
+## TCP port 合法範圍是 1-65535（CodeRabbit review 抓到：is_valid_int() 只驗證
+## 字串是不是整數格式，不驗證數值範圍，":-1"／":65536" 這種不合法的 port 會被
+## 誤判通過）。is_valid_int() 允許前導 "+"／"-"，這裡額外用 int() 轉換後做
+## 範圍檢查，一次擋掉格式與範圍兩種問題
+static func _is_valid_port(port_str: String) -> bool:
+	if not port_str.is_valid_int():
+		return false
+	var port := int(port_str)
+	return port >= 1 and port <= 65535
 
 
 func _parse_provider(provider_name: String, data: Dictionary) -> Provider:
