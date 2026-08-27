@@ -48,9 +48,15 @@ func test_proposed_task_included_when_given() -> void:
 
 func test_accepted_again_after_pending_cleared() -> void:
 	var target := track(Agent.new()) as Agent
-	target.try_record_pending_persuade("阿吉", "aji", "一起去吃飯", {})
-	target._pending_persuade = {}  # 模擬送達並被 _fact_lines_summary() 消費後清空
+	var first_accepted := target.try_record_pending_persuade("阿吉", "aji", "一起去吃飯", {})
+
+	# 用真正清空 _pending_persuade 的生產路徑 _resolve_pending_persuade()，
+	# 不是直接指派——這樣測試才驗證得到「production resolver 真的有清掉」，
+	# 不會在 resolver 停止清空時還誤判通過。persuaded=false 避免碰到
+	# _now_minutes()／GameClock（見檔頭說明的涵蓋範圍限制）
+	target._resolve_pending_persuade({"persuaded": false})
 
 	var accepted := target.try_record_pending_persuade("小滿", "xiaoman", "去打獵", {})
 
+	assert_true(first_accepted, "第一次嘗試應被接受")
 	assert_true(accepted, "清空舊記錄後應能接受新的說服嘗試")

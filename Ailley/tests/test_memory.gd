@@ -160,6 +160,10 @@ func test_get_save_data_keeps_only_l2_and_l4() -> void:
 	var saved := memory.get_save_data()
 
 	assert_eq(saved["entries"].size(), 2, "只有 level 2／4 應被存檔，level 3 不存")
+	var saved_levels: Array[int] = []
+	for saved_entry in saved["entries"]:
+		saved_levels.append(saved_entry["level"])
+	assert_true(saved_levels.has(2) and saved_levels.has(4), "存檔應保留 level 2 與 level 4，而不是巧合湊出同樣的筆數")
 
 
 func test_load_save_data_restores_l2_and_l4_and_clears_l1() -> void:
@@ -167,22 +171,27 @@ func test_load_save_data_restores_l2_and_l4_and_clears_l1() -> void:
 	memory.push_l1("舊的 L1，讀檔後應被清掉")
 	var entry := _make_entry(2, "neutral", 80.0, 5)
 	entry["id"] = 9
+	var l4_entry := _make_entry(4, "neutral", 90.0, 6)
+	l4_entry["id"] = 10
 
-	memory.load_save_data({"entries": [entry]})
+	memory.load_save_data({"entries": [entry, l4_entry]})
 
 	assert_eq(memory.l1.size(), 0, "讀檔應清空 L1")
-	assert_eq(memory.entries.size(), 1, "應還原這一筆記憶")
-	assert_eq(memory._next_id, 9, "_next_id 應同步成存檔裡最大的 id")
+	assert_eq(memory.get_by_level(2).size(), 1, "應還原 level 2 記憶")
+	assert_eq(memory.get_by_level(4).size(), 1, "應還原 level 4 記憶")
+	assert_eq(memory._next_id, 10, "_next_id 應同步成存檔裡最大的 id")
 
 
 func test_load_save_data_skips_malformed_entries() -> void:
 	var memory := track(Memory.new()) as Memory
 	var valid := _make_entry(2)
+	valid["id"] = 1
 	var wrong_level := _make_entry(3)  # level 3 不合法，該被跳過
 
 	memory.load_save_data({"entries": [valid, wrong_level, "not_a_dict"]})
 
 	assert_eq(memory.entries.size(), 1, "level 不是 2/4 或格式錯誤的項目應被跳過")
+	assert_eq(memory.entries[0]["id"], 1, "留下的應是那筆合法的 level 2 記憶，不是跳過後恰好剩一筆")
 
 
 func test_load_save_data_with_missing_entries_key_results_in_empty() -> void:
