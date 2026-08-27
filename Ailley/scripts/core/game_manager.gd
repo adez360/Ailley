@@ -438,14 +438,25 @@ func deploy_from_library(id: String, as_player: bool = false) -> Character:
 # ::_cmd_spawn），生出來的角色那時候都還不存在，永遠不會被那個迴圈打開
 # llm_decision_enabled，會是完全靜止、不做任何決策的殭屍角色（issue #598）。
 # 這裡比照它的 readiness 判斷，在生成當下決定要不要開，讓每條會動態生成
-# 角色的路徑都共用同一道關卡，不用各自補一份。不用等
-# AIService.await_readiness_settled()：世界這時候早就跑起來了，開機那次
-# 探測老早就結算完畢。呼叫時機要在 decision_source／rebuild_provider() 都
-# 設定完之後，不然 get_provider_name() 撈到的還是預設值。化身者（as_player）
-# 是 Player 節點、沒有這個欄位，as Agent 轉型會是 null 自然跳過
+# 角色的路徑都共用同一道關卡，不用各自補一份。
+#
+# 一定要先 await AIService.await_readiness_settled()：_respawn_character()
+# 是從 main_scene.gd::_apply_continue() 呼叫的，而那一步發生在
+# _apply_startup_ai_state() 自己的 await_readiness_settled() 之前——這個
+# 時間點探測可能根本還沒跑完，直接查 get_readiness() 會抓到假的「未就緒」
+# 快照，而且沒有人會重試（CodeRabbit review 抓到）。await_readiness_settled()
+# 本身在探測已結算時會立刻回、不會多等，所以投放／debug 生成這些「早就
+# 結算完畢」的路徑呼叫這裡不會感覺到延遲。await 期間節點可能被場景換掉
+# 或角色本身被移除（is_instance_valid 防呆）。呼叫時機要在
+# decision_source／rebuild_provider() 都設定完之後，不然 get_provider_name()
+# 撈到的還是預設值。化身者（as_player）是 Player 節點、沒有這個欄位，
+# as Agent 轉型會是 null 自然跳過
 func activate_llm_decision_if_ready(character: Character) -> void:
 	var agent := character as Agent
 	if agent == null:
+		return
+	await AIService.await_readiness_settled()
+	if not is_instance_valid(agent):
 		return
 	var readiness := AIService.get_readiness(agent.get_provider_name())
 	if readiness.get("ready", false):
