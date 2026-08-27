@@ -26,9 +26,13 @@ static func ensure_grave_id(corpse: Character) -> int:
 	if not existing.is_empty():
 		return int(existing[0]["grave_id"])
 
+	var location_id := _ensure_cemetery_location_id()
+	if location_id.is_empty():
+		return -1
+
 	var grave_data := {
 		"npc_id": npc_id,
-		"location_id": _ensure_cemetery_location_id(),
+		"location_id": location_id,
 		"buried_by": corpse.buried_by,
 		"buried_tick": corpse.buried_tick,
 	}
@@ -47,6 +51,10 @@ static func ensure_grave_id(corpse: Character) -> int:
 ## home_001 佔位列，"loc_cemetery" 這個規格書 §6 寫的 id 從沒被建過（稽查
 ## #385 時發現，跟 grave 表本身沒人寫過是同一種缺口）。這裡照抄同一招：
 ## 找不到就懶建立一筆最小可用的佔位列，不等 location 表真正跟世界地圖同步
+## 回傳空字串代表建立失敗——呼叫端（ensure_grave_id）要能分辨「真的建好了」
+## 跟「建立失敗但硬塞一個 id 回去」，不然失敗的 location 列會讓 grave 帶著
+## 一個實際上不存在的外鍵去 INSERT，錯誤會延後到 grave 那層才爆、訊息不直觀
+## （CodeRabbit review 抓到，PR #622）
 static func _ensure_cemetery_location_id() -> String:
 	const CEMETERY_LOCATION_ID := "loc_cemetery"
 
@@ -56,7 +64,7 @@ static func _ensure_cemetery_location_id() -> String:
 	if not existing.is_empty():
 		return CEMETERY_LOCATION_ID
 
-	DatabaseManager.insert("location", {
+	if not DatabaseManager.insert("location", {
 		"location_id": CEMETERY_LOCATION_ID,
 		"name": "Cemetery",
 		"description": "The village cemetery.",
@@ -64,7 +72,8 @@ static func _ensure_cemetery_location_id() -> String:
 		"capacity": 6,
 		"danger": 0,
 		"is_active": 1,
-	})
+	}):
+		return ""
 	return CEMETERY_LOCATION_ID
 
 
