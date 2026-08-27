@@ -1752,6 +1752,11 @@ func _on_perform_finished(completed: bool) -> void:
 		return
 	if _current_task.get("source", "") == "llm":
 		_remove_task(_current_task.get("id", ""))
+	# 表演結束前殘留的 place-pursuit 狀態要一起清（CodeRabbit review 抓到）：
+	# 不清的話，下一筆真正的 place 任務會誤讀到這場表演之前留下的
+	# _pursued_place／_pursuit_done，把還沒抵達新地點誤判成「已經到過了」
+	_pursued_place = ""
+	_pursuit_done = false
 	_clear_current_task(true)
 	_push_daily_event("你的表演結束了。")
 	if llm_decision_enabled and not _awaiting_decision:
@@ -2035,6 +2040,14 @@ func _queue_reaction_fact_line(line: String) -> void:
 ## 或走出視野）就從表裡移除，讓下一場表演可以重新被注意到
 func _scan_for_performers() -> void:
 	if is_dead or is_in_conversation() or not llm_decision_enabled or vision == null:
+		# 整輪掃描都跳過時，_tip_prompted_performers 也要清空（CodeRabbit
+		# review 抓到）：不清的話，某個表演者的舊標記會一直卡著——如果他
+		# 這段跳過期間表演結束又重新開始一場新的，等掃描恢復時，下面
+		# 「不再表演的對象從表裡移除」那段清理邏輯根本沒機會跑到，新的
+		# 這場表演會被誤判成「已經問過」，永遠不會真的觸發打賞決策。這裡
+		# 沒辦法在跳過時照常判斷誰還在表演（vision 可能是 null），乾脆全部
+		# 清空，讓掃描恢復時當作全新一輪重新判斷
+		_tip_prompted_performers.clear()
 		return
 
 	var visible := vision.get_visible_characters()
