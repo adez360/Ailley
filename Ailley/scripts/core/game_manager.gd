@@ -427,7 +427,54 @@ func deploy_from_library(id: String, as_player: bool = false) -> Character:
 			character.rebuild_provider()
 
 	entry["deployed"] = true
+	activate_llm_decision_if_ready(character)
+
 	return character
+
+
+# main_scene.gd::_apply_startup_ai_state() 只在開機時跑一次，只認開機當下
+# 已經在 agents group 裡的節點——不管是投放（deploy_from_library()）、還原
+# 存檔（_respawn_character()）或 debug 主控台直接生成（debug_console.gd
+# ::_cmd_spawn），生出來的角色那時候都還不存在，永遠不會被那個迴圈打開
+# llm_decision_enabled，會是完全靜止、不做任何決策的殭屍角色（issue #598）。
+# 這裡比照它的 readiness 判斷，在生成當下決定要不要開，讓每條會動態生成
+# 角色的路徑都共用同一道關卡，不用各自補一份。
+#
+# 一定要先 await AIService.await_readiness_settled()：_respawn_character()
+# 是從 main_scene.gd::_apply_continue() 呼叫的，而那一步發生在
+# _apply_startup_ai_state() 自己的 await_readiness_settled() 之前——這個
+# 時間點探測可能根本還沒跑完，直接查 get_readiness() 會抓到假的「未就緒」
+# 快照，而且沒有人會重試（CodeRabbit review 抓到）。await_readiness_settled()
+# 本身在探測已結算時會立刻回、不會多等，所以投放／debug 生成這些「早就
+# 結算完畢」的路徑呼叫這裡不會感覺到延遲。await 期間節點可能被場景換掉
+# 或角色本身被移除（is_instance_valid 防呆）。呼叫時機要在
+# decision_source／rebuild_provider() 都設定完之後，不然 get_provider_name()
+# 撈到的還是預設值。化身者（as_player）是 Player 節點、沒有這個欄位，
+# as Agent 轉型會是 null 自然跳過
+func activate_llm_decision_if_ready(character: Character) -> void:
+	var agent := character as Agent
+	if agent == null:
+		return
+	await AIService.await_readiness_settled()
+	if not is_instance_valid(agent):
+		return
+	var readiness := AIService.get_readiness(agent.get_provider_name())
+	if not readiness.get("ready", false):
+		return
+
+	# agent.gd::_ready() 剛剛可能已經 fire-and-forget 打過一次
+	# _generate_words_to_creator()（words_to_creator 沒預填才會真的送），
+	# 跟第一次決策共用同一個 requester_id／冷卻池——這裡不等冷卻結束就開
+	# 決策，第一次決策會被同步擋下 ERROR_RATE_LIMITED，決策迴圈靜默卡住到
+	# 下一次仲裁。main_scene.gd::_apply_startup_ai_state() 開場已經在等
+	# 這個冷卻，這裡跟著等同一套（CodeRabbit review 抓到）
+	var cooldown_left := float(AIService.get_usage(agent.character_id).get("cooldown_left", 0.0))
+	if cooldown_left > 0.0:
+		await get_tree().create_timer(cooldown_left).timeout
+		if not is_instance_valid(agent):
+			return
+
+	agent.debug_set_llm_decision(true)
 
 
 # ---- 存檔 ----
@@ -572,17 +619,35 @@ func _wait_for_sleep_reflections_to_settle() -> void:
 # note/技術/存檔.md），否則 Godot 預設關窗會直接結束，這裡完全收不到
 # NOTIFICATION_WM_CLOSE_REQUEST。存檔（不論成功與否）之後都要自己呼叫
 # get_tree().quit()——設 auto_accept_quit=false 之後引擎不會再自動關閉，
-# 不呼叫的話關閉按鈕會變得完全沒反應
+# 不呼叫的話關閉按鈕會變得完全沒反應。save_before_leaving() 內部會 await
+# 睡眠反思結算，這裡也要 await，quit() 才不會搶在存檔完成前執行
 func _notification(what: int) -> void:
 	if what != NOTIFICATION_WM_CLOSE_REQUEST:
 		return
-	if _has_active_game_session():
-		var result := save_all()
-		for character_name in result["character_failures"]:
-			push_error("離開遊戲存檔失敗：%s" % character_name)
-		if not result["world_ok"]:
-			push_error("離開遊戲存檔失敗：世界 %s" % DEFAULT_WORLD_ID)
+	await save_before_leaving()
 	get_tree().quit()
+
+# 離開目前對局共用的存檔收尾——關視窗（上面的 _notification）、Esc 選單
+# 「回主選單」都算「離開遊戲」（#359 存檔時機之一），走同一條路避免兩處
+# 各自維護一份存檔＋錯誤處理。回傳是否全部存檔成功——關視窗那條路不看這個值
+# （視窗都要關了擋不住），但 Esc 選單「回主選單」要靠它決定能不能真的切場景，
+# 不然存檔失敗會悄悄弄丟進度（CodeRabbit review on #587 抓到）。
+#
+# 存檔前跟 _autosave_on_day_change() 一樣 await _wait_for_sleep_reflections_to_settle()——
+# 離場前一刻角色可能才剛進入睡眠、反思還沒套用 personality_delta／today_plan，
+# 不等的話這兩條離場路徑會存到反思套用「前」的舊狀態（CodeRabbit review on #587 抓到）
+func save_before_leaving() -> bool:
+	if not _has_active_game_session():
+		return true
+	await _wait_for_sleep_reflections_to_settle()
+	if not _has_active_game_session():
+		return true
+	var result := save_all()
+	for character_name in result["character_failures"]:
+		push_error("離開遊戲存檔失敗：%s" % character_name)
+	if not result["world_ok"]:
+		push_error("離開遊戲存檔失敗：世界 %s" % DEFAULT_WORLD_ID)
+	return result["world_ok"] and result["character_failures"].is_empty()
 
 # data 缺欄位一律用預設值補，不當成錯誤（跟 character.gd 同一條規則）。
 # 場景裡目前找到的角色直接套用；存檔裡有記載但場景沒有的角色會被重新生成
@@ -708,13 +773,17 @@ func _respawn_character(character_id: String, entry: Dictionary) -> void:
 	)
 
 	if not is_agent:
-		_apply_character_entry(spawn_character(scene, {"character_id": character_id}), entry)
+		var player_character := spawn_character(scene, {"character_id": character_id})
+		_apply_character_entry(player_character, entry)
+		activate_llm_decision_if_ready(player_character)
 		return
 
 	var library_entry := get_library_entry(character_id)
 	if library_entry.is_empty():
 		push_warning("apply_world_save_data: %s 不在角色庫，用最小身分重新生成" % character_id)
-		_apply_character_entry(spawn_character(scene, {"character_id": character_id}), entry)
+		var minimal_character := spawn_character(scene, {"character_id": character_id})
+		_apply_character_entry(minimal_character, entry)
+		activate_llm_decision_if_ready(minimal_character)
 		return
 
 	# 跟 deploy_from_library() 同一套：identity_assignments 讓 _ready() 撿到
@@ -743,3 +812,4 @@ func _respawn_character(character_id: String, entry: Dictionary) -> void:
 			character.rebuild_provider()
 
 	_apply_character_entry(character, entry)
+	activate_llm_decision_if_ready(character)

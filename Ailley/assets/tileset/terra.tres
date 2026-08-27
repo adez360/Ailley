@@ -1,0 +1,41 @@
+[gd_resource type="TileSet" load_steps=6 format=3 uid="uid://e8v6djrm0yrt"]
+
+[ext_resource type="PackedScene" uid="uid://277qf0056ljg" path="res://scenes/objects/tree_01.tscn" id="1_4ry5g"]
+[ext_resource type="PackedScene" uid="uid://ujpshh1ka8qt" path="res://scenes/objects/tree_02.tscn" id="2_annxc"]
+[ext_resource type="Texture2D" uid="uid://dy0xdlx8mf1rq" path="res://assets/objects/Basic_Grass_Biom_things.png" id="3_mud7s"]
+
+[sub_resource type="TileSetScenesCollectionSource" id="TileSetScenesCollectionSource_annxc"]
+scenes/1/scene = ExtResource("1_4ry5g")
+scenes/2/scene = ExtResource("2_annxc")
+
+[sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_b3x7p"]
+texture = ExtResource("3_mud7s")
+5:4/0 = 0
+8:1/0 = 0
+7:1/0 = 0
+6:1/0 = 0
+5:1/0 = 0
+5:0/0 = 0
+6:0/0 = 0
+7:0/0 = 0
+8:0/0 = 0
+5:2/0 = 0
+5:3/0 = 0
+6:3/0 = 0
+6:2/0 = 0
+7:2/0 = 0
+6:4/0 = 0
+7:4/0 = 0
+7:3/0 = 0
+8:2/0 = 0
+8:3/0 = 0
+8:4/0 = 0
+4:4/0 = 0
+3:4/0 = 0
+4:3/0 = 0
+4:2/0 = 0
+3:2/0 = 0
+
+[resource]
+sources/0 = SubResource("TileSetScenesCollectionSource_annxc")
+sources/1 = SubResource("TileSetAtlasSource_b3x7p")

@@ -56,9 +56,9 @@ var _timer := 0.0
 
 
 func _ready() -> void:
-	_character = get_parent() as Character
+	_character = owner as Character
 	if _character == null:
-		push_error("Vision 必須掛在 Character 底下，目前的父節點是 %s" % get_parent())
+		push_error("Vision 所屬場景的根節點必須是 Character，目前是 %s" % owner)
 		set_process(false)
 		return
 
