@@ -59,7 +59,7 @@ updated: 2026-08-24
 
 引擎在組 prompt 時依條件產生**陳述句**，不設欄位、不指定情緒。這是取代 `stress` / `loneliness` / `satisfaction` 的機制。
 
-> [!note] 9 條裡已接 7 條（2026-08-24 核對，見 `agent.gd::_fact_lines_summary()` 註解）
+> [!note] 9 條裡已接 7 條（2026-08-24 核對，見 `Ailley/scripts/character/agent.gd::_fact_lines_summary()` 註解）
 > `persuade` 待回應、社交沉默三級距、目標拖延、首次造訪、連續同一動作失敗都已實作。
 > **「正被搬運中」與「昏迷中曾被搬運，醒來後首個 tick」這兩條還沒接**——依賴 `haul`
 > 執行層，範圍界線見 #338。

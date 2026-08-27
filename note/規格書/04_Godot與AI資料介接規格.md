@@ -196,7 +196,7 @@ updated: 2026-08-26
 | `current_goal` | 選填 | 上限 40 字。省略＝維持原樣；明確傳空字串＝主動清除，兩者語意不同（#352） |
 | `update_plan` | 條件式 | 只在《10》§5.4 列出的開放時機才存在於 schema／system prompt，不是模型自己判斷要不要填（見《12》§2.4） |
 | `persuaded`／`importance`／`valence` | 條件式 | 只在 `context.fact_lines` 帶有待回應的說服事實句時，schema 才含這三個欄位（#227）。省略 `persuaded` 視同不被說動 |
-| `appointment` | 條件式 | **現況（2026-08-26 查證）**：已實作，對話情境中且在場有其他角色時 `plan_response_schema()` 條件式加入這個欄位，`agent.gd` 負責套用與逐分鐘檢查，見《12》§2.4、《10》§5.5，issue #479 已關閉 |
+| `appointment` | 條件式 | **現況（2026-08-26 查證）**：已實作，對話情境中且在場有其他角色時 `plan_response_schema()` 條件式加入這個欄位，`Ailley/scripts/character/agent.gd` 負責套用與逐分鐘檢查，見《12》§2.4、《10》§5.5，issue #479 已關閉 |
 
 `action == "persuade"` 的那筆 `tasks[]` 項目，`params` 另外多兩個欄位：`target`（必填，非空字串）、`reason`（必填，非空字串，說服理由，不驗證內容合不合理）、`proposed_task`（選填）：
 
