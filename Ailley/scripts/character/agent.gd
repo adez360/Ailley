@@ -2724,8 +2724,14 @@ func _select(task: Dictionary, now_minutes: int, outgoing_ok: bool = true) -> vo
 	# 撞名的情形留給 _pursue_follow_task() 第一個 tick 呼叫 resolve() 時
 	# 用同一套 target 存在性／歧義檢查收尾，這裡不重複判斷
 	if current_state == "follow":
-		var follow_target := _find_character_by_name(str(task.get("params", {}).get("target", "")))
-		following_id = follow_target.character_id if follow_target != null else ""
+		# 任務起跑這一刻要做撞名檢查（CodeRabbit review 抓到）：
+		# _find_character_by_name() 撞名時回傳「隨便找到的第一個」，跟
+		# talk／attack／bury／persuade 在 resolve() 用 _find_all_characters_by_name()
+		# 擋撞名的規則不一致，會讓 follow 悄悄跟錯人。之後每個 tick 的
+		# resolve() 已經改用 following_id 查（不會再撞名，id 唯一），
+		# 撞名檢查只需要在這裡、任務剛起跑、還只有顯示名字可查的這一刻做
+		var follow_matches := _find_all_characters_by_name(str(task.get("params", {}).get("target", "")))
+		following_id = follow_matches[0].character_id if follow_matches.size() == 1 else ""
 	elif not following_id.is_empty():
 		following_id = ""
 
