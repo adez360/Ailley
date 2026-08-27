@@ -345,7 +345,6 @@ offset_right = 130.0
 offset_bottom = 42.0
 grow_horizontal = 2
 grow_vertical = 2
-mouse_filter = 2
 theme_override_styles/panel = SubResource("StyleBoxTexture_eld54")
 
 [node name="TitleBg" type="ColorRect" parent="EpitaphInput/Panel"]
