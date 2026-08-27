@@ -1181,15 +1181,20 @@ func load_npc_data()
 ```gdscript
 signal time_changed(hour: int, minute: int)  # 每遊戲分鐘
 signal day_changed(day: int)                 # 跨日，在同一次 time_changed 之前發
+signal new_game_started                      # #618：開新遊戲時發，不是跨日（day 可能還是 1）
 const GAME_MINUTES_PER_TICK := 10            # 生理 tick 週期，Stats 漂移／conditions 共用同一個來源
 @export var seconds_per_game_minute := 1.0
 var hour := 8 · var minute := 0 · var day := 1
+func reset_to_new_game_start() -> void      # #606：day/hour/minute 打回 1/8/0，發 new_game_started
 ```
 
 ```text
 24:00 回捲成 0:00，day += 1。無暫停/加速 API；撥錶只能直接寫欄位再手動 emit
 † 要「第幾天」一律讀 day / 訂 day_changed，不要自己比對 hour 有沒有變小 ——
   私有計數重開遊戲歸零，靠它擋的東西（每日配額）等於沒擋
+† new_game_started 跟 day_changed 是兩回事：按 requester_id 累計「今天已經怎樣」
+  的計數器（例如 AIService 每日配額）兩個都要訂閱，只訂 day_changed 的話開新
+  遊戲時上一局的殘留配額不會清（#618，見 AIService._on_day_changed）
 ⚠ day 還沒持久化，重開仍從 1 開始 —— 要等世界存檔（#21）
 ```
 

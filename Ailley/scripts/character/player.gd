@@ -120,6 +120,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		make_noise()
 		return
 
+	# 用快捷欄目前選取格裡的東西（#611）。跟 make_noise 同一種優先序——不管
+	# 對話中或選單開著都能觸發，不用擠進下面那條 interact 的攔截鏈
+	if event.is_action_pressed("use_item"):
+		get_viewport().set_input_as_handled()
+		var use_reason := use_selected_item()
+		if use_reason != USE_ITEM_OK:
+			report_action_failure("use_item", use_reason)
+		return
+
 	if not event.is_action_pressed("interact"):
 		return
 
