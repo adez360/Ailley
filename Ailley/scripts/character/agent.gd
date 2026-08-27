@@ -1803,6 +1803,13 @@ func load_save_data(data: Dictionary) -> void:
 	_plan_update_requested = false
 	_plan_update_epoch += 1
 
+	# 已經排隊但還沒被下一輪決策消費掉的語意檢索結果也要清（CodeRabbit
+	# review 抓到）：_queue_recalled() 的世代比對只擋得住「讀檔當下還在飛」
+	# 的查詢，擋不住「讀檔前就已經排進 _pending_recalled、但還沒被
+	# _recalled_summary() 讀走」的舊結果——不清的話下一次 next_line()／
+	# _request_next_decision() 照樣會把讀檔前的記憶內容送進讀檔後的提示詞
+	_pending_recalled.clear()
+
 	# 只在資料裡真的有 today_plan 這個 key 時才覆寫——跟 character.gd 的
 	# personality 同一個「省略 key＝不動」語意。沒有這條防呆的話，讀一份
 	# 沒有 today_plan 欄位的存檔（例如舊格式、或只想局部更新其他欄位的
@@ -1850,19 +1857,24 @@ func _on_spotted(other: Character) -> void:
 	# _on_action_interrupted() 那道 is_dead 判斷擋不到這裡——這是 vision.gd
 	# 訊號直接觸發的外部事件回呼，死屍仍會被場上其他角色「第一次注意到」，
 	# 沒擋的話會 say() 台詞、甚至問一次 LLM 決策
-	if is_dead or is_in_conversation() or _noticed.has(other.character_id):
+	if is_dead or is_in_conversation():
 		return
 
-	_noticed[other.character_id] = true
-
 	# 《03》§7 觸發時機表「遇到未在 L1 出現過的角色」（issue #571）：故意放在
-	# has_met() 的早退之前——這裡問的是「最近 8 條記憶視窗裡有沒有這個人」，
-	# 跟下面 has_met() 問的「這輩子見沒見過」是兩個不同的條件，先前見過面
-	# 但很久沒在 L1 裡出現過，一樣值得檢索
-	# call-and-forget（不 await，CodeRabbit review 抓到先前誤加的 await 會
-	# 拖住這裡，延誤下面 has_met() 判斷與跟丟／反應流程）
+	# _noticed 的早退之前（CodeRabbit review 抓到：原本放在 _noticed 早退
+	# 之後，導致這個檢查一輩子只會在「第一次見到這個人」那一次跑到——_noticed
+	# 是終身只設一次、不會清除的表，跟這裡要問的「最近 8 條記憶視窗裡有沒有
+	# 這個人」是完全不同的時間尺度：同一個人可能很久以前見過、_noticed 早就
+	# 設過，但這幾天都沒再想起，理應每次符合這個條件都值得重新檢索，不是只有
+	# 生涯第一次見面那次）。跟下面 has_met() 問的「這輩子見沒見過」是兩個
+	# 不同的條件。call-and-forget（不 await，CodeRabbit review 抓到先前
+	# 誤加的 await 會拖住這裡，延誤下面 has_met() 判斷與跟丟／反應流程）
 	if not _seen_in_l1(other.character_name):
 		_queue_recalled(other.character_name)
+
+	if _noticed.has(other.character_id):
+		return
+	_noticed[other.character_id] = true
 
 	if relationships != null and relationships.has_met(other.character_id):
 		return
@@ -1974,9 +1986,14 @@ func _queue_recalled(query: String) -> void:
 	# 等既有 my_generation 比對同一招——load_save_data() 讀檔時會遞增
 	# _decision_generation，這裡如果不比對，讀檔前排出去、讀檔後才回來的
 	# 語意檢索結果會混進讀檔後全新的狀態裡，變成一句跟目前記憶／人格對不上的
-	# 過期內容
+	# 過期內容。still_valid 傳給 search_l3()（CodeRabbit review 再抓到一次）：
+	# 世代比對本身不夠，mark_retrieved() 這個改動 decay_value 的副作用發生在
+	# search_l3() 內部（await 結束後、回傳文字之前），這裡才檢查世代已經
+	# 太晚——still_valid 讓 search_l3() 在真的執行排序／mark_retrieved()
+	# 之前先問一次，過期就直接跳過，不留副作用
 	var my_generation := _decision_generation
-	var hits: Array[Dictionary] = await memory.search_l3(query)
+	var still_valid := func() -> bool: return not is_dead and my_generation == _decision_generation
+	var hits: Array[Dictionary] = await memory.search_l3(query, Memory.L3_SEARCH_MAX_RESULTS, still_valid)
 	if is_dead or my_generation != _decision_generation:
 		return
 	if hits.is_empty():

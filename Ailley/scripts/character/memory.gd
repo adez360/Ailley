@@ -126,12 +126,23 @@ func _embed_l3_entry(entry: Dictionary) -> void:
 ## query embedding 算不出來（EmbeddingService 未設定/逾時/連不上）就直接回空
 ## 陣列，讓呼叫端走《03》§7 的兜底句「你想不起相關的事。」，不是把「查無結果」
 ## 跟「服務不可用」混在一起判斷
-func search_l3(query_text: String, max_results: int = L3_SEARCH_MAX_RESULTS) -> Array[Dictionary]:
+## still_valid（CodeRabbit review 抓到）：await 期間呼叫端的狀態可能已經
+## 過期（例如 load_save_data() 重新讀檔），呼叫端把「現在還算數嗎」的判斷
+## 包成一個 Callable 傳進來，await 回來後、真的排序並呼叫 mark_retrieved()
+## 改動 decay_value 之前先問一次——不能只讓呼叫端事後丟棄回傳的文字內容，
+## mark_retrieved() 這個副作用發生在 search_l3() 內部，呼叫端事後才檢查
+## 世代已經來不及擋下這個副作用。留空 Callable（預設）代表呼叫端不在乎，
+## 沿用原本永遠視為有效的行為，不強迫每個呼叫點都要準備一個
+func search_l3(
+	query_text: String, max_results: int = L3_SEARCH_MAX_RESULTS, still_valid: Callable = Callable()
+) -> Array[Dictionary]:
 	if query_text.is_empty():
 		return []
 
 	var query_embedding := await EmbeddingService.request_embedding(query_text)
 	if query_embedding.is_empty():
+		return []
+	if still_valid.is_valid() and not still_valid.call():
 		return []
 
 	return _rank_l3_candidates(query_embedding, max_results)

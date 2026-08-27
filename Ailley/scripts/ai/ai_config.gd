@@ -273,7 +273,23 @@ func _apply(data: Dictionary) -> void:
 	var raw_embedding: Variant = data.get("embedding", {})
 	if raw_embedding is Dictionary:
 		var embedding_data := raw_embedding as Dictionary
-		embedding_base_url = str(embedding_data.get("base_url", DEFAULT_EMBEDDING_BASE_URL)).strip_edges().rstrip("/")
+		var raw_embedding_base_url := str(embedding_data.get("base_url", DEFAULT_EMBEDDING_BASE_URL)).strip_edges().rstrip("/")
+		# 只信任 loopback 位址（CodeRabbit review 抓到）：embedding 一律走本機
+		# 是這個功能的核心承諾（見 note/技術/LLM 串接與 AI 服務層.md「Embedding」
+		# 一節）——不是怕記憶內容外流的隱私問題（NPC 記憶是模擬事件，不是玩家
+		# 真實個資），是怕設定檔手改或未來開放玩家自訂這個欄位時，不小心指到
+		# 一個真的收費的雲端端點，讓玩家在不知情的狀況下，每筆記憶寫入／每次
+		# 語意檢索觸發都默默產生 API 費用（觸發頻率比對話還高）。非 loopback
+		# 位址一律拒絕、退回預設值，不嘗試「警告但照樣送出去」
+		if _is_loopback_url(raw_embedding_base_url):
+			embedding_base_url = raw_embedding_base_url
+		else:
+			push_error(
+				"[AIConfig] embedding.base_url 不是本機位址（%s），拒絕使用、退回預設值——"
+				% raw_embedding_base_url
+				+ "embedding 設計上一律走本機，避免玩家不知情下對雲端端點產生費用"
+			)
+			embedding_base_url = DEFAULT_EMBEDDING_BASE_URL
 		embedding_model = str(embedding_data.get("model", DEFAULT_EMBEDDING_MODEL)).strip_edges()
 		# 跟 _parse_provider() 的 timeout 處理同一個理由：<= 0 代表「不設逾時」，
 		# 設定檔手滑填 0 或負值時退回預設值，不信任非正值
@@ -324,6 +340,28 @@ func _apply(data: Dictionary) -> void:
 	var default_ok: bool = not default_provider.is_empty() and providers.has(default_provider)
 	status_reason = L10n.t("AI_STATUS_ENABLED") if default_ok \
 		else L10n.tf("AI_STATUS_BAD_DEFAULT", {"path": CONFIG_PATH})
+
+
+## embedding.base_url 的 loopback 檢查（見 _apply() 的呼叫處說明）。只認
+## host 是 127.0.0.1／localhost／[::1] 這三種寫法，不做真正的 DNS 解析——
+## 設定檔裡填一個會解析到 loopback 的自訂 hostname 這種邊緣情況不在防範
+## 範圍內，這裡只擋最直接、最可能因為設定檔手滑或誤用範例產生的情況
+## （填了雲端 API 的網域）
+static func _is_loopback_url(url: String) -> bool:
+	var without_scheme := url
+	var scheme_index := url.find("://")
+	if scheme_index != -1:
+		without_scheme = url.substr(scheme_index + 3)
+
+	var host := without_scheme
+	var slash_index := host.find("/")
+	if slash_index != -1:
+		host = host.substr(0, slash_index)
+	var colon_index := host.rfind(":")
+	if colon_index != -1:
+		host = host.substr(0, colon_index)
+
+	return host == "127.0.0.1" or host == "localhost" or host == "[::1]" or host == "::1"
 
 
 func _parse_provider(provider_name: String, data: Dictionary) -> Provider:
