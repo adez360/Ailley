@@ -148,6 +148,7 @@ border_color = Color(0.184, 0.145, 0.133, 1)
 BubbleLabel/base_type = &"Label"
 BubbleLabel/colors/font_color = Color(0.13333334, 0.13333334, 0.13333334, 1)
 Button/colors/font_color = Color(0, 0, 0, 1)
+Button/colors/font_disabled_color = Color(0.34901962, 0.34901962, 0.34901962, 1)
 Button/colors/font_focus_color = Color(0.15294118, 0.15294118, 0.15294118, 1)
 Button/colors/font_hover_color = Color(0.15161854, 0.15161839, 0.15161842, 1)
 Button/colors/font_hover_pressed_color = Color(0.15294118, 0.15294118, 0.15294118, 1)

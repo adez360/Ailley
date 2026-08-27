@@ -50,6 +50,10 @@ const _PLAYER_ID_PATH := "user://saves/player_id.txt"
 
 
 func _ready() -> void:
+	# Character._ready() 會用 facing 播 idle 動畫（預設 "front"），玩家出生要面向
+	# 後方，得在 super() 之前設好，不然 player.tscn 場景檔設的 idle_back 只是編輯器
+	# 預覽用，實際一進遊戲就被蓋成 idle_front（CodeRabbit review on #587 抓到）
+	facing = "back"
 	super()
 	add_to_group("player")
 	line_submitted.connect(_on_line_submitted)

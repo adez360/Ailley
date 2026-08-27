@@ -1,6 +1,6 @@
-[gd_scene load_steps=16 format=3 uid="uid://ssjrg885wbrq"]
+[gd_scene load_steps=16 format=3 uid="uid://8gs8myay40dw"]
 
-[ext_resource type="Script" uid="uid://bueondwn1pgkd" path="res://scenes/houses/door.gd" id="1_lwpok"]
+[ext_resource type="Script" uid="uid://bueondwn1pgkd" path="res://scripts/houses/door.gd" id="1_lwpok"]
 [ext_resource type="Texture2D" uid="uid://c4hsqmjtq64fg" path="res://assets/tiles/Wooden_House.png" id="2_3bhf3"]
 [ext_resource type="PackedScene" uid="uid://dmhcl42gile6o" path="res://scenes/components/interactable_component.tscn" id="3_vw3wg"]
 
