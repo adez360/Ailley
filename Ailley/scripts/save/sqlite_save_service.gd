@@ -432,8 +432,9 @@ func _esc(value: String) -> String:
 ##
 ## npc 沒有 version     《14》§2 講的並行寫入保護欄位沒有掛靠——SQLite 這邊
 ##                      實際靠 transaction 保護，不是 version CAS，見檔頭
-## npc_relations        少了 met_count（Relationships.DEFAULT_RECORD 有，
-##                      round-trip 之後這個數字會遺失，重開後從 0 起算）
+## npc_relations        少了 met_count、last_seen（Relationships.DEFAULT_RECORD
+##                      都有，round-trip 之後這兩個值會遺失，met_count 重開後
+##                      從 0 起算、last_seen 重開後變回 -1「從沒見過」，見 #497）
 ## npc_state            少了 mood/social/fun 三項（Stats.SPEC 有這三項，
 ##                      npc_state 只對到《01》§4-1 的 8 項生理狀態）
 ## memory                Character.get_save_data() 現在會產生 memory 欄位
