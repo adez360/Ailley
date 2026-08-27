@@ -522,7 +522,6 @@ func _run() -> void:
 		{
 			"character_id": NPC_A,
 			"target_id": NPC_B,
-			"relations_trust": 20,
 			"relations_appearance_cache": "測試"
 		},
 		"character_id"

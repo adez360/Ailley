@@ -73,7 +73,7 @@ func has_character(id: String) -> bool:
 ## 讀一個角色的完整資料，找不到回傳空 Dictionary
 ##
 ## 回傳形狀跟 Character.get_save_data() 一致：
-##     { character_id, character_name, stats{8 項}, relationships{ <target_id>: {trust, appearance_cache} },
+##     { character_id, character_name, stats{8 項}, relationships{ <target_id>: {appearance_cache} },
 ##       personality?{ 10 項 }, today_plan?[ {text, is_done} ] }
 ##
 ## personality／today_plan 是選填欄位（跟 get_save_data() 只在有資料時才給
@@ -102,7 +102,6 @@ func get_character(id: String) -> Dictionary:
 	var relationships := {}
 	for row in DatabaseManager.select("npc_relations", "character_id = '%s'" % _esc(id)):
 		relationships[row["target_id"]] = {
-			"trust": row["relations_trust"],
 			"appearance_cache": row["relations_appearance_cache"],
 		}
 	data["relationships"] = relationships
@@ -305,7 +304,6 @@ func _replace_relationships(id: String, relationships: Dictionary) -> bool:
 		var row := {
 			"character_id": id,
 			"target_id": target_id,
-			"relations_trust": record.get("trust", 20.0),
 			"relations_appearance_cache": String(record.get("appearance_cache", "")),
 		}
 

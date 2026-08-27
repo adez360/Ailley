@@ -397,7 +397,6 @@ func _cmd_status(args: PackedStringArray) -> void:
 			var record: Dictionary = snapshot["relations"][other_id]
 			lines.append(L10n.tf("CON_RELATION_ENTRY", {
 				"id": other_id,
-				"trust": "%.1f" % record["trust"],
 				"count": record["met_count"],
 			}))
 		_field("CON_FIELD_RELATIONS", SEP.join(lines))

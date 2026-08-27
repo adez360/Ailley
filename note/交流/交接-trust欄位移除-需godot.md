@@ -28,33 +28,78 @@ PR #557（全專案稽核分支）裡，還沒進 main。**這則 PR 刻意不�
 
 - [x] `Ailley/scripts/character/relationships.gd`（commit `edb4197`）：拿掉 trust
   欄位、`get_trust()`/`add_trust()`、`TRUST_MIN`/`MAX`，`load_save_data()` 已清理
+- [x] `NPCRelationsSchema.gd`：移除 `relations_trust` 欄位＋CHECK
+- [x] `DatabaseSchema.gd`：`CURRENT_VERSION` 7→8，新增 migration v8
+  `_migrate_v8_drop_relations_trust`（改名→重建→明確列欄位複製→刪暫存表，
+  不能用 `_migrate_rebuild_single_table` 因為欄位數變了）。**版號 8 跟 PR #607
+  撞號**，先合併者保留、另一個 rebase 重編（照 repo v6/v7 撞號慣例）
+- [x] `MigrationV8Test.gd`（新增，比照 `MigrationV6Test.gd`）：headless 跑過 12 項全 PASS
+- [x] `sqlite_save_service.gd`：`get_character()`／`_replace_relationships()`／docstring 拿掉 trust 映射
+- [x] `prompt_builder.gd`：`_listener_block()` 移除 trust
+- [x] `character.gd`：`get_state_snapshot()` 的 `relations` 拿掉 trust；相關 `_on_rescued`/
+  `_on_attacked`/haul 註解校正
+- [x] `debug_console.gd` + `locale/console.csv`：`CON_RELATION_ENTRY` 拿掉 trust 顯示
+- [x] `DatabaseCRUDTest.gd`：npc_relations 測試 insert 拿掉 `relations_trust`
+- [x] `dialogue_lines.gd`/`conversation.gd`：trust 相關註解校正
+- [x] `note/規格書/01_角色數值規格書.md` §3-1：整段改寫成現況（relations 無引擎數值，
+  只剩 met_count／appearance_cache），移除 trust 變動表與兩個 callout
 
-## 還要做的事
+## 驗證狀態（都過了）
 
-- [ ] `Ailley/scripts/database/schemas/NPCRelationsSchema.gd`：移除 `relations_trust`
-      欄位，需要一版 DB migration（`DatabaseSchema.CURRENT_VERSION` 遞增）——
-      先查目前版本號有沒有其他分支同時在動（P-60 筆記提過 PR #511 曾撞過版本號）
-- [ ] `Ailley/scripts/save/sqlite_save_service.gd`：拿掉對應的讀寫映射
-- [ ] `Ailley/scripts/ai/prompt_builder.gd`：`_listener_block()` 移除 `trust`
-- [ ] `Ailley/scripts/ui/debug_console.gd`：移除 trust 顯示欄
-- [ ] `note/規格書/01_角色數值規格書.md` §3-1：移除 trust 變動表，比照
-      affinity/familiarity/debt 移除時的說明方式補一段（不要留「原本/後來」對照，
-      只寫現況）
+- headless `--quit-after` 整專案開機：無 parse/script error，`Migration 8 ... applied`、
+  `26 schemas created, schema version 8`
+- `MigrationV8Test`（headless）：12 項全 PASS——欄位消失、其餘欄位與資料保留、FK 生效、
+  索引重建、`foreign_key_check` 乾淨
+- 編輯器內 `project_run` + `game_eval`（`ailley@381b`，2026-08-27）：
+  - 遊戲執行期 DB `npc_relations` 欄位＝`[relation_id, character_id, target_id,
+    relations_appearance_cache, updated_at]`，`user_version=8`
+  - `Relationships.DEFAULT_RECORD`／`get_record()` 無 `trust` key
+  - `get_state_snapshot()` 的 `relations` ＝`{<id>: {met_count}}`
+  - `PromptBuilder._listener_block()` ＝`{name, met_count}`
+  - `SqliteSaveService` 存讀 round-trip：`save_character` 回 true、`get_character`
+    讀回 `{<id>: {appearance_cache}}`，都沒有因為缺 `relations_trust` 報錯
+  - debug console `status <name>` 顯示「關係  aji（1 次）   alan（1 次）」，無 trust
+- 註：本機沒有 `obsidian` CLI，`01` 那份筆記是直接用文字編輯改的
+- 註：headless / 遊戲執行已把 `D:/Projects/Ailley` 的 dev DB 推到 schema v8——同目錄切回
+  v7 以下的分支跑會被 `initialize()` 的「版本比程式新，拒絕開啟」擋下（設計如此）
+- 註：`JsonSaveService` 是目前 autoload 的存檔實作，根本不碰 `npc_relations`；
+  `SqliteSaveService`（這次改的）是平行開發中的實作，測試時直接 `.new()` 起來驗
 
-## Godot 內測試（這是換到這台機器的原因）
+### rebase 到最新 main 後續（PR #607 先合併走了 migration 8）
 
-CLAUDE.md 規定 Godot 場景/腳本改動要用 godot-ai MCP 測試。動工前：
-1. `session_manage(op="list")` 確認有沒有連到本專案 project_path 的 session，
-   沒有就回報使用者請他開編輯器
-2. 之後每次呼叫 godot-ai 工具都明確帶上這個 session_id
-3. 完成後用 `project_run` 跑起來、`game_eval` 或既有的 debug 主控台指令
-   （`status <name>` 等）驗證 trust 欄位真的從角色狀態、存讀檔、debug 顯示裡
-   消失，且不會因為缺這個欄位而報錯
+PR #607 合併，`CURRENT_VERSION` 在 main 上已經是 8（npc/location NOT NULL 重建）。
+rebase 過來後把這條的 migration 改編成 **9**，`MigrationV8Test.gd`／`.uid` 保留 #607
+那份（衝突時 `--ours`），本來的測試檔另存成 `MigrationV9Test.gd`。
+
+順帶修好一個 rebase 才浮現的相容性坑：#607 的 migration 8 重建 `npc_relations` 時
+呼叫的是活的 `NPCRelationsSchema`；這條拿掉 `relations_trust` 之後，任何
+`user_version ≤ 7` 的舊資料庫會在 migration 8 就因為欄位形狀對不上而中止整個
+`initialize()`。改法：`_migrate_v8_notnull_primary_keys()` 動態判斷舊表實際上有沒有
+`relations_trust`，有就用新增的 `_migrate_v8_create_npc_relations_with_trust()`
+（凍結 #601 之前的形狀）重建，留給 migration 9 拿掉；沒有則維持原本行為。
+`MigrationV9Test.gd` 新增 `_run_v7_chain_test()` 專門驗證這條路徑。
+
+編輯器內驗證（`ailley@905f`，2026-08-27，臨時場景 `_tmp_migration_v9_test.tscn`
+掛 `MigrationV9Test.gd`，跑完即刪）：
+- 真實 dev DB（原本停在 v8）：`Migration 9 ... applied`、`schema version 9`，正常升級
+- `MigrationV9Test` 隔離測試（`user_version=8` 起跑）：9 項全 PASS
+- `MigrationV9Test._run_v7_chain_test()`（`user_version=7` 起跑，真的帶 `relations_trust`
+  資料）：`Migration 8 ... applied` 接著 `Migration 9 ... applied`，全程沒有中止，
+  5 項全 PASS
+- 總計 `PASS: 17 FAIL: 0`
+
+分支已經 rebase 到最新 main（原本落後 20 個 commit），力度推送（history 改寫過）
+前記得跟使用者確認一次。
 
 ## 完成後開 PR
 
 - Push 到 `chore/remove-relations-trust-field`，開 PR 標題用英文、內文中文，
   `Closes #601`，PR 描述裡引用《99》P-60 說明背景（可參考 issue #601 本文）
+- **文件範圍刻意窄**：只改了《01》§3-1。04／06／01-3／00／02／10／11／13 與
+  `ai/`、`技術/` 筆記裡的 trust 留給 #557（`docs/full-project-audit`）——#557 在那些
+  行上加了 `[!warning]` callout，兩邊動同一批行會衝突。使用者交代：**每次接續
+  要先問 #557 合併了沒；合併後回去確認 #557 那邊 trust 有沒有改全面，沒改到的
+  補進這條 PR 或另開收尾。**（同步在自動記憶）
 - 依照這個專案既有 workflow：開 PR 後 `gh pr comment <N> --body "@coderabbitai
   full review"` 觸發審查，逐項判斷 CodeRabbit 意見（不需要修正就回覆說明理由，
   需要修正就修完回覆「已修復」，新 commit 觸發下一輪 review，重複到沒有新意見）

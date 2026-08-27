@@ -244,10 +244,10 @@ var current_goal := ""
 var _hauling_target: Character = null		# 目前正在搬運誰
 var _hauled_by: Array[Character] = []		# 目前正被誰搬運
 var _speed_multiplier := 1.0				# 速度倍率（搬運時為 50%）
-## 這次昏迷事件裡已經拿過搬運者救助 trust 的名單，避免第一位搬運者救到人、
-## _end_incapacitation() 已經跑過後，稍後才加入的第二位搬運者被
+## 這次昏迷事件裡已經觸發過 _on_rescued() 的搬運者名單，避免第一位搬運者
+## 救到人、_end_incapacitation() 已經跑過後，稍後才加入的第二位搬運者被
 ## set_being_carried() 的 has_condition(CONDITION_INCAPACITATED) 判斷擋掉、
-## 拿不到獎勵（CodeRabbit review 抓到）。新一輪昏迷開始時歸零
+## 漏記救助事實句（CodeRabbit review 抓到）。新一輪昏迷開始時歸零
 var _rescued_haulers: Array[Character] = []
 
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
@@ -628,8 +628,8 @@ func _end_incapacitation() -> void:
 	# stop_haul() 從 _hauled_by 移除，沒有 _exit_tree() 清理時，搬運者若被
 	# queue_free() 直接砍掉，_hauled_by 會留著已釋放的殘留參照——!= null
 	# 擋不住這個，已釋放的 Object 不會自動變成 null，要用 is_instance_valid()
-	# （CodeRabbit review 抓到）。_rescued_haulers 仍要記——不是為了擋重複扣／
-	# 加 trust（已拿掉，見 _on_rescued() 說明），是擋同一位搬運者的事實句被
+	# （CodeRabbit review 抓到）。_rescued_haulers 仍要記——不是為了擋重複的
+	# 關係定性（已拿掉，見 _on_rescued() 說明），是擋同一位搬運者的事實句被
 	# 重複記兩次
 	for hauler in _hauled_by:
 		if is_instance_valid(hauler) and not _rescued_haulers.has(hauler):
@@ -642,10 +642,11 @@ func _end_incapacitation() -> void:
 ## 掛點，跟 _on_attacked() 同一個理由——Player 沒有記憶系統可寫，只有 Agent
 ## 需要記事實句。
 ##
-## 刻意不在這裡直接加 trust（2026-08-24 拿掉，見全專案盤點的原則二／三審查）：
-## 跟 _on_attacked() 同一個問題——引擎用固定公式（+15）幫「被救助」這件事
-## 定性成該加多少信任，AI 沒機會表態；trust 也沒有任何公式拿它當輸入。事件
-## 本身照樣要記成事實句給 AI（見 agent.gd 覆寫），該不該信任由 AI 自己判斷
+## 刻意不在這裡對關係做任何定性（2026-08-24 拿掉固定公式，#601 拿掉 trust
+## 欄位本身，見全專案盤點的原則二／三審查）：跟 _on_attacked() 同一個問題——
+## 引擎用固定公式（+15）幫「被救助」這件事定性成該加多少信任，AI 沒機會表態；
+## trust 也從沒被任何公式當輸入。事件本身照樣要記成事實句給 AI
+## （見 agent.gd 覆寫），該不該信任由 AI 自己判斷
 func _on_rescued(_hauler: Character) -> void:
 	pass
 
@@ -654,7 +655,7 @@ func _on_rescued(_hauler: Character) -> void:
 ## _update_incapacitation()（每遊戲分鐘才跑一次）才處理：stop_haul() 若搶在
 ## 下一個 time_changed 之前執行，_is_being_carried 會被重設回 false，
 ## _end_incapacitation() 永遠不會被呼叫到，角色維持昏迷、也拿不到 health
-## 恢復與搬運者 trust 獎勵（CodeRabbit review 抓到）
+## 恢復（CodeRabbit review 抓到）
 func set_being_carried(is_carried: bool) -> void:
 	if is_carried and has_condition(CONDITION_INCAPACITATED):
 		_is_being_carried = true
@@ -1539,12 +1540,12 @@ func attack(other: Character) -> String:
 ## 被攻擊的收尾鉤子。基底只是掛點——Player 沒有記憶系統可寫，只有 Agent
 ## 需要把這件事記成事實句給下次決策／反思用（見 agent.gd 覆寫）。
 ##
-## 刻意不在這裡直接扣 trust（2026-08-24 拿掉，見全專案盤點的原則二／三審查）：
-## 引擎用固定公式幫「被攻擊」這件事定性成「值 -50 信任」，AI 完全沒機會表態，
-## 跟《00》原則二「引擎只給事件，不給情緒」相反；而且 trust 目前沒有任何公式
-## 拿它當輸入（只餵給 LLM 讀），不符合《00》原則三的留存門檻。事件本身照樣
-## 完整記成事實句給 AI（見 agent.gd 覆寫），該不該信任由 AI 自己判斷、記在
-## 自己的記憶系統裡
+## 刻意不在這裡對關係做任何定性（2026-08-24 拿掉固定公式，#601 拿掉 trust
+## 欄位本身，見全專案盤點的原則二／三審查）：引擎用固定公式幫「被攻擊」這件事
+## 定性成「值 -50 信任」，AI 完全沒機會表態，跟《00》原則二「引擎只給事件，
+## 不給情緒」相反；trust 也從沒被任何公式當輸入（只餵給 LLM 讀），不符合《00》
+## 原則三的留存門檻，因此整條移除。事件本身照樣完整記成事實句給 AI
+## （見 agent.gd 覆寫），該不該信任由 AI 自己判斷、記在自己的記憶系統裡
 func _on_attacked(attacker: Character) -> void:
 	pass
 
@@ -1610,17 +1611,15 @@ func get_state_snapshot() -> Dictionary:
 	if inventory != null:
 		snapshot["money"] = inventory.get_money()
 
-	# 欄名跟 relationships.gd 的 record 一致（trust / met_count），
-	# 不要在這裡改名——同一個數值有兩個名字，讀過 relationships.gd 的人
-	# 會在 snapshot 上找不到 trust。用純量 accessor 不用 get_record()，
-	# 後者每筆都 duplicate(true) 深拷一份只為了讀兩個數字
+	# 欄名跟 relationships.gd 的 record 一致（met_count），不要在這裡改名——
+	# 讀過 relationships.gd 的人會在 snapshot 上找不到。用純量 accessor
+	# 不用 get_record()，後者每筆都 duplicate(true) 深拷一份只為了讀一個數字
 	if relationships != null:
 		var known := relationships.known_ids()
 		if not known.is_empty():
 			var relations := {}
 			for other_id in known:
 				relations[other_id] = {
-					"trust": relationships.get_trust(other_id),
 					"met_count": relationships.get_met_count(other_id),
 				}
 			snapshot["relations"] = relations
@@ -2102,9 +2101,9 @@ func _attach_haul(hauler: Character) -> void:
 
 func _detach_haul(hauler: Character) -> void:
 	_hauled_by.erase(hauler)
-	# 最後一位搬運者放手時清掉這次事件的獎勵名單——不清的話，A 救到人放手後，
+	# 最後一位搬運者放手時清掉這次事件的名單——不清的話，A 救到人放手後，
 	# 之後任何人（B）再搬運同一個已經不昏迷的角色，_attach_haul() 會誤判
-	# 「這次事件還在補發獎勵」而錯發一次 trust（CodeRabbit review 抓到）
+	# 「這次事件還在補發」而多記一次救助事實句（CodeRabbit review 抓到）
 	if _hauled_by.is_empty():
 		_rescued_haulers.clear()
 

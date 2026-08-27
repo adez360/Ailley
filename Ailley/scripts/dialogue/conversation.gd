@@ -137,8 +137,8 @@ func _finish_with_fallback(speaker: Character, listener: Character) -> void:
 	if is_instance_valid(speaker) and is_instance_valid(listener):
 		var closing := DialogueLines.closing()
 		_speak(speaker, closing, true)
-		# fallback 收尾也是真的說出口的一句，沒算進 _turns 的話
-		# _finish() 判定「5 句以上深度對話」trust +2 時會少算這一句
+		# fallback 收尾也是真的說出口的一句，沒算進 _turns 的話，
+		# 之後任何依對話輪數／內容做的判定都會少算這一句
 		# （CodeRabbit review 抓到）
 		_turns.append(PromptBuilder.turn_entry(speaker.character_name, closing))
 
@@ -177,8 +177,8 @@ func _apply_rewards() -> void:
 
 		if character.relationships != null:
 			character.relationships.note_meeting(other.character_id)
-			# 刻意不在這裡加 trust（2026-08-24 拿掉，見全專案盤點的原則二／三
-			# 審查）：跟 _on_attacked()／_on_rescued() 同一個問題——固定公式
-			# 幫「深度對話」定性成該加多少信任，AI 沒機會表態。這裡甚至不需要
-			# 額外記事實句：對話內容本身就在 AI 自己的上下文裡，不必引擎另外
-			# 告知「你們聊了很久」，該不該多信任對方由 AI 自己判斷
+			# 只記「見過面」，不對這場對話做任何關係定性——跟
+			# _on_attacked()／_on_rescued() 同一個原則：固定公式幫「深度對話」
+			# 算出該加多少好感/信任，AI 沒機會表態（《00》原則二／三，
+			# relations 的引擎數值已於 2026-08-16～#601 全部拿掉）。這裡甚至
+			# 不需要額外記事實句：對話內容本身就在 AI 自己的上下文裡
