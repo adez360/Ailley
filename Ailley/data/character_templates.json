@@ -678,7 +678,7 @@
 			},
 			"character": "崩塌前是機房維修員，獨自活過三次斷電。說話很短，不耐煩時會發出鼻音。最在乎自己的東西不被別人碰。",
 			"personality": {
-				"diligence": 85, "courage": 60, "sociability": 15, "morality": 50,
+				"diligence": 85, "courage": 61, "sociability": 15, "morality": 50,
 				"stability": 85, "romanticism": 36, "curiosity": 50, "grudge": 36,
 				"greed": 40, "honesty": 50
 			},
@@ -694,7 +694,7 @@
 			},
 			"character": "在村口擺過幾年攤，認得每個人的臉。話一開頭就停不下來，別人為難時忍不住想幫忙。",
 			"personality": {
-				"diligence": 50, "courage": 43, "sociability": 90, "morality": 60,
+				"diligence": 50, "courage": 43, "sociability": 90, "morality": 61,
 				"stability": 20, "romanticism": 62, "curiosity": 50, "grudge": 41,
 				"greed": 50, "honesty": 50
 			},
@@ -726,7 +726,7 @@
 			},
 			"character": "遊手好閒的年輕人，什麼熱鬧都想湊一腳。答應別人的事常常忘記，但點子多得很。",
 			"personality": {
-				"diligence": 20, "courage": 64, "sociability": 70, "morality": 29,
+				"diligence": 20, "courage": 65, "sociability": 70, "morality": 29,
 				"stability": 50, "romanticism": 71, "curiosity": 85, "grudge": 50,
 				"greed": 80, "honesty": 20
 			},
