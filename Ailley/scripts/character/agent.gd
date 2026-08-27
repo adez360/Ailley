@@ -2411,11 +2411,29 @@ func _effective_action_duration(base_duration: float) -> float:
 		duration *= 1.15
 	return duration
 
+## 地點 → 環境危險度（issue #634，《07》§1-1）。暫時寫死成小 dict，不接
+## `location` 這張 DB 表——那張表目前完全沒有任何 gameplay 程式碼讀寫過
+## （schema 存在但沒人用），接上去要多做一層資料填充跟查詢，投資報酬率
+## 跟這裡「先讓數字生效」的訴求不成比例。**之後真的要做地點資料驅動化
+## （之後可能會有更多地點／可調數值）時，這個 dict 要整個換成從
+## `location` 表讀，不要兩邊各自維護一份**。目前只有森林非 0（《07》§1-1
+## 範例值），其餘 MVP 地點按 P-17 拍板統一是 0，不逐一列出
+const DANGER_BY_PLACE := {
+	"forest": 20,
+}
+
+## 危險度換算成成功率扣分的係數。_roll_success() 其餘修正項在極端值下約
+## ±0.1~0.4（alcohol_term 係數是 0.005，跟這裡採同一個量級），森林
+## danger=20 換算後扣 0.1——介於 stamina 項的極端擺幅與 injury／alcohol
+## 項的極端值之間，不會小到無感，也不會蓋過其他修正項
+const ENVIRONMENT_RISK_COEF := 0.005
+
 ## 環境風險由呼叫端依動作/情境算好傳入（正值代表風險，數字越大成功率扣越多）。
-## SUCCESS_PARAMS 目前沒有動作會走到這裡，之後接動作時（例如 steal 的目擊者
-## 風險）再補實際算法
+## 目前只依角色目前所在地點查表——SUCCESS_PARAMS 上的動作（hunt_small／
+## hunt_large／gather／fish 等）都是在 current_place 原地執行，不像 buy
+## 帶獨立的 place 參數，不需要另外從 params 找地點
 func _environment_risk(_action: String, _params: Dictionary) -> float:
-	return 0.0
+	return float(DANGER_BY_PLACE.get(current_place, 0)) * ENVIRONMENT_RISK_COEF
 
 ## 決策執行前的檢查層（#120，《00》原則一：LLM 決定想做什麼，引擎決定做不做得到）。
 ## 只管兩件事：目標/前提是不是真的存在（硬規則），以及擲不擲得過成功率——語意
