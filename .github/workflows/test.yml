@@ -37,7 +37,7 @@ jobs:
           echo "DISPLAY=:99" >> "$GITHUB_ENV"
 
       - name: 首次匯入（讓 .godot/ 快取就緒，避免第一次開機同時匯入拖慢 MCP handshake）
-        run: "$GODOT_BIN" --headless --path Ailley --import
+        run: '"$GODOT_BIN" --headless --path Ailley --import'
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
 
