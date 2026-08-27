@@ -452,9 +452,9 @@ injury       傷勢     0.5    0       0      ✗        ""
 † satiety/hydration/stamina/wakefulness 才是真正的需求型欄位（`is_need=✓`），會被
   get_lowest_need()/needs_attention() 掃描；hygiene/health 雖然也是「越高越好」，但
   `is_need=✗`，不參與這兩個函式（沒有對應的 place 可去，見《99》P-32 追加決策）
-† hygiene 的 drift 2026-08-24 從 0.5 改成 0，拿掉被動漂移——不再是自然消耗，改成
-  由 hunt_small/hunt_large/gather/perform 等工作動作直接扣（`ACTION_DIRTY` 表，
-  見《01-2》），見《99》P-65
+† hygiene 的 drift 2026-08-24 從 0.5 改成 0，拿掉被動漂移——不再是自然消耗；規劃改
+  由 hunt_small/hunt_large/gather/perform 等工作動作直接扣（`ACTION_DIRTY` 表），
+  但該表尚未接線、也還沒定義在任何規格文件裡，追蹤見《99》P-65
 † alcohol/injury 是事件累積型（預設 0，靠外部事件推高），故意維持「越高越差」，
   跟 satiety 等需求型 4 項方向相反
 ⚠ stamina 的 place 寫死 home_001，每個角色的家其實不一樣
