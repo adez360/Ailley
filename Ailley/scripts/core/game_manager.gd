@@ -427,21 +427,29 @@ func deploy_from_library(id: String, as_player: bool = false) -> Character:
 			character.rebuild_provider()
 
 	entry["deployed"] = true
-
-	# main_scene.gd::_apply_startup_ai_state() 只在開機時跑一次，只認開機
-	# 當下已經在 agents group 裡的節點——投放出來的角色那時候還不存在，
-	# 永遠不會被那個迴圈打開 llm_decision_enabled，會是完全靜止、不做任何
-	# 決策的殭屍角色（issue #598）。這裡比照它的 readiness 判斷，在投放
-	# 當下決定要不要開。不用等 AIService.await_readiness_settled()：世界
-	# 這時候早就跑起來了，開機那次探測老早就結算完畢。化身者（as_player）
-	# 是 Player 節點、沒有這個欄位，as Agent 轉型會是 null 自然跳過
-	var agent := character as Agent
-	if agent != null:
-		var readiness := AIService.get_readiness(agent.get_provider_name())
-		if readiness.get("ready", false):
-			agent.debug_set_llm_decision(true)
+	activate_llm_decision_if_ready(character)
 
 	return character
+
+
+# main_scene.gd::_apply_startup_ai_state() 只在開機時跑一次，只認開機當下
+# 已經在 agents group 裡的節點——不管是投放（deploy_from_library()）、還原
+# 存檔（_respawn_character()）或 debug 主控台直接生成（debug_console.gd
+# ::_cmd_spawn），生出來的角色那時候都還不存在，永遠不會被那個迴圈打開
+# llm_decision_enabled，會是完全靜止、不做任何決策的殭屍角色（issue #598）。
+# 這裡比照它的 readiness 判斷，在生成當下決定要不要開，讓每條會動態生成
+# 角色的路徑都共用同一道關卡，不用各自補一份。不用等
+# AIService.await_readiness_settled()：世界這時候早就跑起來了，開機那次
+# 探測老早就結算完畢。呼叫時機要在 decision_source／rebuild_provider() 都
+# 設定完之後，不然 get_provider_name() 撈到的還是預設值。化身者（as_player）
+# 是 Player 節點、沒有這個欄位，as Agent 轉型會是 null 自然跳過
+func activate_llm_decision_if_ready(character: Character) -> void:
+	var agent := character as Agent
+	if agent == null:
+		return
+	var readiness := AIService.get_readiness(agent.get_provider_name())
+	if readiness.get("ready", false):
+		agent.debug_set_llm_decision(true)
 
 
 # ---- 存檔 ----
@@ -722,13 +730,17 @@ func _respawn_character(character_id: String, entry: Dictionary) -> void:
 	)
 
 	if not is_agent:
-		_apply_character_entry(spawn_character(scene, {"character_id": character_id}), entry)
+		var player_character := spawn_character(scene, {"character_id": character_id})
+		_apply_character_entry(player_character, entry)
+		activate_llm_decision_if_ready(player_character)
 		return
 
 	var library_entry := get_library_entry(character_id)
 	if library_entry.is_empty():
 		push_warning("apply_world_save_data: %s 不在角色庫，用最小身分重新生成" % character_id)
-		_apply_character_entry(spawn_character(scene, {"character_id": character_id}), entry)
+		var minimal_character := spawn_character(scene, {"character_id": character_id})
+		_apply_character_entry(minimal_character, entry)
+		activate_llm_decision_if_ready(minimal_character)
 		return
 
 	# 跟 deploy_from_library() 同一套：identity_assignments 讓 _ready() 撿到
@@ -757,3 +769,4 @@ func _respawn_character(character_id: String, entry: Dictionary) -> void:
 			character.rebuild_provider()
 
 	_apply_character_entry(character, entry)
+	activate_llm_decision_if_ready(character)
