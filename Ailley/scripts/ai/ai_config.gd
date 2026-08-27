@@ -358,6 +358,16 @@ static func _is_loopback_url(url: String) -> bool:
 	if slash_index != -1:
 		host = host.substr(0, slash_index)
 
+	# URI userinfo（"user:pass@host"，CodeRabbit review 抓到）：
+	# "127.0.0.1:8081@evil.example" 這種寫法，@ 前面看起來是 loopback，但
+	# Godot 的 HTTPRequest 實際連線時會把 @ 前面當成 userinfo 丟棄，真正連
+	# 上的是 @ 後面的 evil.example——如果這裡只看 @ 前面就判定過關，等於
+	# 讓一個指向任意遠端主機的 URL 偽裝成本機位址騙過驗證。embedding server
+	# 不需要 URL 內嵌帳密，含 @ 的 authority 一律直接拒絕，不嘗試解析
+	# 「@ 後面才是真正的 host」這種寫法本身要不要放行
+	if host.find("@") != -1:
+		return false
+
 	# 括號包住的 IPv6 字面值（CodeRabbit review 抓到）：[::1] 或 [::1]:port，
 	# port 只會出現在右括號之後——不能像下面非括號的情形直接找「最後一個
 	# 冒號」去切，[::1] 本身內部就有冒號，會把左括號內容切壞（[::1] 被切成
