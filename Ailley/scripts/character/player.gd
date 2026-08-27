@@ -200,6 +200,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		vending_menu.open(machine, self)
 		return
 
+	# 死人不能搭話——對著石化的屍體按 E 是要復活他，不是要跟他聊天
+	# （issue #386，《規格書09》§8）。先擋 is_dead 再判表演，屍體不會
+	# 被拿去開打賞選單；其他人（活人）走原本路徑
+	if other != null and other.is_dead:
+		var revive_reason := revive(other)
+		if revive_reason != REVIVE_OK:
+			report_action_failure("revive", revive_reason)
+		return
+
 	# 對方正在表演時，E 開的是打賞選單而不是搭話——玩家（天神）主動打賞是
 	# 全新的 UI 互動，直接呼叫 Inventory.add_money()，不走 AI 決策（#575 拍板）。
 	# tip_menu 理論上一定找得到（場景裡固定掛著），跟 vending_menu 同一種
