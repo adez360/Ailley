@@ -660,17 +660,6 @@ func apply_world_save_data(data: Dictionary) -> void:
 	# 判定跟其他之後讀這個欄位的系統看到錯誤的化身角色
 	embodied_character_id = str(data.get("embodied_character_id", ""))
 
-	# 場景裡目前的 player 節點如果不是存檔記錄的那一個，代表需要換身——但
-	# 換身機制（#371）還沒做，這裡只能示警，不能真的動。不視為錯誤：MVP
-	# 現在場景裡固定只有一個 player 節點，兩者本來就該一致，只有先前手動
-	# 換過場景或存檔跨場次挪用時才會觸發。「沒有 player 節點」正規化成空字串
-	# 再比較，涵蓋「存檔記錄空但場景有 player」與「存檔記錄有 id 但場景沒
-	# player」兩種原本會被漏掉的不一致
-	var player_node := get_tree().get_first_node_in_group("player") as Character
-	var current_embodied_character_id := player_node.character_id if player_node != null else ""
-	if current_embodied_character_id != embodied_character_id:
-		push_warning("apply_world_save_data: 存檔記錄的化身角色 %s 跟場景目前的 player 節點 %s 不同，尚無自動換身機制（見 #371），需要手動處理" % [embodied_character_id, current_embodied_character_id])
-
 	var library_data = data.get("character_library", [])
 	# clear() 在型別檢查之前——存檔壞掉、library_data 不是 Array 時，也不該
 	# 讓上一個世界殘留的 character_library 繼續留在記憶體裡（CodeRabbit review 抓到）
@@ -691,6 +680,28 @@ func apply_world_save_data(data: Dictionary) -> void:
 			character_library.append(entry.duplicate(true))
 	else:
 		push_error("apply_world_save_data: character_library 不是 Array，跳過角色庫載入")
+
+	# 場景裡目前的 player 節點如果不是存檔記錄的那一個，自動從角色庫重新投放
+	# 正確的化身角色（#455）。要放在 character_library 載入完成「之後」——
+	# deploy_from_library() 靠 get_library_entry() 查表，載入前查不到任何
+	# 角色庫紀錄。「沒有 player 節點」正規化成空字串再比較，涵蓋「存檔記錄空但
+	# 場景有 player」與「存檔記錄有 id 但場景沒 player」兩種原本會被漏掉的不一致
+	var player_node := get_tree().get_first_node_in_group("player") as Character
+	var current_embodied_character_id := player_node.character_id if player_node != null else ""
+	if current_embodied_character_id != embodied_character_id:
+		if embodied_character_id.is_empty():
+			push_warning("apply_world_save_data: 場景目前的 player 節點 %s 在存檔裡沒有對應紀錄，維持現狀" % current_embodied_character_id)
+		else:
+			# 這筆紀錄剛從存檔載入，deployed 沿用存檔當下的狀態——存檔當時
+			# 這隻角色就是化身角色，幾乎一定是 true。deploy_from_library()
+			# 對「已經 deployed」的紀錄會直接早退不投放，這裡先歸零，讓它能
+			# 真的重新投放（get_library_entry() 回傳的是陣列元素本身的參照，
+			# 這裡改了 character_library 裡對應的那筆也會跟著變）
+			var target_entry := get_library_entry(embodied_character_id)
+			if not target_entry.is_empty():
+				target_entry["deployed"] = false
+			if deploy_from_library(embodied_character_id, true) == null:
+				push_warning("apply_world_save_data: 無法從角色庫重新投放化身角色 %s（不在角色庫，或世界投放上限已滿），需要手動處理" % embodied_character_id)
 
 	var characters = data.get("characters", {})
 	# 驗證 characters 必須是 Dictionary，不是就跳過整個角色載入流程
