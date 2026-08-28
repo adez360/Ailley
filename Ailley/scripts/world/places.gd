@@ -9,16 +9,41 @@ extends Node2D
 ## 現在只有一份，找不到就是真的沒有這個地點，不用假裝有座標。
 
 
+## 站位避讓半徑（issue #657）：多個角色被排到同一個地點錨點時，長時間停留
+## 下來會完全疊在同一個像素上，視覺上分不清有幾個角色在場。抓 8px（半格）——
+## 夠讓角色視覺上分得開，又不會偏出 TALK_RANGE（32px，見 character.gd）讓
+## 角色明明站在「同一個地點」卻搭不到話
+const OVERLAP_AVOID_RADIUS := 8.0
+
+
 func has(place_name: String) -> bool:
 	return has_node(NodePath(place_name))
 
 
-func resolve(place_name: String) -> Vector2:
+## character_id 選填：帶了就在錨點座標外加一個依角色 id 算出的固定偏移
+## （見 _overlap_offset()），分散多角色疊站在同一錨點的情形。留空維持舊行為
+## 原樣回傳錨點座標——不強迫每個呼叫端（debug 主控台、建角流程的一次性座標
+## 查詢……）都要提供 id
+func resolve(place_name: String, character_id: String = "") -> Vector2:
 	var marker: Node2D = get_node_or_null(NodePath(place_name))
 	if marker == null:
 		push_error("PlaceAnchors: 沒有這個地點 %s" % place_name)
 		return Vector2.ZERO
-	return marker.global_position
+	if character_id.is_empty():
+		return marker.global_position
+	return marker.global_position + _overlap_offset(character_id)
+
+
+## 用 character_id 的雜湊值算一個固定方向的偏移，半徑固定 OVERLAP_AVOID_RADIUS。
+## 同一個角色每次呼叫都拿到同一個偏移——不能每次都不同，否則移動中的抵達
+## 判定（_has_arrived_at()）會追著一個一直在動的目標跑，永遠判定不了「到了」。
+## 不同角色的雜湊值大機率不同、偏移方向也跟著不同，多角色排到同一個錨點時
+## 自然散開，不需要引擎去追蹤「這個地點現在站了幾個人、該讓下一個站哪裡」
+## 這種主動式排位邏輯——跟這個檔案「座標就是場景裡的單一事實來源」一致，
+## 不額外維護一份佔位狀態
+func _overlap_offset(character_id: String) -> Vector2:
+	var angle: float = (hash(character_id) % 360) * TAU / 360.0
+	return Vector2.RIGHT.rotated(angle) * OVERLAP_AVOID_RADIUS
 
 
 # 反向解析（issue #426）：給一個世界座標，回傳它落在哪個地點的錨點半徑內，

@@ -707,7 +707,7 @@ func _send_to_herb_shop_for_treatment() -> void:
 		return
 	_herb_shop_lookup_error_reported = false
 
-	global_position = anchors.resolve("herb_shop")
+	global_position = anchors.resolve("herb_shop", character_id)
 
 	# 記錄治療開始時間，_update_treatment() 會處理倒計時
 	_treatment_start_minute = GameClock.hour * 60 + GameClock.minute

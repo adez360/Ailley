@@ -814,7 +814,7 @@ func _is_own_pursuit_target(world_position: Vector2) -> bool:
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
 	if anchors == null or not anchors.has(current_place):
 		return false
-	return world_position.distance_to(anchors.resolve(current_place)) <= ARRIVE_DISTANCE
+	return world_position.distance_to(anchors.resolve(current_place, character_id)) <= ARRIVE_DISTANCE
 
 # 給事實句（_push_daily_event()）用的即時位置反查（issue #426）：current_place
 # 是目前任務的目的地，不是即時座標——移動中會提早等於目的地，talk／追逐這類
@@ -3276,7 +3276,7 @@ func _pursue_current_task() -> void:
 			_pursuit_done = true
 		return
 
-	var target: Vector2 = anchors.resolve(current_place)
+	var target: Vector2 = anchors.resolve(current_place, character_id)
 
 	# 已經在目的地就沒事要做。這一步不做的話，「早就到了」會被誤報成「走不到」：
 	# move_to() 對「路徑不足兩點」一律回傳 false，而站在原地正好就是這種情形
@@ -3365,7 +3365,7 @@ func _pursue_talk_task() -> void:
 				_pursued_place = current_place
 			return
 
-		var place_pos: Vector2 = anchors.resolve(current_place)
+		var place_pos: Vector2 = anchors.resolve(current_place, character_id)
 		if not _has_arrived_at(place_pos):
 			# 還沒到——跟 _pursue_current_task() 的節流邏輯一樣：
 			# 同一個地點只起步一次，還在走就繼續走
@@ -3612,7 +3612,7 @@ func _pursue_work_task() -> void:
 		_clear_current_task(false)
 		return
 
-	var target: Vector2 = anchors.resolve(current_place)
+	var target: Vector2 = anchors.resolve(current_place, character_id)
 
 	# 還沒到達就先走過去
 	if not _has_arrived_at(target):
@@ -3751,7 +3751,7 @@ func _pursue_buy_task() -> void:
 		_reevaluate()
 		return
 
-	var approach_target: Vector2 = anchors.resolve(place)
+	var approach_target: Vector2 = anchors.resolve(place, character_id)
 
 	# 還沒到達就先走過去
 	if not _has_arrived_at(approach_target):
@@ -3879,7 +3879,7 @@ func _pursue_gather_task() -> void:
 		_reevaluate()
 		return
 
-	var target: Vector2 = anchors.resolve(place)
+	var target: Vector2 = anchors.resolve(place, character_id)
 
 	# 還沒到達就先走過去——跟 _pursue_work_task()／_pursue_buy_task() 同一套
 	# 收斂邏輯：地點沒換就只起步一次，已有結論（含 move_to() 失敗）不重試

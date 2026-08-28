@@ -230,7 +230,7 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 	# 原點，不讓投放整個失敗
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
 	if anchors != null and anchors.has("pavilion"):
-		character.global_position = anchors.resolve("pavilion")
+		character.global_position = anchors.resolve("pavilion", character.character_id)
 
 	return character
 
