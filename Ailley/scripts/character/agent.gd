@@ -3060,13 +3060,21 @@ func _pursue_work_task() -> void:
 
 # buy 任務的執行（#340）：先找到販賣機並移動到其位置，再呼叫 buy_from()。
 # 販賣機透過 params.place 指定（餐酒館或藥草鋪）
+#
+# 導航目標刻意不是 machine.global_position（#670）：販賣機是 NavGrid 上的
+# 障礙格（見 vending_machine.gd 開頭註解），終點格永遠不可走，尋徑只會把
+# 路徑收斂到鄰近可走格，跟 _has_arrived_at() 的判定（2px 或同一格）永遠對不上，
+# 是結構性死結，不是機率問題。改跟 _pursue_work_task() 同一套，用 PlaceAnchors
+# 預先擺在可走格上的錨點當導航目標；買東西那一刻的距離判定（buy_from()，
+# character.gd）維持看 machine.global_position，不受影響，四個方向一樣能買
 func _pursue_buy_task() -> void:
 	var buy_task_id: String = str(_current_task.get("id", ""))
 	var place: String = str(_current_task.get("params", {}).get("place", ""))
 	var machine := _find_vending_machine_at_place(place)
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
 
-	# 找不到販賣機：立即返回失敗
-	if not machine:
+	# 找不到販賣機，或販賣機所在地點沒有對應的可走錨點：立即返回失敗
+	if not machine or anchors == null or not anchors.has(place):
 		# 要先讀 source／id 再清空 _current_task——清空之後兩個 get() 都只會
 		# 讀到空字典的預設值，llm 任務永遠判斷不是 llm、也移除不掉，會卡在
 		# 池子裡讓 _reevaluate() 重複選到同一筆（CodeRabbit review 抓到）
@@ -3078,19 +3086,27 @@ func _pursue_buy_task() -> void:
 		stop_moving()
 		_pursued_place = ""
 		_pursuit_done = false
-		_current_task = {}
-		current_place = ""
-		current_state = "idle"
 		last_action_result = Character.BUY_TARGET_NOT_FOUND
 		if failed_task_source == "llm":
 			_remove_task(failed_task_id)
+		else:
+			# schedule 任務不會被移出池子，靠 window 自然退場——不加退避的話
+			# 下面 _reevaluate() 會在同一輪 trampoline 裡立刻重選到同一筆、
+			# 立刻再失敗一次，卡進無法跳出的同步迴圈（CodeRabbit review 抓到）
+			_mark_schedule_retry_backoff(_current_task)
+		# 用 _clear_current_task() 而不是手動清四個欄位：它會把這筆任務 id 記進
+		# _reevaluate_excluded_ids，這輪 trampoline 才不會又選回同一筆
+		# （CodeRabbit review 抓到，跟上面的退避是同一個問題的兩面）
+		_clear_current_task(false)
 		if llm_decision_enabled and not _awaiting_decision:
 			_request_next_decision(_today_plan_needs_new_goal())
 		_reevaluate()
 		return
 
+	var approach_target: Vector2 = anchors.resolve(place)
+
 	# 還沒到達就先走過去
-	if not _has_arrived_at(machine.global_position):
+	if not _has_arrived_at(approach_target):
 		# 同 _pursue_work_task() 的收斂邏輯：已有結論就不要重試——但這裡要比對
 		# 任務 id 而不是 current_place，理由見 _buy_pursuit_task_id 的說明
 		# （CodeRabbit review 抓到）
@@ -3106,8 +3122,8 @@ func _pursue_buy_task() -> void:
 		_buy_pursuit_task_id = buy_task_id
 		_pursued_place = current_place
 		_pursuit_done = false
-		_buy_pursuit_target = machine.global_position
-		if not move_to(machine.global_position):
+		_buy_pursuit_target = approach_target
+		if not move_to(approach_target):
 			push_warning("Agent %s: 走不到販賣機 %s" % [character_name, place])
 			# schedule 任務維持原本的停止重試行為，靠 window 自然退場；
 			# llm 任務沒有 window 這條退路，只設 _pursuit_done 的話會一直卡在
