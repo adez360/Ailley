@@ -1,3 +1,4 @@
+class_name Conversation
 extends Node
 
 ## 兩個角色之間的一場對話。
@@ -31,6 +32,12 @@ const MAX_DISTANCE := 48.0		# 講到一半離這麼遠就散場，比搭話門�
 const REASON_ENDED_BY_SPEAKER := "ENDED_BY_SPEAKER"
 const REASON_TOO_FAR := "TOO_FAR"
 const REASON_INTERRUPTED := "INTERRUPTED"
+
+## 被搭話的一方在 turn 0 選擇不理會（engage=false）：跟 REASON_ENDED_BY_SPEAKER
+## 分開，因為一句話都沒講——不能算「認識」（_apply_rewards() 只認
+## REASON_ENDED_BY_SPEAKER），事實句也要誠實反映「沒有回應」而不是「講完話了」
+## （複審 PR #667 抓到：原本兩者共用同一個 reason，誤觸發 note_meeting()）
+const REASON_IGNORED := "IGNORED"
 
 var initiator: Character
 var target: Character
@@ -88,7 +95,7 @@ func _run() -> void:
 		if turn == 0 and not result.get("engage", true):
 			if speaker.bubble != null:
 				speaker.bubble.clear()
-			_finish(REASON_ENDED_BY_SPEAKER)
+			_finish(REASON_IGNORED)
 			queue_free()
 			return
 
@@ -170,7 +177,7 @@ func _finish(reason: String) -> void:
 
 	for character in [initiator, target]:
 		if is_instance_valid(character):
-			character.exit_conversation()
+			character.exit_conversation(reason)
 
 	finished.emit(reason)
 

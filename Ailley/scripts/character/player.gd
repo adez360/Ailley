@@ -110,8 +110,8 @@ func _on_line_submitted(text: String) -> void:
 # 只有真的有 next_line() 在等待時才需要 emit 取消——沒在等待時 emit 只會是
 # 發進沒人接的訊號（跟上面 _on_line_submitted() 同一個理由），順便清掉任何
 # 殘留的緩衝，不讓上一場對話沒送出的半句話流進下一場對話
-func exit_conversation() -> void:
-	super()
+func exit_conversation(reason: String = "") -> void:
+	super(reason)
 	_pending_lines.clear()
 	if _turn_waiting:
 		turn_resolved.emit("", false)

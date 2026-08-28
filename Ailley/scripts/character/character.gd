@@ -1062,7 +1062,7 @@ func enter_conversation(conversation: Node) -> void:
 	_conversation = conversation
 	stop_moving()
 
-func exit_conversation() -> void:
+func exit_conversation(_reason: String = "") -> void:
 	_conversation = null
 
 # 自己主動離開對話
