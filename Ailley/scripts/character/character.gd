@@ -9,6 +9,7 @@ extends CharacterBody2D
 signal move_finished(reached: bool)
 signal noise_heard(source: Character)		# 收到的那一方會發，見 make_noise()
 signal spoke(line: String)			# 講出任何一句話都會發，日後寫逐字稿/記憶系統的接點
+signal speech_heard(source: Character, line: String)	# 收到的那一方會發，見 say() 的廣播（issue #669）
 
 const SPEED = 60.0		# 2026-08-24 從 80 調降，原速 5 格/秒（16px/格）偏快
 const ARRIVE_DISTANCE = 2.0		# 距離 waypoint 多近算抵達
@@ -1073,6 +1074,11 @@ func leave_conversation() -> void:
 ## interrupt=true 立刻蓋掉正在顯示/排隊中的內容（LLM 回應等待中的「…」要被
 ## 真正的台詞立刻換掉，不能排在它後面等它自己的顯示時間跑完）。
 ## 預設 false 維持原本「不打斷正在講的話」的排隊語意，其餘呼叫端不用改
+##
+## 廣播 speech_heard 不分呼叫來源——一般聊天輸入框（chat_input.gd）跟
+## talk_to() 正式對話（conversation.gd）都算「說了一句話」，《07》§3
+## 定義的「聽覺（一般說話）3 格」是物理上聽不聽得到，不分是哪種介面講出來的
+## （issue #669）
 func say(line: String, interrupt: bool = false) -> void:
 	if bubble == null:
 		return
@@ -1080,6 +1086,7 @@ func say(line: String, interrupt: bool = false) -> void:
 		bubble.clear()
 	bubble.say(line)
 	spoke.emit(line)
+	_broadcast_speech(line)
 
 ## 行為失敗時統一的回報方式（issue #180），取代原本三個呼叫點（player.gd
 ## 的 work_at／talk_to、vending_menu.gd 的 buy_from）各自手寫的
@@ -1142,6 +1149,22 @@ func make_noise(radius: float = NOISE_RADIUS) -> void:
 			continue
 		if get_body_position().distance_to(other.get_body_position()) <= radius:
 			other.noise_heard.emit(self)
+
+## 廣播半徑（像素），3 格——《07》§3 定案「聽覺（一般說話）3 格」，跟
+## NOISE_RADIUS（shout／make_noise 的 8 格）是刻意分開的兩個數字
+const SPEECH_HEARD_RADIUS := 48.0
+
+## 對外廣播「這裡說了一句話」，範圍內每個角色都會收到 speech_heard 訊號，
+## 帶實際講的內容——跟 make_noise() 只給「有聲音發生」這個事實不同，
+## 一般說話《07》§3 定義的本來就是「聽得到的對話」，內容是客觀事實（誰講了
+## 什麼字），要不要反應、反應是什麼由收到的那一方自己決定，感測/反應分離
+## 的理由跟 make_noise() 一樣（issue #669，見 [[聽覺感測]]）
+func _broadcast_speech(line: String) -> void:
+	for other in get_tree().get_nodes_in_group("characters"):
+		if other == self:
+			continue
+		if get_body_position().distance_to(other.get_body_position()) <= SPEECH_HEARD_RADIUS:
+			other.speech_heard.emit(self, line)
 
 
 # ---- 工作 ----

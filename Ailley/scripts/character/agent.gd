@@ -652,6 +652,7 @@ func _ready() -> void:
 		vision.lost.connect(_on_lost)
 
 	noise_heard.connect(_on_noise_heard)
+	speech_heard.connect(_on_speech_heard)
 	move_finished.connect(_on_move_finished)
 
 	# NavGrid 開場是非同步建的，不等它建完就出發只會拿到空路徑
@@ -1922,6 +1923,31 @@ func _on_noise_heard(_source: Character) -> void:
 
 	# fallback（排程模式，沒有 LLM 可問）：維持原本寫死的 !? 反應
 	say(L10n.t("DLG_NOISE_ALERT"))
+
+# 範圍內有人說話（一般聊天輸入框或 talk_to() 對話，見 character.gd::say()
+# 的廣播，issue #669）。跟 _on_noise_heard() 同一種感測/反應分離，差別是
+# 這裡帶了實際講的內容——《07》§3「聽覺（一般說話）3 格」定義的本來就是
+# 「聽得到的對話」，內容是客觀事實，要不要反應交給模型自己判斷
+#
+# 排程模式（llm_decision_enabled 關著）刻意不冒 !?，跟 _on_noise_heard() 不同：
+# 一般說話遠比 make_noise()／shout 頻繁（玩家聊天、talk_to() 每一句都算），
+# 排程模式又沒有決策迴圈會消費 _pending_reaction_lines，硬套 noise 那套寫死
+# 反應只會讓排程模式的 NPC 對著每一句路過的對話狂冒 !?。這只是排程模式下
+# 沒有「決策者」時的視覺呈現選擇，不影響 llm_decision_enabled 開著時送給
+# 模型的事實內容（下面完整保留），跟原則二要保護的「事件有沒有讓 AI 知道」
+# 是兩回事；llm_decision_enabled 開著但這次問不到結果（逾時／驗證失敗）時，
+# 仍比照 _on_noise_heard() 退回寫死反應，不能讓角色看起來完全沒反應
+func _on_speech_heard(source: Character, line: String) -> void:
+	if is_dead or is_in_conversation():
+		return
+
+	if llm_decision_enabled:
+		_queue_reaction_fact_line("你聽到附近的 %s 說：『%s』，要不要有反應由你自己決定" % [source.character_name, line])
+		var result := await _request_next_decision()
+		if is_dead:
+			return
+		if result.get("triggered", false) and not result.get("ok", false):
+			say(L10n.t("DLG_NOISE_ALERT"))
 
 # 把一次性事件（看到陌生人、聽到聲音）排進下一次決策的事實句佇列
 # （#402／#407）。見 _pending_reaction_lines 的欄位說明
