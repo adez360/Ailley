@@ -1375,6 +1375,17 @@ func _request_next_decision(
 
 		var tasks_added := _push_llm_tasks(data["tasks"], data)
 
+		# 回應合法地帶回空 tasks 陣列（規格「不更新就是空陣列」）、且現在
+		# 真的沒有任何事在做時，補一筆 idle 頂著（issue #699）——不這樣做的
+		# 話角色會卡在完全沒有任何任務的狀態，唯一接得上的「動作做完」事件
+		# 驅動重排永遠不會發生，只能靠 #695 那個獨立節流的保底重排撐著。
+		# 補一筆 idle 之後兩者行為一致：duration 到期就正常觸發下一次決策，
+		# 不需要為「決策回應空手而歸」另外燒一份跟仲裁器候選池不相干的
+		# 冷卻預算。優先度給 0——就算池子裡還留著別的候選（例如 schedule
+		# 任務進了窗口），也不該搶贏它們
+		if tasks_added == 0 and _current_task.is_empty():
+			_push_llm_tasks([{"action": "idle", "params": {}, "priority": 0.0}], data)
+
 		# emotion（#351）：每次決策都必填，validate_tasks() 已經驗證過 type／
 		# intensity 合法，這裡直接套用，不再二次判斷——AI 自己宣告的內在狀態，
 		# 引擎不覆寫、不打折扣。stability／grudge 帶這隻角色自己的人格值——不帶
