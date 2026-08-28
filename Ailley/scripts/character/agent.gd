@@ -2629,6 +2629,8 @@ func _reevaluate_once() -> void:
 			continue
 		if _reevaluate_excluded_ids.has(task.get("id", "")):
 			continue
+		if not _preconditions_met(task):
+			continue
 		# 排程任務這個時間窗內已知會失敗，退避到窗期結束（issue #505，見
 		# _mark_schedule_retry_backoff()）——不跳過的話同一個失敗的排程任務
 		# 每個遊戲分鐘都會被選回來重試一次，是這則 issue 要修的洗版問題本身
@@ -2643,8 +2645,9 @@ func _reevaluate_once() -> void:
 	if not best.is_empty():
 		_consider_switch(best, best_score, now, now_minutes)
 	elif not _current_task.is_empty() \
-			and (_is_expired(_current_task, now_minutes) or not _in_window_or_unwindowed(_current_task, now)):
-		# 一個候選都沒有，而目前這筆自己已經過期或窗口過了：清掉，不要留著。
+			and (_is_expired(_current_task, now_minutes) or not _in_window_or_unwindowed(_current_task, now) \
+				or not _preconditions_met(_current_task)):
+		# 一個候選都沒有，而目前這筆自己已經過期、窗口過了、或前提不再成立：清掉，不要留著。
 		# 留著的話 sleep（interruptible = false）會讓 is_talk_interruptible() 與
 		# _is_preemptible() 都永遠回 false，角色再也搭不了話、任務也永遠搶不走
 		# ——跟「窗口過期還被 interruptible 擋住」是同一個坑，只是從 best 為空
@@ -2701,8 +2704,14 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 	if best.get("id", "") == _current_task.get("id", ""):
 		return
 
+	# 三道濾網跟候選迴圈（_reevaluate_once()）用的是同一套：過期／窗口／
+	# preconditions，任一項不成立就不受下面的承諾保護。preconditions 沒過時
+	# not current_still_valid → _select() 的 outgoing_ok=true，today_log 記
+	# ok=true——跟過期／出窗同一種「自然結束」收尾，不是被搶占（ok=false）
+	# 那條；要不要為前提失效另立更細的訊號是產品決策，見《行程佇列與任務仲裁》
 	var current_still_valid := not _is_expired(_current_task, now_minutes) \
-		and _in_window_or_unwindowed(_current_task, now)
+		and _in_window_or_unwindowed(_current_task, now) \
+		and _preconditions_met(_current_task)
 
 	if current_still_valid:
 		# 承諾檢查（含 interruptible）只保護「還沒過期、還在自己時間窗內」的
@@ -2727,6 +2736,13 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 
 	# current_still_valid：舊任務還在自己視窗內、沒過期，卻在這裡被換掉，
 	# 代表它是被 best 搶占的，not (自然結束)——today_log 記 ok=false（#366）
+	#
+	# 前提失效時 best 若是 idle 或沒有 place（CodeRabbit review）：_select()
+	# 只覆寫 _current_task，_pursue_current_task() 對這種任務直接 return，
+	# 不會呼叫 stop_moving()，角色會沿用舊任務留下的路徑繼續移動。這裡在
+	# 換任務前主動停下，讓「前提失效」跟其他讓位情形一樣立刻停止舊行為
+	if not current_still_valid:
+		stop_moving()
 	_select(best, now_minutes, not current_still_valid)
 
 ## 《01-2》§3 完整表格，數字照抄，含目前還沒接上執行邏輯的動作（等落地時
@@ -3557,9 +3573,14 @@ func _pursue_work_task() -> void:
 		stop_moving()
 		_pursued_place = ""
 		_pursuit_done = false
-		_current_task = {}
-		current_place = ""
-		current_state = "idle"
+		# schedule 來源沒有 _remove_task() 這條退路，任務會留在池子裡——跟
+		# _pursue_buy_task() 同一個理由，失敗要先設退避，不然下一個 tick
+		# window 還沒過就會立刻重試同一個解不開的地點（CodeRabbit review 抓到）
+		_mark_schedule_retry_backoff(_current_task)
+		# 改用 _clear_current_task()，不要手動清空——手動清空會漏記
+		# today_log（_log_task_ended() 沒被呼叫），這筆 work 不會出現在
+		# 每日摘要（CodeRabbit review 抓到）
+		_clear_current_task(false)
 		return
 
 	var target: Vector2 = anchors.resolve(current_place)
@@ -3607,12 +3628,13 @@ func _pursue_work_task() -> void:
 
 	if reason != Character.WORK_OK:
 		push_warning("Agent %s: work_at 失敗（%s）" % [character_name, reason])
-		# 其他失敗原因：清掉任務、重置 pursuit state 並等待決策
+		# 其他失敗原因：清掉任務、重置 pursuit state 並等待決策。同上改用
+		# _clear_current_task()，避免漏記 today_log；失敗也一併設退避，理由
+		# 同上一條路徑（CodeRabbit review 抓到）
 		_pursued_place = ""
 		_pursuit_done = false
-		_current_task = {}
-		current_place = ""
-		current_state = "idle"
+		_mark_schedule_retry_backoff(_current_task)
+		_clear_current_task(false)
 		if llm_decision_enabled and not _awaiting_decision:
 			_request_next_decision(_today_plan_needs_new_goal())
 
@@ -3682,13 +3704,18 @@ func _pursue_buy_task() -> void:
 		if failed_task_source == "llm":
 			_remove_task(failed_task_id)
 		else:
-			# schedule 任務不會被移出池子，靠 window 自然退場——不加退避的話
-			# 下面 _reevaluate() 會在同一輪 trampoline 裡立刻重選到同一筆、
-			# 立刻再失敗一次，卡進無法跳出的同步迴圈（CodeRabbit review 抓到）
+			# schedule 來源沒有 _remove_task() 這條退路，任務不會被移出池子、
+			# 靠 window 自然退場。下面緊接著同步呼叫 _reevaluate()，若只手動
+			# 清空 _current_task 而不經過 _clear_current_task()，這筆任務的 id
+			# 不會被寫進 _reevaluate_excluded_ids，window／分數都沒變，會立刻
+			# 被重新選中、再次進來這個分支，形成同一個遊戲分鐘內的同步無窮
+			# 迴圈（CodeRabbit review 抓到，🔴 Critical）——不加退避的話，會在
+			# 同一輪 trampoline 裡立刻重選到同一筆、立刻再失敗一次，卡進無法
+			# 跳出的同步迴圈。_clear_current_task() 擋住這一輪重選，
+			# _mark_schedule_retry_backoff() 擋住下一個 tick 的重選，直到這個
+			# window 過去——兩者是同一個問題的兩面
 			_mark_schedule_retry_backoff(_current_task)
-		# 用 _clear_current_task() 而不是手動清四個欄位：它會把這筆任務 id 記進
-		# _reevaluate_excluded_ids，這輪 trampoline 才不會又選回同一筆
-		# （CodeRabbit review 抓到，跟上面的退避是同一個問題的兩面）
+		# 手動清空會漏記 today_log，改用共用收尾 helper（CodeRabbit review 抓到）
 		_clear_current_task(false)
 		if llm_decision_enabled and not _awaiting_decision:
 			_request_next_decision(_today_plan_needs_new_goal())
@@ -3747,11 +3774,16 @@ func _pursue_buy_task() -> void:
 
 	if _current_task.get("source", "") == "llm":
 		_remove_task(_current_task.get("id", ""))
+	else:
+		# 跟上面「找不到販賣機」同一個理由，且不分成功失敗都要擋：買到了
+		# 也不代表這筆 schedule 任務會被移出池子，成功路徑一樣有立即
+		# _reevaluate() 重選到同一筆的風險——會連續購買到錢不足或背包塞滿
+		# 為止（CodeRabbit review 抓到，🔴 Critical）
+		_mark_schedule_retry_backoff(_current_task)
 	_pursued_place = ""
 	_pursuit_done = false
-	_current_task = {}
-	current_place = ""
-	current_state = "idle"
+	# 手動清空會漏記 today_log，改用共用收尾 helper（CodeRabbit review 抓到）
+	_clear_current_task(last_action_result == Character.BUY_OK)
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
@@ -4739,6 +4771,100 @@ func _is_expired(task: Dictionary, now_minutes: int) -> bool:
 	var expires_at: int = task.get("expires_at", 0)
 	return expires_at > 0 and expires_at <= now_minutes
 
+# preconditions 是 AND 陣列：任一筆比對失敗，整筆任務判定不成立——跟
+# window／expires_at 兩道既有濾網並排，候選迴圈（_reevaluate_once()）跟
+# _current_task 的有效性判斷（_consider_switch() 的 current_still_valid）
+# 都呼叫這個函式，不是只管候選篩選。preconditions 本身非 Array、單筆非
+# Dictionary、欄位解析不出來、value 不是數字，一律 fail-closed 回傳 false——
+# value 尤其不能省：_compare_precondition() 對數字比不相容型別（例如對 null）
+# 會直接丟 runtime error，不是安全地回傳 false（見《行程佇列與任務仲裁》
+# 「前提求值」一節的驗證紀錄）
+func _preconditions_met(task: Dictionary) -> bool:
+	var preconditions = task.get("preconditions", [])
+	if not (preconditions is Array):
+		push_warning("Agent: preconditions 格式錯誤（非 Array），視為不成立：%s" % [preconditions])
+		return false
+	for cond in preconditions:
+		if not (cond is Dictionary):
+			push_warning("Agent: precondition 格式錯誤（非 Dictionary），視為不成立：%s" % [cond])
+			return false
+		var actual = _resolve_precondition_field(cond, task)
+		if actual == null:
+			push_warning("Agent: precondition 欄位無法解析，視為不成立：%s" % [cond])
+			return false
+		# actual 一定是數字（stats 命名空間只回傳數字或 null，
+		# null 已在上面擋掉）——value 也強制要求數字，否則 >=/<=/>/< 會在
+		# _compare_precondition() 對不相容型別（例如數字對 null／字串）直接
+		# 丟出 runtime error，不是安全地回傳 false（實測驗證過：
+		# `5.0 >= null` 會拋 "Invalid operands 'float' and 'Nil'"，不會被
+		# GDScript 靜默吞掉），違反這裡一路 fail-closed 的原則
+		var expected = cond.get("value")
+		if not (expected is int or expected is float):
+			push_warning("Agent: precondition value 不是數字，視為不成立：%s" % [cond])
+			return false
+		# op 不是字串時（例如誤填數字）一樣要在呼叫前擋下來——
+		# _compare_precondition() 的 op 參數型別化成 String，非字串 Variant
+		# 傳進去會在呼叫當下直接丟 runtime error，不是安全地回傳 false
+		# （CodeRabbit review 抓到，跟 field 那則同一種型別漏洞）
+		var op = cond.get("op", "")
+		if not (op is String):
+			push_warning("Agent: precondition op 不是字串，視為不成立：%s" % [cond])
+			return false
+		if not _compare_precondition(op, actual, expected):
+			return false
+	return true
+
+# 欄位只認一種命名空間，寫成 "stats.<key>"：key 要在 Stats.SPEC 裡才算數，
+# 錯字視為無法解析（Stats.get_value() 本身對不存在的 key 靜默回 0.0，這裡
+# 不能直接沿用，否則錯字會被誤判成「數值 0」剛好卡過某些條件）。
+#
+# 刻意不支援 "relations.<key>"（trust／met_count，2026-08-24 拿掉，見全專案
+# 盤點的原則二審查）：這個機制濾掉的是候選任務——一旦允許用 relations 當
+# precondition，某個任務會在 AI 連看都沒看到之前就被引擎依信任度濾掉，這
+# 跟《07》§5 已拍板的方向正相反（社會性限制不過濾，AI 能選，由引擎判定
+# 失敗並給理由）。stats 類（力竭、傷勢）是《00》原則一「客觀做不到」的範圍，
+# relations 類是社會性限制，兩者不該用同一道濾網處理。之後如果真的需要用
+# 關係狀態限制任務可見度，要先回頭確認不會複製這個問題，不是直接加回這個
+# 分支
+func _resolve_precondition_field(cond: Dictionary, _task: Dictionary) -> Variant:
+	# field 不是字串時（例如 LLM／排程資料誤填數字）直接 fail-closed——
+	# GDScript 對 Variant → String 的型別化指派不會做隱式轉換，非字串會直接
+	# 丟 runtime error 中止 _reevaluate_once()，不是安全地回傳 false
+	# （CodeRabbit review 抓到）
+	var raw_field: Variant = cond.get("field", "")
+	if not (raw_field is String):
+		return null
+	var field: String = raw_field
+	var parts := field.split(".", true, 1)
+	if parts.size() != 2:
+		return null
+
+	match parts[0]:
+		"stats":
+			if stats == null or not Stats.SPEC.has(parts[1]):
+				return null
+			return stats.get_value(parts[1])
+		_:
+			return null
+
+func _compare_precondition(op: String, actual: Variant, expected: Variant) -> bool:
+	match op:
+		">=":
+			return actual >= expected
+		"<=":
+			return actual <= expected
+		">":
+			return actual > expected
+		"<":
+			return actual < expected
+		"==":
+			return actual == expected
+		"!=":
+			return actual != expected
+		_:
+			push_warning("Agent: precondition 用了不認得的比較運算 %s" % [op])
+			return false
+
 func _in_window_or_unwindowed(task: Dictionary, now: String) -> bool:
 	var window = task.get("window")
 	if window == null:
@@ -4804,6 +4930,7 @@ func get_task_debug_info() -> Array[Dictionary]:
 			"task": task,
 			"is_current": not _current_task.is_empty() and task["id"] == _current_task["id"],
 			"in_window": _in_window_or_unwindowed(task, now),
+			"preconditions_met": _preconditions_met(task),
 			"score": {
 				"base": float(task.get("priority", 0.0)),
 				"time": _time_bonus(task, now),
