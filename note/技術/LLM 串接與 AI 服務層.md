@@ -870,20 +870,22 @@ poc 輸出裡有、《06》沒提到的欄位：`reasoning`／`inner_monologue`�
 100 字上限是延遲/品質的直接槓桿，往下砍會更快但決策品質會掉；其他槓桿是模型
 量化等級、llama-server 的 `--parallel` 設定，會影響全部呼叫，改動範圍更大。
 
-## 動態投放到真正依任務移動：冷卻已修好，真正的卡點是空任務回應沒有補救機制（2026-08-28 實測）
+## 動態投放到真正依任務移動：冷卻問題待修（PR #684），真正的卡點是空任務回應沒有補救機制（2026-08-28 實測）
 
-`_generate_words_to_creator()`（`agent.gd`／`game_manager.gd` 各一份）原本
-跟第一次 plan 決策共用同一個 `AIService.Policy.SCHEDULED` 冷卻池，導致
-投放後多等一輪完整冷卻（目前 30 秒）才送得出第一次決策——這個問題已經在
-issue #682 修掉：新增 `AIService.Policy.CREATION`，讓這通一次性生成呼叫
-無條件豁免冷卻與每日配額，不再跟決策共用池子。修完後不管走 debug 主控台
-`spawn` 還是正式的 `GameManager.deploy_from_library()`，投放到送出第一次
-plan 決策都只要一次網路延遲（0.6-1.9 秒，量級同上一節 #118 校準值），
-不再有那 30 秒——透過 `Continue`（讀檔重生）真實路徑重新投放已生成過
-`words_to_creator` 的角色驗證過：`AIService.get_usage()` 顯示
-`calls_today: 1`，沒有被搶先佔用冷卻。
+`_generate_words_to_creator()`（`agent.gd`／`game_manager.gd` 各一份）目前
+仍跟第一次 plan 決策共用同一個 `AIService.Policy.SCHEDULED` 冷卻池
+（origin/main 的 `Policy` enum 只有 `SCHEDULED`／`CONVERSATION`），導致
+投放後多等一輪完整冷卻（目前 30 秒）才送得出第一次決策。修法（issue #682，
+**實作在尚未合併的 PR #684**）：新增 `AIService.Policy.CREATION`，讓這通
+一次性生成呼叫無條件豁免冷卻與每日配額，不再跟決策共用池子。合併後不管走
+debug 主控台 `spawn` 還是正式的 `GameManager.deploy_from_library()`，
+投放到送出第一次 plan 決策預期只要一次網路延遲（0.6-1.9 秒，量級同上一節
+#118 校準值；此數值是在 #684 分支上實測的，尚未進 main），不再有那 30 秒
+——透過 `Continue`（讀檔重生）真實路徑重新投放已生成過 `words_to_creator`
+的角色驗證過：`AIService.get_usage()` 顯示 `calls_today: 1`，沒有被搶先
+佔用冷卻。
 
-**但修完冷卻之後，角色還是可能站著不動，原因換了一個**：任務池要真的有
+**冷卻修掉之後（#684），角色還是可能站著不動，原因換了一個**：任務池要真的有
 東西，仲裁器才有東西可選。決策回應的 `tasks` 欄位允許回傳空陣列（規格
 「不更新就是空陣列」），這是合法回應，不是驗證失敗。三隻分別測試過的
 角色（正式投放的 Gandalf、debug spawn 的 Gandalf（複製）、小海）在
