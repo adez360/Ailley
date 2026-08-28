@@ -90,7 +90,10 @@ func _on_interact_area_body_exited(body: Node2D) -> void:
 func _on_noise_heard(_source: Character) -> void:
 	if is_dead or is_in_conversation():
 		return
-	say(L10n.t("DLG_NOISE_ALERT"))
+	# broadcast=false：這是系統 fallback 泡泡，不是玩家真的說了什麼，不該被
+	# 3 格內的 NPC 當成「聽到的對話」去反應、問一次決策——同 agent.gd 的理由，
+	# 見 character.gd::say() 的說明（CodeRabbit review 抓到，PR #674）
+	say(L10n.t("DLG_NOISE_ALERT"), false, false)
 
 # 打字是「這一輪有結果了」的其中一種來源，另一種是對話結束（見 exit_conversation()）。
 # 兩者收斂成同一個訊號，next_line() 才只要等一個東西。
