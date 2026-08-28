@@ -1083,7 +1083,7 @@ func enter_conversation(conversation: Node) -> void:
 	_conversation = conversation
 	stop_moving()
 
-func exit_conversation() -> void:
+func exit_conversation(_reason: String = "") -> void:
 	_conversation = null
 
 # 自己主動離開對話
@@ -1138,9 +1138,11 @@ func report_action_failure(action_label: String, reason: String) -> void:
 ## 兩者由子類別覆寫。conversation.gd 只問「輪到你了，下一句是什麼」，不問
 ## 「你是誰」，之後要接遠端角色（伺服器轉發）也只是再多一個覆寫，會話層不用改。
 ##
-## 回傳 {"ok": bool, "line": String, "end": bool}：ok=false 代表這一輪要不到
-## 台詞（LLM 停用/逾時/驗證失敗），呼叫端（conversation.gd）要轉去 fallback，
-## 不是把空字串當成正常台詞講出去
+## 回傳 {"ok": bool, "engage": bool, "line": String, "end": bool}：ok=false 代表
+## 這一輪要不到台詞（LLM 停用/逾時/驗證失敗），呼叫端（conversation.gd）要轉去
+## fallback，不是把空字串當成正常台詞講出去。engage 只在第一輪（turns 空陣列，
+## 被搭話的那一方）才可能是 false——對象選擇不理會這次搭話，line/end 這時沒有
+## 內容可看，其餘輪次 engage 恆為 true（issue #630）
 func next_line(_listener: Character, _turns: Array[Dictionary], _max_turns: int) -> Dictionary:
 	push_error("%s: next_line() 沒有被子類別覆寫" % character_name)
 	return {"ok": false}

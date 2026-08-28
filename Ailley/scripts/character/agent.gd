@@ -960,25 +960,43 @@ func _is_preemptible() -> bool:
 # 任務。憑當下的 _current_task 判斷會有兩種撲空：真正該清的那筆任務已經
 # 不是 _current_task、清不到；或是被別人搭話時，自己另一筆不相干的待辦
 # talk 任務剛好是 _current_task，被誤刪
-func exit_conversation() -> void:
+func exit_conversation(reason: String = "") -> void:
 	# 事件事實句要在 super() 把 _conversation 清成 null 之前先讀——這裡只記
-	# 客觀事實（跟誰講完話），不記對話內容好壞，那是睡前反思時 LLM 自己判斷的事
+	# 客觀事實（跟誰講完話／被不理會），不記對話內容好壞，那是睡前反思時 LLM
+	# 自己判斷的事
+	#
+	# REASON_IGNORED（複審 PR #667 抓到）：對方一句話沒說就不理會，「你跟 X
+	# 講完話了」是假話，兩邊要分別給誠實的說法——被搭話的一方看到的是自己
+	# 選擇不理會，發起搭話的一方看到的是對方沒有回應
 	if _conversation != null:
 		var other: Character = _conversation.target if _conversation.initiator == self else _conversation.initiator
 		if other != null:
 			# #426：current_place 對指名對話（direct-target talk）從頭到尾是
 			# 空字串（沒有 place 可言），這裡改用即時座標反查——對話結束當下
 			# 兩人就站在彼此旁邊，位置是準的
-			_push_daily_event(
-				"你跟 %s 講完話了" % other.character_name, [other.character_id], _resolve_actual_place()
-			)
+			var event_text: String
+			if reason == Conversation.REASON_IGNORED:
+				event_text = (
+					"%s 不理你的搭話，沒有回應" % other.character_name if self == _conversation.initiator
+					else "你不理會 %s 的搭話" % other.character_name
+				)
+			else:
+				event_text = "你跟 %s 講完話了" % other.character_name
+			_push_daily_event(event_text, [other.character_id], _resolve_actual_place())
 			# 「多久沒說話」事實句的計時基準（#338）
 			_last_social_minute = _now_minutes()
 
-	super()
+	super(reason)
 
 	if not _active_talk_task_id.is_empty():
 		var was_llm := _active_talk_task_source == "llm"
+
+		# talk_to() 剛送出時只知道對話物件建立成功，對方 turn 0 要不要理還沒
+		# 問——真正的結果要等這裡知道 reason 才算數，被無視（REASON_IGNORED）
+		# 算失敗，這樣連續失敗計數才會如實累積，下輪決策才有機會避開同一個
+		# 一再不理自己的對象（複審 PR #667 抓到，原本在 _pursue_talk_task()
+		# 送出當下就搶先記成功）
+		_track_action_result_for_facts("talk", reason != Conversation.REASON_IGNORED)
 
 		_remove_task(_active_talk_task_id)
 		if _current_task.get("id", "") == _active_talk_task_id:
@@ -1061,17 +1079,25 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 	# review 抓到，PR #674）
 	say(AI_THINKING_TEXT, true, false)
 
+	# turns 空陣列＝被搭話的第一輪，還沒人開口——這輪多開放 engage 欄位，
+	# 讓對象可以選擇不理會這次搭話（issue #630）。之後的輪次已經在聊，
+	# 不套用這份，只有 validate_dialogue() 那組欄位
+	var is_opening := turns.is_empty()
 	var envelope := PromptBuilder.build_dialogue_envelope(
-		self, listener, turns, max_turns, current_place, _recalled_summary()
+		self, listener, turns, max_turns, current_place, _recalled_summary(), is_opening
 	)
-	var result := await _decide_with_retry(envelope, AIService.Policy.CONVERSATION, AISchema.validate_dialogue)
+	var validator: Callable = (
+		AISchema.validate_dialogue_open if is_opening else AISchema.validate_dialogue
+	)
+	var result := await _decide_with_retry(envelope, AIService.Policy.CONVERSATION, validator)
 	if not result["ok"]:
 		return {"ok": false}
 
 	return {
 		"ok": true,
-		"line": result["data"]["line"],
-		"end": result["data"]["end"],
+		"engage": result["data"].get("engage", true),
+		"line": result["data"].get("line", ""),
+		"end": result["data"].get("end", false),
 	}
 
 ## 睡眠反思（#168，《03》§5）：把今天的事實句丟給 LLM，換回摘要跟逐筆評分，
@@ -3398,9 +3424,12 @@ func _pursue_talk_task() -> void:
 			# 記住是這筆任務讓對話成立的——exit_conversation() 靠這個 id 清任務，
 			# 不能靠「對話結束當下的 _current_task」，因為對話期間 _reevaluate()
 			# 照樣可能把 _current_task 換成別的（見 exit_conversation() 的註解）
+			#
+			# 這裡只代表對話物件建立成功，對方 turn 0 要不要理都還沒問——真正
+			# 的成功/失敗記錄留到 exit_conversation() 知道 reason 之後才寫
+			# （複審 PR #667 抓到：這裡搶先記成功，被無視也洗不掉）
 			_active_talk_task_id = _current_task.get("id", "")
 			_active_talk_task_source = _current_task.get("source", "")
-			_track_action_result_for_facts("talk", true)
 		else:
 			# 失敗不放棄任務，下個遊戲分鐘再試——對方可能只是暫時忙碌（TARGET_BUSY
 			# 等），跟 move_to() 走不到只 push_warning 不整筆放棄是同一種態度。

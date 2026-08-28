@@ -1,3 +1,4 @@
+class_name Conversation
 extends Node
 
 ## 兩個角色之間的一場對話。
@@ -11,8 +12,8 @@ extends Node
 ##
 ## Step 1：輪流講話改成非同步——`_run()` 是唯一的協程，每一輪呼叫
 ## `speaker.next_line()`（見 character.gd），可能要等 LLM 回應或等玩家打字，
-## 都不阻塞 `_process()` 的距離/中斷判定。開場白仍然是模板句（見下方
-## `_run()` 的說明），不經過 next_line()。
+## 都不阻塞 `_process()` 的距離/中斷判定。開場白（turn 0）也一律經過
+## `next_line()`，見下方 `_run()` 的說明。
 
 signal finished(reason: String)
 
@@ -31,6 +32,12 @@ const MAX_DISTANCE := 48.0		# 講到一半離這麼遠就散場，比搭話門�
 const REASON_ENDED_BY_SPEAKER := "ENDED_BY_SPEAKER"
 const REASON_TOO_FAR := "TOO_FAR"
 const REASON_INTERRUPTED := "INTERRUPTED"
+
+## 被搭話的一方在 turn 0 選擇不理會（engage=false）：跟 REASON_ENDED_BY_SPEAKER
+## 分開，因為一句話都沒講——不能算「認識」（_apply_rewards() 只認
+## REASON_ENDED_BY_SPEAKER），事實句也要誠實反映「沒有回應」而不是「講完話了」
+## （複審 PR #667 抓到：原本兩者共用同一個 reason，誤觸發 note_meeting()）
+const REASON_IGNORED := "IGNORED"
 
 var initiator: Character
 var target: Character
@@ -61,21 +68,14 @@ func _process(_delta: float) -> void:
 		_finish(REASON_TOO_FAR)
 		return
 
-# 唯一的協程，整場對話的輪次都在這裡推進。
-#
-# 開場白刻意不經過 next_line()：talk_to() 目前只有玩家會呼叫（Agent 還沒有
-# 主動搭話的觸發），若開場也要等 next_line()，玩家按 E 之後要嘛得先等 LLM
-# （體感延遲，且發起方通常就是玩家，等於等自己打字），要嘛得先打一句話
-# 才能開口——兩者都是體驗倒退，現有的「按 E 立刻打招呼」沒有理由改掉，
-# 這不在這次 issue 的範圍內
+## 唯一的協程，整場對話的輪次都在這裡推進。
+##
+## 開場白一律過 LLM（issue #630／《99》P-67）：不再由發起方（目前只有玩家會
+## 呼叫 talk_to()）冒一句寫死的招呼，turn 0 直接問被搭話的一方要不要理——
+## 對方可以選擇不理會、逕自去做自己的事（engage=false，見
+## AISchema.validate_dialogue_open()），跟真實社交一樣，不由引擎規定「按 E
+## 就一定會被回應」。next_line() 一開頭就會顯示「…」，等待期間不是空畫面
 func _run() -> void:
-	var opening := DialogueLines.opening(target.character_name)
-	_speak(initiator, opening)
-	_turns.append(PromptBuilder.turn_entry(initiator.character_name, opening))
-
-	if await _wait_for_read(initiator, opening):
-		return
-
 	var turn := 0
 	while turn < SAFETY_MAX_TURNS:
 		var speaker := target if turn % 2 == 0 else initiator
@@ -86,7 +86,17 @@ func _run() -> void:
 			return
 
 		if not result.get("ok", false):
-			_finish_with_fallback(speaker, listener)
+			_finish_with_fallback(speaker, listener, turn == 0)
+			return
+
+		# 被搭話的一方選擇不理會（issue #630）：只有 turn 0 才可能出現，之後
+		# 已經在聊，不會再有「要不要理」這個選項——安靜結束，沒有台詞可顯示，
+		# 把 next_line() 開頭顯示的「…」收掉
+		if turn == 0 and not result.get("engage", true):
+			if speaker.bubble != null:
+				speaker.bubble.clear()
+			_finish(REASON_IGNORED)
+			queue_free()
 			return
 
 		var line: String = result.get("line", "")
@@ -128,19 +138,24 @@ func _speak(speaker: Character, line: String, interrupt: bool = false) -> void:
 	speaker.say(line, interrupt)
 
 # LLM 停用/逾時/驗證失敗，next_line() 統一回 ok=false，這裡收尾：說一句
-# DialogueLines.closing()（唯一還在用它的地方，正常結束的台詞是 LLM 自己
+# DialogueLines 的模板句（唯一還在用它的地方，正常結束的台詞是 LLM 自己
 # 那句，不再另外補一句），然後正常結束——對玩家來說這場對話看起來很正常，
-# 差別只在收尾早了幾輪，不是任何看得出來的「壞掉」
-func _finish_with_fallback(speaker: Character, listener: Character) -> void:
+# 差別只在收尾早了幾輪，不是任何看得出來的「壞掉」。is_opening=true（turn 0
+# 就失敗）時换成 opening()：這時候連第一句都還沒有，講「再見」不合理，
+# 比照 opening() 自己宣告的 fallback 定位（issue #630／《99》P-67）
+func _finish_with_fallback(speaker: Character, listener: Character, is_opening: bool = false) -> void:
 	# next_line() 裡的 await 讓出過控制權，speaker/listener 理論上可能在這段
 	# 期間被移出場景（跟 _process() 的 is_instance_valid 檢查是同一種顧慮）
 	if is_instance_valid(speaker) and is_instance_valid(listener):
-		var closing := DialogueLines.closing()
-		_speak(speaker, closing, true)
-		# fallback 收尾也是真的說出口的一句，沒算進 _turns 的話，
+		var line := (
+			DialogueLines.opening(listener.character_name) if is_opening
+			else DialogueLines.closing()
+		)
+		_speak(speaker, line, true)
+		# fallback 這句也是真的說出口的一句，沒算進 _turns 的話，
 		# 之後任何依對話輪數／內容做的判定都會少算這一句
 		# （CodeRabbit review 抓到）
-		_turns.append(PromptBuilder.turn_entry(speaker.character_name, closing))
+		_turns.append(PromptBuilder.turn_entry(speaker.character_name, line))
 
 	_finish(REASON_ENDED_BY_SPEAKER)
 	queue_free()
@@ -163,7 +178,7 @@ func _finish(reason: String) -> void:
 
 	for character in [initiator, target]:
 		if is_instance_valid(character):
-			character.exit_conversation()
+			character.exit_conversation(reason)
 
 	finished.emit(reason)
 
