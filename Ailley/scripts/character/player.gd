@@ -36,7 +36,7 @@ var _pending_lines: Array[String] = []
 ## 還是「還沒輪到，先緩衝」（#207）
 var _turn_waiting := false
 
-@onready var interact_area: Area2D = $InteractArea
+@onready var interact_area: Area2D = $Sensing/InteractArea
 
 ## InteractArea 目前偵測到的候選（工作站／販賣機，靠 collision layer "interactable"
 ## 篩選，見 project.godot 的 layer_3）。角色候選不走這裡——直接沿用
@@ -50,6 +50,10 @@ const _PLAYER_ID_PATH := "user://saves/player_id.txt"
 
 
 func _ready() -> void:
+	# Character._ready() 會用 facing 播 idle 動畫（預設 "front"），玩家出生要面向
+	# 後方，得在 super() 之前設好，不然 player.tscn 場景檔設的 idle_back 只是編輯器
+	# 預覽用，實際一進遊戲就被蓋成 idle_front（CodeRabbit review on #587 抓到）
+	facing = "back"
 	super()
 	add_to_group("player")
 	line_submitted.connect(_on_line_submitted)
@@ -86,7 +90,10 @@ func _on_interact_area_body_exited(body: Node2D) -> void:
 func _on_noise_heard(_source: Character) -> void:
 	if is_dead or is_in_conversation():
 		return
-	say(L10n.t("DLG_NOISE_ALERT"))
+	# broadcast=false：這是系統 fallback 泡泡，不是玩家真的說了什麼，不該被
+	# 3 格內的 NPC 當成「聽到的對話」去反應、問一次決策——同 agent.gd 的理由，
+	# 見 character.gd::say() 的說明（CodeRabbit review 抓到，PR #674）
+	say(L10n.t("DLG_NOISE_ALERT"), false, false)
 
 # 打字是「這一輪有結果了」的其中一種來源，另一種是對話結束（見 exit_conversation()）。
 # 兩者收斂成同一個訊號，next_line() 才只要等一個東西。
@@ -375,9 +382,14 @@ func _set_highlighted_other(target: Character) -> void:
 
 # 讀取 WASD 輸入，回傳正規化後的方向（斜向不會加速）
 func get_input_direction() -> Vector2:
-	# 有 UI 拿到焦點時（例如 debug 輸入框）不吃移動鍵，
-	# 因為 Input.get_axis() 讀的是全域輸入狀態，不會被 LineEdit 攔下來
-	if get_viewport().gui_get_focus_owner() != null:
+	# 有文字輸入框拿到焦點時（例如 debug 輸入框）不吃移動鍵，
+	# 因為 Input.get_axis() 讀的是全域輸入狀態，不會被 LineEdit 攔下來。
+	# 只認 LineEdit/TextEdit，不是任意拿到焦點的 Control——Button 預設
+	# focus_mode 就是 FOCUS_ALL，點過場上任何一顆按鈕（esc 選單、工具列……）
+	# 之後只要沒人主動 release_focus()，焦點會一直留著，用「有沒有 Control
+	# 拿焦點」當條件會讓玩家點過一次按鈕後就永久走不動
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	if focus_owner is LineEdit or focus_owner is TextEdit:
 		return Vector2.ZERO
 
 	return Vector2(

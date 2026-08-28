@@ -52,6 +52,35 @@ LLM 一律走 `AIService`（`scripts/ai/ai_service.gd`）→ Godot ↔ Sidecar
   本機 llama-server 與 OpenRouter 兩條
 - 每次呼叫帶一份含 Agent 狀態與人格的 JSON，回傳也要 JSON
 
+### Embedding（L3 語意記憶檢索，issue #571）：獨立於對話 provider
+
+2026-08-26 拍板：embedding 是獨立於「玩家對話走 Local 還是 Cloud」的第三條線，
+**不管玩家選哪個對話 provider，embedding 這個計算步驟本身一律走本機**。理由：
+embedding 模型遠比對話模型輕量（bge-small 幾百 MB、CPU 就能跑），Cloud 玩家
+也負擔得起在自己機器常駐這一支，換來的是「產生向量」這件事兩種玩家都不用
+多一筆對外 API 呼叫的延遲與費用，也不用把記憶內容送給第三方 embedding 服務。
+
+> [!warning] 這不是「記憶內容整體都不出本機」的保證
+> `search_l3()` 命中的記憶**文字內容**會被塞進 `context.memory.recalled`，
+> 跟既有的 `recent`(L2)／`core`(L4) 一樣，整包 envelope 送進 `AIService.request()`，
+> 送去玩家選的哪個對話 provider（Local／Cloud）就跟哪個一樣，這裡沒有額外
+> 攔截。跟 L2／L4 記憶內容既有的行為一致，不是 L3 才有的例外，也沒有計畫
+> 幫 L3 加特殊隔離——2026-08-27 拍板維持這個一致性，只修正這裡過度承諾的
+> 文件敘述，不改變傳輸行為（CodeRabbit review 抓到，見 issue #571 討論）
+
+- 模型：`bge-small-zh-v1.5-q8_0.gguf`，`llama-server --embedding --pooling cls`
+  服務 OpenAI 相容的 `/v1/embeddings`。這組模型檔案原本就在遠端 GPU 機器
+  （見「遠端 GPU 機器連線手冊」）留著沒清掉，不用重新下載
+- 檢索本身用暴力法 cosine similarity，不引入向量 DB／延伸套件——L3 記憶量級
+  （單一 NPC 頂多幾十筆）用不上 ANN 索引，多一個套件只會增加打包風險
+- `ai_config.json` 新增一個跟 `providers` **平行**的頂層 `embedding` 區塊
+  （不是 `providers` 字典裡的一個 provider）——這條線不受玩家的 Local/Cloud
+  選擇影響，混在一起會讓語意不清楚
+- 開發期驗證：本機沒有 GPU，改在遠端 GPU 機器（`desktop-h9aniv5`）常駐這支
+  embedding server（沿用既有筆記記載的 `neonardooo@100.85.79.25:2222` SSH
+  存取方式），本機用 `ssh -N -L 8081:127.0.0.1:8081 ...` 建 tunnel 連過去測。
+  **這條 tunnel 是本機行程，機器關機／重開會中止**，下次要驗證前得重新建立
+
 ## 協定：HTTP，不是 WebSocket
 
 > [!important] 這題沒得選
@@ -83,8 +112,9 @@ WebSocket 在本專案有位置，但是**另一條線**：
 
 | 檔案 | 職責 |
 | --- | --- |
-| `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers` 與全域的速率限制三個旋鈕 |
-| `ai_service.gd` | **正式線唯一碰網路的地方**。autoload。節點池、佇列、逾時、速率限制、重試 |
+| `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers`、全域的速率限制三個旋鈕，以及跟 `providers` 平行的頂層 `embedding` 區塊（見上方「Embedding」一節） |
+| `ai_service.gd` | **對話／決策唯一碰網路的地方**。autoload。節點池、佇列、逾時、速率限制、重試——只打玩家自己選的 Local／Cloud 對話 provider |
+| `embedding_service.gd` | **L3 語意檢索唯一碰網路的地方**（issue #571）。autoload，跟 `ai_service.gd` 分開、各自獨立打各自的端點——這裡永遠打本機的 embedding-only server，不受玩家的對話 provider 選擇影響，也不共用 `ai_service.gd` 的節點池／佇列／速率限制（呼叫頻率遠低於對話，見《03》§7 觸發時機表，不需要那一整套） |
 | `ai_schema.gd` | 回應驗證：`JSON.parse_string` → null 檢查 → 逐欄位型別檢查 → `action` 白名單 |
 | `prompt_builder.gd` | 由 Character 組出請求信封（dialogue／plan／reflection／creation 皆已實作）。system 段前綴每個角色的人格摘要，見下方「人格資料」 |
 
@@ -109,9 +139,13 @@ llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key
 		"local":      {"base_url": "http://127.0.0.1:8080/v1", "api_key": "", "model": "qwen2.5-7b-instruct", "timeout": 10.0, "format_guaranteed": true},
 		"openrouter": {"base_url": "https://openrouter.ai/api/v1", "api_key": "sk-or-v1-…", "model": "openai/gpt-4o-mini", "timeout": 10.0}
 	},
+	"embedding": {"base_url": "http://127.0.0.1:8081/v1", "model": "bge-small-zh-v1.5-q8_0.gguf", "timeout": 10.0},
 	"min_interval_sec": 30.0
 }
 ```
+
+`embedding` 是跟 `providers` 平行的頂層區塊（見上方「Embedding」一節），不是
+`providers` 字典裡的一個 provider——這條線不受 `default_provider` 選擇影響。
 
 `min_interval_sec` / `max_calls_per_game_day` / `dialogue_exempt` 維持全域，
 **不逐 provider**：那是角色的成本控管，算在 `requester_id` 上，同一隻角色不管

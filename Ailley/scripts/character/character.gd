@@ -9,6 +9,7 @@ extends CharacterBody2D
 signal move_finished(reached: bool)
 signal noise_heard(source: Character)		# 收到的那一方會發，見 make_noise()
 signal spoke(line: String)			# 講出任何一句話都會發，日後寫逐字稿/記憶系統的接點
+signal speech_heard(source: Character, line: String)	# 收到的那一方會發，見 say() 的廣播（issue #669）
 
 const SPEED = 60.0		# 2026-08-24 從 80 調降，原速 5 格/秒（16px/格）偏快
 const ARRIVE_DISTANCE = 2.0		# 距離 waypoint 多近算抵達
@@ -266,17 +267,17 @@ var _rescued_haulers: Array[Character] = []
 
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
-@onready var stats: Stats = get_node_or_null("Stats")
-@onready var relationships: Relationships = get_node_or_null("Relationships")
-@onready var bubble: Node2D = get_node_or_null("Bubble")
-@onready var vision: Vision = get_node_or_null("Vision")
-@onready var inventory: Inventory = get_node_or_null("Inventory")
-@onready var work_progress: WorkProgress = get_node_or_null("WorkProgress")
-@onready var money_popup: MoneyPopup = get_node_or_null("MoneyPopup")
-@onready var memory: Memory = get_node_or_null("Memory")
+@onready var stats: Stats = get_node_or_null("State/Stats")
+@onready var relationships: Relationships = get_node_or_null("State/Relationships")
+@onready var bubble: Node2D = get_node_or_null("UI/Bubble")
+@onready var vision: Vision = get_node_or_null("Sensing/Vision")
+@onready var inventory: Inventory = get_node_or_null("State/Inventory")
+@onready var work_progress: WorkProgress = get_node_or_null("UI/WorkProgress")
+@onready var money_popup: MoneyPopup = get_node_or_null("UI/MoneyPopup")
+@onready var memory: Memory = get_node_or_null("State/Memory")
 # 只有 Player 掛這個節點——NPC 不需要被引導去任何地方。get_node_or_null()
 # 在沒有這個節點的 Agent 實例上安靜回 null，呼叫端（#305）自己判斷要不要用
-@onready var waypoint_indicator: WaypointIndicator = get_node_or_null("WaypointIndicator")
+@onready var waypoint_indicator: WaypointIndicator = get_node_or_null("UI/WaypointIndicator")
 
 # 最後一次的面向：front / back / right，停下時用來挑 idle 動畫
 var facing := "front"
@@ -1087,13 +1088,28 @@ func leave_conversation() -> void:
 ## interrupt=true 立刻蓋掉正在顯示/排隊中的內容（LLM 回應等待中的「…」要被
 ## 真正的台詞立刻換掉，不能排在它後面等它自己的顯示時間跑完）。
 ## 預設 false 維持原本「不打斷正在講的話」的排隊語意，其餘呼叫端不用改
-func say(line: String, interrupt: bool = false) -> void:
+##
+## 廣播 speech_heard 不分呼叫來源——一般聊天輸入框（chat_input.gd）跟
+## talk_to() 正式對話（conversation.gd）都算「說了一句話」，《07》§3
+## 定義的「聽覺（一般說話）3 格」是物理上聽不聽得到，不分是哪種介面講出來的
+## （issue #669）。
+##
+## broadcast=false：內部系統 fallback 泡泡（`!?`／`！` 這類感測不到 LLM
+## 回應時的寫死反應）不是「這個角色真的說了什麼」，不該算進《07》§3 的
+## 「聽得到的對話」——放行的話，鄰近的 LLM 角色會把這句 `!?` 當成一句話
+## 排進自己的事實句佇列、觸發一次決策，決策若同樣問不到結果又冒出自己的
+## `!?`，在 3 格範圍內連環擴散成一波決策請求風暴（CodeRabbit review 抓到，
+## PR #674）。所有這類 fallback 泡泡呼叫端都要傳 false，見 agent.gd／player.gd
+## 的 _on_noise_heard()／_on_speech_heard()／_react_to_spotted_fallback()
+func say(line: String, interrupt: bool = false, broadcast: bool = true) -> void:
 	if bubble == null:
 		return
 	if interrupt:
 		bubble.clear()
 	bubble.say(line)
 	spoke.emit(line)
+	if broadcast:
+		_broadcast_speech(line)
 
 ## 行為失敗時統一的回報方式（issue #180），取代原本三個呼叫點（player.gd
 ## 的 work_at／talk_to、vending_menu.gd 的 buy_from）各自手寫的
@@ -1156,6 +1172,22 @@ func make_noise(radius: float = NOISE_RADIUS) -> void:
 			continue
 		if get_body_position().distance_to(other.get_body_position()) <= radius:
 			other.noise_heard.emit(self)
+
+## 廣播半徑（像素），3 格——《07》§3 定案「聽覺（一般說話）3 格」，跟
+## NOISE_RADIUS（shout／make_noise 的 8 格）是刻意分開的兩個數字
+const SPEECH_HEARD_RADIUS := 48.0
+
+## 對外廣播「這裡說了一句話」，範圍內每個角色都會收到 speech_heard 訊號，
+## 帶實際講的內容——跟 make_noise() 只給「有聲音發生」這個事實不同，
+## 一般說話《07》§3 定義的本來就是「聽得到的對話」，內容是客觀事實（誰講了
+## 什麼字），要不要反應、反應是什麼由收到的那一方自己決定，感測/反應分離
+## 的理由跟 make_noise() 一樣（issue #669，見 [[聽覺感測]]）
+func _broadcast_speech(line: String) -> void:
+	for other in get_tree().get_nodes_in_group("characters"):
+		if other == self:
+			continue
+		if get_body_position().distance_to(other.get_body_position()) <= SPEECH_HEARD_RADIUS:
+			other.speech_heard.emit(self, line)
 
 
 # ---- 工作 ----
