@@ -618,10 +618,12 @@ pattern 這類字串格式約束，格式與未來時間的檢查落在驗證層
 `ai_config.gd`／`ai_service.gd`／`ai_schema.gd`／`data/ai_config.example.json`，
 autoload 已註冊，主控台加了 `ai` 指令。
 
-- `request(envelope, requester_id, policy)`：`enum Policy { SCHEDULED, CONVERSATION }`，
-  `CONVERSATION` 跳過冷卻與每日配額但照樣計數（走獨立的 `_dialogue_calls_today`），
-  預設 `SCHEDULED`——忘了指定的呼叫端落在保守那邊，不會意外拿到無限額度
-- 速率限制三個旋鈕搬進 `user://ai_config.json`（皆可設 0＝不限），預設值與規格數值
+- `request(envelope, requester_id, policy)`：`enum Policy { SCHEDULED, CONVERSATION, CREATION }`，
+  `CONVERSATION`／`CREATION` 跳過冷卻與每日配額但照樣計數（分別走獨立的
+  `_dialogue_calls_today`／`_creation_calls_today`），`CREATION` 是建角一次性生成
+  （words_to_creator，#682），預設 `SCHEDULED`——忘了指定的呼叫端落在保守那邊，
+  不會意外拿到無限額度
+- 速率限制旋鈕搬進 `user://ai_config.json`（皆可設 0＝不限），預設值與規格數值
   見 `ai/api.md`（`AIConfig`）／規格書《13》§5
 - 回傳一律 `{"ok": bool, "data": Dictionary, "error": String}`，呼叫端一律 `await`
 - 4xx 不重試；網路錯誤／5xx 重試 1 次
@@ -904,18 +906,18 @@ poc 輸出裡有、《06》沒提到的欄位：`reasoning`／`inner_monologue`�
 100 字上限是延遲/品質的直接槓桿，往下砍會更快但決策品質會掉；其他槓桿是模型
 量化等級、llama-server 的 `--parallel` 設定，會影響全部呼叫，改動範圍更大。
 
-## 動態投放到真正依任務移動：冷卻問題待修（PR #684），真正的卡點是空任務回應沒有補救機制（2026-08-28 實測）
+## 動態投放到真正依任務移動：冷卻問題已修（PR #684），真正的卡點是空任務回應沒有補救機制（2026-08-28 實測）
 
-`_generate_words_to_creator()`（`agent.gd`／`game_manager.gd` 各一份）目前
-仍跟第一次 plan 決策共用同一個 `AIService.Policy.SCHEDULED` 冷卻池
-（origin/main 的 `Policy` enum 只有 `SCHEDULED`／`CONVERSATION`），導致
-投放後多等一輪完整冷卻（目前 30 秒）才送得出第一次決策。修法（issue #682，
-**實作在尚未合併的 PR #684**）：新增 `AIService.Policy.CREATION`，讓這通
-一次性生成呼叫無條件豁免冷卻與每日配額，不再跟決策共用池子。合併後不管走
+`_generate_words_to_creator()`（`agent.gd`／`game_manager.gd` 各一份）在
+#684 之前跟第一次 plan 決策共用同一個 `AIService.Policy.SCHEDULED` 冷卻池
+（當時 `Policy` enum 只有 `SCHEDULED`／`CONVERSATION`），導致投放後多等一輪
+完整冷卻（當時 30 秒）才送得出第一次決策。修法（issue #682，
+**實作在 PR #684，已併入 main**）：新增 `AIService.Policy.CREATION`，讓這通
+一次性生成呼叫無條件豁免冷卻與每日配額，不再跟決策共用池子。現在不管走
 debug 主控台 `spawn` 還是正式的 `GameManager.deploy_from_library()`，
-投放到送出第一次 plan 決策預期只要一次網路延遲（0.6-1.9 秒，量級同上一節
-#118 校準值；此數值是在 #684 分支上實測的，尚未進 main），不再有那 30 秒
-——透過 `Continue`（讀檔重生）真實路徑重新投放已生成過 `words_to_creator`
+投放到送出第一次 plan 決策只要一次網路延遲（0.6-1.9 秒，量級同上一節
+#118 校準值；此數值是在 #684 分支上實測的，已隨 #684 進 main），不再有那
+30 秒——透過 `Continue`（讀檔重生）真實路徑重新投放已生成過 `words_to_creator`
 的角色驗證過：`AIService.get_usage()` 顯示 `calls_today: 1`，沒有被搶先
 佔用冷卻。
 
