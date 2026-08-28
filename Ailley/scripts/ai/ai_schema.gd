@@ -272,7 +272,15 @@ const MAX_LINE_CHARS := 200
 ## 100 字是上限不是底限：逼模型精簡寫完一條因果鏈，不是逼它湊字數
 const MAX_REASONING_CHARS := 100
 
-static func validate_dialogue(data: Dictionary) -> Dictionary:
+## task 是選填欄位（issue #658）：角色講的話若是真的當下就要兌現的承諾
+## （不是玩笑、不是還要對方答應的提議），可以順帶回傳一個任務，讓內容層
+## 講的話跟決策層實際會做的事對得上。跟 persuade 的 proposed_task（#227）
+## 共用同一套 _validate_task_shape()，不逐欄位另外驗一次——是不是「真的算
+## 承諾」交給模型自己判斷，這裡只驗證形狀，不逐字比對台詞裡有沒有特定關鍵字
+## （固定詞彙比對遲早漏接或誤判，語言表達方式千變萬化）。跟巢狀 persuade
+## 同理擋掉 action == "persuade"：對話裡口頭承諾「我要去說服誰」語意混亂，
+## 不是這個機制要支援的情境
+static func validate_dialogue(data: Dictionary, now_minutes: int) -> Dictionary:
 	if not data.has("line") or not data["line"] is String:
 		return _fail(ERROR_BAD_SHAPE)
 
@@ -296,21 +304,35 @@ static func validate_dialogue(data: Dictionary) -> Dictionary:
 			return _fail(ERROR_BAD_SHAPE)
 		end = data["end"]
 
-	return _ok({"line": line, "end": end})
+	var result := {"line": line, "end": end}
+
+	if data.has("task"):
+		var task: Variant = data["task"]
+		if not task is Dictionary:
+			return _fail(ERROR_BAD_SHAPE)
+		var task_dict := task as Dictionary
+		if task_dict.get("action") == "persuade":
+			return _fail(ERROR_BAD_SHAPE)
+		var task_result := _validate_task_shape(task_dict, now_minutes)
+		if not task_result["ok"]:
+			return _fail(task_result["error"])
+		result["task"] = task_result["data"]
+
+	return _ok(result)
 
 ## 對話第一輪（turn 0，被搭話的那一方）專用：多開放 engage 欄位，可以選擇
 ## 不理會這次搭話（issue #630——「他想講就講不想講就算了，跟真實社交一樣」）。
 ## engage=false 時不強求 line/end 有內容，直接固定回一個空殼；其餘情況
 ## （省略或 true）比照一般規則整個丟給 validate_dialogue()，正常回一句話，
 ## 不要維護兩份幾乎一樣的檢查邏輯
-static func validate_dialogue_open(data: Dictionary) -> Dictionary:
+static func validate_dialogue_open(data: Dictionary, now_minutes: int) -> Dictionary:
 	if data.has("engage"):
 		if not data["engage"] is bool:
 			return _fail(ERROR_BAD_SHAPE)
 		if not data["engage"]:
 			return _ok({"engage": false, "line": "", "end": true})
 
-	var validated := validate_dialogue(data)
+	var validated := validate_dialogue(data, now_minutes)
 	if validated["ok"]:
 		validated["data"]["engage"] = true
 	return validated

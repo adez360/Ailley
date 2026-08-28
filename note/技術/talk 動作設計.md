@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/dialogue/conversation.gd
 status: 進行中
-updated: 2026-08-22
+updated: 2026-08-29
 ---
 
 # talk 動作設計
@@ -32,6 +32,16 @@ updated: 2026-08-22
 > [!important] 這個分層是整個設計的重點
 > 內容層以外的四層跟「誰產生台詞」無關。切乾淨的話，接 LLM 那天只換內容層一個檔。
 > 反過來說，把「產生台詞」寫進狀態機裡的話，之後就得整段重寫。
+
+> [!note] 內容層可以順帶推進決策層（issue #658）
+> 角色講出的話若是「講了就要做」的即時承諾（不是玩笑、不是還要對方答應的
+> 提議），對話回應可以附帶選填的 `task` 欄位，直接推進講話者自己的任務池
+> （`PromptBuilder.DIALOGUE_TASK_HINT`／`AISchema.validate_dialogue()`，
+> 跟 `agent.gd::next_line()` 串起來）。判斷「這句話算不算承諾」交給模型
+> 自己讀懂語意決定，**不是引擎事後比對台詞裡有沒有特定關鍵字**——語言表達
+> 方式千變萬化，固定詞彙比對遲早漏接或誤判。欄位形狀跟驗證方式沿用
+> persuade 的 `proposed_task`（#227）那套 `_validate_task_shape()`，同理
+> 擋掉巢狀 `persuade`。
 
 ## 會話做成獨立物件
 
