@@ -870,48 +870,38 @@ poc 輸出裡有、《06》沒提到的欄位：`reasoning`／`inner_monologue`�
 100 字上限是延遲/品質的直接槓桿，往下砍會更快但決策品質會掉；其他槓桿是模型
 量化等級、llama-server 的 `--parallel` 設定，會影響全部呼叫，改動範圍更大。
 
-## 動態投放到真正依任務移動：卡點是冷卻共用，不是網路延遲（2026-08-28 實測）
+## 動態投放到真正依任務移動：冷卻已修好，真正的卡點是空任務回應沒有補救機制（2026-08-28 實測）
 
-新角色從 `spawn_character()` 投放到任務池裡真的出現一筆任務、仲裁器選中它
-開始移動，中間的時間依投放路徑差非常多，關鍵在 `_generate_words_to_creator()`
-（`agent.gd`）跟第一次 plan 決策共用同一個 `requester_id`（`character_id`）、
-同一個 `AIService.Policy.SCHEDULED` 冷卻池（`min_interval_sec`，目前設定值
-30 秒）：
+`_generate_words_to_creator()`（`agent.gd`／`game_manager.gd` 各一份）原本
+跟第一次 plan 決策共用同一個 `AIService.Policy.SCHEDULED` 冷卻池，導致
+投放後多等一輪完整冷卻（目前 30 秒）才送得出第一次決策——這個問題已經在
+issue #682 修掉：新增 `AIService.Policy.CREATION`，讓這通一次性生成呼叫
+無條件豁免冷卻與每日配額，不再跟決策共用池子。修完後不管走 debug 主控台
+`spawn` 還是正式的 `GameManager.deploy_from_library()`，投放到送出第一次
+plan 決策都只要一次網路延遲（0.6-1.9 秒，量級同上一節 #118 校準值），
+不再有那 30 秒——透過 `Continue`（讀檔重生）真實路徑重新投放已生成過
+`words_to_creator` 的角色驗證過：`AIService.get_usage()` 顯示
+`calls_today: 1`，沒有被搶先佔用冷卻。
 
-```gdscript
-func _generate_words_to_creator() -> void:
-	if not words_to_creator.is_empty():
-		return
-	...
-	var result: Dictionary = await AIService.request(envelope, character_id, AIService.Policy.SCHEDULED)
-```
+**但修完冷卻之後，角色還是可能站著不動，原因換了一個**：任務池要真的有
+東西，仲裁器才有東西可選。決策回應的 `tasks` 欄位允許回傳空陣列（規格
+「不更新就是空陣列」），這是合法回應，不是驗證失敗。三隻分別測試過的
+角色（正式投放的 Gandalf、debug spawn 的 Gandalf（複製）、小海）在
+剛投放的頭幾輪決策，`reasoning` 都類似「沒有特定計畫，等待中」，回傳
+`tasks: []`——這種情況下 `_current_task` 維持空字典，**沒有「動作完成」
+這件事會發生，而目前唯一接上的重排時機正是「目前任務做滿」**（見
+[[行程佇列與任務仲裁]]「什麼時候會請 LLM 重排」），所以角色會無限期
+卡在原地，沒有任何機制會主動再問一次。
 
-`words_to_creator` 一旦不是空字串就直接跳過，不會打這通；是空字串就會在
-`_ready()` fire-and-forget 打一次，而且用的是跟決策一樣的 `SCHEDULED`
-政策，會佔用同一份冷卻。`game_manager.gd::activate_llm_decision_if_ready()`
-（issue #598）跟 `main_scene.gd::_apply_startup_ai_state()`（issue #357）
-都已經考慮到這件事，在真正呼叫 `debug_set_llm_decision(true)` 前會先讀
-`AIService.get_usage(character_id).cooldown_left` 並整段 `await` 完，
-避免決策請求同步被 `ERROR_RATE_LIMITED` 擋下、決策迴圈靜默卡住到下一次仲裁——
-這段邏輯本身寫在那兩個函式自己的註解裡，只是之前沒有抄進筆記庫。
-
-兩條投放路徑因此有完全不同的實際等待時間：
-
-- **debug 主控台 `spawn <template_id>`**（`debug_console.gd::_cmd_spawn()`）：
-  目前組 `identity` 時只給 `character_name`，**沒有**把模板已經算好的
-  `words_to_creator` 帶過去（模板 50 筆全部有內容，見 [[角色庫與投放]]，
-  但這個指令沒有讀那個欄位）。結果是每次用這個指令生出來的角色一定會
-  觸發 `_generate_words_to_creator()`，吃掉一次 30 秒冷卻，`activate_llm_decision_if_ready()`
-  會乖乖等滿它才送出第一次 plan 決策。實測：投放 → 進場（近乎瞬間，
-  instantiate 本身 <100ms）→ 冷卻 30 秒 → plan 決策網路延遲 0.6-1.9 秒
-  （量級同上一節 #118 校準值）→ push 進任務池 → 下一次仲裁（≤1 遊戲分鐘＝
-  1 現實秒）判斷贏過門檻才真的開始移動——**總計約 30 秒出頭**，不是網路
-  延遲的量級。
-- **正式的角色庫投放**（`GameManager.deploy_from_library()`）：這條路徑會
-  把角色庫裡已經生成好的 `words_to_creator` 一併放進 `identity`，
-  `_generate_words_to_creator()` 一看欄位非空就直接跳過，不佔用這份冷卻。
-  理論上只要一次 plan 決策的網路延遲（0.6-1.9 秒）就能進到任務池，沒有
-  上面那 30 秒——這條路徑尚未實測驗證，待確認。
+跟這個案例外觀相似但成因不同、容易搞混的是「模型回了一筆 `idle` 任務」
+（有 `duration`，會真的進池子、被選中、佔滿 `_current_task`）——這種
+情況角色一樣站著不動（`idle` 本來就是原地不動的動作），但 `duration`
+到期後**會**正常觸發下一次決策，不會永久卡住。原始 Gandalf 那次實測
+就是這個模式：連續好幾輪 `idle`（reasoning 分別是「看不到 player，可能
+有問題」「村裡沒有玩家，沒有其他事情可做」）之後才轉成一筆 `talk`
+（target: player）。**空陣列回應**跟**內容是 `idle` 的正常任務**是兩種
+不同的「看起來都沒在動」，只有前者是真正卡死、需要補救機制；後者只是
+需要多等幾輪 `duration`。
 
 實測方法：`game_eval` 直接呼叫 `AIService.request()`／`AISchema.parse_completion()`／
 `AISchema.validate_tasks()` 逐階段拆解，搭配 `AIService.get_usage(character_id)`
@@ -922,6 +912,49 @@ func _generate_words_to_creator() -> void:
 可解除，不是真的崩潰）；改成多次分開的短呼叫，或直接 `await` 會自己
 resolve 的呼叫（例如 `debug_set_llm_decision()` 本身回傳的就是 await 完的
 結果字典），不要自己手動輪詢等待。
+
+## 兩隻 AI 同場互看：機制上通，但沒觀察到真的互相搭話（2026-08-28 實測）
+
+在同一個場景同時開兩隻角色的決策迴圈（同一位置、`vision` 確認互相看得到
+對方），驗證了幾件事：
+
+- `AIService` 的用量統計（`calls_today`／`cooldown_left`／配額）是逐
+  `requester_id`（`character_id`）分開算的，兩隻角色同時打不會互相污染
+  彼此的冷卻或配額，`POOL_SIZE=3` 的節點池在這個規模下沒有觀察到排隊卡住
+- `context.visible` 確實會把另一隻看得到的 NPC 列進去，`talk`／`give`／
+  `persuade`／`attack` 這幾個需要 `target` 的動作理論上都能選到對方
+  （不是只能選玩家）
+- 但這次兩隻測試角色頭幾輪決策都回傳空 `tasks`（見上一節），沒有實際
+  觀察到 NPC 對 NPC 的 `talk`/`give`/`persuade`/`attack` 真的被選中執行
+  ——這條路徑機制上打得通，但端到端沒有被這次測試驗證到，需要更長的
+  觀察窗（或用 `debug_push_task()` 強制塞一筆去驗執行層）才能確認
+
+## `move_to`／`buy` 打不到：LLM 從沒被告知地點清單存在（issue #605，PR #647 進行中）
+
+`prompt_builder.gd::build_plan_envelope()` 送給模型的 `context` 只有
+`visible`／`pool`／`today_plan`／`fact_lines`／`memory`，沒有任何「這個
+村子有哪些地點」的欄位。`ai_schema.gd` 對 `buy`／`move_to` 的 `place`
+參數也只驗證非空字串，不驗證是否真實存在——模型因此只能盲猜地點代號
+（`home`／`herb_shop`／`tavern`／`pavilion`／`god_stone`／`cemetery`
+這幾個 `PlaceAnchors` 底下的真實名字），實務上幾乎不會被選中。
+
+issue #605／PR #647（draft，跟 #644 一起修）已經在補：`prompt_builder.gd`
+新增 `_shop_summary()`，把全村販賣機的 `{place: {item_id: price}}` 塞進
+`_self_block()`（plan／dialogue 共用），直接解掉 `buy` 這半；`#644` 順便
+把 `persuade` 的 appointment 地點也改成動態帶入 `PlaceAnchors.list()`。
+**但 #647 的範圍只涵蓋販賣機清單，不是一般性的地點清單**——`move_to`
+去涼亭純社交、去墓園這類不涉及購買的移動，模型依然不知道地點存在，
+#647 合併後這半仍待另外驗證。
+
+## `work` 對 AI 決策角色雙重不可達
+
+`ai_schema.gd::ALLOWED_ACTIONS` 刻意不含 `work`（「《07》《11》的動作裡
+沒有它，嚴格照 spec」），LLM 決策永遠選不到；`work` 只有場景固定 NPC
+靠 `npc_schedule.json` 的 `state` 欄位觸發 `_pursue_work_task()`。動態
+投放的角色（`spawn_character()` 生出來的）刻意不指派 `schedule_template`
+（見 [[角色庫與投放]]），所以連這條路也走不到。目前沒有追蹤這個缺口的
+issue——要讓 AI 自主決策的角色也能工作，需要另外設計「動態角色怎麼被
+分配工作站」，不是單純把 `work` 加進白名單就好。
 
 ## 待對齊：組長發的資料夾結構規範，跟現有 `Ailley/CLAUDE.md` 不一樣
 
