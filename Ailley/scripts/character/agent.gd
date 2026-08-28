@@ -2291,8 +2291,9 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 
 	# 三道濾網跟候選迴圈（_reevaluate_once()）用的是同一套：過期／窗口／
 	# preconditions，任一項不成立就不受下面的承諾保護。preconditions 沒過時
-	# 走跟「被搶占」相同的路徑（not current_still_valid → _select() 記
-	# ok=false）——這筆任務不是自然做完，跟過期/出窗被換掉是同一種語意
+	# not current_still_valid → _select() 的 outgoing_ok=true，today_log 記
+	# ok=true——跟過期／出窗同一種「自然結束」收尾，不是被搶占（ok=false）
+	# 那條；要不要為前提失效另立更細的訊號是產品決策，見《行程佇列與任務仲裁》
 	var current_still_valid := not _is_expired(_current_task, now_minutes) \
 		and _in_window_or_unwindowed(_current_task, now) \
 		and _preconditions_met(_current_task)
