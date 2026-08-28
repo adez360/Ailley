@@ -43,6 +43,11 @@ func _process(delta: float) -> void:
 	_cooldown_remaining = maxf(_cooldown_remaining - delta, 0.0)
 	if panel.visible:
 		_update_status()
+		# input.editable 原本只在 _set_open(true) 那一刻算一次，倒數在面板
+		# 開著的時候歸零不會被這裡追上——玩家會看到狀態列文字變成「可以
+		# 說話了」卻打不了字，得先關面板再重開才能真的解鎖。跟上面的文字
+		# 更新放在同一個 frame 一起做，不等下一次 _set_open()
+		input.editable = _cooldown_remaining <= 0.0
 
 # 點石頭開面板。跟 status_panel.gd 同一個理由用 _input 而非 _unhandled_input，
 # 且刻意不 set_input_as_handled()——空地點擊要繼續傳給 selection.gd 取消選取
