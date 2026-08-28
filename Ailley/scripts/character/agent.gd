@@ -3332,6 +3332,17 @@ func _pursue_talk_task() -> void:
 			push_warning("Agent %s: 搭話 %s 失敗（%s）" % [
 				character_name, target.character_name, failure
 			])
+			# 失敗原因要寫回 last_action_result，下一輪決策的 _self_block()
+			# 才看得到剛才發生什麼事（issue #604）：原本這裡只 push_warning，
+			# LLM 完全不知道搭話失敗、更不知道為什麼，容易一直重選同一個
+			# 注定失敗的 talk。這是餵給模型的內部資料，要按《06_資料欄位對應
+			# 表》固定中文，不能走 FAILURE_MESSAGE_KEYS／L10n 查表——玩家語系
+			# 一變（OS 語系／locale 指令）就會把英文混進中文 prompt（跟
+			# hear_god_stone() 不經 L10n 是同一個理由，見本檔 :556 的註解），
+			# 所以比照 _give_failure_message() 那組硬寫中文的轉換函式
+			last_action_result = "跟 %s 搭話失敗：%s" % [
+				target.character_name, _talk_failure_message(failure)
+			]
 			_track_action_result_for_facts("talk", false)
 		return
 
@@ -3350,6 +3361,29 @@ func _pursue_talk_task() -> void:
 
 	if progress["threshold_reached"]:
 		push_warning("Agent %s: 追不上搭話對象 %s，可能被卡住" % [character_name, target.character_name])
+
+# talk_to() 失敗原因碼轉中文，格式跟 _give_failure_message() 一致。不走
+# FAILURE_MESSAGE_KEYS／L10n 查表：last_action_result 是餵給 LLM 的欄位
+#（《06_資料欄位對應表》明定「中文自然語言」），玩家語系不該影響 prompt
+# 內容，所以直接比照 give／attack／bury 硬寫中文
+func _talk_failure_message(failure: String) -> String:
+	match failure:
+		Character.TALK_OK:
+			return ""
+		Character.TALK_TARGET_NOT_FOUND:
+			return "找不到這個人，可能已經離開了"
+		Character.TALK_TARGET_IS_SELF:
+			return "不能跟自己搭話"
+		Character.TALK_TOO_FAR:
+			return "距離太遠，話傳不過去"
+		Character.TALK_TARGET_BUSY:
+			return "對方正忙，暫時沒空理你"
+		Character.TALK_TARGET_UNINTERRUPTIBLE:
+			return "現在打斷不了對方"
+		Character.TALK_TARGET_NOT_VISIBLE:
+			return "視線被擋住了，搭不上話"
+		_:
+			return "搭話沒有成功"
 
 # eat 任務的執行（#114）：跟 talk 一樣是「呼叫一次就完成」，不是靠 duration
 # 逐分鐘回復的動作，所以不走通用的地點追逐路徑，做完立刻收尾。
@@ -4205,10 +4239,27 @@ func _pursue_persuade_task() -> void:
 	# 走 LLM 決策迴圈（玩家沒有）。fire-and-forget：不 await，讓這筆任務照
 	# 固定 duration 收尾，彈窗的結果晚點才回來，兩者互不卡住
 	if target_is_player:
+		# request_persuade_response() 是 Player 才有的方法，要在記帳前先擋：
+		# 檢查原本放在 _ask_player_persuade() 內部，守衛失敗時下面三行「成功」
+		# 記帳已經寫完——last_action_result 讓 LLM 下一輪讀到「說服已送達」、
+		# _track_action_result_for_facts(true) 歸零連續失敗計數、
+		# _persuade_delivered 鎖住後續 tick，但彌窗從未跳、玩家永遠不會回應
+		# （review 抓到）。能在編譯期綁死 Player 型別就不需要這個執行期檢查，
+		# 但 agent.gd 不能對兄弟類別 Player 做靜態型別依賴（issue #603：解析
+		# 順序依賴 .godot 的 class_name 快取，快取過舊、冷啟動、CI 情境下整份
+		# 腳本編譯失敗），所以用 has_method() 在執行期才檢查，不在編譯期建立
+		# 跨檔案依賴。守衛失敗代表這個目標永遠說服不了，直接結束任務，比照
+		# 上面「沒辦法被說服」分支的收尾
+		if not target.has_method("request_persuade_response"):
+			push_warning("Agent %s: 說服目標不是 Player，缺少 request_persuade_response()" % character_name)
+			last_action_result = "這個人好像沒辦法被說服"
+			_track_action_result_for_facts("persuade", false)
+			_finish_task_and_request_next()
+			return
 		last_action_result = "你試著說服 %s，等他自己想清楚" % target.character_name
 		_track_action_result_for_facts("persuade", true)
 		_persuade_delivered = true
-		_ask_player_persuade(target as Player, reason, proposed_task)
+		_ask_player_persuade(target, reason, proposed_task)
 		return
 
 	var recorded: bool = (target as Agent).try_record_pending_persuade(character_name, character_id, reason, proposed_task)
@@ -4394,7 +4445,15 @@ func _describe_task_intent(task: Dictionary) -> String:
 # 不 await 這個函式，跟 persuade 本身「送達」與「被不被說動」是兩個時間點
 # 分開的既有設計一致——送達當下就讓任務照 duration 收尾，彈窗的結果晚點
 # 才會回來，兩者不互相卡
-func _ask_player_persuade(player: Player, reason: String, proposed_task: Dictionary) -> void:
+func _ask_player_persuade(player: Character, reason: String, proposed_task: Dictionary) -> void:
+	# 型別故意寫 Character 不寫 Player（issue #603）：agent.gd 對兄弟類別
+	# Player 做靜態型別依賴，若 agent.gd 解析時排在 player.gd 的全域
+	# class_name 註冊之前（快取過舊、冷啟動、CI 等情境），會直接編譯失敗，
+	# 連帶讓全部依賴 agent.gd 的腳本一起壞掉、所有 NPC 的 Vision 都掛不上。
+	# 是否真的有 request_persuade_response()（是不是 Player）由呼叫端
+	# _pursue_persuade_task() 在記帳前用 has_method() 檢查過——守衛放在這裡
+	# 擋不住呼叫端已寫好的「成功」記帳（review 抓到），這裡直接假設檢查通過
+
 	var text: String
 	if proposed_task.is_empty():
 		text = "%s 試著說服你：%s，你被說動了嗎？" % [character_name, reason]
