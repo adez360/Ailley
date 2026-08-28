@@ -298,10 +298,12 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 獨立的後續動作，不在 #482 範圍內。
 
 > [!note] `turns_so_far` 口徑尚未定案，接線時要挑一個
-> `conversation.gd::_run()` 的迴圈變數 `turn`（從 0 起算、不含開場白）跟
-> `_turns.size()`（陣列長度，含開場白那一句）是兩個不同的數字——下面 A/B/C
-> 實驗腳本用的是前者（`turn`），跟 `_turns` 陣列本身的長度不等價。接回真代碼
-> 時要明確選一種當 `turns_so_far` 的定義，`Ailley/scripts/ai/prompt_builder.gd::build_dialogue_envelope()`
+> `conversation.gd::_run()` 的迴圈變數 `turn`（從 0 起算）跟 `_turns.size()`
+> （陣列長度）在同一輪呼叫 `next_line()` 的當下是同一個數字——開場白已改成
+> 一律過 LLM（issue #630／《99》P-67），不再有「`turn` 不含開場白、`_turns.size()`
+> 含開場白」那個固定 1 的落差。下面 A/B/C 實驗跑在這個落差還存在的舊版上，
+> 腳本用的是 `turn`；接回真代碼時兩邊現在算的是同一件事，選哪個當
+> `turns_so_far` 都可以，`Ailley/scripts/ai/prompt_builder.gd::build_dialogue_envelope()`
 > 沿用同一個公式，不要兩邊各自算一套。
 
 **A/B/C 實測在本次樣本中大幅改善收尾行為**（issue #482，2026-08-23，本機 llama-server
@@ -412,16 +414,19 @@ max_dialogue_calls_per_game_day`，不是 `>`——跟既有
 > 這樣講清楚，不是無條件對兩種設定都生效
 
 **預設值 30 的依據**：這次記的樣本是 `_turns.size()`（對話輪數），不是真正的
-`AIService.request()` 呼叫次數——每場開頭的 `DialogueLines.opening()` 不打
-LLM，7.0 輪／場扣掉這句開場白，實際是雙方合計約 **6.0 次呼叫／場**（這次
-樣本全是 NPC 對 NPC，不涉及玩家回合那個額外的不打 LLM 因素）。
+`AIService.request()` 呼叫次數。這次樣本測的是舊版行為——開場白當時還是
+`DialogueLines.opening()` 寫死的模板句，不打 LLM，7.0 輪／場扣掉這句開場白，
+換算成雙方合計約 6.0 次呼叫／場。開場白改成一律過 LLM 之後（issue #630／
+《99》P-67），這個扣減不再成立，同一份 7.0 輪／場的樣本换算下來會更接近
+**7.0 次呼叫／場**（每一輪都打 LLM）；這個數字本身也是舊樣本套新規則的
+粗算，不是重新量測的結果。
 >
 > [!warning] 配額 scope 是 per-`requester_id`（單一角色），不是 per-對話（CodeRabbit review 抓到）
 > `_dialogue_calls_today[requester_id]` 算的是**單一角色**今天講了幾輪，不是
-> 一場對話兩隻角色合計打了幾次。上面「6.0 次呼叫／場」是雙方合計，若對話
-> 輪流發言、大致平均分攤，換算成單一角色的負擔是約 **3 次呼叫／場**——30
-> 次配額對單一角色來說約可撐 **10 場**均值對話，不是拿雙方合計數去除的
-> 5 場。這個換算本身也只是「輪流均分」的粗略假設，實際上兩隻角色誰先開口、
+> 一場對話兩隻角色合計打了幾次。上面「7.0 次呼叫／場」是雙方合計，若對話
+> 輪流發言、大致平均分攤，換算成單一角色的負擔是約 **3.5 次呼叫／場**——30
+> 次配額對單一角色來說約可撐 **8～9 場**均值對話，不是拿雙方合計數去除的
+> 場次。這個換算本身也只是「輪流均分」的粗略假設，實際上兩隻角色誰先開口、
 > 誰講得多不會完全對半分，正式訂數字前要用同一個 per-角色口徑重新記樣本，
 > 不是延用這次雙方合計的數字
 >
@@ -608,7 +613,9 @@ autoload 已註冊，主控台加了 `ai` 指令。
 `DialogueLines`。`MAX_TURNS` 換成 `SAFETY_MAX_TURNS`（純保險，收尾由 `end` 欄位決定），
 `character.gd` 有 `signal spoke`，玩家在對話中打的字也送得進上下文。
 
-開場白仍然是模板句：對話由 `DialogueLines.opening()` 起頭，第二輪才進 LLM。
+開場白（turn 0，被搭話的一方）也一律過 LLM（issue #630／《99》P-67），多開放
+一個 `engage` 欄位，可以選擇不理會這次搭話；`DialogueLines.opening()` 只在
+turn 0 的 LLM 呼叫失敗時當 fallback 使用，跟 `closing()` 是同一種定位。
 
 ### Step 2 — 任務池與仲裁器 ✅ 完成
 

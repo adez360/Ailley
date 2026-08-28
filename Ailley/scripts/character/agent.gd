@@ -996,17 +996,25 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 	# 比精準對齊網路延遲更重要
 	say(AI_THINKING_TEXT, true)
 
+	# turns 空陣列＝被搭話的第一輪，還沒人開口——這輪多開放 engage 欄位，
+	# 讓對象可以選擇不理會這次搭話（issue #630）。之後的輪次已經在聊，
+	# 不套用這份，只有 validate_dialogue() 那組欄位
+	var is_opening := turns.is_empty()
 	var envelope := PromptBuilder.build_dialogue_envelope(
-		self, listener, turns, max_turns, current_place
+		self, listener, turns, max_turns, current_place, is_opening
 	)
-	var result := await _decide_with_retry(envelope, AIService.Policy.CONVERSATION, AISchema.validate_dialogue)
+	var validator: Callable = (
+		AISchema.validate_dialogue_open if is_opening else AISchema.validate_dialogue
+	)
+	var result := await _decide_with_retry(envelope, AIService.Policy.CONVERSATION, validator)
 	if not result["ok"]:
 		return {"ok": false}
 
 	return {
 		"ok": true,
-		"line": result["data"]["line"],
-		"end": result["data"]["end"],
+		"engage": result["data"].get("engage", true),
+		"line": result["data"].get("line", ""),
+		"end": result["data"].get("end", false),
 	}
 
 ## 睡眠反思（#168，《03》§5）：把今天的事實句丟給 LLM，換回摘要跟逐筆評分，

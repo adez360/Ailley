@@ -280,6 +280,22 @@ static func validate_dialogue(data: Dictionary) -> Dictionary:
 
 	return _ok({"line": line, "end": end})
 
+## 對話第一輪（turn 0，被搭話的那一方）專用：多開放 engage 欄位，可以選擇
+## 不理會這次搭話（issue #630——「他想講就講不想講就算了，跟真實社交一樣」）。
+## engage=false 時不強求 line/end 有內容，直接固定回一個空殼；其餘情況
+## （省略或 true）比照一般規則整個丟給 validate_dialogue()，正常回一句話，
+## 不要維護兩份幾乎一樣的檢查邏輯
+static func validate_dialogue_open(data: Dictionary) -> Dictionary:
+	if data.has("engage"):
+		if not data["engage"] is bool:
+			return _fail(ERROR_BAD_SHAPE)
+		if not data["engage"]:
+			return _ok({"engage": false, "line": "", "end": true})
+
+	var validated := validate_dialogue(data)
+	if validated["ok"]:
+		validated["data"]["engage"] = true
+	return validated
 
 # 單筆任務的通用邊界檢查：action 白名單、params 型別、talk/attack/give 的
 # 逐欄位檢查、expires_in_minutes 換算、priority／duration 範圍。從
