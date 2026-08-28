@@ -607,17 +607,14 @@ static func _memory_block(
 
 	return {"recent": recent, "core": core, "recalled": recalled}
 
-## 關係只送 trust —— 好感／熟悉／虧欠三維已經整個拿掉（《01》3-1），
+## 關係只送 met_count —— 好感／熟悉／虧欠／信任(trust) 都已整個拿掉（《01》3-1），
 ## 「我對這個人什麼觀感」不再由引擎給一個數字，交給模型自己從對話與記憶判斷
 static func _listener_block(speaker: Character, listener: Character) -> Dictionary:
-	var trust := float(Relationships.DEFAULT_RECORD["trust"])
 	var met_count := 0
 	if speaker.relationships != null:
-		trust = speaker.relationships.get_trust(listener.character_id)
 		met_count = speaker.relationships.get_met_count(listener.character_id)
 
 	return {
 		"name": listener.character_name,
-		"trust": trust,
 		"met_count": met_count,
 	}

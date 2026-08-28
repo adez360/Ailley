@@ -13,11 +13,6 @@ static func create(db) -> bool:
 
 		target_id TEXT NOT NULL,
 
-		relations_trust INTEGER NOT NULL DEFAULT 20
-			CHECK (
-				relations_trust BETWEEN 0 AND 100
-			),
-
 		relations_appearance_cache TEXT NOT NULL DEFAULT ''
 			CHECK (
 				length(relations_appearance_cache) <= 20

@@ -19,9 +19,9 @@ extends RefCounted
 ## 一來避免 character.gd -> conversation.gd -> dialogue_lines.gd -> character.gd 的循環相依，
 ## 二來逼自己把「產生台詞需要哪些資訊」講清楚，之後那就是要送給 LLM 的 context。
 ##
-## 台詞不分親疏：好感度欄位已經拿掉（《01》3-1），引擎手上沒有任何
-## 「這兩個人熟不熟」的數值可以拿來挑句子。剩下的 trust 是信任不是好感，
-## 拿它當親疏門檻等於把兩件事混成一件，那正是規格書要拆開的東西。
+## 台詞不分親疏：好感／熟悉／虧欠／信任(trust) 全都拿掉了（《01》3-1），
+## 引擎手上沒有任何「這兩個人什麼關係」的數值可以拿來挑句子——那是模型
+## 自己從對話與記憶判斷的事，不是引擎給一個門檻。
 
 
 static func opening(listener_name: String) -> String:

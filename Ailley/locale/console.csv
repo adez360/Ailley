@@ -43,7 +43,7 @@ CON_MOVE_TOWARD,"前往 {pos}（路徑 {points} 點）","heading to {pos} ({poin
 CON_MOVE_IDLE,"靜止","idle"
 CON_LOOK_BODY,"面向 {facing}／動畫 {anim}","facing {facing} / anim {anim}"
 CON_STATE_ACTIVE,"進行中","in progress"
-CON_RELATION_ENTRY,"{id} 信任 {trust}（{count} 次）","{id} trust {trust} ({count} met)"
+CON_RELATION_ENTRY,"{id}（{count} 次）","{id} ({count} met)"
 CON_SCHEDULE_BODY,"{place}／{state}（共 {count} 筆）","{place} / {state} ({count} entries)"
 CON_OVERLAY_ALL_OFF,"已關閉全部 debug 疊圖","All debug overlays turned off"
 CON_OVERLAY_NO_LAYER,"沒有這個項目：{layer}","No such overlay: {layer}"
