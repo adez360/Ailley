@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/dialogue/conversation.gd
 status: 進行中
-updated: 2026-08-22
+updated: 2026-08-29
 ---
 
 # talk 動作設計
@@ -88,7 +88,7 @@ updated: 2026-08-22
 
 關係是「對某個人」而不是「角色自己的數值」，所以獨立成 `Relationships`，
 key 用對方的 `character_id` 而不是 name —— name 會改，用它當 key 等於改名即失憶。
-每筆存成 Dictionary 而不是單一浮點數：欄位是 `trust`／`met_count`／
+每筆存成 Dictionary 而不是單一浮點數：欄位是 `met_count`／
 `appearance_cache`（規格《01》3-1、《99》P-08）／`appearance_state`（#498，
 見下方外觀異動偵測），之後要加最後見面時間（見 #497）、印象標籤也一樣不用
 改結構。
@@ -126,8 +126,8 @@ review 抓到：「髒兮兮」「乾淨多了」「傷已經好了」這幾種�
 > 型別不對、舊格式存檔——通通算「沒有 baseline」，一律只建立新 baseline、
 > 不比對、不發事實句，不能退回 `{injured: false, filthy: false}` 這種看似
 > 合法的預設值再拿去比對（那樣等於偷偷假造了一個「上次見到時沒受傷也不髒」
-> 的假歷史）。這點刻意不跟 `Relationships` 其餘欄位（`trust`／`met_count`
-> 型別不對時退回 `DEFAULT_RECORD` 的預設數字）同一套處理——那些欄位的預設
+> 的假歷史）。這點刻意不跟 `Relationships` 其餘欄位（`met_count`／`appearance_cache`
+> 型別不對時退回 `DEFAULT_RECORD` 的預設值）同一套處理——那些欄位的預設
 > 值本身就是合法的初始狀態，`appearance_state` 的「不存在」跟「存在且是
 > false」語意不同，不能共用退回預設值那條路。具體的讀檔/型別驗證程式碼留給
 > 實作 issue 寫，這裡只定住這條語意規則，避免照抄其他欄位的驗證模式時
@@ -149,19 +149,21 @@ review 抓到：「髒兮兮」「乾淨多了」「傷已經好了」這幾種�
 > 因為讀不到欄位而報錯或誤判成異動。具體的 schema migration 寫法留給實作
 > issue。
 
-好感、熟悉、虧欠不是引擎欄位：沒有任何公式讀過它們（《00》原則三），
-那三件事交給《03》記憶系統自己記、自己判斷、自己演。
+好感、熟悉、虧欠、信任都不是引擎欄位：沒有任何公式讀過它們（《00》原則三），
+這幾件事交給《03》記憶系統自己記、自己判斷、自己演（信任／`trust` 是最後
+拿掉的一個，見 issue #601）。
 
 > [!important] 查詢不可以建立紀錄
-> `Relationships` 的讀寫是分開的：`get_trust()` / `get_record()` / `has_met()`
-> 全部唯讀，`get_record()` 甚至回的是副本；只有 `add_trust()`、`set_appearance_cache()`
-> 與 `note_meeting()` 會走私有的 `_ensure_record()` 建立紀錄。
+> `Relationships` 的讀寫是分開的：`get_record()` / `has_met()` 全部唯讀，
+> `get_record()` 甚至回的是副本；只有 `set_appearance_cache()` 與
+> `note_meeting()` 會走私有的 `_ensure_record()` 建立紀錄。
 >
 > 這條是踩出來的：原本查詢走「沒有就當場建一筆」的 `get_record()`，
 > 而 `conversation.gd` 開場就會問一次關係 ——
 > 於是**只要對話開始過，`has_met()` 就永遠為真，而 `met_count` 還是 0**。
 > 症狀是 [[視覺感測]] 那個「第一次看到陌生人才愣一下」再也不會發生
-> （搭話後立刻走開就足以觸發），而主控台會印出「player 信任 20.0（0 次）」這種自相矛盾的東西。
+> （搭話後立刻走開就足以觸發），而主控台會印出「player（0 次）」卻同時判定
+> `has_met()` 為真，這種見過面次數是 0 但「已認識」的自相矛盾狀態。
 >
 > 「認識」的唯一來源是 `note_meeting()`，也就是**好好講完一場話**。
 > 這件事接 LLM 之後更要緊：`met_count` 與「認不認識」是要送進 payload 的事實，
@@ -201,7 +203,7 @@ NavGrid 的障礙判定只查 `terrain`，不受影響），取代原本每次�
 | 面對面 | `talk_to()` 本身不要求（debug 主控台、`agent.gd` 的 LLM 決策直接指名對象呼叫） | 操作上太苛；但玩家按 `E` 走 `player.gd::_nearest_facing()` 候選篩選時仍會排除沒面向的目標（`FACING_DOT_THRESHOLD`，見 #102） |
 | 互動鍵 | `E` | |
 | 被搭話者的行程 | 暫停後重算 | 不是接續原路 |
-| 回補 | social +25、mood +5 | 只有正常講完才發；關係只記 `note_meeting()`，不動 `trust` |
+| 回補 | social +25、mood +5 | 只有正常講完才發；關係只記 `note_meeting()`，不寫入任何評價數值 |
 | 等待對方回話逾時 | **暫定 8 秒**（AI 對 AI） | 沒有既有數值可參照，比照《04》`/event` 逾時（8秒建議值）抓同一量級，比一般 `/decide`（5秒）寬鬆，對話生成通常較長。逾時走 fallback（`DialogueLines.closing()`）。真人玩家的回話等待秒數留到 MVP-2 玩家加入後再定——現在真人不參與 `talk`，不急 |
 
 ## 呈現層的坑
