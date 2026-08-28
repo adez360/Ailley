@@ -52,7 +52,6 @@ func _build() -> void:
 	_panel = PanelContainer.new()
 	_panel.position = Vector2(VIEWPORT_W - PANEL_WIDTH - TAB_SIZE.x, 0)
 	_panel.size = Vector2(PANEL_WIDTH, VIEWPORT_H)
-	_panel.add_theme_stylebox_override("panel", _flat(CREAM, 6, 6))
 	add_child(_panel)
 
 	var col := VBoxContainer.new()
