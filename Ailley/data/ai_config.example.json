@@ -22,5 +22,10 @@
 	"max_calls_per_game_day": 20,
 	"dialogue_exempt": true,
 	"max_dialogue_calls_per_game_day": 30,
-	"max_creation_calls_per_game_day": 0
+	"max_creation_calls_per_game_day": 0,
+	"embedding": {
+		"base_url": "http://127.0.0.1:8081/v1",
+		"model": "bge-small-zh-v1.5-q8_0.gguf",
+		"timeout": 10.0
+	}
 }
