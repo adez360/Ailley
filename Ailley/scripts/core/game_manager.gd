@@ -276,6 +276,10 @@ func receive_created_character(data: Dictionary) -> void:
 		"hexaco": hexaco,
 		"character": description,
 		"appearance": data.get("appearance", []),
+		# 選中哪一格造型組的索引（appearance[] 內容本身待《99》P-38 填）。
+		# 編輯既有角色時要能還原這個選擇，不然 character_create.gd::_load_entry()
+		# 每次都被迫重置成 -1、鎖住存檔鈕直到重新手動選一次（issue #683）
+		"appearance_style_index": int(data.get("appearance_style_index", -1)),
 		"personality": persona["personality"],
 		"system_prompt": persona["system_prompt"],
 		# 編輯時沿用既有的 words_to_creator——人格改了不代表要重打一次
