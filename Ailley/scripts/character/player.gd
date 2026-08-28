@@ -146,6 +146,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	if vending_menu != null and vending_menu.is_open():
 		return
 
+	# tip_menu 開著時同理 vending_menu（CodeRabbit review 抓到）：漏了這道
+	# guard 的話，Player 這裡會搶先吃掉 interact／ui_cancel 事件、呼叫
+	# set_input_as_handled()，tip_menu.gd 自己的 _unhandled_input() 永遠輪
+	# 不到、選單關不掉
+	var tip_menu := get_tree().get_first_node_in_group("tip_menu")
+	if tip_menu != null and tip_menu.is_open():
+		return
+
 	get_viewport().set_input_as_handled()
 
 	if is_in_conversation():
@@ -173,8 +181,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		if other == null:
 			report_action_failure("work_at", work_reason)
 			return
-		# 工作失敗但旁邊還有人可以搭話——先試搭話，兩邊都失敗才回報，
-		# 不然「工作站被佔用」跟「搭話失敗」會疊成兩則訊息一起蹦出來
+		# 工作失敗但旁邊還有人可以互動——對方正在表演的話跟下面主路徑同一種
+		# 判斷，開打賞選單而不是搭話（CodeRabbit review 抓到：這條 return
+		# 分支原本會搶在下面的 tip_menu 判斷之前結束，讓表演中的人在這裡
+		# 只能被搭話，開不了打賞選單）
+		if other.is_performing() and tip_menu != null:
+			tip_menu.open(other, self)
+			return
+		# 否則先試搭話，兩邊都失敗才回報，不然「工作站被佔用」跟「搭話失敗」
+		# 會疊成兩則訊息一起蹦出來
 		if talk_to(other) != TALK_OK:
 			report_action_failure("work_at", work_reason)
 		return
@@ -183,6 +198,15 @@ func _unhandled_input(event: InputEvent) -> void:
 	# （場景裡固定掛著），這裡多防一手是避免場景漏掛的話直接炸掉
 	elif machine != null and candidates["to_machine"] <= candidates["to_other"] and vending_menu != null:
 		vending_menu.open(machine, self)
+		return
+
+	# 對方正在表演時，E 開的是打賞選單而不是搭話——玩家（天神）主動打賞是
+	# 全新的 UI 互動，直接呼叫 Inventory.add_money()，不走 AI 決策（#575 拍板）。
+	# tip_menu 理論上一定找得到（場景裡固定掛著），跟 vending_menu 同一種
+	# 「多防一手」寫法，避免場景漏掛時直接炸掉。變數在函式開頭已經宣告過
+	# 一次（給上面關閉選單那道 guard 用），這裡直接沿用，不重複宣告
+	if other != null and other.is_performing() and tip_menu != null:
+		tip_menu.open(other, self)
 		return
 
 	var talk_reason := talk_to(other)
@@ -286,12 +310,16 @@ var _highlighted_other: Character = null
 
 func _process(_delta: float) -> void:
 	var vending_menu := get_tree().get_first_node_in_group("vending_menu")
+	var tip_menu := get_tree().get_first_node_in_group("tip_menu")
 
-	# 選單開著時 E 是關閉選單（見 vending_menu.gd 自己的 _unhandled_input），
-	# 不是這三個候選裡的任何一個——選單不擋移動，玩家開著選單照樣能走位/轉向，
-	# 這裡不擋的話高亮會跟著跳來跳去，暗示 E 現在會搭話/工作，實際上按下去
-	# 只會關掉選單，跟對話中不顯示互動高亮是同一個理由
-	if is_in_conversation() or (vending_menu != null and vending_menu.is_open()):
+	# 選單開著時 E 是關閉選單（見 vending_menu.gd／tip_menu.gd 自己的
+	# _unhandled_input），不是這三個候選裡的任何一個——選單不擋移動，玩家
+	# 開著選單照樣能走位/轉向，這裡不擋的話高亮會跟著跳來跳去，暗示 E 現在
+	# 會搭話/工作，實際上按下去只會關掉選單，跟對話中不顯示互動高亮是同一個
+	# 理由。tip_menu 漏了這道 guard 會讓表演者在選單開著時還被畫成「可以互動」
+	# （CodeRabbit review 抓到）
+	if is_in_conversation() or (vending_menu != null and vending_menu.is_open()) \
+			or (tip_menu != null and tip_menu.is_open()):
 		_set_highlighted_workstation(null)
 		_set_highlighted_machine(null)
 		_set_highlighted_other(null)
