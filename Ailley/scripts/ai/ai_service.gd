@@ -125,6 +125,11 @@ func _ready() -> void:
 		_pool.append(http)
 
 	GameClock.day_changed.connect(_on_day_changed)
+	# 開新遊戲不是跨日，是整條時間軸歸零重來（#618，CodeRabbit review 抓到）——
+	# GameClock.reset_to_new_game_start() 不會發 day_changed（day 可能還是 1，
+	# 語意上沒有「跳了一天」），沒有這條的話上一局殘留的每日配額會直接延續
+	# 到新的一局，讓新一局一開場就打到 daily_quota
+	GameClock.new_game_started.connect(_on_day_changed.bind(0))
 
 	# reload_config() 上面已經呼叫過，裡面自己會觸發 _check_readiness_all()
 	# （見該函式），這裡不用再呼叫一次——CodeRabbit review 抓到：原本這裡
@@ -444,7 +449,7 @@ func _note_call(requester_id: String, policy: Policy) -> void:
 	_calls_today[requester_id] = int(_calls_today.get(requester_id, 0)) + 1
 
 
-# 跨日就把兩本帳清掉。日計數在 GameClock，這裡不自己數 ——
+# 跨日、或開新遊戲（#618）就把兩本帳清掉。日計數在 GameClock，這裡不自己數 ——
 # 私有計數重開遊戲會歸零，每日配額就能靠重開遊戲繞過
 func _on_day_changed(_day: int) -> void:
 	_calls_today.clear()

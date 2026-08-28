@@ -31,9 +31,12 @@ const DEFAULT_BASE_URL := "https://openrouter.ai/api/v1"
 const DEFAULT_MODEL := "openai/gpt-4o-mini"
 
 # 10 秒是 HTTPRequest.timeout 的值，不是自寫的計時器 —— 引擎原生支援逾時。
-# 這個維持全域一個值，不做成逐 provider——HTTPRequest 節點池是共用的
-# （見 ai_service.gd），節點的 timeout 是節點屬性不是逐請求參數，做成逐
-# provider 反而沒有實際效果，只會製造「設定了卻沒生效」的錯覺
+# 這是逐 provider 設定不到時的退回值，不是唯一生效的全域值：_parse_provider()
+# 把設定檔裡沒填、或填了非正值（0／負值，HTTPRequest 會解讀成「不逾時」）的
+# provider.timeout 一律退回這個值；填了正值的話 provider.timeout 蓋過它，
+# ai_service.gd::_send()／_probe_models() 每次發送前都把節點的
+# HTTPRequest.timeout 設成當次呼叫的 provider.timeout，同一個節點池跨請求
+# 換著用不同 provider 時逐次生效，不是建立節點當下定死的一次性初值
 const DEFAULT_TIMEOUT := 10.0
 
 ## 速率限制的預設值。放在設定檔而不是寫死在 ai_service.gd，是因為這兩個數字
@@ -51,6 +54,18 @@ const DEFAULT_MAX_CALLS_PER_GAME_DAY := 20
 ## 呼叫上限提案」一節。dialogue_exempt=false 時這個旋鈕形同虛設——那種設定下
 ## 對話呼叫已經走一般 max_calls_per_game_day 路徑，不需要疊加第二層限制
 const DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY := 30
+
+## L3 語意檢索的 embedding 端點設定（issue #571，《03》§7）。刻意放在頂層、
+## 不塞進 providers 字典——providers 代表玩家自己選的聊天 provider（Local／
+## Cloud 二選一），而 embedding 永遠打本機的 embedding-only llama-server，
+## 跟玩家選了哪個聊天 provider 無關，兩者是獨立的設定面。預設值指向專案內
+## 已驗證可用的本機 embedding server（bge-small-zh-v1.5-q8_0.gguf，
+## `llama-server --embedding --pooling cls`），沒填這個區塊時就套用這組預設值，
+## 不是留白——EmbeddingService 本來就是軟失敗設計（連不上就回空結果，不擋
+## 遊戲），沒必要在設定層再擋一次
+const DEFAULT_EMBEDDING_BASE_URL := "http://127.0.0.1:8081/v1"
+const DEFAULT_EMBEDDING_MODEL := "bge-small-zh-v1.5-q8_0.gguf"
+const DEFAULT_EMBEDDING_TIMEOUT := 10.0
 
 ## 對話輪次要不要豁免上面兩條限制。預設豁免 ——
 ## MIN_INTERVAL_SEC 是為「行程重排」訂的，而對話輪次是秒級間隔，
@@ -142,6 +157,10 @@ var min_interval_sec := DEFAULT_MIN_INTERVAL_SEC
 var max_calls_per_game_day := DEFAULT_MAX_CALLS_PER_GAME_DAY
 var dialogue_exempt := DEFAULT_DIALOGUE_EXEMPT
 var max_dialogue_calls_per_game_day := DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY
+
+var embedding_base_url := DEFAULT_EMBEDDING_BASE_URL
+var embedding_model := DEFAULT_EMBEDDING_MODEL
+var embedding_timeout := DEFAULT_EMBEDDING_TIMEOUT
 
 
 # 內建 sidecar 的本機連線預設值（《16》§2.2 決定隨安裝包附上的 llama-server，
@@ -250,6 +269,48 @@ func _apply(data: Dictionary) -> void:
 		data.get("max_dialogue_calls_per_game_day", DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY)
 	))
 
+	# embedding 區塊跟上面幾個速率限制欄位一樣，在 enabled 判斷之前就先讀——
+	# 這個區塊管的是 L3 語意檢索，跟聊天 provider 的 enabled/disabled 狀態無關，
+	# 玩家沒開聊天 AI 一樣可能想要記憶檢索照常運作（雖然沒有 LLM 決策迴圈會用到
+	# 它，但 Memory.search_l3() 不該因為這裡提早 return 而讀到沒套用過的預設值）
+	var raw_embedding: Variant = data.get("embedding", {})
+	if raw_embedding is Dictionary:
+		var embedding_data := raw_embedding as Dictionary
+		var raw_embedding_base_url := str(embedding_data.get("base_url", DEFAULT_EMBEDDING_BASE_URL)).strip_edges().rstrip("/")
+		# 只信任 loopback 位址（CodeRabbit review 抓到）：embedding 一律走本機
+		# 是這個功能的核心承諾（見 note/技術/LLM 串接與 AI 服務層.md「Embedding」
+		# 一節）——不是怕記憶內容外流的隱私問題（NPC 記憶是模擬事件，不是玩家
+		# 真實個資），是怕設定檔手改或未來開放玩家自訂這個欄位時，不小心指到
+		# 一個真的收費的雲端端點，讓玩家在不知情的狀況下，每筆記憶寫入／每次
+		# 語意檢索觸發都默默產生 API 費用（觸發頻率比對話還高）。非 loopback
+		# 位址一律拒絕、退回預設值，不嘗試「警告但照樣送出去」
+		if _is_loopback_url(raw_embedding_base_url):
+			embedding_base_url = raw_embedding_base_url
+		else:
+			# 不把 raw_embedding_base_url 整個印進錯誤訊息（CodeRabbit review
+			# 抓到）：這個值來自玩家可寫入的設定檔，可能夾帶 URI userinfo 或
+			# query string 裡的帳密／token，寫進 log 就是把這些資料留在使用者
+			# 看得到、可能被分享出去除錯的地方——這裡只需要讓玩家知道「這個
+			# 設定被拒絕了」，不需要把被拒絕的值本身複誦一次
+			push_error(
+				"[AIConfig] embedding.base_url 不是本機位址，拒絕使用、退回預設值——"
+				+ "embedding 設計上一律走本機，避免玩家不知情下對雲端端點產生費用"
+			)
+			embedding_base_url = DEFAULT_EMBEDDING_BASE_URL
+		# 跟下面 timeout 同一個理由：空字串／全空白不是合法的模型名稱，
+		# 設定檔手滑填 "" 或 "   " 時退回預設值，不然 EmbeddingService
+		# 會拿空字串當 model 送出請求（CodeRabbit review 抓到）
+		var raw_embedding_model := str(embedding_data.get("model", DEFAULT_EMBEDDING_MODEL)).strip_edges()
+		embedding_model = raw_embedding_model if not raw_embedding_model.is_empty() else DEFAULT_EMBEDDING_MODEL
+		# 跟 _parse_provider() 的 timeout 處理同一個理由：<= 0 代表「不設逾時」，
+		# 設定檔手滑填 0 或負值時退回預設值，不信任非正值
+		var raw_embedding_timeout := float(embedding_data.get("timeout", DEFAULT_EMBEDDING_TIMEOUT))
+		embedding_timeout = raw_embedding_timeout if raw_embedding_timeout > 0.0 else DEFAULT_EMBEDDING_TIMEOUT
+	else:
+		embedding_base_url = DEFAULT_EMBEDDING_BASE_URL
+		embedding_model = DEFAULT_EMBEDDING_MODEL
+		embedding_timeout = DEFAULT_EMBEDDING_TIMEOUT
+
 	default_provider = str(data.get("default_provider", "")).strip_edges()
 
 	providers.clear()
@@ -290,6 +351,81 @@ func _apply(data: Dictionary) -> void:
 	var default_ok: bool = not default_provider.is_empty() and providers.has(default_provider)
 	status_reason = L10n.t("AI_STATUS_ENABLED") if default_ok \
 		else L10n.tf("AI_STATUS_BAD_DEFAULT", {"path": CONFIG_PATH})
+
+
+## embedding.base_url 的 loopback 檢查（見 _apply() 的呼叫處說明）。只認
+## host 是 127.0.0.1／localhost／[::1] 這三種寫法，不做真正的 DNS 解析——
+## 設定檔裡填一個會解析到 loopback 的自訂 hostname 這種邊緣情況不在防範
+## 範圍內，這裡只擋最直接、最可能因為設定檔手滑或誤用範例產生的情況
+## （填了雲端 API 的網域）
+static func _is_loopback_url(url: String) -> bool:
+	var without_scheme := url
+	var scheme_index := url.find("://")
+	if scheme_index != -1:
+		without_scheme = url.substr(scheme_index + 3)
+
+	var host := without_scheme
+	var slash_index := host.find("/")
+	if slash_index != -1:
+		host = host.substr(0, slash_index)
+
+	# URI userinfo（"user:pass@host"，CodeRabbit review 抓到）：
+	# "127.0.0.1:8081@evil.example" 這種寫法，@ 前面看起來是 loopback，但
+	# Godot 的 HTTPRequest 實際連線時會把 @ 前面當成 userinfo 丟棄，真正連
+	# 上的是 @ 後面的 evil.example——如果這裡只看 @ 前面就判定過關，等於
+	# 讓一個指向任意遠端主機的 URL 偽裝成本機位址騙過驗證。embedding server
+	# 不需要 URL 內嵌帳密，含 @ 的 authority 一律直接拒絕，不嘗試解析
+	# 「@ 後面才是真正的 host」這種寫法本身要不要放行
+	if host.find("@") != -1:
+		return false
+
+	# 括號包住的 IPv6 字面值（CodeRabbit review 抓到）：[::1] 或 [::1]:port，
+	# port 只會出現在右括號之後——不能像下面非括號的情形直接找「最後一個
+	# 冒號」去切，[::1] 本身內部就有冒號，會把左括號內容切壞（[::1] 被切成
+	# 「[:」）。有括號時改成找右括號位置，port（如果有）保證在它後面
+	if host.begins_with("["):
+		var bracket_end := host.find("]")
+		if bracket_end == -1:
+			return false
+
+		# 右括號後面的內容要嘛是空字串、要嘛是合法的 ":<port>"（CodeRabbit
+		# review 抓到）："[::1]evil.example" 這種寫法，右括號後面直接接一個
+		# 網域名稱，不是 port——先前這裡只保留 "[::1]" 那一段去比對，等於
+		# 完全忽略了右括號後面還有東西，讓這種偽裝成 loopback 的字串通過
+		# 驗證；但 _apply() 實際存起來、後續 EmbeddingService 真正拿去打的
+		# 是原始未截斷的 raw_embedding_base_url，不是這裡截斷過的 host，兩者
+		# 對不上
+		var suffix := host.substr(bracket_end + 1)
+		if not suffix.is_empty():
+			if not suffix.begins_with(":") or not _is_valid_port(suffix.substr(1)):
+				return false
+
+		host = host.substr(0, bracket_end + 1)
+	else:
+		var colon_index := host.rfind(":")
+		if colon_index != -1:
+			# 冒號後面也要驗證是合法 port 才能截掉（CodeRabbit review 抓到
+			# 的同一類問題，這裡原本完全沒驗證：is_valid_int() 連 ":-1" 這種
+			# 負數、":65536" 這種超出 TCP port 範圍的值都會判定通過，兩者都
+			# 不是真正能用的 port）——冒號後面不是合法 port 時，代表這整段
+			# 不是「host:port」的寫法，不能只取冒號前半段去比對，直接判定
+			# 不是 loopback
+			if not _is_valid_port(host.substr(colon_index + 1)):
+				return false
+			host = host.substr(0, colon_index)
+
+	return host == "127.0.0.1" or host == "localhost" or host == "[::1]" or host == "::1"
+
+
+## TCP port 合法範圍是 1-65535（CodeRabbit review 抓到：is_valid_int() 只驗證
+## 字串是不是整數格式，不驗證數值範圍，":-1"／":65536" 這種不合法的 port 會被
+## 誤判通過）。is_valid_int() 允許前導 "+"／"-"，這裡額外用 int() 轉換後做
+## 範圍檢查，一次擋掉格式與範圍兩種問題
+static func _is_valid_port(port_str: String) -> bool:
+	if not port_str.is_valid_int():
+		return false
+	var port := int(port_str)
+	return port >= 1 and port <= 65535
 
 
 func _parse_provider(provider_name: String, data: Dictionary) -> Provider:

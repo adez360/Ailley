@@ -1,0 +1,14 @@
+[gd_resource type="StyleBoxTexture" load_steps=3 format=3 uid="uid://db8gj58uccemy"]
+
+[ext_resource type="Texture2D" uid="uid://loh8kgucviuh" path="res://assets/ui/panels.png" id="1_jytyi"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_aywsu"]
+atlas = ExtResource("1_jytyi")
+region = Rect2(2, 1, 28, 29)
+
+[resource]
+texture = SubResource("AtlasTexture_aywsu")
+texture_margin_left = 4.0
+texture_margin_top = 4.0
+texture_margin_right = 4.0
+texture_margin_bottom = 6.0

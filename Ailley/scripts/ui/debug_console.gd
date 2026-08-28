@@ -525,12 +525,12 @@ func _cmd_act(args: PackedStringArray) -> void:
 		])
 		return
 
-	# talk／attack／bury 的參數是人不是地點（見 agent.gd::_pursue_talk_task()／
-	# _pursue_attack_task()／_pursue_bury_task()），其餘動作一律吃 place。
+	# talk／attack／bury／follow 的參數是人不是地點（見 agent.gd::_pursue_talk_task()／
+	# _pursue_attack_task()／_pursue_bury_task()／_pursue_follow_task()），其餘動作一律吃 place。
 	# 這裡照 action 分流，不要求下指令的人自己記得填哪個 key
 	var params := {}
 	if args.size() == 3:
-		params["target" if ["talk", "attack", "bury"].has(action) else "place"] = args[2]
+		params["target" if ["talk", "attack", "bury", "follow"].has(action) else "place"] = args[2]
 
 	# is_in_group("agents") 不會幫 GDScript 縮窄靜態型別，顯式轉型才能讓
 	# debug_push_task()（Agent-only）這個呼叫真的是型別安全的
@@ -714,6 +714,9 @@ func _cmd_spawn(args: PackedStringArray) -> void:
 
 	var identity := {"character_name": template.get("character_name", "")}
 	var character := GameManager.spawn_character(AGENT_SCENE, identity)
+	# 跟投放／還原共用同一道 readiness 關卡，不然這裡生出來的角色一樣會是
+	# 不會決策的殭屍（issue #598），沒辦法拿來驗證投放流程是否正常
+	GameManager.activate_llm_decision_if_ready(character)
 
 	_print("[color=88ff88]生成角色 %s[/color][color=888888]  id %s[/color]" % [
 		character.character_name, character.character_id

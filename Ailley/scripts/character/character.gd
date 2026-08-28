@@ -9,8 +9,9 @@ extends CharacterBody2D
 signal move_finished(reached: bool)
 signal noise_heard(source: Character)		# 收到的那一方會發，見 make_noise()
 signal spoke(line: String)			# 講出任何一句話都會發，日後寫逐字稿/記憶系統的接點
+signal speech_heard(source: Character, line: String)	# 收到的那一方會發，見 say() 的廣播（issue #669）
 
-const SPEED = 80.0
+const SPEED = 60.0		# 2026-08-24 從 80 調降，原速 5 格/秒（16px/格）偏快
 const ARRIVE_DISTANCE = 2.0		# 距離 waypoint 多近算抵達
 const STUCK_TIME = 1.0			# 卡住多久就放棄目前路徑
 
@@ -79,6 +80,37 @@ const DRINK_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法喝�
 const DRINK_NO_DRINK := "NO_DRINK"		# 背包裡沒有 ItemDatabase 分類為 drink 的物品
 const DRINK_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 hydration，不能先扣飲品
 
+## perform() 的失敗原因碼，形狀比照 EAT_*／DRINK_*（#575）。跟 work_at() 一樣
+## 是多分鐘的長動作，多了一個 BUSY——已經在表演、工作或對話中不能再開始一次
+const PERFORM_OK := ""
+const PERFORM_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒有樂器可用
+const PERFORM_NO_INSTRUMENT := "NO_INSTRUMENT"	# 背包裡沒有 instrument（#575 拍板：任意地點皆可，只認物品，不認地點）
+const PERFORM_NO_STATS := "NO_STATS"			# 沒有 Stats 的角色沒地方扣 hygiene
+const PERFORM_BUSY := "BUSY"					# 已經在表演、工作、對話中，或移動被鎖定
+
+## 表演持續的遊戲分鐘數。跟 WORK_DURATION_MINUTES 同一種「固定分鐘數」寫法，
+## 值取相同量級——太短的話，範圍內的路人 Vision 偵測＋LLM 決策一輪跑不完，
+## 表演已經結束了，永遠等不到任何人打賞
+const PERFORM_DURATION_MINUTES := 10
+
+## gather() 的失敗原因碼，形狀比照 BUY_*：除了 NO_INVENTORY，背包滿了直接
+## 原樣轉傳 Inventory 的 ADD_NO_SPACE，不重新取名（#574）
+const GATHER_OK := ""
+const GATHER_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法採集
+
+## use_selected_item() 的失敗原因碼，形狀比照 EAT_*／DRINK_*（#611）。除了這四個，
+## use_selected_item() 還會**原樣轉傳** Inventory.use_item() 自己的原因碼
+## （`NOT_CONSUMABLE`、`INVALID_EFFECT`、`REMOVE_FAILED`……），跟 buy_from() 轉傳
+## `NOT_ENOUGH`／`NO_SPACE` 同一個理由，不重新取名
+const USE_ITEM_OK := ""
+const USE_ITEM_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法使用道具
+const USE_ITEM_NO_SELECTION := "NO_SELECTION"	# 快捷欄沒選格，或選到的是空格
+const USE_ITEM_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復數值
+const USE_ITEM_IS_DEAD := "IS_DEAD"		# 死屍不能使用道具（CodeRabbit review 抓到，PR #615）——
+						# 跟 talk_to() 擋自己是死屍發起搭話同一種漏洞：is_dead
+						# 之後沒有任何地方會停用玩家的 _unhandled_input()，
+						# 死屍照樣能吃/喝
+
 const GIVE_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE 一樣的距離門檻，2 格
 
 ## give_to() 的失敗原因碼，形狀比照 TALK_*／BUY_*。除了這四個，give_to()
@@ -132,6 +164,7 @@ const FAILURE_MESSAGE_KEYS := {
 	"NO_INVENTORY": "FAIL_NO_INVENTORY",
 	"NO_FOOD": "FAIL_NO_FOOD",
 	"NO_DRINK": "FAIL_NO_DRINK",
+	"NO_INSTRUMENT": "FAIL_NO_INSTRUMENT",
 	"NO_STATS": "FAIL_NO_STATS",
 	"NOT_FOUND": "FAIL_NOT_FOUND",
 	"INVALID_COUNT": "FAIL_INVALID_COUNT",
@@ -142,6 +175,8 @@ const FAILURE_MESSAGE_KEYS := {
 	"NOT_ENOUGH": "FAIL_NOT_ENOUGH",
 	"INVALID_AMOUNT": "FAIL_INVALID_AMOUNT",
 	"NO_SPACE": "FAIL_NO_SPACE",
+	"NO_SELECTION": "FAIL_NO_SELECTION",
+	"IS_DEAD": "FAIL_IS_DEAD",
 }
 
 ## 滑鼠指到時套在 sprite 上的描邊
@@ -237,17 +272,17 @@ var _rescued_haulers: Array[Character] = []
 
 @onready var sprite: AnimatedSprite2D = $AnimatedSprite2D
 @onready var collider: CollisionShape2D = $CollisionShape2D
-@onready var stats: Stats = get_node_or_null("Stats")
-@onready var relationships: Relationships = get_node_or_null("Relationships")
-@onready var bubble: Node2D = get_node_or_null("Bubble")
-@onready var vision: Vision = get_node_or_null("Vision")
-@onready var inventory: Inventory = get_node_or_null("Inventory")
-@onready var work_progress: WorkProgress = get_node_or_null("WorkProgress")
-@onready var money_popup: MoneyPopup = get_node_or_null("MoneyPopup")
-@onready var memory: Memory = get_node_or_null("Memory")
+@onready var stats: Stats = get_node_or_null("State/Stats")
+@onready var relationships: Relationships = get_node_or_null("State/Relationships")
+@onready var bubble: Node2D = get_node_or_null("UI/Bubble")
+@onready var vision: Vision = get_node_or_null("Sensing/Vision")
+@onready var inventory: Inventory = get_node_or_null("State/Inventory")
+@onready var work_progress: WorkProgress = get_node_or_null("UI/WorkProgress")
+@onready var money_popup: MoneyPopup = get_node_or_null("UI/MoneyPopup")
+@onready var memory: Memory = get_node_or_null("State/Memory")
 # 只有 Player 掛這個節點——NPC 不需要被引導去任何地方。get_node_or_null()
 # 在沒有這個節點的 Agent 實例上安靜回 null，呼叫端（#305）自己判斷要不要用
-@onready var waypoint_indicator: WaypointIndicator = get_node_or_null("WaypointIndicator")
+@onready var waypoint_indicator: WaypointIndicator = get_node_or_null("UI/WaypointIndicator")
 
 # 最後一次的面向：front / back / right，停下時用來挑 idle 動畫
 var facing := "front"
@@ -288,11 +323,13 @@ var death_at := ""				# UTC ISO 8601 時間戳，見 §8 復活窗口判斷依�
 var death_cause := ""			# 中文自然語言，引擎彙整，不讓 LLM 潤飾
 var death_location_id := ""	# 死亡當下的地點，查不到具名地點時是空字串（在地點之間）
 var last_words: Variant = null	# String 或 null（來不及開口）；只有 Agent 會真的問 LLM，見 _request_last_words()
-var corpse_decay := 0.0		# 0–100，_update_corpse_decay() 每 tick +0.7；達 100 之後交給 #387 判斷是否自動立無名碑
-var is_buried := false			# 安葬流程見 #380，這裡只保留欄位供其寫入
+var corpse_decay := 0.0		# 0–100，_update_corpse_decay() 每 tick +0.7；達 100 觸發 _erect_unmarked_grave()
+var is_buried := false			# 人為安葬見 bury()（#380），自動立無名碑見 _erect_unmarked_grave()（#387）
 var grave_id: Variant = null	# 同上，String 或 null
-var buried_by: Variant = null	# 誰安葬了你，String（character_id）或 null（無名碑等非人為安葬留給 #387）
+var buried_by: Variant = null	# 誰安葬了你，String（character_id）或 null（無名碑等非人為安葬，見 _erect_unmarked_grave()）
 var buried_tick := -1			# 安葬當下的全域 tick，同 death_tick 換算方式，見 bury()
+var is_anonymous := false		# 無名碑（《規格書09》§3-4／§4-3）：_erect_unmarked_grave() 自動立碑時設 true；
+								# bury() 人為安葬不改這個值，只有《規格書09》§4-4 擦拭墓碑（未實作）能清成 false
 
 # 滑鼠 hover（selection.gd）跟 E 鍵目前的互動目標（player.gd）是兩個獨立的
 # 高亮來源，任一個成立就該顯示描邊。分開存，不是合用一個布林值——CodeRabbit
@@ -726,8 +763,8 @@ const DEATH_LOCATION_RADIUS := 32.0
 ## 死亡流程（#379，《規格書09》§1／§2）。這批 issue 只處理
 ## 「health≤0→昏迷→逾時未獲救治→死亡」這一條觸發路徑；餓死／渴死／老化／
 ## 瞬間死亡 Flag 等其餘觸發源留給後續 issue，各自準備好 death_cause 文案後
-## 呼叫這裡收尾即可，不需要重做狀態機本身。墓園／安葬（#380）與 corpse_decay
-## 達 100 自動立無名碑（#387）都是後續 issue，這裡只負責觸發與石化
+## 呼叫這裡收尾即可，不需要重做狀態機本身。這裡只負責觸發與石化，墓園／安葬
+## 見 bury()（#380），corpse_decay 達 100 自動立無名碑見 _erect_unmarked_grave()（#387）
 func _die(cause: String) -> void:
 	if is_dead:
 		return
@@ -813,7 +850,7 @@ func _resolve_death_location() -> String:
 ## 屍體腐壞（《規格書09》§3-4）：死亡後每 tick +0.7，clamp 在 [0,100]——
 ## 100/0.7 除不盡，不 clamp 會在某個 tick 算出 100.1，讓存檔的 CHECK 約束
 ## 寫入失敗（規格書原文引用 issue #451 CodeRabbit review 踩過的坑）。達到
-## 100 之後交給 #387（自動立無名碑）判斷，這裡只負責累加，不做立碑
+## 100 且還沒被安葬、還沒立過碑時，交給 _erect_unmarked_grave() 自動立無名碑
 func _update_corpse_decay() -> void:
 	if not is_dead:
 		return
@@ -824,9 +861,14 @@ func _update_corpse_decay() -> void:
 	if death_tick == _current_tick():
 		return
 	corpse_decay = clampf(corpse_decay + 0.7, 0.0, 100.0)
+	# grave_id 仍是 null 才觸發：避免每個超過 100 之後的 tick 都重複嘗試立碑
+	# （已安葬的屍體 corpse_decay 理論上不會再被呼叫到這裡，is_buried 這個
+	# 條件只是雙重保險）
+	if corpse_decay >= 100.0 and not is_buried and grave_id == null:
+		_erect_unmarked_grave()
 
 
-# ---- 安葬（#380，《規格書09》§3-2／§6） ----
+# ---- 安葬（#380／#387，《規格書09》§3-2／§3-4／§6） ----
 
 ## 搬運／安葬距離門檻，跟 HAUL_RANGE／GIVE_RANGE 同一種「2 格內」判斷，
 ## 沒有理由對屍體另訂一套距離
@@ -912,6 +954,23 @@ func _cemetery_grave_count() -> int:
 		if node is Character and (node as Character).is_buried:
 			count += 1
 	return count
+
+## 屍體腐壞見底、沒人安葬時，引擎自動立「無名碑」（#387，《規格書09》§1／§3-4）：
+## 確保每一個死亡都會被記錄，不需要搬到墓園、不需要任何人動手。跟 bury() 的差別
+## 只在「誰做的」——is_buried 一樣設 true，但 buried_by 留 null（自動、非人為），
+## is_anonymous 設 true 讓墓碑面板只顯示死亡原因與日期（§4-3）。跟 bury() 共用
+## 同一組 CEMETERY_GRAVE_CAPACITY 上限（§6 拍板：滿格時兩者都直接失敗）——
+## 滿格時這裡直接放棄，corpse_decay 已經是 100、grave_id 仍是 null，
+## _update_corpse_decay() 之後每個 tick 都會重試，直到有格子空出來
+func _erect_unmarked_grave() -> void:
+	if _cemetery_grave_count() >= CEMETERY_GRAVE_CAPACITY:
+		return
+	is_buried = true
+	grave_id = "grave_%s" % character_id
+	buried_by = null
+	buried_tick = _current_tick()
+	is_anonymous = true
+	print_debug("Character %s 腐壞見底，自動立無名碑" % character_name)
 
 
 # ---- 移動 ----
@@ -1034,13 +1093,28 @@ func leave_conversation() -> void:
 ## interrupt=true 立刻蓋掉正在顯示/排隊中的內容（LLM 回應等待中的「…」要被
 ## 真正的台詞立刻換掉，不能排在它後面等它自己的顯示時間跑完）。
 ## 預設 false 維持原本「不打斷正在講的話」的排隊語意，其餘呼叫端不用改
-func say(line: String, interrupt: bool = false) -> void:
+##
+## 廣播 speech_heard 不分呼叫來源——一般聊天輸入框（chat_input.gd）跟
+## talk_to() 正式對話（conversation.gd）都算「說了一句話」，《07》§3
+## 定義的「聽覺（一般說話）3 格」是物理上聽不聽得到，不分是哪種介面講出來的
+## （issue #669）。
+##
+## broadcast=false：內部系統 fallback 泡泡（`!?`／`！` 這類感測不到 LLM
+## 回應時的寫死反應）不是「這個角色真的說了什麼」，不該算進《07》§3 的
+## 「聽得到的對話」——放行的話，鄰近的 LLM 角色會把這句 `!?` 當成一句話
+## 排進自己的事實句佇列、觸發一次決策，決策若同樣問不到結果又冒出自己的
+## `!?`，在 3 格範圍內連環擴散成一波決策請求風暴（CodeRabbit review 抓到，
+## PR #674）。所有這類 fallback 泡泡呼叫端都要傳 false，見 agent.gd／player.gd
+## 的 _on_noise_heard()／_on_speech_heard()／_react_to_spotted_fallback()
+func say(line: String, interrupt: bool = false, broadcast: bool = true) -> void:
 	if bubble == null:
 		return
 	if interrupt:
 		bubble.clear()
 	bubble.say(line)
 	spoke.emit(line)
+	if broadcast:
+		_broadcast_speech(line)
 
 ## 行為失敗時統一的回報方式（issue #180），取代原本三個呼叫點（player.gd
 ## 的 work_at／talk_to、vending_menu.gd 的 buy_from）各自手寫的
@@ -1103,6 +1177,22 @@ func make_noise(radius: float = NOISE_RADIUS) -> void:
 			continue
 		if get_body_position().distance_to(other.get_body_position()) <= radius:
 			other.noise_heard.emit(self)
+
+## 廣播半徑（像素），3 格——《07》§3 定案「聽覺（一般說話）3 格」，跟
+## NOISE_RADIUS（shout／make_noise 的 8 格）是刻意分開的兩個數字
+const SPEECH_HEARD_RADIUS := 48.0
+
+## 對外廣播「這裡說了一句話」，範圍內每個角色都會收到 speech_heard 訊號，
+## 帶實際講的內容——跟 make_noise() 只給「有聲音發生」這個事實不同，
+## 一般說話《07》§3 定義的本來就是「聽得到的對話」，內容是客觀事實（誰講了
+## 什麼字），要不要反應、反應是什麼由收到的那一方自己決定，感測/反應分離
+## 的理由跟 make_noise() 一樣（issue #669，見 [[聽覺感測]]）
+func _broadcast_speech(line: String) -> void:
+	for other in get_tree().get_nodes_in_group("characters"):
+		if other == self:
+			continue
+		if get_body_position().distance_to(other.get_body_position()) <= SPEECH_HEARD_RADIUS:
+			other.speech_heard.emit(self, line)
 
 
 # ---- 工作 ----
@@ -1251,6 +1341,19 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 	return BUY_OK
 
 
+# ---- 採集 ----
+
+# 在藥草叢採集一份藥草（#574）：跟 buy_from() 一樣只管「把東西塞進背包」——
+# 地點對不對、擲不擲得過成功率是 resolve() 的事（見 agent.gd 的 SUCCESS_PARAMS／
+# _roll_success()），這裡假設呼叫端已經確認過那兩件事才會呼叫。add_item()
+# 內部已處理堆疊規則，回傳值直接轉傳（ADD_OK 剛好也是空字串，跟 GATHER_OK
+# 同一個值，不用另外映射）
+func gather() -> String:
+	if inventory == null:
+		return GATHER_NO_INVENTORY
+	return inventory.add_item("herb")
+
+
 # ---- 人格 ----
 
 ## 依 delta_dict（{欄位: 差值}）調整人格特質，統一夾在 0~100。跟睡眠反思套用
@@ -1347,6 +1450,93 @@ func drink() -> String:
 
 	apply_personality_delta(item.get("personality_delta", {}))
 	return DRINK_OK
+
+
+# ---- 表演 ----
+
+## 目前是否正在表演（#575）。跟 is_working() 同一種「多分鐘長動作進行中」
+## 旗標，Vision 偵測到的路人靠這個判斷要不要把「有人在表演」餵給自己的 AI
+var _performing := false
+var _perform_session_id := 0
+
+func is_performing() -> bool:
+	return _performing
+
+## 手持 instrument 就地表演，任意地點皆可（#575 拍板：不像 work_at() 要先有
+## 工作站）。跟 eat()／drink() 一樣先做前置檢查、才有副作用；但表演不是瞬間
+## 完成，是跟 work_at() 同一種「立刻回傳 OK、實際過程交給協程跑」的長動作
+## ——duration 夠長，範圍內的路人才有機會被 Vision 偵測到、問過自己的 AI
+## 要不要打賞。hygiene -1 是一次性扣點（每次「開始表演」扣一次），不是既有
+## drift 機制的量級，這裡刻意不套用 Stats 既有的每分鐘漂移模式
+func perform() -> String:
+	if inventory == null:
+		return PERFORM_NO_INVENTORY
+	if not inventory.has_item("instrument"):
+		return PERFORM_NO_INSTRUMENT
+	if stats == null:
+		return PERFORM_NO_STATS
+	if is_in_conversation() or _working or _performing or _is_movement_locked():
+		return PERFORM_BUSY
+
+	stats.add("hygiene", -1.0)
+	_performing = true
+	stop_moving()
+	_run_perform(_perform_session_id)
+	return PERFORM_OK
+
+## 表演協程本體：跟 _run_work() 同一種「逐遊戲分鐘等 GameClock.time_changed」
+## 寫法，用 session_id 擋掉中途被 force_interrupt() 提前結束後、舊協程醒來
+## 時又重複收尾一次（同一招見 _run_work() 的 session_id 比對）
+func _run_perform(session_id: int) -> void:
+	for i in PERFORM_DURATION_MINUTES:
+		await GameClock.time_changed
+		if session_id != _perform_session_id:
+			return
+	_end_perform(true)
+
+## completed：跑滿 PERFORM_DURATION_MINUTES 自然結束傳 true，force_interrupt()
+## 中途打斷傳 false（CodeRabbit review 抓到：兩種原本都會落進同一個
+## _on_perform_finished()，被打斷的表演會被誤記成正常結束）
+func _end_perform(completed: bool) -> void:
+	_performing = false
+	_perform_session_id += 1
+	_on_perform_finished(completed)
+
+## 表演結束的收尾鉤子，基底 no-op——跟 _on_work_finished() 同一個理由，Player
+## 沒有行程可言，只有 Agent 需要清目前任務並重新問決策
+func _on_perform_finished(_completed: bool) -> void:
+	pass
+
+# ---- 使用背包目前選取的道具 ----
+
+# 玩家按下 use_item 鍵時，使用快捷欄目前選取格裡的東西（#611）。跟 eat()／
+# drink() 的差異：那兩個是「自動找背包裡第一個符合分類的物品」，這裡固定用
+# 玩家自己選的那一格——選到的不是食物/飲品就直接失敗，不會幫忙跳去找別的。
+# 是不是消耗品交給 inventory.use_item() 的 is_consumable 參數判斷，這裡只
+# 負責把分類轉成布林值；其餘原因碼直接轉傳，見上面 USE_ITEM_* 常數的說明
+func use_selected_item() -> String:
+	if is_dead:
+		return USE_ITEM_IS_DEAD
+	if inventory == null:
+		return USE_ITEM_NO_INVENTORY
+
+	var slot := inventory.get_slot(inventory.get_selected_index())
+	if slot.is_empty():
+		return USE_ITEM_NO_SELECTION
+	if stats == null:
+		return USE_ITEM_NO_STATS
+
+	var item_id: String = slot["item_id"]
+	var item := ItemDatabase.get_item(item_id)
+	var category: String = item.get("category", "")
+	var is_consumable := category == "food" or category == "drink"
+
+	var use_reason := inventory.use_item(item_id, stats, item, is_consumable)
+	if use_reason != Inventory.USE_OK:
+		return use_reason
+
+	apply_personality_delta(item.get("personality_delta", {}))
+	return USE_ITEM_OK
 
 
 # ---- 送禮 ----
@@ -1489,6 +1679,8 @@ func force_interrupt() -> void:
 		leave_conversation()
 	if _working:
 		_end_work(_current_workstation)
+	if _performing:
+		_end_perform(false)
 	_on_action_interrupted()
 
 ## 中斷後的收尾鉤子，讓子類別決定要不要重新規劃行程。基底不用管——
@@ -1519,6 +1711,7 @@ func get_state_snapshot() -> Dictionary:
 		"animation": sprite.animation,
 		"in_conversation": is_in_conversation(),
 		"working": is_working(),
+		"performing": is_performing(),
 		"last_action_result": last_action_result,
 		# 深拷貝：Dictionary／Array 是傳參照，直接放進 snapshot 的話呼叫端改了
 		# 快照會連帶改到 Character 內部狀態，繞過 set_emotion() 的驗證
@@ -1587,6 +1780,7 @@ func get_save_data() -> Dictionary:
 		"grave_id": grave_id,
 		"buried_by": buried_by,
 		"buried_tick": buried_tick,
+		"is_anonymous": is_anonymous,
 	}
 
 	if stats != null:
@@ -1669,6 +1863,8 @@ func load_save_data(data: Dictionary) -> void:
 		buried_by = loaded_buried_by if (loaded_buried_by == null or (loaded_buried_by is String and not loaded_buried_by.is_empty())) else null
 		var loaded_buried_tick: Variant = data.get("buried_tick", -1)
 		buried_tick = loaded_buried_tick if (loaded_buried_tick is int and (loaded_buried_tick == -1 or loaded_buried_tick >= 0)) else -1
+		var loaded_anonymous: Variant = data.get("is_anonymous", false)
+		is_anonymous = loaded_anonymous if loaded_anonymous is bool else false
 
 		# 治療欄位跟 _die() 同一個理由清掉（CodeRabbit review 抓到）：上面幾行
 		# 只還原死亡欄位本身，沒清掉治療欄位——若這份存檔或載入前的角色狀態剛好
@@ -1708,6 +1904,7 @@ func load_save_data(data: Dictionary) -> void:
 		grave_id = null
 		buried_by = null
 		buried_tick = -1
+		is_anonymous = false
 
 	# 治療與昏迷互斥（見 _send_to_herb_shop_for_treatment()），治療中的存檔優先還原成治療狀態，
 	# 不重建 CONDITION_INCAPACITATED；只有「昏迷中但還沒送醫」才需要重建。死亡是終局，

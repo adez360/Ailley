@@ -36,7 +36,7 @@ var _pending_lines: Array[String] = []
 ## 還是「還沒輪到，先緩衝」（#207）
 var _turn_waiting := false
 
-@onready var interact_area: Area2D = $InteractArea
+@onready var interact_area: Area2D = $Sensing/InteractArea
 
 ## InteractArea 目前偵測到的候選（工作站／販賣機，靠 collision layer "interactable"
 ## 篩選，見 project.godot 的 layer_3）。角色候選不走這裡——直接沿用
@@ -50,9 +50,14 @@ const _PLAYER_ID_PATH := "user://saves/player_id.txt"
 
 
 func _ready() -> void:
+	# Character._ready() 會用 facing 播 idle 動畫（預設 "front"），玩家出生要面向
+	# 後方，得在 super() 之前設好，不然 player.tscn 場景檔設的 idle_back 只是編輯器
+	# 預覽用，實際一進遊戲就被蓋成 idle_front（CodeRabbit review on #587 抓到）
+	facing = "back"
 	super()
 	add_to_group("player")
 	line_submitted.connect(_on_line_submitted)
+	noise_heard.connect(_on_noise_heard)
 
 	# 半徑動態算 maxf(...)，不能寫死：WORK_RANGE／TALK_RANGE／BUY_RANGE 是三個
 	# 故意保持獨立可調的常數（見 note/技術/販賣機.md），這裡只是先撈進一個
@@ -71,6 +76,24 @@ func _on_interact_area_body_entered(body: Node2D) -> void:
 
 func _on_interact_area_body_exited(body: Node2D) -> void:
 	_nearby_interactables.erase(body)
+
+## 範圍內有人 make_noise()／shout 時（issue #376），玩家跟 agent.gd 非 LLM
+## 模式下的 fallback 走同一條路——冒 !?。玩家沒有 LLM 決策迴圈可以問「要不要
+## 有反應」，這裡不是引擎替玩家決定了什麼感受，只是把「有事發生」這個感測
+## 結果顯示出來，要不要理會是玩家自己的事（跟《00》原則二「引擎只給事件，
+## 不給情緒」對到的是 AI 那一側，這裡對應的是把感測結果曝光給操作者本人）。
+## 對話中不冒泡：跟 agent.gd 的 _on_noise_heard() 同一個理由，避免打斷正在
+## 顯示的對話內容。死屍不反應（CodeRabbit review 抓到，同 agent.gd 的
+## _on_noise_heard() 一致）——這是 character.gd::make_noise() 直接觸發的外部
+## 事件回呼，不會自動被別處的死亡判斷擋掉。make_noise() 本身已經排除自己
+## （見 Character.make_noise()），這裡不用再另外判斷來源是不是自己
+func _on_noise_heard(_source: Character) -> void:
+	if is_dead or is_in_conversation():
+		return
+	# broadcast=false：這是系統 fallback 泡泡，不是玩家真的說了什麼，不該被
+	# 3 格內的 NPC 當成「聽到的對話」去反應、問一次決策——同 agent.gd 的理由，
+	# 見 character.gd::say() 的說明（CodeRabbit review 抓到，PR #674）
+	say(L10n.t("DLG_NOISE_ALERT"), false, false)
 
 # 打字是「這一輪有結果了」的其中一種來源，另一種是對話結束（見 exit_conversation()）。
 # 兩者收斂成同一個訊號，next_line() 才只要等一個東西。
@@ -104,6 +127,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		make_noise()
 		return
 
+	# 用快捷欄目前選取格裡的東西（#611）。跟 make_noise 同一種優先序——不管
+	# 對話中或選單開著都能觸發，不用擠進下面那條 interact 的攔截鏈
+	if event.is_action_pressed("use_item"):
+		get_viewport().set_input_as_handled()
+		var use_reason := use_selected_item()
+		if use_reason != USE_ITEM_OK:
+			report_action_failure("use_item", use_reason)
+		return
+
 	if not event.is_action_pressed("interact"):
 		return
 
@@ -112,6 +144,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	# 讓事件繼續往下傳給 vending_menu.gd 自己的 _unhandled_input 處理
 	var vending_menu := get_tree().get_first_node_in_group("vending_menu")
 	if vending_menu != null and vending_menu.is_open():
+		return
+
+	# tip_menu 開著時同理 vending_menu（CodeRabbit review 抓到）：漏了這道
+	# guard 的話，Player 這裡會搶先吃掉 interact／ui_cancel 事件、呼叫
+	# set_input_as_handled()，tip_menu.gd 自己的 _unhandled_input() 永遠輪
+	# 不到、選單關不掉
+	var tip_menu := get_tree().get_first_node_in_group("tip_menu")
+	if tip_menu != null and tip_menu.is_open():
 		return
 
 	get_viewport().set_input_as_handled()
@@ -141,8 +181,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		if other == null:
 			report_action_failure("work_at", work_reason)
 			return
-		# 工作失敗但旁邊還有人可以搭話——先試搭話，兩邊都失敗才回報，
-		# 不然「工作站被佔用」跟「搭話失敗」會疊成兩則訊息一起蹦出來
+		# 工作失敗但旁邊還有人可以互動——對方正在表演的話跟下面主路徑同一種
+		# 判斷，開打賞選單而不是搭話（CodeRabbit review 抓到：這條 return
+		# 分支原本會搶在下面的 tip_menu 判斷之前結束，讓表演中的人在這裡
+		# 只能被搭話，開不了打賞選單）
+		if other.is_performing() and tip_menu != null:
+			tip_menu.open(other, self)
+			return
+		# 否則先試搭話，兩邊都失敗才回報，不然「工作站被佔用」跟「搭話失敗」
+		# 會疊成兩則訊息一起蹦出來
 		if talk_to(other) != TALK_OK:
 			report_action_failure("work_at", work_reason)
 		return
@@ -151,6 +198,15 @@ func _unhandled_input(event: InputEvent) -> void:
 	# （場景裡固定掛著），這裡多防一手是避免場景漏掛的話直接炸掉
 	elif machine != null and candidates["to_machine"] <= candidates["to_other"] and vending_menu != null:
 		vending_menu.open(machine, self)
+		return
+
+	# 對方正在表演時，E 開的是打賞選單而不是搭話——玩家（天神）主動打賞是
+	# 全新的 UI 互動，直接呼叫 Inventory.add_money()，不走 AI 決策（#575 拍板）。
+	# tip_menu 理論上一定找得到（場景裡固定掛著），跟 vending_menu 同一種
+	# 「多防一手」寫法，避免場景漏掛時直接炸掉。變數在函式開頭已經宣告過
+	# 一次（給上面關閉選單那道 guard 用），這裡直接沿用，不重複宣告
+	if other != null and other.is_performing() and tip_menu != null:
+		tip_menu.open(other, self)
 		return
 
 	var talk_reason := talk_to(other)
@@ -254,12 +310,16 @@ var _highlighted_other: Character = null
 
 func _process(_delta: float) -> void:
 	var vending_menu := get_tree().get_first_node_in_group("vending_menu")
+	var tip_menu := get_tree().get_first_node_in_group("tip_menu")
 
-	# 選單開著時 E 是關閉選單（見 vending_menu.gd 自己的 _unhandled_input），
-	# 不是這三個候選裡的任何一個——選單不擋移動，玩家開著選單照樣能走位/轉向，
-	# 這裡不擋的話高亮會跟著跳來跳去，暗示 E 現在會搭話/工作，實際上按下去
-	# 只會關掉選單，跟對話中不顯示互動高亮是同一個理由
-	if is_in_conversation() or (vending_menu != null and vending_menu.is_open()):
+	# 選單開著時 E 是關閉選單（見 vending_menu.gd／tip_menu.gd 自己的
+	# _unhandled_input），不是這三個候選裡的任何一個——選單不擋移動，玩家
+	# 開著選單照樣能走位/轉向，這裡不擋的話高亮會跟著跳來跳去，暗示 E 現在
+	# 會搭話/工作，實際上按下去只會關掉選單，跟對話中不顯示互動高亮是同一個
+	# 理由。tip_menu 漏了這道 guard 會讓表演者在選單開著時還被畫成「可以互動」
+	# （CodeRabbit review 抓到）
+	if is_in_conversation() or (vending_menu != null and vending_menu.is_open()) \
+			or (tip_menu != null and tip_menu.is_open()):
 		_set_highlighted_workstation(null)
 		_set_highlighted_machine(null)
 		_set_highlighted_other(null)
@@ -322,9 +382,14 @@ func _set_highlighted_other(target: Character) -> void:
 
 # 讀取 WASD 輸入，回傳正規化後的方向（斜向不會加速）
 func get_input_direction() -> Vector2:
-	# 有 UI 拿到焦點時（例如 debug 輸入框）不吃移動鍵，
-	# 因為 Input.get_axis() 讀的是全域輸入狀態，不會被 LineEdit 攔下來
-	if get_viewport().gui_get_focus_owner() != null:
+	# 有文字輸入框拿到焦點時（例如 debug 輸入框）不吃移動鍵，
+	# 因為 Input.get_axis() 讀的是全域輸入狀態，不會被 LineEdit 攔下來。
+	# 只認 LineEdit/TextEdit，不是任意拿到焦點的 Control——Button 預設
+	# focus_mode 就是 FOCUS_ALL，點過場上任何一顆按鈕（esc 選單、工具列……）
+	# 之後只要沒人主動 release_focus()，焦點會一直留著，用「有沒有 Control
+	# 拿焦點」當條件會讓玩家點過一次按鈕後就永久走不動
+	var focus_owner := get_viewport().gui_get_focus_owner()
+	if focus_owner is LineEdit or focus_owner is TextEdit:
 		return Vector2.ZERO
 
 	return Vector2(
