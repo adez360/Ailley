@@ -2764,11 +2764,47 @@ func _effective_action_duration(base_duration: float) -> float:
 		duration *= 1.15
 	return duration
 
+## 地點 → 環境危險度（issue #634，《07》§1-1）。暫時寫死成小 dict，不接
+## `location` 這張 DB 表——那張表目前完全沒有任何 gameplay 程式碼讀寫過
+## （schema 存在但沒人用），接上去要多做一層資料填充跟查詢，投資報酬率
+## 跟這裡「先讓數字生效」的訴求不成比例。**之後真的要做地點資料驅動化
+## （之後可能會有更多地點／可調數值）時，這個 dict 要整個換成從
+## `location` 表讀，不要兩邊各自維護一份**。目前只有森林非 0（《07》§1-1
+## 範例值），其餘 MVP 地點按 P-17 拍板統一是 0，不逐一列出
+const DANGER_BY_PLACE := {
+	"forest": 20,
+}
+
+## 危險度換算成成功率扣分的係數（hunt_small 基準 ×1）。規格《01-2》§2 的
+## 「-環境風險」沒定義 danger→% 換算公式，係數本身屬實作自由度；取
+## 0.005 是因為 _roll_success() 其餘修正項在極端值下約 ±0.1~0.4
+## （alcohol_term 係數也是 0.005，同一量級），森林 danger=20 換算後
+## hunt_small 扣 0.1、hunt_large（×2）扣 0.2——介於 stamina 項的極端
+## 擺幅與 injury／alcohol 項的極端值之間，不會小到無感，也不會蓋過其他
+## 修正項
+const ENVIRONMENT_RISK_COEF := 0.005
+
+## 動作 → 環境風險倍率（《01-2》§3 環境風險欄）。森林 danger=20 時：
+## hunt_small 規格扣 0.10（20×0.005×1）、hunt_large 規格扣 0.20
+## （「森林危險度 ×2」）——×1／×2 直接對上規格數字。不在表上的動作
+## 不吃地點危險度：gather／fish 規格欄標「—」；steal 的環境風險走
+## 目擊判定（Vision/make_noise），perform 走觀眾人數修正，都是另一套
+## 機制，等各自落地時再接，不要用地點 danger 頂替
+const ENV_RISK_MULT := {
+	"hunt_small": 1.0,
+	"hunt_large": 2.0,
+}
+
 ## 環境風險由呼叫端依動作/情境算好傳入（正值代表風險，數字越大成功率扣越多）。
-## SUCCESS_PARAMS 目前沒有動作會走到這裡，之後接動作時（例如 steal 的目擊者
-## 風險）再補實際算法
-func _environment_risk(_action: String, _params: Dictionary) -> float:
-	return 0.0
+## 依動作倍率（ENV_RISK_MULT）乘上角色目前所在地點的危險度——SUCCESS_PARAMS
+## 上的動作都是在 current_place 原地執行，不像 buy 帶獨立的 place 參數，
+## 不需要另外從 params 找地點
+func _environment_risk(action: String, _params: Dictionary) -> float:
+	var mult := float(ENV_RISK_MULT.get(action, 0.0))
+	if mult == 0.0:
+		return 0.0
+	return float(DANGER_BY_PLACE.get(current_place, 0)) * ENVIRONMENT_RISK_COEF * mult
+
 
 ## 決策執行前的檢查層（#120，《00》原則一：LLM 決定想做什麼，引擎決定做不做得到）。
 ## 只管兩件事：目標/前提是不是真的存在（硬規則），以及擲不擲得過成功率——語意
