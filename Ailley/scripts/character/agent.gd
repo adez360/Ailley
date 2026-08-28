@@ -611,7 +611,7 @@ func _generate_words_to_creator() -> void:
 	if not words_to_creator.is_empty():
 		return
 	var envelope := PromptBuilder.build_creation_envelope(system_prompt)
-	var result: Dictionary = await AIService.request(envelope, character_id, AIService.Policy.SCHEDULED)
+	var result: Dictionary = await AIService.request(envelope, character_id, AIService.Policy.CREATION)
 	if not result["ok"]:
 		return
 	var parsed := AISchema.parse_completion(result["data"])

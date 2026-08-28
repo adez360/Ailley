@@ -285,10 +285,12 @@ func receive_created_character(data: Dictionary) -> void:
 # reflection 平行的第四種信封類型，只在這一刻打一次。fire-and-forget：
 # 存檔本身不等這通請求，跟 workstation.gd::_run_work() 同一種協程模式——
 # 角色已經進角色庫，AI 回應晚到只補 words_to_creator 這一個欄位。
-# requester_id 用角色自己的 id，跟其他角色/Agent 的行程重排各自分開算配額
+# requester_id 用角色自己的 id，走 Policy.CREATION——跟這隻角色之後投放時
+# 第一次 plan 決策（Policy.SCHEDULED）是各自獨立的冷卻池，這通不會佔掉
+# 那邊的額度（issue #682）
 func _generate_words_to_creator(entry: Dictionary) -> void:
 	var envelope := PromptBuilder.build_creation_envelope(entry["system_prompt"])
-	var result: Dictionary = await AIService.request(envelope, entry["id"], AIService.Policy.SCHEDULED)
+	var result: Dictionary = await AIService.request(envelope, entry["id"], AIService.Policy.CREATION)
 	if not result["ok"]:
 		return
 	var parsed := AISchema.parse_completion(result["data"])
@@ -466,17 +468,10 @@ func activate_llm_decision_if_ready(character: Character) -> void:
 		return
 
 	# agent.gd::_ready() 剛剛可能已經 fire-and-forget 打過一次
-	# _generate_words_to_creator()（words_to_creator 沒預填才會真的送），
-	# 跟第一次決策共用同一個 requester_id／冷卻池——這裡不等冷卻結束就開
-	# 決策，第一次決策會被同步擋下 ERROR_RATE_LIMITED，決策迴圈靜默卡住到
-	# 下一次仲裁。main_scene.gd::_apply_startup_ai_state() 開場已經在等
-	# 這個冷卻，這裡跟著等同一套（CodeRabbit review 抓到）
-	var cooldown_left := float(AIService.get_usage(agent.character_id).get("cooldown_left", 0.0))
-	if cooldown_left > 0.0:
-		await get_tree().create_timer(cooldown_left).timeout
-		if not is_instance_valid(agent):
-			return
-
+	# _generate_words_to_creator()（words_to_creator 沒預填才會真的送）——
+	# 那通走 AIService.Policy.CREATION，跟這裡即將發起的第一次決策
+	# （Policy.SCHEDULED）是各自獨立的冷卻池，不用像 issue #682 之前那樣
+	# 等一輪冷卻才能開決策
 	agent.debug_set_llm_decision(true)
 
 
