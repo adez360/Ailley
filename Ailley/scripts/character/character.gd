@@ -9,6 +9,7 @@ extends CharacterBody2D
 signal move_finished(reached: bool)
 signal noise_heard(source: Character)		# 收到的那一方會發，見 make_noise()
 signal spoke(line: String)			# 講出任何一句話都會發，日後寫逐字稿/記憶系統的接點
+signal speech_heard(source: Character, line: String)	# 收到的那一方會發，見 say() 的廣播（issue #669）
 
 const SPEED = 60.0		# 2026-08-24 從 80 調降，原速 5 格/秒（16px/格）偏快
 const ARRIVE_DISTANCE = 2.0		# 距離 waypoint 多近算抵達
@@ -79,6 +80,24 @@ const DRINK_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法喝�
 const DRINK_NO_DRINK := "NO_DRINK"		# 背包裡沒有 ItemDatabase 分類為 drink 的物品
 const DRINK_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 hydration，不能先扣飲品
 
+## perform() 的失敗原因碼，形狀比照 EAT_*／DRINK_*（#575）。跟 work_at() 一樣
+## 是多分鐘的長動作，多了一個 BUSY——已經在表演、工作或對話中不能再開始一次
+const PERFORM_OK := ""
+const PERFORM_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒有樂器可用
+const PERFORM_NO_INSTRUMENT := "NO_INSTRUMENT"	# 背包裡沒有 instrument（#575 拍板：任意地點皆可，只認物品，不認地點）
+const PERFORM_NO_STATS := "NO_STATS"			# 沒有 Stats 的角色沒地方扣 hygiene
+const PERFORM_BUSY := "BUSY"					# 已經在表演、工作、對話中，或移動被鎖定
+
+## 表演持續的遊戲分鐘數。跟 WORK_DURATION_MINUTES 同一種「固定分鐘數」寫法，
+## 值取相同量級——太短的話，範圍內的路人 Vision 偵測＋LLM 決策一輪跑不完，
+## 表演已經結束了，永遠等不到任何人打賞
+const PERFORM_DURATION_MINUTES := 10
+
+## gather() 的失敗原因碼，形狀比照 BUY_*：除了 NO_INVENTORY，背包滿了直接
+## 原樣轉傳 Inventory 的 ADD_NO_SPACE，不重新取名（#574）
+const GATHER_OK := ""
+const GATHER_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法採集
+
 ## use_selected_item() 的失敗原因碼，形狀比照 EAT_*／DRINK_*（#611）。除了這四個，
 ## use_selected_item() 還會**原樣轉傳** Inventory.use_item() 自己的原因碼
 ## （`NOT_CONSUMABLE`、`INVALID_EFFECT`、`REMOVE_FAILED`……），跟 buy_from() 轉傳
@@ -145,6 +164,7 @@ const FAILURE_MESSAGE_KEYS := {
 	"NO_INVENTORY": "FAIL_NO_INVENTORY",
 	"NO_FOOD": "FAIL_NO_FOOD",
 	"NO_DRINK": "FAIL_NO_DRINK",
+	"NO_INSTRUMENT": "FAIL_NO_INSTRUMENT",
 	"NO_STATS": "FAIL_NO_STATS",
 	"NOT_FOUND": "FAIL_NOT_FOUND",
 	"INVALID_COUNT": "FAIL_INVALID_COUNT",
@@ -1073,13 +1093,28 @@ func leave_conversation() -> void:
 ## interrupt=true 立刻蓋掉正在顯示/排隊中的內容（LLM 回應等待中的「…」要被
 ## 真正的台詞立刻換掉，不能排在它後面等它自己的顯示時間跑完）。
 ## 預設 false 維持原本「不打斷正在講的話」的排隊語意，其餘呼叫端不用改
-func say(line: String, interrupt: bool = false) -> void:
+##
+## 廣播 speech_heard 不分呼叫來源——一般聊天輸入框（chat_input.gd）跟
+## talk_to() 正式對話（conversation.gd）都算「說了一句話」，《07》§3
+## 定義的「聽覺（一般說話）3 格」是物理上聽不聽得到，不分是哪種介面講出來的
+## （issue #669）。
+##
+## broadcast=false：內部系統 fallback 泡泡（`!?`／`！` 這類感測不到 LLM
+## 回應時的寫死反應）不是「這個角色真的說了什麼」，不該算進《07》§3 的
+## 「聽得到的對話」——放行的話，鄰近的 LLM 角色會把這句 `!?` 當成一句話
+## 排進自己的事實句佇列、觸發一次決策，決策若同樣問不到結果又冒出自己的
+## `!?`，在 3 格範圍內連環擴散成一波決策請求風暴（CodeRabbit review 抓到，
+## PR #674）。所有這類 fallback 泡泡呼叫端都要傳 false，見 agent.gd／player.gd
+## 的 _on_noise_heard()／_on_speech_heard()／_react_to_spotted_fallback()
+func say(line: String, interrupt: bool = false, broadcast: bool = true) -> void:
 	if bubble == null:
 		return
 	if interrupt:
 		bubble.clear()
 	bubble.say(line)
 	spoke.emit(line)
+	if broadcast:
+		_broadcast_speech(line)
 
 ## 行為失敗時統一的回報方式（issue #180），取代原本三個呼叫點（player.gd
 ## 的 work_at／talk_to、vending_menu.gd 的 buy_from）各自手寫的
@@ -1144,6 +1179,22 @@ func make_noise(radius: float = NOISE_RADIUS) -> void:
 			continue
 		if get_body_position().distance_to(other.get_body_position()) <= radius:
 			other.noise_heard.emit(self)
+
+## 廣播半徑（像素），3 格——《07》§3 定案「聽覺（一般說話）3 格」，跟
+## NOISE_RADIUS（shout／make_noise 的 8 格）是刻意分開的兩個數字
+const SPEECH_HEARD_RADIUS := 48.0
+
+## 對外廣播「這裡說了一句話」，範圍內每個角色都會收到 speech_heard 訊號，
+## 帶實際講的內容——跟 make_noise() 只給「有聲音發生」這個事實不同，
+## 一般說話《07》§3 定義的本來就是「聽得到的對話」，內容是客觀事實（誰講了
+## 什麼字），要不要反應、反應是什麼由收到的那一方自己決定，感測/反應分離
+## 的理由跟 make_noise() 一樣（issue #669，見 [[聽覺感測]]）
+func _broadcast_speech(line: String) -> void:
+	for other in get_tree().get_nodes_in_group("characters"):
+		if other == self:
+			continue
+		if get_body_position().distance_to(other.get_body_position()) <= SPEECH_HEARD_RADIUS:
+			other.speech_heard.emit(self, line)
 
 
 # ---- 工作 ----
@@ -1292,6 +1343,19 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 	return BUY_OK
 
 
+# ---- 採集 ----
+
+# 在藥草叢採集一份藥草（#574）：跟 buy_from() 一樣只管「把東西塞進背包」——
+# 地點對不對、擲不擲得過成功率是 resolve() 的事（見 agent.gd 的 SUCCESS_PARAMS／
+# _roll_success()），這裡假設呼叫端已經確認過那兩件事才會呼叫。add_item()
+# 內部已處理堆疊規則，回傳值直接轉傳（ADD_OK 剛好也是空字串，跟 GATHER_OK
+# 同一個值，不用另外映射）
+func gather() -> String:
+	if inventory == null:
+		return GATHER_NO_INVENTORY
+	return inventory.add_item("herb")
+
+
 # ---- 人格 ----
 
 ## 依 delta_dict（{欄位: 差值}）調整人格特質，統一夾在 0~100。跟睡眠反思套用
@@ -1389,6 +1453,61 @@ func drink() -> String:
 	apply_personality_delta(item.get("personality_delta", {}))
 	return DRINK_OK
 
+
+# ---- 表演 ----
+
+## 目前是否正在表演（#575）。跟 is_working() 同一種「多分鐘長動作進行中」
+## 旗標，Vision 偵測到的路人靠這個判斷要不要把「有人在表演」餵給自己的 AI
+var _performing := false
+var _perform_session_id := 0
+
+func is_performing() -> bool:
+	return _performing
+
+## 手持 instrument 就地表演，任意地點皆可（#575 拍板：不像 work_at() 要先有
+## 工作站）。跟 eat()／drink() 一樣先做前置檢查、才有副作用；但表演不是瞬間
+## 完成，是跟 work_at() 同一種「立刻回傳 OK、實際過程交給協程跑」的長動作
+## ——duration 夠長，範圍內的路人才有機會被 Vision 偵測到、問過自己的 AI
+## 要不要打賞。hygiene -1 是一次性扣點（每次「開始表演」扣一次），不是既有
+## drift 機制的量級，這裡刻意不套用 Stats 既有的每分鐘漂移模式
+func perform() -> String:
+	if inventory == null:
+		return PERFORM_NO_INVENTORY
+	if not inventory.has_item("instrument"):
+		return PERFORM_NO_INSTRUMENT
+	if stats == null:
+		return PERFORM_NO_STATS
+	if is_in_conversation() or _working or _performing or _is_movement_locked():
+		return PERFORM_BUSY
+
+	stats.add("hygiene", -1.0)
+	_performing = true
+	stop_moving()
+	_run_perform(_perform_session_id)
+	return PERFORM_OK
+
+## 表演協程本體：跟 _run_work() 同一種「逐遊戲分鐘等 GameClock.time_changed」
+## 寫法，用 session_id 擋掉中途被 force_interrupt() 提前結束後、舊協程醒來
+## 時又重複收尾一次（同一招見 _run_work() 的 session_id 比對）
+func _run_perform(session_id: int) -> void:
+	for i in PERFORM_DURATION_MINUTES:
+		await GameClock.time_changed
+		if session_id != _perform_session_id:
+			return
+	_end_perform(true)
+
+## completed：跑滿 PERFORM_DURATION_MINUTES 自然結束傳 true，force_interrupt()
+## 中途打斷傳 false（CodeRabbit review 抓到：兩種原本都會落進同一個
+## _on_perform_finished()，被打斷的表演會被誤記成正常結束）
+func _end_perform(completed: bool) -> void:
+	_performing = false
+	_perform_session_id += 1
+	_on_perform_finished(completed)
+
+## 表演結束的收尾鉤子，基底 no-op——跟 _on_work_finished() 同一個理由，Player
+## 沒有行程可言，只有 Agent 需要清目前任務並重新問決策
+func _on_perform_finished(_completed: bool) -> void:
+	pass
 
 # ---- 使用背包目前選取的道具 ----
 
@@ -1562,6 +1681,8 @@ func force_interrupt() -> void:
 		leave_conversation()
 	if _working:
 		_end_work(_current_workstation)
+	if _performing:
+		_end_perform(false)
 	_on_action_interrupted()
 
 ## 中斷後的收尾鉤子，讓子類別決定要不要重新規劃行程。基底不用管——
@@ -1592,6 +1713,7 @@ func get_state_snapshot() -> Dictionary:
 		"animation": sprite.animation,
 		"in_conversation": is_in_conversation(),
 		"working": is_working(),
+		"performing": is_performing(),
 		"last_action_result": last_action_result,
 		# 深拷貝：Dictionary／Array 是傳參照，直接放進 snapshot 的話呼叫端改了
 		# 快照會連帶改到 Character 內部狀態，繞過 set_emotion() 的驗證

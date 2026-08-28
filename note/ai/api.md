@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-24
+updated: 2026-08-28
 ---
 
 # api
@@ -87,12 +87,14 @@ ui_cancel                Esc（Godot 內建，project.godot 沒有覆寫）
 signal move_finished(reached: bool)          # 走完 true / 卡住放棄 false
 signal noise_heard(source: Character)        # 收到方會發，見 make_noise()
 signal spoke(line: String)                   # 講出任何一句話都會發（逐字稿/記憶的接點）
+signal speech_heard(source: Character, line: String)   # 收到方會發，見 say() 廣播（issue #669）
 
 const SPEED = 60.0                           # 2026-08-24 從 80 調降
 const ARRIVE_DISTANCE = 2.0
 const STUCK_TIME = 1.0
 const TALK_RANGE := 32.0                     # 2 格
 const NOISE_RADIUS := 128.0                  # 8 格，make_noise() 的預設半徑
+const SPEECH_HEARD_RADIUS := 48.0            # 3 格，say() 廣播 speech_heard 的半徑
 
 const TALK_OK := ""                          # 以下為 talk_to() 回傳值
 const TALK_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
@@ -134,11 +136,12 @@ func is_talk_interruptible() -> bool          # 基底 `not _working`；Agent �
 func enter_conversation(conversation: Node) -> void
 func exit_conversation() -> void
 func leave_conversation() -> void
-func say(line: String, interrupt := false) -> void   # interrupt=true 蓋掉現在這句
+func say(line: String, interrupt := false, broadcast := true) -> void   # interrupt=true 蓋掉現在這句；broadcast=false 給系統內部泡泡（!?／！／AI_THINKING_TEXT「…」）用，不廣播 speech_heard，避免鄰近 LLM 角色連環反應（issue #669）
 func speech_duration(line: String) -> float
 func face_towards(other: Character) -> void
 func update_animation(desired_velocity: Vector2) -> void   # facing 讀解算前的期望方向，不是解算後的 velocity（#108）
 func make_noise(radius: float = NOISE_RADIUS) -> void   # 廣播 noise_heard 給範圍內每個角色
+func _broadcast_speech(line: String) -> void   # say() 內部呼叫，廣播 speech_heard 給 SPEECH_HEARD_RADIUS 內每個角色
 
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
 func get_pick_rect() -> Rect2                # 目前影格的矩形，世界座標
@@ -203,6 +206,9 @@ _process()：每幀重算 _get_interact_candidates()，跟 E 會打到誰同一�
   更新 Workstation/VendingMachine 的 Highlight 節點與 Character.set_interact_highlighted()
   ——玩家即時看得到「E 現在會打到誰」（issue #81）
 make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不會冒 !?
+Player 不接 speech_heard（issue #669）：說話的人本來就會冒對話泡泡，真人玩家
+  看畫面就知道附近有人在講什麼，不需要引擎再曝光一次（跟 noise_heard 不同——
+  聲音本身沒有畫面呈現，才需要 !? 曝光感測結果）
 † gui_get_focus_owner() != null 時 get_input_direction() 回 ZERO
   Input.get_axis() 讀全域狀態，LineEdit 攔不住
 † 候選先被 _is_facing()（cone 判定）篩過一輪，沒被玩家面向的直接不算候選——
@@ -329,7 +335,13 @@ _on_move_finished()：move_finished 是共用訊號（debug 主控台的 goto �
   靠 last_move_target 比對是不是自己 current_place 的錨點才算數（issue #91）
 spotted 且 !relationships.has_met() → say("！") + stop_moving() + 2s + 重算行程
   _noticed 表確保每個對象只觸發一次
-noise_heard 且 !is_in_conversation() → say("!?")，無去重，每次都會反應
+noise_heard 且 !is_in_conversation() → say("!?", false, false)，無去重，每次都會反應
+  （broadcast=false：fallback 泡泡不再觸發 speech_heard，PR #674，見下）
+speech_heard 且 !is_in_conversation()（issue #669）：
+  llm_decision_enabled 開著 → 事實句「你聽到附近的 X 說：『...』」排隊 + 立刻請求下一次決策，
+    問不到結果才退回 say("!?", false, false)；關著（排程模式）→ 不冒 !?（頻率遠高於 noise，見 [[聽覺感測]]）
+  fallback 泡泡一律 broadcast=false（不再觸發 speech_heard），避免鄰近 LLM 角色把 !? 當一句話
+    排進自己的事實句佇列、連環觸發決策（PR #674，見 character.gd::say()）
 ⚠ 抵達判定 = 距離 ≤ ARRIVE_DISTANCE(2px) OR 已在目標格內(16px)
   只比距離的話 2..11px 是死角：距離說沒到，find_path() 卻因同格只回一個點
   → move_to() false → 假的「走不到」。每次重算行程都會噴
@@ -837,6 +849,34 @@ get_usage -> {game_day, calls_today, max_calls, dialogue_today, max_dialogue, to
 → 技術/LLM 串接與 AI 服務層
 ```
 
+## EmbeddingService — scripts/ai/embedding_service.gd · autoload · Node
+
+```gdscript
+func reload_config() -> void
+func request_embedding(text: String) -> PackedFloat32Array   # 一律 await
+```
+
+```text
+request_embedding("<text>") -> PackedFloat32Array  # 失敗一律回空陣列（未設定/逾時/連不上/格式不對），不 push_error、不丟例外
+
+† 跟 AIService 分開是刻意的：AIService 打玩家自己選的聊天 provider（Local／Cloud
+  二選一），這裡永遠打本機的 embedding-only llama-server，跟玩家選了哪個聊天
+  provider 無關——NPC 記憶內容送去語意檢索不該因為玩家選了雲端聊天 provider
+  就跟著送去雲端
+† 只信任 loopback 位址（_is_loopback_url()）：embedding.base_url 設定非本機位址
+  一律拒絕、退回 DEFAULT_EMBEDDING_BASE_URL，避免不知情下對雲端端點產生費用
+† max_redirects=0：loopback 伺服器自己回 301/302/303 導去外部網址時直接判定失敗，
+  不追蹤過去，避免繞過上面那條 loopback 限制
+† 呼叫頻率遠低於 AIService，不用它那套節點池／佇列／速率限制——每次呼叫各自建
+  一個 HTTPRequest 節點，用完即丟
+† embedding.base_url 要含 API 路徑字首（例如 llama-server 是 /v1）：
+  request_embedding() 直接把 base_url 跟 "/embeddings" 接起來打，不會自動補這段——
+  填裸 host（例如只填 http://127.0.0.1:8081）會打到不存在的路徑，靜默 404、
+  回空陣列，沒有任何錯誤訊息，範例見 data/ai_config.example.json 的
+  "http://127.0.0.1:8081/v1"
+→ 技術/LLM 串接與 AI 服務層「Embedding」
+```
+
 ## DecisionContext — scripts/ai/decision_context.gd · class_name · RefCounted
 
 ```gdscript
@@ -1320,6 +1360,7 @@ schedule 插槽現為 {time, place, state}，是計畫結構的子集
 Vision 圓形無朝向；lost 無呼叫端
 Agent 不對 Stats 反應（get_lowest_need_place() 可用但無呼叫端）
 noise_heard 對話中會被吞掉；睡覺中的 Agent 沒有排除，一樣會冒 !?
+speech_heard（issue #669）同樣問題：對話中會被吞掉、睡覺中的 Agent 沒有排除
 SaveService 兩條實作並存：JsonSaveService（MVP 採用中）與 SqliteSaveService/DatabaseManager
   （非阻塞平行開發，見《99》P-26）；CharacterStatePersistence 已把 npc/npc_state/
   npc_inventory/npc_wallet 同步進 DATABASE_PATH，但 character_id／GameClock.day 本身

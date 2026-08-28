@@ -39,6 +39,16 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 `waypoint_indicator.gd` 用 `owner`（場景根節點）取得所屬 Character，不用
 `get_parent()`——分類進子節點後直接父節點不再是 Character 本體（issue #616）。
 
+> [!warning] 三個分類節點必須是 `Node2D`，不能是純 `Node`（issue #673）
+> Godot 的 CanvasItem 算 `global_position` 只認緊鄰的父節點
+> （`CanvasItem::get_parent_item()` 只查 `get_parent()`，不會往上跳過非
+> CanvasItem 節點找）。`State`／`Sensing`／`UI` 底下掛的都是 `Node2D`／
+> `Area2D`（`Vision`、`InteractArea`、`Bubble`、`WorkProgress`、
+> `MoneyPopup`、`WaypointIndicator`），這三個分類節點只要退回純 `Node`，
+> 底下全部斷了座標繼承，`global_position` 卡在自己 `.tscn` 裡存的本地座標，
+> 不會跟著角色移動——視野／互動偵測會直接失效，UI 元件會飄在角色出生點附近。
+> 曾經因為場景重構誤設成 `Node` 整個系統跑不動，實測數據與修法見 #673。
+
 子類別只覆寫 `_decide_velocity()` 決定「往哪走」：
 
 - **Player** —— 有輸入就用輸入並中斷現有路徑，否則 `super()` 跟隨 A\* 路徑
