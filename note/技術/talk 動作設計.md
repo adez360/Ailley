@@ -126,6 +126,19 @@ TAMMY」），不加「好久不見」這類情緒推測，符合《00》原則�
 3 天前（手動改 `last_seen` 欄位模擬，「你上次見到 TestLastSeen 是 3 天前。」）。
 另外驗證 `get_save_data()`／`load_save_data()` round-trip 保留 `last_seen`。
 
+> [!important] 舊存檔過渡態（`has_met=true`、`last_seen=-1`）不能算天數差（PR #641 review 抓到）
+> `_last_seen_sentence()` 原本只查 `has_met`，沒有另外擋 `last_seen_day < 0`——
+> #497 之前的存檔只有 `met_count`、沒有 `last_seen` 欄位，讀回來時
+> `has_met()` 為真（`met_count > 0`）但 `last_seen` 退回預設值 `-1`，
+> 會算出 `GameClock.day - (-1)` 這種編造出來的天數，往後每次決策都送出
+> 錯誤事實句，直到下次真的 `note_meeting()` 才自癒。已補上
+> `last_seen_day < 0` 判斷，這種過渡態一律退回「你還沒見過」。
+> `game_eval` 對 `PromptBuilder._last_seen_sentence()` 四種情境實測：
+> `(has_met=false, -1)` → 「你還沒見過阿吉。」；
+> `(has_met=true, last_seen_day=-1)`（過渡態）→ 「你還沒見過阿吉。」（修復前會算成假天數）；
+> `(has_met=true, last_seen_day=GameClock.day)` → 「你今天已經見過阿吉了。」；
+> `(has_met=true, last_seen_day=GameClock.day-3)` → 「你上次見到阿吉是 3 天前。」。
+
 外觀異動偵測（#498 拍板）：`appearance_cache`（自由文字、初次相遇的外觀描述，
 P-08 已拍板但從沒有任何呼叫端寫入過）繼續維持原樣不動，這次新增一個獨立欄位
 `appearance_state: {injured: bool, filthy: bool}`，直接讀 `character.gd` 既有
