@@ -1,4 +1,4 @@
-[gd_scene load_steps=24 format=3 uid="uid://wo0a0v2y4gj1"]
+[gd_scene load_steps=25 format=3 uid="uid://wo0a0v2y4gj1"]
 
 [ext_resource type="Theme" uid="uid://dktke2k785jv0" path="res://assets/ui/ailley_theme.tres" id="1_3swnk"]
 [ext_resource type="PackedScene" uid="uid://cyrnw30ddh16r" path="res://scenes/debug_console.tscn" id="1_mphia"]
@@ -18,6 +18,7 @@
 [ext_resource type="PackedScene" uid="uid://d3no1g5djdk2s" path="res://scenes/god_stone_input.tscn" id="11_0m4u7"]
 [ext_resource type="PackedScene" uid="uid://ccx0ctgkyuok1" path="res://scenes/persuade_dialog.tscn" id="13_5n1hp"]
 [ext_resource type="Script" uid="uid://dd0c5rk3hycom" path="res://scripts/ui/character_sidebar.gd" id="18_5357l"]
+[ext_resource type="PackedScene" uid="uid://c8x8h4qofhqg2" path="res://scenes/tip_menu.tscn" id="14_tipmn"]
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_qpprf"]
 atlas = ExtResource("9_iypfu")
@@ -362,6 +363,8 @@ columns = 9
 [node name="GodStoneInput" parent="." instance=ExtResource("11_0m4u7")]
 
 [node name="PersuadeDialog" parent="." instance=ExtResource("13_5n1hp")]
+
+[node name="TipMenu" parent="." instance=ExtResource("14_tipmn")]
 
 [node name="CharacterSidebar" type="CanvasLayer" parent="."]
 script = ExtResource("18_5357l")
