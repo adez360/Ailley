@@ -1949,7 +1949,10 @@ func _on_speech_heard(source: Character, line: String) -> void:
 	if llm_decision_enabled:
 		_queue_reaction_fact_line("你聽到附近的 %s 說：『%s』，要不要有反應由你自己決定" % [source.character_name, line])
 		var result := await _request_next_decision()
-		if is_dead:
+		# await 期間對方可能已經走 talk_to() 建立了新對話（見 character.gd
+		# 該函式），這裡的 fallback 不能無條件冒 !?，會插進正在顯示的
+		# 對話泡泡（CodeRabbit review 抓到，PR #674）
+		if is_dead or is_in_conversation():
 			return
 		if result.get("triggered", false) and not result.get("ok", false):
 			say(L10n.t("DLG_NOISE_ALERT"), false, false)
