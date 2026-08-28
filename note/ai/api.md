@@ -136,7 +136,7 @@ func is_talk_interruptible() -> bool          # 基底 `not _working`；Agent �
 func enter_conversation(conversation: Node) -> void
 func exit_conversation() -> void
 func leave_conversation() -> void
-func say(line: String, interrupt := false, broadcast := true) -> void   # interrupt=true 蓋掉現在這句；broadcast=false 給系統 fallback 泡泡（!?／！）用，不廣播 speech_heard，避免鄰近 LLM 角色連環反應（issue #669）
+func say(line: String, interrupt := false, broadcast := true) -> void   # interrupt=true 蓋掉現在這句；broadcast=false 給系統內部泡泡（!?／！／AI_THINKING_TEXT「…」）用，不廣播 speech_heard，避免鄰近 LLM 角色連環反應（issue #669）
 func speech_duration(line: String) -> float
 func face_towards(other: Character) -> void
 func update_animation(desired_velocity: Vector2) -> void   # facing 讀解算前的期望方向，不是解算後的 velocity（#108）

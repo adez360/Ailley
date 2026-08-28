@@ -994,8 +994,10 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 	# 立刻蓋掉正在顯示的東西，讓玩家知道「這個角色在想」，不是卡住。
 	# AIService.request() 還沒送出就已經先顯示——冷卻/配額檢查也算在等待時間裡，
 	# 玩家看到「…」的時間可能比實際打網路的時間長，這是刻意的：早一點給回饋
-	# 比精準對齊網路延遲更重要
-	say(AI_THINKING_TEXT, true)
+	# 比精準對齊網路延遲更重要。broadcast=false：這是「正在想」的內部狀態
+	# 泡泡，不是角色真的說了什麼，不該觸發鄰近角色的 speech_heard（CodeRabbit
+	# review 抓到，PR #674）
+	say(AI_THINKING_TEXT, true, false)
 
 	var envelope := PromptBuilder.build_dialogue_envelope(
 		self, listener, turns, max_turns, current_place
