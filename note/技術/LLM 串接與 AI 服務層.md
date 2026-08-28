@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-28
+updated: 2026-08-29
 ---
 
 # LLM 串接與 AI 服務層
@@ -204,6 +204,16 @@ creation 四種都已經實作（`PromptBuilder.build_dialogue_envelope()`／
 system: 人格敘述 ＋ 行為規則 ＋ 輸出 schema ＋ 動作白名單     ← 幾乎不變
 user:   <下方 JSON 字串化>                                    ← 每次變
 ```
+
+`system` 段最後固定接一句語言規則（`PromptBuilder.OUTPUT_LANGUAGE_RULE`，issue
+#656）：本機小模型沒有明確語言限制時，容易在中文句子裡夾雜訓練資料帶出來的
+英文詞彙。這句只管「自由文字（台詞、心聲、吐槽）要用繁體中文」，不影響 JSON
+欄位名／enum 值——所以接在規則段最後面而不是最前面，避免被誤讀成連 schema
+都要中文。`build_dialogue_envelope`／`build_plan_envelope`／
+`build_reflection_envelope`／`build_checkpoint_envelope`／
+`build_last_words_envelope`／`build_words_to_creator_envelope`（都經過
+`_system()`）跟 `build_creation_envelope`（不吃 `Character`，另外接一次）
+全部套用同一句。
 
 ```json
 {
