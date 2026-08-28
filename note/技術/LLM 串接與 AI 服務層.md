@@ -929,6 +929,44 @@ resolve 的呼叫（例如 `debug_set_llm_decision()` 本身回傳的就是 awai
   ——這條路徑機制上打得通，但端到端沒有被這次測試驗證到，需要更長的
   觀察窗（或用 `debug_push_task()` 強制塞一筆去驗執行層）才能確認
 
+## 投放位置沒有邏輯，落在跟玩家無關的世界原點（issue #685，已修，PR 待開）
+
+`spawn_character()` 原本完全沒有指定投放位置，動態生成的角色一律停在
+`Node2D` 預設座標 `(0, 0)`。實測：玩家出生點 `(-94, 33)` 距離世界原點
+約 99.6px，剛好落在角色 vision 半徑（80px，5 格 tile）之外——新投放的
+角色一睜眼就看不到玩家，`context.visible` 通常是空的，這是上面「空任務
+回應」問題最常見的觸發源頭：不是模型不想規劃，是它睜眼看到的世界本來
+就空的。兩隻以上動態角色同時投放（例如 debug 主控台連續 `spawn`）會
+全部疊在同一個 `(0,0)`，彼此看得到但一樣看不到玩家。
+
+修法：`spawn_character()` 在 `add_child()` 之後把新角色的 `global_position`
+設成 `PlaceAnchors`（`get_tree().get_first_node_in_group("place_anchors")`，
+見 `places.gd`）底下 `pavilion`（涼亭）錨點的座標——規格書裡本來就是
+社交聚集地，語意上最合理；錨點找不到就維持原點，不讓投放整個失敗。
+實測驗證：投放後 `global_position` 精確落在 `anchors.resolve("pavilion")`
+回傳的座標上。
+
+## 真實死亡個案：決策鏈沒斷，是執行鏈斷了（2026-08-28）
+
+玩家自建角色「000000」投放後遊戲時間過了約 28 小時（對應約 28 分鐘現實
+時間）沒有離開涼亭附近，存檔顯示瀕死：
+
+```
+is_dead: false, health: 18.0
+hydration: 0.0, satiety: 0.0, wakefulness: 0.0, stamina: 8.0
+is_exhausted: true
+today_plan: "喝水和吃飯"（從頭到尾沒變過）
+```
+
+`today_plan` 一直是「喝水和吃飯」，代表模型的判斷完全正確、也沒有放棄
+這個意圖——**決策層沒有問題**。真正斷掉的是執行層：`eat`／`drink` 從
+角色自己背包找東西（`_find_food_slot()`／`_find_drink_slot()`），新投放
+或玩家自建角色預設背包是空的；唯一能補貨的 `buy` 又因為上一節「LLM 從
+沒被告知地點清單存在」幾乎打不中。結果是模型每輪都誠實地想吃飯喝水，
+每次都因為背包沒東西而執行失敗，四項核心生存數值一路歸零，health 被
+拖到瀕死邊緣——**這代表 #605／PR #647（地點清單）不只是「決策內容比較
+豐富」的體驗改善，是攸關新角色存活與否的必要修復**，應優先合併。
+
 ## `move_to`／`buy` 打不到：LLM 從沒被告知地點清單存在（issue #605，PR #647 進行中）
 
 `prompt_builder.gd::build_plan_envelope()` 送給模型的 `context` 只有
