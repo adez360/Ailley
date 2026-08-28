@@ -120,10 +120,23 @@ const LONG_ACTION_CHECKPOINT_INTERVAL := 10
 ## 相當餘裕，維持 20
 const LLM_TASK_POOL_CAP := 20
 
-## 任務池跟 _current_task 都空時（issue #695）的保底重排節流間隔，跟
-## MIN_ACTION_DURATION／LONG_ACTION_CHECKPOINT_INTERVAL 同一個量級,理由
-## 相同：這是引擎對「一次動作」的最小時間顆粒,沒有必要另外校準一個新數字
-const STUCK_RETRY_INTERVAL_MINUTES := 10
+## 任務池跟 _current_task 都空時（issue #695）的保底重排節流間隔。**不能**
+## 跟 MIN_ACTION_DURATION 一樣抓 10：AIService 的 min_interval_sec（預設 30）
+## 是「真實」秒，跟 GameClock.seconds_per_game_minute（預設 1.0）換算後，
+## 10 遊戲分鐘只等於 10 真實秒，比 AIService 自己的冷卻還短——真正的攻速
+## 瓶頸會是 AIService 那邊的 30 秒，不是這裡。一隻整天卡住的角色會每 30
+## 真實秒成功打一次、吃掉一次 max_calls_per_game_day（預設 20）：
+## 20 × 30 秒 = 600 真實秒，只是一個完整遊戲日（1440 遊戲分鐘 × 1.0 秒
+## = 1440 真實秒）的 42%，代表卡住的角色會在遊戲日前半就把全天配額燒光，
+## 剩下時間連真的發生事件（玩家走過去）都問不了模型。
+##
+## 抓 72：1440 遊戲分鐘 ÷ max_calls_per_game_day(20) ≈ 72，讓「整天都卡住」
+## 這個最壞情況的補救嘗試次數本身就不超過每日配額，配額才留得住給任務
+## 完成、事件觸發這些真正該優先的重排時機用。這個數字綁定兩個設定檔常數
+## 的比例關係，AIConfig 的預設值之後若調整，這裡要跟著重新計算，不是
+## 寫死不變的量級常數（跟 MIN_ACTION_DURATION 那種純粹的「動作最小顆粒」
+## 性質不同）
+const STUCK_RETRY_INTERVAL_MINUTES := 72
 
 ## 候選任務池。這一版只在 _load_schedule() 建立一次就不再變動——
 ## 「到點才可用」靠仲裁時的 window 過濾，不是把任務從池子裡搬進搬出
