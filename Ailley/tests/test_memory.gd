@@ -69,7 +69,10 @@ func test_decay_all_reduces_negative_faster_with_low_grudge() -> void:
 
 func test_decay_all_removes_entry_at_or_below_zero() -> void:
 	var memory := track(Memory.new()) as Memory
-	memory.entries.append(_make_entry(2, "neutral", 1.0))
+	# 起始值抓成剛好衰減到 0.0（BASE_DECAY_RATE 本身），釘住「>0 才留、
+	# 等於 0 也要移除」這條邊界；起始值抓遠大於衰減率只驗證得到「衰減夠多
+	# 會被移除」，抓不到 kept 判斷式若從 `> 0` 鬆成 `>= 0` 的邊界迴歸
+	memory.entries.append(_make_entry(2, "neutral", Memory.BASE_DECAY_RATE))
 
 	memory.decay_all()
 
@@ -93,6 +96,16 @@ func test_mark_retrieved_adds_bonus_capped_at_max() -> void:
 	memory.mark_retrieved(entry)
 
 	assert_eq(entry["decay_value"], Memory.DECAY_MAX, "檢索加成不該超過上限 100")
+
+
+func test_mark_retrieved_adds_exact_bonus_when_not_capped() -> void:
+	var memory := track(Memory.new()) as Memory
+	var entry := _make_entry(2, "neutral", 50.0)
+	memory.entries.append(entry)
+
+	memory.mark_retrieved(entry)
+
+	assert_eq(entry["decay_value"], 50.0 + Memory.RETRIEVAL_BONUS, "未封頂時應精確加上 RETRIEVAL_BONUS，不是隨便一個增量")
 
 
 func test_mark_retrieved_ignores_entry_not_in_entries() -> void:
@@ -182,7 +195,13 @@ func test_load_save_data_restores_l2_and_l4_and_clears_l1() -> void:
 	assert_eq(memory._next_id, 10, "_next_id 應同步成存檔裡最大的 id")
 
 
-func test_load_save_data_skips_malformed_entries() -> void:
+## production 的 load_save_data() 只驗兩件事：raw_entry 是不是 Dictionary、
+## level 是不是 2 或 4——不驗其餘欄位（valence／decay_value／content...）是否
+## 齊全。測試名稱照這個實際驗證範圍命名，不要叫「malformed」暗示連缺欄位的
+## entry 也會被擋下（那個情境目前不會被跳過，之後若真的碰到存檔缺欄位的
+## entry，decay_all() 等函式讀不到欄位會噴 Invalid access——這是 production
+## 驗證邊界，不是本測試的涵蓋範圍，見 issue #664）
+func test_load_save_data_skips_wrong_level_and_non_dict_entries() -> void:
 	var memory := track(Memory.new()) as Memory
 	var valid := _make_entry(2)
 	valid["id"] = 1
@@ -190,7 +209,7 @@ func test_load_save_data_skips_malformed_entries() -> void:
 
 	memory.load_save_data({"entries": [valid, wrong_level, "not_a_dict"]})
 
-	assert_eq(memory.entries.size(), 1, "level 不是 2/4 或格式錯誤的項目應被跳過")
+	assert_eq(memory.entries.size(), 1, "level 不是 2/4 或不是 Dictionary 的項目應被跳過")
 	assert_eq(memory.entries[0]["id"], 1, "留下的應是那筆合法的 level 2 記憶，不是跳過後恰好剩一筆")
 
 

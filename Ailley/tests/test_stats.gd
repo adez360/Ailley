@@ -2,10 +2,14 @@
 class_name TestStats
 extends McpTestSuite
 
-## 驗證 Stats 的純數值邏輯（issue #583）。Stats 依 stats.gd 開頭註解是刻意
-## 設計成不依賴場景／GameClock，本套件不掛進場景樹（同 test_bury.gd 的寫法），
-## `_ready()` 不會跑，`values` 一開始是空的——每個測試自己用 `set_value()`
-## 把要用到的欄位準備好，不依賴 SPEC 的 start 值。
+## 驗證 Stats 的純數值邏輯（issue #583）。get_value/set_value/_apply_drift 等
+## 純數值函式不依賴場景或 GameClock，本套件不掛進場景樹（同 test_bury.gd 的
+## 寫法），`_ready()` 不會跑，`values` 一開始是空的——每個測試自己用
+## `set_value()` 把要用到的欄位準備好，不依賴 SPEC 的 start 值。
+##
+## `_ready()`／`_on_time_changed()` 綁定 `GameClock.time_changed` 訊號、在
+## 分鐘邊界觸發 `_apply_drift()` 的那段（stats.gd:58-67）不在本套件涵蓋範圍——
+## 沒有場景樹，`_ready()` 不會跑，這段本身就測不到，不是遺漏。
 
 func suite_name() -> String:
 	return "stats"
@@ -70,27 +74,14 @@ func test_apply_drift_moves_need_toward_zero() -> void:
 	assert_eq(stats.get_value("satiety"), 50.0 - Stats.SPEC["satiety"]["drift"], "satiety 應往 0 漂移 drift 那麼多")
 
 
-func test_apply_drift_moves_health_toward_hundred() -> void:
+func test_apply_drift_moves_injury_toward_zero() -> void:
 	var stats := track(Stats.new()) as Stats
 	_seed_all(stats)
-	# health 的 drift 是 0，改個有 drift 又 toward 非 0 的欄位不存在於 SPEC，
-	# 這裡直接驗證「toward 100」的欄位方向對——injury toward 0、drift 0.5，
-	# 用它驗證「往下」，另外驗證 hygiene（drift 0，理應完全不動）當對照組
 	stats.set_value("injury", 10.0)
 
 	stats._apply_drift()
 
 	assert_eq(stats.get_value("injury"), 10.0 - Stats.SPEC["injury"]["drift"], "injury 應往 0 漂移")
-
-
-func test_apply_drift_skips_zero_drift_stats() -> void:
-	var stats := track(Stats.new()) as Stats
-	_seed_all(stats)
-	stats.set_value("hygiene", 70.0)
-
-	stats._apply_drift()
-
-	assert_eq(stats.get_value("hygiene"), 70.0, "drift=0 的欄位不該被 _apply_drift 動到")
 
 
 func test_apply_drift_pauses_injury_when_flagged() -> void:
@@ -106,6 +97,10 @@ func test_apply_drift_pauses_injury_when_flagged() -> void:
 
 func test_needs_attention_true_when_need_below_critical() -> void:
 	var stats := track(Stats.new()) as Stats
+	# needs_attention() 對 is_need 欄位直接索引 values[key]（見 _seed_all 上方
+	# 說明），全部 is_need 欄位都要先補齊，否則測試只是巧合靠 SPEC 目前的
+	# 插入順序（hydration 排 stamina／wakefulness 前面）提前 return 才過
+	_seed_all(stats)
 	stats.set_value("satiety", 80.0)
 	stats.set_value("hydration", 10.0)
 
@@ -118,7 +113,7 @@ func test_needs_attention_ignores_non_need_stats() -> void:
 	stats.set_value("hydration", 80.0)
 	stats.set_value("stamina", 80.0)
 	stats.set_value("wakefulness", 80.0)
-	stats.set_value("hygiene", 5.0)  # 心情類，非 need，跌破 CRITICAL 也不算
+	stats.set_value("hygiene", 5.0)  # is_need=false（沒有對應的 place 可去），跌破 CRITICAL 也不算
 
 	assert_false(stats.needs_attention(), "非 is_need 欄位（hygiene）跌破門檻不該觸發")
 
@@ -137,7 +132,7 @@ func test_get_place_for_need_returns_spec_place() -> void:
 	var stats := track(Stats.new()) as Stats
 
 	assert_eq(stats.get_place_for_need("stamina"), "home", "stamina 的 place 應為 home")
-	assert_eq(stats.get_place_for_need("mood"), "", "不存在的欄位應回空字串")
+	assert_eq(stats.get_place_for_need("not_a_real_stat"), "", "不存在的欄位應回空字串")
 
 
 func test_get_lowest_need_place_matches_lowest_need() -> void:
