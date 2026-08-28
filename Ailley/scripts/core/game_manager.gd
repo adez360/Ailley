@@ -222,6 +222,16 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 	if not name_given:
 		character.character_name = character.name.to_lower()
 
+	# 動態生成的角色在這之前一律停在 Node2D 預設座標 (0, 0)，跟玩家的實際
+	# 出生點是兩個互不相關的座標，導致 vision 幾乎必然偵測不到玩家、
+	# LLM 決策收到「附近沒有任何人」而只能回傳 idle（issue #685）。落點選
+	# 涼亭（`pavilion`）——規格書裡本來就是社交聚集地，語意上最合理。
+	# 錨點需要透過 "place_anchors" 群組取得（見 places.gd），找不到就維持
+	# 原點，不讓投放整個失敗
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors != null and anchors.has("pavilion"):
+		character.global_position = anchors.resolve("pavilion")
+
 	return character
 
 
