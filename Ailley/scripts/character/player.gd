@@ -170,6 +170,26 @@ func _unhandled_input(event: InputEvent) -> void:
 	var machine: VendingMachine = candidates["machine"]
 	var other: Character = candidates["other"]
 
+	# 除錯用（issue #654：兩個角色重疊站在同一格時搭話完全沒反應，追不到
+	# 原因，程式碼審查沒看出漏洞）。列出這一刻視野裡的每個角色跟距離／
+	# 面向判定結果，重現時對照 Output/Debugger 面板看是卡在哪一步：
+	# visible_characters 裡有沒有兩個都在、_is_facing() 有沒有兩個都過、
+	# 最後選中的是哪一個（或 null）。問題查清楚、改完 talk_to() 之後這段
+	# 要記得拿掉，不是永久留著的 log
+	var visible_for_debug: Array = vision.get_visible_characters() if vision != null else []
+	print("[talk_debug] E 鍵按下，視野內角色數=%d" % visible_for_debug.size())
+	for c in visible_for_debug:
+		if not is_instance_valid(c):
+			continue
+		var pos: Vector2 = (c as Character).get_body_position()
+		print("[talk_debug]   候選 %s | pos=%s | facing=%s | dist=%.1f" % [
+			(c as Character).character_id,
+			pos,
+			_is_facing(pos),
+			get_body_position().distance_to(pos),
+		])
+	print("[talk_debug] _nearest_facing() 選中 other=%s" % (other.character_id if other != null else "null"))
+
 	# 失敗要往下掉到搭話，不是直接 return。工作站被別人佔用（WORK_OCCUPIED）
 	# 或自己正在工作（WORK_BUSY）時直接 return 的話，E 整個沒反應 ——
 	# 玩家連站在眼前那個正在工作的人都搭不了話
@@ -210,6 +230,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 
 	var talk_reason := talk_to(other)
+	print("[talk_debug] talk_to() 回傳 reason=%s" % ("(OK)" if talk_reason == TALK_OK else talk_reason))	# 除錯用，見上方 issue #654 說明
 	if talk_reason != TALK_OK:
 		report_action_failure("talk_to", talk_reason)
 
