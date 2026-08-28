@@ -119,7 +119,16 @@ var _model_name := ""
 var _model_hint: Label
 var _decision_source_container: Control
 
-## true 時面板走化身者模式：決策來源分頁對玩家沒有意義，見 _refresh_all()。
+## 六維滑桿與強度計數兩個區塊（issue #372），化身者模式一起隱藏——強度計數
+## 純粹是滑桿極端項的統計，滑桿藏起來的話這個數字沒有意義可看
+var _slider_block_container: Control
+var _strength_block_container: Control
+
+## true 時面板走化身者模式：決策來源、六維人格滑桿對玩家都沒有意義，一併
+## 隱藏（issue #372，見 _refresh_all()）——玩家自己操控角色，不需要選
+## LLM 決策來源，也不需要靠六維滑桿描述「這個角色的個性」，那是給 AI
+## 讀的行為準則來源。隱藏的同時 _can_save() 也要跳過極端項門檻（見那邊
+## 的說明），不然滑桿摸不到、門檻卻還在擋，會變成存不了檔。
 ## 目前唯一的入口是 open(as_player=true)，還沒有任何按鈕會傳這個值——
 ## UI 上「由我操控」的選項本身待後續視覺任務接上（issue #371）
 var _embodiment_mode := false
@@ -407,9 +416,12 @@ func _decision_source_block() -> Control:
 func _build_tab_personality() -> Control:
 	var block := VBoxContainer.new()
 	block.add_theme_constant_override("separation", 4)
-	block.add_child(_slider_block())
-	block.add_child(_strength_block())
+	_slider_block_container = _slider_block()
+	block.add_child(_slider_block_container)
+	_strength_block_container = _strength_block()
+	block.add_child(_strength_block_container)
 	block.add_child(_description_block())
+	block.add_child(_random_button_row(_on_random_personality_pressed))
 	return block
 
 func _slider_block() -> Control:
@@ -535,9 +547,12 @@ func _build_tab_appearance() -> Control:
 	hint.text = "UI_CC_STYLE_HINT"
 	hint.add_theme_color_override("font_color", CLAY)
 	block.add_child(hint)
+	block.add_child(_random_button_row(_on_random_appearance_pressed))
 	return block
 
 
+## 隨機按鈕不放這裡（issue #676）：改成分頁 2／3 各自一顆，見 _random_button_row()。
+## 這個 footer 現在只有存檔鍵
 func _footer() -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
@@ -545,11 +560,6 @@ func _footer() -> Control:
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(spacer)
-
-	var random := Button.new()
-	random.text = "UI_CC_BTN_RANDOM"
-	random.pressed.connect(_on_random_pressed)
-	row.add_child(random)
 
 	_save_button = Button.new()
 	_save_button.text = "UI_CC_BTN_SAVE"
@@ -559,6 +569,20 @@ func _footer() -> Control:
 	_save_button.add_theme_color_override("font_hover_color", INK)
 	_save_button.pressed.connect(_on_save_pressed)
 	row.add_child(_save_button)
+	return row
+
+## 分頁 2／3 各自的隨機按鈕列（issue #676）。分頁 1（基本資料）沒有這一列——
+## 姓名／年齡／性別本來就不隨機，決策來源更是玩家的成本決定不是角色設定
+## （規格書 05 §6），分頁 1 沒有任何欄位可以隨機，不留一顆按下去沒反應的按鈕
+func _random_button_row(handler: Callable) -> Control:
+	var row := HBoxContainer.new()
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(spacer)
+	var button := Button.new()
+	button.text = "UI_CC_BTN_RANDOM"
+	button.pressed.connect(handler)
+	row.add_child(button)
 	return row
 
 
@@ -605,24 +629,38 @@ func _on_style_pressed(index: int) -> void:
 	_refresh_style_buttons()
 	_refresh_strength()
 
-func _on_random_pressed() -> void:
-	# 隨機但保證落在可存檔區間：先全部置中，再挑 2 個推向兩端
+## 只隨機分頁 2 的六維滑桿（issue #676）：隨機按鈕拆成各分頁各自觸發，
+## 不再像舊版一次觸發全部分頁——玩家停在分頁 1 按下去畫面沒反應、切到
+## 別頁才發現剛剛其實兩頁都被隨機掉，是誤導。保證落在可存檔區間：
+## 先全部置中，再挑 2 個推向兩端
+func _on_random_personality_pressed() -> void:
 	for slider in _sliders:
 		slider.value = DEFAULT_VALUE
 	var picks := range(DIMENSIONS.size())
 	picks.shuffle()
 	for i in picks.slice(0, EXTREME_MIN_WITH_DESC + 1):
 		_sliders[i].value = (randi_range(0, 4) * STEP) if randf() < 0.5 else (100.0 - randi_range(0, 4) * STEP)
-	# 「整個角色隨機」純組合既有邏輯（規格書 05 §6）：分頁 2 滑桿 + 分頁 3
-	# 隨機挑一套造型組。決策來源刻意不隨機——那是玩家的成本決定，不是角色設定
+	_refresh_all()
+
+## 只隨機分頁 3 的造型組選擇（issue #676）
+func _on_random_appearance_pressed() -> void:
 	_style_selected = randi_range(0, STYLE_COUNT - 1)
 	_refresh_all()
 
+## 存檔完成後直接開角色庫首頁（issue #679）：投放是存檔後的自然下一步
+## （規格書 05 流程圖），玩家不用自己想到再重打一次 charlib 指令才找得到
+## 剛存的角色。找不到角色庫面板只 push_error，不擋存檔本身——兩個面板
+## 互相知道彼此（見 character_library.gd 用同一個 group 找回這裡）
 func _on_save_pressed() -> void:
 	if not _can_save():
 		return
 	character_saved.emit(collect())
 	close()
+	var library := get_tree().get_first_node_in_group("character_library_panel")
+	if library == null:
+		push_error("CharacterCreate: 找不到 character_library_panel")
+		return
+	library.open()
 
 
 func _extreme_count() -> int:
@@ -636,10 +674,14 @@ func _extreme_min() -> int:
 	var has_desc := not _desc_edit.text.strip_edges().is_empty()
 	return EXTREME_MIN_WITH_DESC if has_desc else EXTREME_MIN_WITHOUT_DESC
 
+## 化身者模式跳過極端項門檻（issue #372）：六維滑桿藏起來後玩家碰不到，
+## 門檻卻還在擋的話會變成永遠存不了檔——這幾個滑桿本來就只給 AI 決策讀，
+## 玩家自己操控時沒有意義，見 _embodiment_mode 的說明
 func _can_save() -> bool:
-	var n := _extreme_count()
-	if n < _extreme_min() or n > EXTREME_MAX:
-		return false
+	if not _embodiment_mode:
+		var n := _extreme_count()
+		if n < _extreme_min() or n > EXTREME_MAX:
+			return false
 	if _name_edit.text.strip_edges().is_empty():
 		return false
 	if _style_selected < 0:
@@ -661,6 +703,8 @@ func _refresh_all() -> void:
 	_refresh_model_dropdown()
 	_refresh_style_buttons()
 	_decision_source_container.visible = not _embodiment_mode
+	_slider_block_container.visible = not _embodiment_mode
+	_strength_block_container.visible = not _embodiment_mode
 
 func _deployed_count() -> int:
 	var n := 0
