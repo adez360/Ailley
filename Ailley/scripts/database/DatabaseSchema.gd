@@ -810,8 +810,8 @@ static func _migrate_v6_action_history_composite_index(db) -> bool:
 ## relations_trust 從 NPCRelationsSchema 拿掉，migration 9 才是正式移除它的
 ## 地方。這裡若一律呼叫活的 NPCRelationsSchema.create() 重建，會在「舊資料庫
 ## 真的帶著 relations_trust」時跟舊表形狀對不上而中止（_migrate_rebuild_table_group()
-## 的欄位形狀比對抓到）。用 old_name（重建前的實際舊表）有沒有 relations_trust
-## 欄位動態判斷該用哪個 create：有 → 用凍結的 _migrate_v8_create_npc_relations_with_trust()
+## 的欄位形狀比對抓到）。在 _migrate_rebuild_table_group() 改名「之前」先查活表
+## npc_relations 有沒有 relations_trust 欄位動態判斷該用哪個 create：有 → 用凍結的 _migrate_v8_create_npc_relations_with_trust()
 ## 原樣重建、留給 migration 9 拿掉；沒有（新資料庫從沒真的存過這欄，或已經是
 ## #601 之後的形狀）→ 用現行 NPCRelationsSchema，跟其餘表的預設行為一致。
 static func _migrate_v8_notnull_primary_keys(db) -> bool:
