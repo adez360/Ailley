@@ -2812,6 +2812,15 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 				return {"success": false, "reason": "身上沒有夠的錢"}
 			# 檢查是否有空位或是否可以堆疊（add_item 會幫我們檢查）
 			# 這裡先用樂觀假設，真的失敗讓 buy_from() 退款並傳回原因碼
+		"gather":
+			# 硬規則：藥草叢是目前唯一的採集地點，place 對不上就直接判定
+			# 失敗，不落進下面的 _roll_success()——跟 buy 的販賣機存在檢查
+			# 同一種角色，只是這裡沒有場景物件可查，直接比對地點名稱字串。
+			# 通過硬規則後不 return，落進下面統一的 _roll_success()：gather
+			# 在 SUCCESS_PARAMS 上（見那張表），是真的需要擲骰的動作（#574）
+			var gather_place: String = str(params.get("place", ""))
+			if gather_place != "herb_field":
+				return {"success": false, "reason": "這裡沒有藥草可以採"}
 		"give":
 			# 《01-2》§1 流程圖①前置檢查點名的例子就是「物品在身上？」——give
 			# 不進②③擲骰（不在 SUCCESS_PARAMS 上），只有這一關硬規則
@@ -3097,6 +3106,11 @@ func _pursue_current_task() -> void:
 	# buy 跟 eat／drink 同理：呼叫一次就完成（#340）
 	if current_state == "buy":
 		_pursue_buy_task()
+		return
+
+	# gather 跟 buy 同理：要先走到藥草叢，抵達後呼叫一次就完成（#574）
+	if current_state == "gather":
+		_pursue_gather_task()
 		return
 
 	# work 是長動作，執行協程會自己跑 5 分鐘，只能呼叫一次（#358）
@@ -3630,6 +3644,112 @@ func _find_vending_machine_at_place(place: String) -> VendingMachine:
 			return machine
 
 	return null
+
+# gather 任務的執行（#574）：跟 _pursue_work_task() 同理，先走到地點錨點，
+# 抵達後才執行；跟 eat／drink／buy 同理，呼叫一次就完成，不像 nap 那樣佔滿
+# 整段 duration。⚠ gather 在 SUCCESS_PARAMS 上（見 _roll_success()），
+# resolve() 對它是真的擲骰——這裡只能在抵達後呼叫一次 resolve()，不能放進
+# 每個遊戲分鐘都會重算的路徑（《99》issue #216 已警告過這個陷阱：那張表上的
+# 動作接執行層時，_roll_success() 每呼叫一次就重骰一次，不是「重驗前置條件」
+# 那種可以每分鐘重跑的純函式）。寫法照抄 _pursue_buy_task() 的「先走、
+# 到了才骰」結構，只是用地點錨點取代販賣機節點
+func _pursue_gather_task() -> void:
+	var place: String = str(_current_task.get("params", {}).get("place", ""))
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+
+	# 藥草叢是目前唯一的採集地點：place 不是 herb_field，或場景根本沒建這個
+	# 錨點，都直接判定失敗，不用先走過去才發現——跟 _pursue_buy_task() 同一套
+	# 「先驗證地點合不合理，再決定要不要走過去」的順序（CodeRabbit review 抓到：
+	# 原本只檢查「這個名字有沒有對應到任何錨點」，place 給一個真實存在但不是
+	# herb_field 的地點（例如 tavern）時會先走過去，抵達後才靠 resolve() 判定
+	# 失敗，等於明知走錯地方還是先走過去，浪費遊戲時間）
+	if place != "herb_field" or anchors == null or not anchors.has(place):
+		var failed_task_source: String = str(_current_task.get("source", ""))
+		var failed_task_id: String = str(_current_task.get("id", ""))
+		push_warning("Agent %s: 沒有這個採集地點 %s" % [character_name, place])
+		# 排程來源的 place 打錯字是靜態資料，每個遊戲分鐘重算都會撞上同一個
+		# 失敗，不退避就是《99》issue #505 修過的「排程失敗每分鐘瘋狂重試」
+		# 重演（原案例是 eat 排程沒食物），這裡要在 _current_task 被清空、
+		# 拿不到任務物件之前先標記
+		_mark_schedule_retry_backoff(_current_task)
+		stop_moving()
+		_pursued_place = ""
+		_pursuit_done = false
+		last_action_result = "這裡沒有藥草可以採"
+		# 用 _clear_current_task() 取代手動重設三個欄位——手動寫法漏呼叫
+		# _log_task_ended()，這筆失敗的 gather 不會出現在 today_log／每日摘要
+		# 裡（CodeRabbit review 抓到，跟 eat／drink／buy 的收尾方式看齊）
+		_clear_current_task(false)
+		if failed_task_source == "llm":
+			_remove_task(failed_task_id)
+		if llm_decision_enabled and not _awaiting_decision:
+			_request_next_decision(_today_plan_needs_new_goal())
+		_reevaluate()
+		return
+
+	var target: Vector2 = anchors.resolve(place)
+
+	# 還沒到達就先走過去——跟 _pursue_work_task()／_pursue_buy_task() 同一套
+	# 收斂邏輯：地點沒換就只起步一次，已有結論（含 move_to() 失敗）不重試
+	if not _has_arrived_at(target):
+		if current_place == _pursued_place and (is_moving() or _pursuit_done):
+			return
+		_pursued_place = current_place
+		_pursuit_done = false
+		if not move_to(target):
+			push_warning("Agent %s: 走不到 %s" % [character_name, place])
+			# 跟 _pursue_buy_task() 同一套：llm 任務沒有 window 這條退路，只設
+			# _pursuit_done 的話會一直卡在 gather 狀態，永遠等不到失敗結果、
+			# 也不會請求下一個決策（CodeRabbit review 抓到）
+			if _current_task.get("source", "") == "llm":
+				last_action_result = "走不到藥草叢，無法採集"
+				_finish_task_and_request_next()
+			else:
+				_pursuit_done = true
+		return
+
+	# 已到達藥草叢，執行採集
+	stop_moving()
+	_pursued_place = current_place
+	_pursuit_done = true
+
+	# resolve() 不分來源都要呼叫——跟 eat／drink／buy
+	# 不同的是，gather 在 SUCCESS_PARAMS 上，resolve() 對它是真的擲骰，不是
+	# 「重驗前置條件」的純函式；只在 llm 來源才骰的話，schedule 來源的 gather
+	# （目前 npc_schedule.json 沒有，但介面上合法）會完全跳過擲骰、直接必中，
+	# 違反《01-2》§2 的成功率公式（CodeRabbit review 抓到）
+	var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+	last_action_result = result["reason"]
+	var proceed: bool = result["success"]
+	if not proceed:
+		_track_action_result_for_facts("gather", false)
+
+	if proceed:
+		var reason := gather()
+		last_action_result = reason
+		if reason != Character.GATHER_OK:
+			push_warning("Agent %s: gather 失敗（%s）" % [character_name, reason])
+		else:
+			_push_daily_event("你採集到了一份%s。" % ItemDatabase.get_display_name("herb"))
+		_track_action_result_for_facts("gather", reason == Character.GATHER_OK)
+
+	# 排程來源不論擲骰失敗、gather() 失敗、還是成功，都要退避到窗期結束——
+	# 跟 eat／drink 只在失敗時退避的理由不同：eat／drink 有 satiety 這種會隨
+	# 動作完成自然下降的分數，吃飽了下一輪自然選不到；gather 沒有這種內建
+	# 抑制，同一個排程窗期內每個遊戲分鐘都可能被 _reevaluate() 立即重選中，
+	# 擲骰成功也一樣會無限重跑、每分鐘多產一份 herb（CodeRabbit review 抓到）
+	_mark_schedule_retry_backoff(_current_task)
+
+	if _current_task.get("source", "") == "llm":
+		_remove_task(_current_task.get("id", ""))
+	_pursued_place = ""
+	_pursuit_done = false
+	# 同上：用 _clear_current_task() 取代手動重設，補上 today_log 紀錄
+	# （CodeRabbit review 抓到）
+	_clear_current_task(last_action_result == Character.GATHER_OK)
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
+	_reevaluate()
 
 # murmur 任務的執行（#162）：沒有目標、不用移動，講給自己聽當下就結束——不像
 # talk 要追著會動的目標走，也不像 nap／rest 那類要佔滿整段 duration。resolve()
