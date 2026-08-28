@@ -19,6 +19,6 @@
 	"good_knife": { "display_name": "好刀", "category": "carry", "icon": null },
 	"instrument": { "display_name": "樂器", "category": "carry", "icon": null },
 	"clothes_basic": { "display_name": "一般衣物", "category": "carry", "icon": null },
-	"medicine": { "display_name": "藥品", "category": "carry", "icon": null },
+	"medicine": { "display_name": "藥品", "category": "carry", "icon": null, "effect_injury": -30.0 },
 	"battery": { "display_name": "電池", "category": "carry", "icon": null }
 }

@@ -241,8 +241,9 @@ const LLM_TASK_POOL_CAP := 20                # 只算 source=="llm" 的筆數
 const ACTION_RECOVERY := {sleep: {stat: stamina, amount: 6.0}, nap: {stat: stamina, amount: 4.0}, rest: {stat: stamina, amount: 2.0}}   # 動作->{stat,amount}（#112／#214），暫定值
 const DEBUG_TASK_PRIORITY := 999.0           # act 指令推進來的任務分數，壓過任何 schedule 任務
 const SUCCESS_PARAMS := {                    # 《01-2》§3 成功率表照抄，含尚未接執行邏輯的動作（#120）
-    hunt_small/hunt_large/gather/fish/steal/persuade/perform/attack
-    → {base, trait, coef}                    # struggle 例外太多，不套用這張表
+    hunt_small/hunt_large/gather/fish/steal/perform
+    → {base, trait, coef}                    # attack 必中、persuade 不擲骰（見《01-2》§3 註），
+                                              # 兩者都不走這張表；struggle 例外太多，同樣不套用
 }
 
 var _tasks: Array[Dictionary]                # 候選池，schedule 開場建立一次，llm 用 _push_llm_tasks() 加
@@ -437,7 +438,7 @@ satiety      飽足感   3.0    0       100    ✓        restaurant
 hydration    水分     2.0    0       80     ✓        restaurant
 stamina      體力     1.0    0       80     ✓        home_001
 wakefulness  清醒度   1.2    0       90     ✓        home_001
-hygiene      清潔     0.5    0       70     ✗        ""
+hygiene      清潔     0      0       70     ✗        ""
 alcohol      酒精濃度 3.0    0       0      ✗        ""
 health       生命值   0.0    100     100    ✗        ""
 injury       傷勢     0.5    0       0      ✗        ""
@@ -448,10 +449,14 @@ injury       傷勢     0.5    0       0      ✗        ""
   `_minute % GAME_MINUTES_PER_TICK == 0` 的分鐘邊界才真的套用一次（#361 修正，
   修正前錯誤地每現實秒套用一次，漂移速度快了 10 倍）
 † place 只回名稱不回座標 — Stats 不可依賴場景（存檔/測試要能無場景使用）
-† satiety/hydration/stamina/wakefulness/hygiene/health 是《01》§4-1「越高越好」的需求型欄位；
-  但 get_lowest_need()/needs_attention() 只掃 is_need=✓ 的 4 項（hygiene/health 沒有對應的
-  place 可去，不參與這兩個函式，見《99》P-32 追加決策）
-† alcohol/injury 是事件累積型（預設 0，靠外部事件推高），故意維持「越高越差」，不跟其他 6 項統一方向
+† satiety/hydration/stamina/wakefulness 才是真正的需求型欄位（`is_need=✓`），會被
+  get_lowest_need()/needs_attention() 掃描；hygiene/health 雖然也是「越高越好」，但
+  `is_need=✗`，不參與這兩個函式（沒有對應的 place 可去，見《99》P-32 追加決策）
+† hygiene 的 drift 2026-08-24 從 0.5 改成 0，拿掉被動漂移——不再是自然消耗；規劃改
+  由 hunt_small/hunt_large/gather/perform 等工作動作直接扣（`ACTION_DIRTY` 表），
+  但該表尚未接線、也還沒定義在任何規格文件裡，追蹤見《99》P-65
+† alcohol/injury 是事件累積型（預設 0，靠外部事件推高），故意維持「越高越差」，
+  跟 satiety 等需求型 4 項方向相反
 ⚠ stamina 的 place 寫死 home_001，每個角色的家其實不一樣
 ```
 
@@ -1176,15 +1181,20 @@ func load_npc_data()
 ```gdscript
 signal time_changed(hour: int, minute: int)  # 每遊戲分鐘
 signal day_changed(day: int)                 # 跨日，在同一次 time_changed 之前發
+signal new_game_started                      # #618：開新遊戲時發，不是跨日（day 可能還是 1）
 const GAME_MINUTES_PER_TICK := 10            # 生理 tick 週期，Stats 漂移／conditions 共用同一個來源
 @export var seconds_per_game_minute := 1.0
 var hour := 8 · var minute := 0 · var day := 1
+func reset_to_new_game_start() -> void      # #606：day/hour/minute 打回 1/8/0，發 new_game_started
 ```
 
 ```text
 24:00 回捲成 0:00，day += 1。無暫停/加速 API；撥錶只能直接寫欄位再手動 emit
 † 要「第幾天」一律讀 day / 訂 day_changed，不要自己比對 hour 有沒有變小 ——
   私有計數重開遊戲歸零，靠它擋的東西（每日配額）等於沒擋
+† new_game_started 跟 day_changed 是兩回事：按 requester_id 累計「今天已經怎樣」
+  的計數器（例如 AIService 每日配額）兩個都要訂閱，只訂 day_changed 的話開新
+  遊戲時上一局的殘留配額不會清（#618，見 AIService._on_day_changed）
 ⚠ day 還沒持久化，重開仍從 1 開始 —— 要等世界存檔（#21）
 ```
 

@@ -50,8 +50,9 @@ var _words_to_creator_spoken := false
 var _words_to_creator_pending := false
 
 ## #381：墓碑四內容欄位其中兩個（《規格書 09》§4-2）。life_highlights 由引擎彙整
-## L4 核心記憶與重大事件流產出，絕不讓 LLM 潤飾，目前死亡狀態機還沒做（見 #368），
-## 這裡先開欄位形狀讓存讀檔接得上，沒有任何呼叫端會寫入——不影響現有行為。
+## L4 核心記憶產出，絕不讓 LLM 潤飾——彙整函式 `Memory.get_life_highlights()`
+## 已實作（#384），但死亡流程（`Character._die()`）還沒有任何呼叫端把結果寫進
+## 這個欄位，見 [[記憶與睡眠反思]]「墓碑欄位 life_highlights」。
 ## words_to_creator 是墓碑第三個欄位，已存在於上面（#164），不重複宣告。
 ## last_words（第二個欄位）改由 Character 基底宣告（#379，死亡狀態機落地時
 ## 才發現這裡本來就先開了欄位形狀——Godot 4.5 不允許子類別重新宣告父類別
@@ -613,7 +614,10 @@ func _generate_words_to_creator() -> void:
 	var result: Dictionary = await AIService.request(envelope, character_id, AIService.Policy.SCHEDULED)
 	if not result["ok"]:
 		return
-	var validated := AISchema.validate_creation(result["data"])
+	var parsed := AISchema.parse_completion(result["data"])
+	if not parsed["ok"]:
+		return
+	var validated := AISchema.validate_creation(parsed["data"])
 	if not validated["ok"]:
 		return
 	if not words_to_creator.is_empty():

@@ -31,9 +31,12 @@ const DEFAULT_BASE_URL := "https://openrouter.ai/api/v1"
 const DEFAULT_MODEL := "openai/gpt-4o-mini"
 
 # 10 秒是 HTTPRequest.timeout 的值，不是自寫的計時器 —— 引擎原生支援逾時。
-# 這個維持全域一個值，不做成逐 provider——HTTPRequest 節點池是共用的
-# （見 ai_service.gd），節點的 timeout 是節點屬性不是逐請求參數，做成逐
-# provider 反而沒有實際效果，只會製造「設定了卻沒生效」的錯覺
+# 這是逐 provider 設定不到時的退回值，不是唯一生效的全域值：_parse_provider()
+# 把設定檔裡沒填、或填了非正值（0／負值，HTTPRequest 會解讀成「不逾時」）的
+# provider.timeout 一律退回這個值；填了正值的話 provider.timeout 蓋過它，
+# ai_service.gd::_send()／_probe_models() 每次發送前都把節點的
+# HTTPRequest.timeout 設成當次呼叫的 provider.timeout，同一個節點池跨請求
+# 換著用不同 provider 時逐次生效，不是建立節點當下定死的一次性初值
 const DEFAULT_TIMEOUT := 10.0
 
 ## 速率限制的預設值。放在設定檔而不是寫死在 ai_service.gd，是因為這兩個數字

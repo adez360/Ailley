@@ -168,6 +168,25 @@ func get_by_levels(levels: Array[int]) -> Dictionary[int, Array]:
 	return buckets
 
 
+## 墓碑欄位 life_highlights（issue #384，《規格書 09》§4-2）：從 L4 核心記憶
+## 彙整重大事件成一段文字陣列，純資料格式化，不經 LLM 潤飾——L4 本來就是
+## 《03》定義的「重大事件」分級（importance 90+，永不衰減，上限 L4_CAP），
+## 不需要另外維護一套「重大事件流」判斷邏輯。
+##
+## 依 created_day 由舊到新排序，跟規格書範例的敘事順序一致（先發生的事在
+## 前）；格式化成「第 D 天，<content>」——content 是 add_candidate() 存進來
+## 時就修剪過的原始事實句，這裡不做任何語氣潤飾或摘要，維持「這是真的發生
+## 過的事」的重量（見《規格書 09》§4-2 的 warning）
+func get_life_highlights() -> Array[String]:
+	var l4_entries := get_by_level(4)
+	l4_entries.sort_custom(func(a, b): return a["created_day"] < b["created_day"])
+
+	var highlights: Array[String] = []
+	for entry in l4_entries:
+		highlights.append("第 %d 天，%s" % [entry["created_day"], entry["content"]])
+	return highlights
+
+
 func _on_day_changed(_day: int) -> void:
 	decay_all()
 

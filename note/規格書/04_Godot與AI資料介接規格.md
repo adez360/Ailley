@@ -1,7 +1,7 @@
 ---
 tags: [規格書, 架構]
 status: 大致定案
-updated: 2026-08-24
+updated: 2026-08-26
 ---
 
 # 04_Godot與AI資料介接規格
@@ -196,7 +196,7 @@ updated: 2026-08-24
 | `current_goal` | 選填 | 上限 40 字。省略＝維持原樣；明確傳空字串＝主動清除，兩者語意不同（#352） |
 | `update_plan` | 條件式 | 只在《10》§5.4 列出的開放時機才存在於 schema／system prompt，不是模型自己判斷要不要填（見《12》§2.4） |
 | `persuaded`／`importance`／`valence` | 條件式 | 只在 `context.fact_lines` 帶有待回應的說服事實句時，schema 才含這三個欄位（#227）。省略 `persuaded` 視同不被說動 |
-| `appointment` | 尚未實作 | 《10》§5.5 已拍板設計，但 `ai_schema.gd`／`prompt_builder.gd` 都還沒接上這個欄位，見 issue #479 |
+| `appointment` | 條件式 | **現況（2026-08-26 查證）**：已實作，對話情境中且在場有其他角色時 `plan_response_schema()` 條件式加入這個欄位，`Ailley/scripts/character/agent.gd` 負責套用與逐分鐘檢查，見《12》§2.4、《10》§5.5，issue #479 已關閉 |
 
 `action == "persuade"` 的那筆 `tasks[]` 項目，`params` 另外多兩個欄位：`target`（必填，非空字串）、`reason`（必填，非空字串，說服理由，不驗證內容合不合理）、`proposed_task`（選填）：
 
@@ -488,8 +488,9 @@ HTTP 5xx、逾時都落在上面 AIService 層的 `http`／`timeout` identifier 
 | `params` | **不約束**，schema 只宣告成 `{"type": "object"}`——`target`（talk／attack／give）與 `item_id`／`place`（buy）等欄位靠 §3 提到的 AISchema 驗證層逐動作檢查是否為非空字串，不是動態 GBNF enum。§7.1 原本規劃的 `build_schema_for_call()`（依在場角色／物品動態組 `target`／`location_id` 的 enum）已被 §8 簡化路線取代，沒有實作 |
 | `update_plan` | **條件式欄位**，僅特定時機加入 schema（《10》§5.4、《12》§2.4） |
 | `persuaded`／`importance`／`valence` | **條件式欄位**，僅這輪帶有待回應說服事實句時加入 schema（#227） |
+| `appointment` | **條件式欄位**（2026-08-26 查證已實作），對話情境中且在場有其他角色時加入 schema，見上方 §4-2 附註、issue #479（已關閉） |
 
-`appointment`（《10》§5.5）、`speech_volume`（`dialogue` 的 `line` 沒有分音量）都是尚未實作的欄位，不在目前的 schema 裡，見 §4-2／§9。
+`speech_volume`（`dialogue` 的 `line` 沒有分音量）是尚未實作的欄位，不在目前的 schema 裡；`appointment`（《10》§5.5）已實作，見上方 §4-2、§6 附註。
 
 > 動態能力目前只剩「條件式欄位存不存在」這一層，不再有依在場角色/物品即時產生的動態 enum。RemoteLLM（雲端模型）的 schema 約束為盡力而為，非文法層強制，房主機收到後仍須完整驗證（《12》§4）。
 > 
