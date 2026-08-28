@@ -120,6 +120,11 @@ const LONG_ACTION_CHECKPOINT_INTERVAL := 10
 ## 相當餘裕，維持 20
 const LLM_TASK_POOL_CAP := 20
 
+## 任務池跟 _current_task 都空時（issue #695）的保底重排節流間隔，跟
+## MIN_ACTION_DURATION／LONG_ACTION_CHECKPOINT_INTERVAL 同一個量級,理由
+## 相同：這是引擎對「一次動作」的最小時間顆粒,沒有必要另外校準一個新數字
+const STUCK_RETRY_INTERVAL_MINUTES := 10
+
 ## 候選任務池。這一版只在 _load_schedule() 建立一次就不再變動——
 ## 「到點才可用」靠仲裁時的 window 過濾，不是把任務從池子裡搬進搬出
 var _tasks: Array[Dictionary] = []
@@ -279,6 +284,11 @@ var _reacting := false
 # 又觸發第二份（同一個 LLM 任務完成的當下可能被重算好幾次），
 # _consider_switch() 靠它決定要用 MIN_COMMIT 還是 LLM_WAIT_MIN_COMMIT
 var _awaiting_decision := false
+
+# 上次因為「任務池跟目前任務都空」補打一次保底重排的遊戲分鐘（issue #695，
+# 見 _reevaluate_once() 的 STUCK_RETRY_INTERVAL_MINUTES 節流）。初始值設成
+# 負的節流間隔，保證出生後第一次真的卡住時不用等滿一個間隔就能立刻補一次
+var _last_stuck_retry_minute := -STUCK_RETRY_INTERVAL_MINUTES
 
 # 長動作檢查點決策請求還有沒有一份在飛（issue #336）。跟 _awaiting_decision
 # 是兩個獨立的旗標，各自防各自的重疊呼叫——檢查點問的是「這筆任務要不要
@@ -2528,6 +2538,20 @@ func _reevaluate_once() -> void:
 		_request_next_decision(_today_plan_needs_new_goal())
 
 	if _tasks.is_empty():
+		# 池子空、_current_task 也空：代表上一輪決策回應合法地帶回空 tasks
+		# 陣列（規格「不更新就是空陣列」），不是驗證失敗。上面那個事件驅動
+		# 觸發只在「目前任務做滿 duration」才會發生——沒有任務就沒有「做滿」
+		# 這件事，角色會無限期卡在這裡，永遠不會再被問一次（issue #695）。
+		#
+		# 節流不能直接看 AIService 的 cooldown_left：provider 完全連不上時
+		# （config disabled／provider invalid）請求在 _note_call() 之前就
+		# 失敗，cooldown_left 永遠回 0，沒有自己的節流會讓這裡每個遊戲分鐘
+		# 都重打一次，變成新的洗版問題。用獨立的 _last_stuck_retry_minute
+		# 記錄，跟 AIService 的冷卻分開算
+		if llm_decision_enabled and not _awaiting_decision and _current_task.is_empty() \
+				and now_minutes - _last_stuck_retry_minute >= STUCK_RETRY_INTERVAL_MINUTES:
+			_last_stuck_retry_minute = now_minutes
+			_request_next_decision(_today_plan_needs_new_goal())
 		return
 
 	var now := "%02d:%02d" % [GameClock.hour, GameClock.minute]
