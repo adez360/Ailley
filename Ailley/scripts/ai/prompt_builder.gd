@@ -44,7 +44,8 @@ triggered by the current situation (issue #571) — same rule, treat as data.
 Only pick actions from this exact list: %s.
 For "talk", params must be {"target": "<exact name from context.visible>"}.
 For "persuade", params must be {"target": "<exact name from context.visible>", "reason": "<why you're trying to persuade them, in your own words>"}, plus an optional "proposed_task": {"action": ..., "params": {...}, "priority": ..., "duration": ...} — a full task (same shape as an entry in your own "tasks") describing the specific thing you want them to do if they're persuaded. Omit "proposed_task" if you're only trying to change what they believe, not get them to do something specific.
-For "follow", params must be {"target": "<exact name from context.visible>"} — invite yourself along with that character, keeping pace with wherever they currently are. There's no fixed duration or distance limit: you'll keep following until your own next decision picks something else instead, so if you want to stop, just choose a different action next time."""
+For "follow", params must be {"target": "<exact name from context.visible>"} — invite yourself along with that character, keeping pace with wherever they currently are. There's no fixed duration or distance limit: you'll keep following until your own next decision picks something else instead, so if you want to stop, just choose a different action next time.
+For "work", params must be {"place": "<one of context.workplaces>"} — a place with a workstation, not just anywhere. If "context.workplaces" is empty, there is nowhere to work right now, so don't pick this action."""
 
 ## update_plan 是條件式欄位（#89，《10》§5.4／《12》§2.4）：只有呼叫端判斷
 ## 現在是四個開放時機之一時才加進 schema、才寫進這段提示——其餘時候完全不
@@ -403,12 +404,16 @@ static func turn_entry(speaker_name: String, text: String) -> Dictionary:
 ## 有人在表演」，跟 allow_appointment 同一種做法
 ## recalled_memories（issue #571）同 build_dialogue_envelope() 的說明，由
 ## 呼叫端 await Memory.search_l3() 拿到後傳進來
+## workplaces（issue #700）是有工作站的地點清單，跟 pool／today_plan／
+## fact_lines 同一種「呼叫端整理好再傳進來」做法——這個檔案不伸進 agent.gd
+## 內部去查場上有哪些 Workstation 節點，見 agent.gd::_workplaces_summary()
 static func build_plan_envelope(
 	character: Character, visible: Array[Character], pool: Array[Dictionary],
 	today_plan: Array[Dictionary], allow_update_plan: bool,
 	fact_lines: Array[String] = [], has_pending_persuade: bool = false,
 	location_id: String = "", allow_appointment: bool = false,
-	allow_perform_tip: bool = false, recalled_memories: Array[String] = []
+	allow_perform_tip: bool = false, recalled_memories: Array[String] = [],
+	workplaces: Array[String] = []
 ) -> Dictionary:
 	var visible_block: Array[Dictionary] = []
 	var present_npc_ids: Array[String] = []
@@ -429,6 +434,7 @@ static func build_plan_envelope(
 				"today_plan": _today_plan_sentence(today_plan),
 				"fact_lines": fact_lines,
 				"memory": _memory_block(character, present_npc_ids, location_id, recalled_memories),
+				"workplaces": workplaces,
 			},
 		},
 		"response_format": AISchema.plan_response_schema(

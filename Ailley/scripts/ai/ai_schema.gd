@@ -24,22 +24,24 @@ extends RefCounted
 # 動作（issue #88）。不在這張表上的 action 一律拒絕 —— 用白名單而不是
 # 黑名單，是因為黑名單漏掉的那一項就是被打穿的那一項。
 #
-# 刻意不含 spec 沒有的 "work"：《07》《11》的動作裡沒有它，嚴格照 spec。
-# 這只影響 LLM 回應的驗證——schedule 來源的任務（npc_schedule.json 轉換）是
-# agent.gd 直接建構、不經過這裡，既有的 work 排程不受影響；影響的是 LLM 之後
-# 不能自己決定叫角色去打工，只有寫死在 npc_schedule.json 的排程能觸發 work。
-#
 # "move_to" 沿用既有命名，不改成 spec 用的 "move"——兩者語意完全一樣，只是
 # 命名不同，改名要動 agent.gd／debug_console.gd／api.md 好幾處引用，不值得
 # 為了對齊規格書用詞冒這個風險
 #
 # "murmur"（自語，#162）原本 #88 population 時漏掉——《11》§1 拍板的 MVP 動作
 # 清單本來就有 murmur，只是那次沒被列進來，不是這次新拍板決定要加
+#
+# "work"（issue #700，2026-08-29 拍板）：原本刻意不含（《07》《11》拍板當時
+# 沒有它），因為執行層那時也還沒有 work 這個動作。#358 把 work_at() 接上執行層
+# 之後，這道白名單就只剩「LLM 選不到」這一層限制，跟 buy/gather 早就開放給
+# LLM 選是不對稱的——動態投放或玩家自建的角色因此完全沒有自主賺錢的手段
+# （buy 只會花錢，不會賺錢）。開放後 params 要求 place（跟 buy/gather 同一套
+# 驗證，見下方），執行層不變：_pursue_work_task() 已經是仲裁器既有路徑
 const ALLOWED_ACTIONS := [
 	# A 溝通類
 	"talk", "persuade", "give", "report", "shout", "perform", "murmur",
 	# B 工作與消費類
-	"hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink",
+	"hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink", "work",
 	# C 動作與移動類
 	"move_to", "sleep", "nap", "rest", "wash", "idle",
 	# D 敵對類
@@ -110,7 +112,12 @@ const ALLOWED_ACTIONS := [
 # perform 是 #575 接上的：跟 work 同一套「立刻回傳 OK、協程跑完才收尾」的
 # 長動作模式（_pursue_perform_task()），差別是不用先到工作站——任意地點皆可，
 # 只認背包裡有沒有 instrument
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "gather", "follow", "perform"]
+#
+# work 是 #700 接上的：執行層（_pursue_work_task() → work_at()）從 #358 就在，
+# 這次只是把它跟 buy／gather 一樣開放給 LLM 選。跟 gather 同一套「先走到地點
+# 才執行」模式，差別是地點錯了（沒有工作站）時失敗原因是 WORK_TARGET_NOT_FOUND
+# 而不是專屬的地點名檢查——見 agent.gd::_pursue_work_task() 的說明
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "gather", "follow", "perform", "work"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -394,6 +401,17 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 		if not gather_place is String or (gather_place as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
 		gather_params["place"] = (gather_place as String).strip_edges()
+
+	# work 動作的 params 驗證（#700）：跟 gather 同一套「place 是必填字串」——
+	# 目前只有一個工作站，但仍要求 LLM 明講去哪裡；place 對不對得上實際的
+	# 工作站是執行層的事（見 agent.gd::_pursue_work_task()），這個檔案不在
+	# 驗證層幫忙補值或查表，跟 buy/gather 一貫的做法一致
+	if action == "work":
+		var work_params: Dictionary = task.get("params", {})
+		var work_place: Variant = work_params.get("place")
+		if not work_place is String or (work_place as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+		work_params["place"] = (work_place as String).strip_edges()
 
 	# #268／#290：expires_in_minutes（模型填的相對時長）現在有跟
 	# priority/duration 同一套量級上限，不再只有 is_finite()——
