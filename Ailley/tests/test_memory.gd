@@ -126,6 +126,7 @@ func test_get_by_level_filters_correctly() -> void:
 	var l3_entries := memory.get_by_level(3)
 
 	assert_eq(l3_entries.size(), 1, "應只回傳 level 3 的那一筆")
+	assert_eq(l3_entries[0]["level"], 3, "回傳的那一筆本身也該是 level 3，不是巧合湊出同樣的筆數")
 
 
 func test_get_by_levels_buckets_by_level() -> void:
