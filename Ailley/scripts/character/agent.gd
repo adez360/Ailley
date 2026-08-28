@@ -1337,14 +1337,8 @@ func _request_next_decision(allow_update_plan: bool = false, allow_appointment: 
 			# 方式：不逼模型整包重答（那要在 schema 層才做得到，這裡已經是
 			# 網路回來、_decide_with_retry() 早就判定這輪回應整體合法之後），
 			# 靜默放棄這個約定，等模型下次決策再試
-			var anchors := get_tree().get_first_node_in_group("place_anchors")
 			var raw_location: String = str(new_appointment.get("location", ""))
-			var normalized_location := ""
-			if anchors != null:
-				for known_place in anchors.list():
-					if known_place.to_lower() == raw_location.strip_edges().to_lower():
-						normalized_location = known_place
-						break
+			var normalized_location := _normalize_place(raw_location)
 			if not normalized_location.is_empty():
 				new_appointment["location"] = normalized_location
 				_apply_appointment(new_appointment)
@@ -1441,6 +1435,26 @@ func _clear_appointment_plan_entry() -> void:
 			_today_plan.remove_at(i)
 			return
 
+## 把模型回應／舊存檔裡的約定地點字串正規化成 PlaceAnchors 的裸節點名
+## （issue #644）：去首尾空白、不分大小寫的逐字比對，確認對不上已知地點時
+## 回傳空字串。決策套用端跟讀檔還原端（load_save_data()）共用同一個實作——
+## 正規化只插在網路回應那條路的話，#644 上路前的舊存檔（location 是自由
+## 文字）讀檔後跟裸地點名逐字比永遠不等，到期必定假爽約（複審抓到）。
+## 場景還沒就位（不在樹上／沒有 PlaceAnchors）時原樣退回輸入，跟決策端
+## 「拿不到 anchors 就不動」的既有態度一致
+func _normalize_place(raw: String) -> String:
+	var tree := get_tree()
+	if tree == null:
+		return raw
+	var anchors := tree.get_first_node_in_group("place_anchors")
+	if anchors == null:
+		return raw
+	var trimmed := raw.strip_edges().to_lower()
+	for known_place in anchors.list():
+		if known_place.to_lower() == trimmed:
+			return known_place
+	return ""
+
 ## 套用一筆新約定（#479，《10》§5.5）。整筆取代，不跟舊約定合併——跟
 ## _apply_today_plan() 同一種「重寫」語意，同時間只有一筆有效，換新的之前先
 ## 清掉舊約定留下的 today_plan 摘要（見 _clear_appointment_plan_entry()）。
@@ -1460,10 +1474,19 @@ func _apply_appointment(data: Dictionary) -> void:
 		"waiting_since": -1,
 		"plan_id": plan_id,
 	}
+	# location 存的是 PlaceAnchors 的裸節點名（#644 正規化後），today_plan 是
+	# 玩家可見的面板文字（《15》），直接印 key 會出現「約在「god_stone」見面」
+	# 這種內部代號——組顯示文字時轉成 display_name()；模型側的事實句（提醒／
+	# 爽約，見 _process_appointment()）維持 key，不做翻譯（見
+	# note/技術/在地化.md「刻意沒有翻譯的東西」：外來文字一律視為資料）
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	var location_display := str(_appointment["location"])
+	if anchors != null:
+		location_display = anchors.display_name(location_display)
 	_today_plan.append({
 		"id": plan_id,
 		"text": "跟 %s 約在「%s」見面（%s）" % [
-			_appointment["with"], _appointment["location"], _appointment["game_time"]
+			_appointment["with"], location_display, _appointment["game_time"]
 		],
 		"is_done": false,
 	})
@@ -1820,7 +1843,22 @@ func load_save_data(data: Dictionary) -> void:
 	if data.has("appointment"):
 		var raw_appointment: Variant = data.get("appointment")
 		if raw_appointment is Dictionary and _is_valid_appointment_shape(raw_appointment as Dictionary):
-			_appointment = (raw_appointment as Dictionary).duplicate(true)
+			var restored_appointment := (raw_appointment as Dictionary).duplicate(true)
+			# #644 正規化上路前的舊存檔，location 是自由文字，跟裸地點名逐字
+			# 比永遠不等，到期必定假爽約——讀檔這條路也要過同一個
+			# _normalize_place()（複審抓到：原本正規化只插在網路回應那條路）。
+			# 對不上已知地點的跟決策套用端同一個態度：整筆丟棄，不是留著等
+			# 一個必然發生的假爽約
+			var normalized_location := _normalize_place(
+				str(restored_appointment.get("location", ""))
+			)
+			if not normalized_location.is_empty():
+				restored_appointment["location"] = normalized_location
+				_appointment = restored_appointment
+			else:
+				push_warning("Agent %s: 存檔裡的約定地點「%s」不是已知地點，丟棄這筆約定" % [
+					character_name, str(restored_appointment.get("location", ""))
+				])
 		else:
 			_appointment = null
 	_appointment_broken_pending_line = ""

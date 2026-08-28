@@ -145,7 +145,8 @@ updated: 2026-08-24
     "pool": [ "…Agent._task_pool_summary() 摘要" ],
     "today_plan": "You intended to do today: 採藥草 (done), 找 TAMMY 聊天.",
     "fact_lines": [ "你已經大半天沒和任何人說過話了。" ],
-    "memory": { "recent": [ "…" ], "core": [ "…" ] }
+    "memory": { "recent": [ "…" ], "core": [ "…" ] },
+    "shop": { "tavern": { "bread": 12, "ale": 8 }, "herb_shop": { "herb": 15 } }
   }
 }
 ```
@@ -161,6 +162,7 @@ updated: 2026-08-24
 | `context.fact_lines` | ✔ | 引擎產生的事實句陣列，無則傳 `[]` |
 | `context.visible` | ✔ | **只放在場的人**，無則傳 `[]`，形狀是 `{name, trust, met_count}`——只送 `trust`，好感／熟悉／虧欠三維已拿掉（《01》3-1） |
 | `context.memory` | ✔ | L2（近期）依連結展開篩選、L4（核心）固定全量帶入（#360），只帶 `content` 字串 |
+| `context.shop` | ✔ | 全村販賣機目錄 `{place: {item_id: price}}`（#605）。**只掛在 plan 信封**：dialogue／checkpoint／last_words／reflection 共用的 self 區塊不帶，那些情境用不到商品目錄，白付 token。`place` 是裸節點名（`herb_shop`／`tavern`，跟 `_find_vending_machine_at_place()` 同一套判斷），同地點多台機器只收錄第一台——跟 `_find_vending_machine_at_place()` 回傳第一台的取樣方向一致 |
 
 沒有本文件先前設想的 `available_actions` 陣列、`present_npcs` 的 `appearance_text`、`location.desc`——可選動作清單是寫死在 system prompt 文字裡的 `AISchema.IMPLEMENTED_ACTIONS`（`Ailley/scripts/ai/ai_schema.gd`，由 `PromptBuilder._plan_system()` 動態組進提示詞），不是每次動態依前提條件過濾出來的陣列。
 
