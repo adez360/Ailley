@@ -16,6 +16,10 @@ extends CanvasLayer
 ## 既有現象：點擊已安葬角色時 StatusPanel 也會一起開，這不是這裡新造成的，
 ## 兩邊都不吃掉點擊事件本來就會疊加）。只對「已安葬」的角色開面板——未安葬
 ## 的屍體沒有墓碑（《規格書09》§4-3「未安葬不顯示遺言/生平」）。
+##
+## 無名碑（`is_anonymous`，同一個 §4-3）另外走限縮顯示：面板照樣開，但
+## 標題不顯示真名、內容只留「無人知曉他是誰」跟死亡日期，個性/生平/遺言
+## 整段不顯示——見 `_add_anonymous_lines()`。
 
 const EMPTY_PLACEHOLDER := "—"		# 《15》§1-1：沒資料一律顯示這個，不留空白不顯示假值
 const BARK := Color("2F2522")
@@ -62,7 +66,7 @@ func _pick_character(screen_pos: Vector2) -> Character:
 
 func _open(corpse: Character) -> void:
 	_corpse = corpse
-	title_label.text = corpse.character_name
+	title_label.text = L10n.t("UI_GRAVE_ANONYMOUS_TITLE") if corpse.is_anonymous else corpse.character_name
 	_refresh_content()
 	panel.show()
 
@@ -72,12 +76,31 @@ func _close() -> void:
 
 func _refresh_content() -> void:
 	_clear_children(content_vbox)
+	if _corpse.is_anonymous:
+		_add_anonymous_lines()
+		return
 	_add_section_header("UI_GRAVE_SECTION_PERSONALITY")
 	_add_personality_lines()
 	_add_section_header("UI_GRAVE_SECTION_LIFE")
 	_add_life_highlights_lines()
 	_add_section_header("UI_GRAVE_SECTION_LAST_WORDS")
 	_add_last_words_line()
+
+## 無名碑（《規格書09》§3-4／§4-3）：corpse_decay 達 100 沒人安葬時
+## _erect_unmarked_grave()（#387）自動立碑、設 is_anonymous = true——
+## 個性／生平／遺言整段不顯示，只留「無人知曉他是誰」跟死亡日期，
+## 跟已具名安葬的完整顯示（上面那個分支）刻意不同，不是漏寫
+func _add_anonymous_lines() -> void:
+	var unknown_label := Label.new()
+	unknown_label.text = L10n.t("UI_GRAVE_ANONYMOUS_UNKNOWN")
+	unknown_label.add_theme_color_override("font_color", BARK)
+	unknown_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	content_vbox.add_child(unknown_label)
+
+	var day_label := Label.new()
+	day_label.text = L10n.tf("UI_GRAVE_ANONYMOUS_DAY", {"day": _corpse.death_day})
+	day_label.add_theme_color_override("font_color", BARK)
+	content_vbox.add_child(day_label)
 
 ## personality 沒資料（identity 沒帶 hexaco，見 Personality.from_identity()）
 ## 時是空字典，不是每個角色都保證有這 10 項——一律用 has() 檢查，缺的略過，
@@ -100,7 +123,13 @@ func _add_personality_lines() -> void:
 ## 跟 status_panel.gd 的 today_plan／today_log 對 Player 的處理同一個理由
 func _add_life_highlights_lines() -> void:
 	var agent := _corpse as Agent
-	var highlights: Array[String] = agent.life_highlights if agent != null else []
+	# 三元運算子兩側型別要一致（GDScript 對 Array[String] 這種具型別陣列的
+	# 隱式轉換不會套用在三元運算式裡，直接寫 [] 在執行期會拋
+	# "Trying to assign an array of type Array to a variable of type
+	# Array[String]"）——用 if/else 明確賦值，不要圖方便寫成一行三元運算
+	var highlights: Array[String] = []
+	if agent != null:
+		highlights = agent.life_highlights
 	if highlights.is_empty():
 		var label := Label.new()
 		label.text = L10n.t("UI_GRAVE_NO_LIFE_HIGHLIGHTS")
