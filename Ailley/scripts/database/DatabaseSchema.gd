@@ -34,7 +34,7 @@ extends RefCounted
 ## CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
-const CURRENT_VERSION := 9
+const CURRENT_VERSION := 10
 
 
 ## 版本落後時依序套用的變更，每個 entry：
@@ -87,6 +87,11 @@ const MIGRATIONS: Array[Dictionary] = [
 		"version": 9,
 		"name": "Rebuild npc/location and all their dependent tables with NOT NULL primary keys",
 		"apply": Callable(DatabaseSchema, "_migrate_v9_notnull_primary_keys")
+	},
+	{
+		"version": 10,
+		"name": "Drop npc_relations.relations_trust (issue #601)",
+		"apply": Callable(DatabaseSchema, "_migrate_v10_drop_relations_trust")
 	}
 ]
 
@@ -232,6 +237,20 @@ static func _migrate_rebuild_verify_column_shape(db, old_name: String, new_name:
 			+ "the NOT NULL primary key fix this migration handles."
 		) % [old_name, old_columns, new_columns]
 	)
+	return false
+
+
+## 查一張既有表目前是否帶某個欄位。給 migration 9 的 npc_relations entry
+## 動態選要用哪個 create_fn（見上面 _migrate_v9_notnull_primary_keys() 的
+## 說明），版本無關的共用工具，一樣可以給之後別的 migration 用。
+static func _migrate_table_has_column(db, table_name: String, column_name: String) -> bool:
+	if not db.query("PRAGMA table_info(%s);" % table_name):
+		return false
+
+	for row in (db.query_result as Array):
+		if String(row.get("name", "")) == column_name:
+			return true
+
 	return false
 
 
@@ -409,6 +428,13 @@ static func _migrate_rebuild_single_table(
 ##
 ## entry 可選帶 "repair_null_pk"（預設 false），見
 ## _migrate_rebuild_handle_null_primary_keys() 的說明。
+##
+## entry 也可選帶 "create_fn"（Callable(db)->bool，預設用 entry["schema"].create）：
+## 讓某張表用「這個 migration 當時的舊形狀」重建，而不是「現在的 *Schema.gd」——
+## 同一張表後續若被別的 migration 再改形狀（例如再拿掉一欄），這裡若還是呼叫
+## 活的 schema class，_migrate_rebuild_verify_column_shape() 會因為形狀已經
+## 對不上舊資料庫而中止，等於這個較舊的 migration 被後來的 schema 變更波及。
+## 見 migration 9 的 npc_relations（issue #601 拿掉 relations_trust 之後）。
 static func _migrate_rebuild_table_group(db, entries: Array) -> bool:
 	var old_names := {}
 
@@ -428,7 +454,11 @@ static func _migrate_rebuild_table_group(db, entries: Array) -> bool:
 			return false
 
 	for entry in entries:
-		if not entry["schema"].create(db):
+		var create_ok: bool = (
+			entry["create_fn"].call(db) if entry.has("create_fn")
+			else entry["schema"].create(db)
+		)
+		if not create_ok:
 			push_error(
 				"[DatabaseSchema] Table rebuild: Failed to recreate %s: %s"
 				% [entry["table"], db.error_message]
@@ -710,6 +740,64 @@ static func _migrate_v7_notnull_primary_keys(db) -> bool:
 	])
 
 
+## Migration 10：拿掉 npc_relations.relations_trust（issue #601）。`trust` 全庫零
+## 引擎消費者（persuade 走模型判斷不擲骰、僅存的三個固定公式加減已改事實句
+## 陳述），不符合《00》原則三的留存門檻，比照 affinity/familiarity/debt 整條移除。
+## SQLite 不支援移除帶 CHECK 的欄位，要整張表重建；npc_relations 沒有任何其他
+## 表外鍵指向它（它自己外鍵指向 npc），單表重建即可。不能沿用
+## _migrate_rebuild_single_table()——那個走 INSERT ... SELECT * 並比對欄位形狀，
+## 是為「只補 NOT NULL、欄位不變」設計的，這裡欄位數變了會被形狀檢查擋下。
+## 改成明確列出保留欄位複製。
+##
+## 原本開發時跟 PR #607（npc/location NOT NULL 重建）撞號取 8，#607 先合併，
+## rebase 時重編為 9；之後合併 main 又發現 9 已被同一條 NOT NULL 重建佔走
+## （8 被 world_character_state.following_npc_id／issue #576 插隊，重建順延為
+## 9，見上面 Migration 9 的說明），再順延為 10——跟這個檔案先前 v6（原 4）、
+## v7（原 6）撞號重編同一套處理。
+static func _migrate_v10_drop_relations_trust(db) -> bool:
+	var old_name := "npc_relations__migrate_v10_old"
+
+	if not db.query("ALTER TABLE npc_relations RENAME TO %s;" % old_name):
+		push_error(
+			"[DatabaseSchema] Migration 10: Failed to rename npc_relations: "
+			+ db.error_message
+		)
+		return false
+
+	if not _migrate_rebuild_drop_stale_indexes(db, old_name):
+		return false
+
+	if not NPCRelationsSchema.create(db):
+		push_error(
+			"[DatabaseSchema] Migration 10: Failed to recreate npc_relations: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query(
+		"""
+		INSERT INTO npc_relations
+			(relation_id, character_id, target_id, relations_appearance_cache, updated_at)
+		SELECT
+			relation_id, character_id, target_id, relations_appearance_cache, updated_at
+		FROM %s;
+		""" % old_name
+	):
+		push_error(
+			"[DatabaseSchema] Migration 10: Failed to copy data into npc_relations: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query("DROP TABLE %s;" % old_name):
+		push_error(
+			"[DatabaseSchema] Migration 10: Failed to drop %s: " % old_name
+			+ db.error_message
+		)
+		return false
+
+	return true
+
 ## Migration 6：npc_action_history 是同一輪開發（#428）才新增的表，
 ## NPCActionHistorySchema.gd 最初把 idx_npc_action_history_npc 只建在
 ## (npc_id)，後來（#511 CodeRabbit review）才發現重複率分析需要
@@ -824,7 +912,22 @@ static func _migrate_v8_add_following_npc_id(db) -> bool:
 ## 這 4 張在 migration 7 已經因為 world／item 重建過一輪，這裡因為 npc
 ## 重建又要再重建一次——不是重複勞動，是因為兩次重建各自針對不同的父表
 ## （item／world vs. npc），沒有先後可以合併的空間。
+##
+## npc_relations 的 entry 額外判斷：issue #601 在這個 migration 上線後才把
+## relations_trust 從 NPCRelationsSchema 拿掉，migration 10 才是正式移除它的
+## 地方。這裡若一律呼叫活的 NPCRelationsSchema.create() 重建，會在「舊資料庫
+## 真的帶著 relations_trust」時跟舊表形狀對不上而中止（_migrate_rebuild_table_group()
+## 的欄位形狀比對抓到）。在 _migrate_rebuild_table_group() 改名「之前」先查活表
+## npc_relations 有沒有 relations_trust 欄位動態判斷該用哪個 create：有 → 用凍結的 _migrate_v8_create_npc_relations_with_trust()
+## 原樣重建、留給 migration 10 拿掉；沒有（新資料庫從沒真的存過這欄，或已經是
+## #601 之後的形狀）→ 用現行 NPCRelationsSchema，跟其餘表的預設行為一致。
 static func _migrate_v9_notnull_primary_keys(db) -> bool:
+	var npc_relations_entry := {"table": "npc_relations", "schema": NPCRelationsSchema}
+	if _migrate_table_has_column(db, "npc_relations", "relations_trust"):
+		npc_relations_entry["create_fn"] = Callable(
+			DatabaseSchema, "_migrate_v8_create_npc_relations_with_trust"
+		)
+
 	return _migrate_rebuild_table_group(db, [
 		{"table": "location", "schema": LocationSchema, "repair_null_pk": true},
 		{"table": "npc", "schema": NPCSchema, "repair_null_pk": true},
@@ -848,13 +951,79 @@ static func _migrate_v9_notnull_primary_keys(db) -> bool:
 		{"table": "npc_last_action", "schema": NPCLastActionSchema},
 		{"table": "npc_occupation", "schema": NPCOccupationSchema},
 		{"table": "npc_personality", "schema": NPCPersonalitySchema},
-		{"table": "npc_relations", "schema": NPCRelationsSchema},
+		npc_relations_entry,
 		{"table": "npc_schedule", "schema": NPCScheduleSchema},
 		{"table": "npc_state", "schema": NPCStateSchema},
 		{"table": "npc_taboo", "schema": NPCTabooSchema},
 		{"table": "npc_wallet", "schema": NPCWalletSchema},
 		{"table": "world_character_state", "schema": WorldCharacterStateSchema}
 	])
+
+
+## npc_relations 在 migration 9 當下（issue #561；原訂版號 8，見上面 Migration 9
+## 的說明）的形狀，帶 relations_trust——凍結成獨立函式而不是呼叫
+## NPCRelationsSchema.create()，是因為 issue #601
+## 把 relations_trust 從那個活的 schema class 移除了。migration 9 的職責只是
+## 幫舊資料庫補 NOT NULL 主鍵，真的帶著 relations_trust 資料的舊資料庫不該因為
+## 之後別的 migration 又改了這張表的欄位，就連帶讓自己失敗（
+## _migrate_rebuild_table_group() 的欄位形狀比對會抓到：舊表有 relations_trust、
+## 新表沒有，直接中止整個 initialize()）。只在 _migrate_v9_notnull_primary_keys()
+## 動態判斷出舊表確實還帶 relations_trust 時才會被指定成 create_fn 呼叫；
+## 這裡凍結的 CREATE TABLE 就是 #601 之前 NPCRelationsSchema.gd 的內容，
+## trust 欄位由 migration 10 負責拿掉。
+static func _migrate_v8_create_npc_relations_with_trust(db) -> bool:
+	var sql := """
+	CREATE TABLE IF NOT EXISTS npc_relations (
+
+		relation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+		character_id TEXT NOT NULL,
+
+		target_id TEXT NOT NULL,
+
+		relations_trust INTEGER NOT NULL DEFAULT 20
+			CHECK (
+				relations_trust BETWEEN 0 AND 100
+			),
+
+		relations_appearance_cache TEXT NOT NULL DEFAULT ''
+			CHECK (
+				length(relations_appearance_cache) <= 20
+			),
+
+		updated_at TEXT NOT NULL
+			DEFAULT CURRENT_TIMESTAMP,
+
+		FOREIGN KEY (character_id)
+			REFERENCES npc(npc_id)
+			ON DELETE CASCADE,
+
+		FOREIGN KEY (target_id)
+			REFERENCES npc(npc_id)
+			ON DELETE CASCADE,
+
+		UNIQUE (character_id, target_id),
+
+		CHECK (character_id <> target_id)
+	);
+
+	CREATE INDEX IF NOT EXISTS
+	idx_npc_relations_character
+	ON npc_relations(character_id);
+
+	CREATE INDEX IF NOT EXISTS
+	idx_npc_relations_target
+	ON npc_relations(target_id);
+	"""
+
+	if not db.query(sql):
+		push_error(
+			"[DatabaseSchema] Migration 8: Failed to recreate npc_relations (frozen with-trust shape): "
+			+ db.error_message
+		)
+		return false
+
+	return true
 
 
 static func initialize(db) -> bool:

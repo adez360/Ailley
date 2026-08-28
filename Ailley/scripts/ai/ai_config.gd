@@ -55,6 +55,13 @@ const DEFAULT_MAX_CALLS_PER_GAME_DAY := 20
 ## 對話呼叫已經走一般 max_calls_per_game_day 路徑，不需要疊加第二層限制
 const DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY := 30
 
+## 建角一次性生成（words_to_creator）的每日呼叫上限。CREATION policy 無條件
+## 豁免冷卻與配額（見 ai_service.gd Policy 的說明），沒有這個旋鈕的話成本
+## 保護完全敞開——雖然結構上每個角色一輩子只打一次，但生成失敗時每次開局／
+## 投放都會重打，累積請求數沒有上限。0＝不限（預設，維持「結構上只打一次」
+## 的既有行為），跟對話上限同一套慣例；想保住帳單的人可以設一個數字兜底
+const DEFAULT_MAX_CREATION_CALLS_PER_GAME_DAY := 0
+
 ## L3 語意檢索的 embedding 端點設定（issue #571，《03》§7）。刻意放在頂層、
 ## 不塞進 providers 字典——providers 代表玩家自己選的聊天 provider（Local／
 ## Cloud 二選一），而 embedding 永遠打本機的 embedding-only llama-server，
@@ -156,6 +163,7 @@ var providers := {}					# 名字 -> Provider
 var min_interval_sec := DEFAULT_MIN_INTERVAL_SEC
 var max_calls_per_game_day := DEFAULT_MAX_CALLS_PER_GAME_DAY
 var dialogue_exempt := DEFAULT_DIALOGUE_EXEMPT
+var max_creation_calls_per_game_day := DEFAULT_MAX_CREATION_CALLS_PER_GAME_DAY
 var max_dialogue_calls_per_game_day := DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY
 
 var embedding_base_url := DEFAULT_EMBEDDING_BASE_URL
@@ -267,6 +275,9 @@ func _apply(data: Dictionary) -> void:
 	dialogue_exempt = bool(data.get("dialogue_exempt", DEFAULT_DIALOGUE_EXEMPT))
 	max_dialogue_calls_per_game_day = maxi(0, int(
 		data.get("max_dialogue_calls_per_game_day", DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY)
+	))
+	max_creation_calls_per_game_day = maxi(0, int(
+		data.get("max_creation_calls_per_game_day", DEFAULT_MAX_CREATION_CALLS_PER_GAME_DAY)
 	))
 
 	# embedding 區塊跟上面幾個速率限制欄位一樣，在 enabled 判斷之前就先讀——
