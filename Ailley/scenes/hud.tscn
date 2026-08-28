@@ -1,4 +1,4 @@
-[gd_scene load_steps=25 format=3 uid="uid://wo0a0v2y4gj1"]
+[gd_scene load_steps=26 format=3 uid="uid://wo0a0v2y4gj1"]
 
 [ext_resource type="Theme" uid="uid://dktke2k785jv0" path="res://assets/ui/ailley_theme.tres" id="1_3swnk"]
 [ext_resource type="PackedScene" uid="uid://cyrnw30ddh16r" path="res://scenes/debug_console.tscn" id="1_mphia"]
@@ -13,16 +13,19 @@
 [ext_resource type="Script" uid="uid://c6630bjn71tla" path="res://scripts/ui/clock_hud.gd" id="8_5357l"]
 [ext_resource type="PackedScene" uid="uid://cefpexpl7arvm" path="res://scenes/character_create.tscn" id="8_uxdf7"]
 [ext_resource type="PackedScene" uid="uid://xqribn8mdubp" path="res://scenes/character_library.tscn" id="9_5357l"]
+[ext_resource type="Texture2D" uid="uid://cy4w176sb7s0o" path="res://assets/ui/HUD.png" id="9_iypfu"]
 [ext_resource type="Script" uid="uid://djdfer2luq3s5" path="res://scripts/ui/pause.gd" id="10_iypfu"]
 [ext_resource type="PackedScene" uid="uid://d3no1g5djdk2s" path="res://scenes/god_stone_input.tscn" id="11_0m4u7"]
 [ext_resource type="PackedScene" uid="uid://ccx0ctgkyuok1" path="res://scenes/persuade_dialog.tscn" id="13_5n1hp"]
 [ext_resource type="Script" uid="uid://lutrmlqpql7v" path="res://scripts/ui/epitaph_input.gd" id="14_eld54"]
 [ext_resource type="Script" uid="uid://dd0c5rk3hycom" path="res://scripts/ui/character_sidebar.gd" id="18_5357l"]
 
-[sub_resource type="AtlasTexture" id="AtlasTexture_qpprf"]
+[sub_resource type="AtlasTexture" id="AtlasTexture_iypfu"]
+atlas = ExtResource("9_iypfu")
 region = Rect2(1, 1, 25, 27)
 
-[sub_resource type="AtlasTexture" id="AtlasTexture_3xg78"]
+[sub_resource type="AtlasTexture" id="AtlasTexture_qpprf"]
+atlas = ExtResource("9_iypfu")
 region = Rect2(34, 3, 1, 11)
 
 [sub_resource type="StyleBoxTexture" id="StyleBoxTexture_jbj1t"]
@@ -124,7 +127,7 @@ script = ExtResource("8_5357l")
 
 [node name="Face" type="TextureRect" parent="HUD/ClockHUD"]
 layout_mode = 0
-texture = SubResource("AtlasTexture_qpprf")
+texture = SubResource("AtlasTexture_iypfu")
 
 [node name="Hand" type="TextureRect" parent="HUD/ClockHUD"]
 layout_mode = 0
@@ -133,7 +136,7 @@ offset_top = 2.5
 offset_right = 13.0
 offset_bottom = 13.5
 pivot_offset = Vector2(0.5, 11)
-texture = SubResource("AtlasTexture_3xg78")
+texture = SubResource("AtlasTexture_qpprf")
 
 [node name="StatusPanel" type="CanvasLayer" parent="."]
 script = ExtResource("4_5n1hp")
