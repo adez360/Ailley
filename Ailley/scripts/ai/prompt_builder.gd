@@ -689,8 +689,15 @@ static func _listener_block(speaker: Character, listener: Character) -> Dictiona
 ## 事實句同一種語言（世界內容給模型看的是中文，跟系統指令模板本身的英文分開，
 ## 見 DIALOGUE_SYSTEM／_today_plan_sentence() 的既有慣例）。只陳述天數差，
 ## 不加「好久不見」這類情緒推測（《00》原則二）
+##
+## has_met 為真但 last_seen_day 仍是 -1（`get_last_seen()` 的「從沒見過」預設值）
+## 是舊存檔的過渡態：#497 之前的存檔只有 met_count、沒有 last_seen 欄位，
+## `load_save_data()` 缺欄位一律退回 -1（見 relationships.gd 該函式的說明）。
+## 這裡若不特判會算出 `GameClock.day - (-1)` 這種假天數，往後每次決策都送出
+## 錯誤事實句，直到下次真的 note_meeting() 才自癒——寧可先退回「還沒見過」
+## 這句同樣不精確但不會塞一個編造出來的數字給模型
 static func _last_seen_sentence(listener_name: String, has_met: bool, last_seen_day: int) -> String:
-	if not has_met:
+	if not has_met or last_seen_day < 0:
 		return "你還沒見過%s。" % listener_name
 
 	var days_ago := GameClock.day - last_seen_day
