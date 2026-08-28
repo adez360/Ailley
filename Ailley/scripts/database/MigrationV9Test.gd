@@ -77,16 +77,19 @@ func _run_isolated_v9_test() -> void:
 
 	if not db.open_db():
 		_fail("open_db", db.error_message)
+		_close_and_cleanup()
 		return
 
 	if not _seed_legacy_schema():
 		_fail("seed_legacy_schema", "建立舊版 schema／種子資料失敗")
+		_close_and_cleanup()
 		return
 
 	var pre_count := _count_rows("npc_relations")
 
 	if not DatabaseSchema.initialize(db):
 		_fail("DatabaseSchema.initialize", "回傳 false")
+		_close_and_cleanup()
 		return
 
 	_check(
@@ -138,9 +141,7 @@ func _run_isolated_v9_test() -> void:
 		"PRAGMA foreign_key_check 回傳非空結果"
 	)
 
-	db.close_db()
-	db = null
-	_delete_test_db()
+	_close_and_cleanup()
 
 
 ## 完整鏈測試：user_version 種在 7，只種 location／npc（真實主鍵，不需要
@@ -159,6 +160,7 @@ func _run_v7_chain_test() -> void:
 
 	if not db.open_db():
 		_fail("v7_chain/open_db", db.error_message)
+		_close_and_cleanup()
 		return
 
 	# location／npc 直接用現行 *Schema.gd 建立（不是手刻舊版 SQL）：這裡不測
@@ -169,14 +171,17 @@ func _run_v7_chain_test() -> void:
 	# migration 真正要驗證的那張表。
 	if not LocationSchema.create(db):
 		_fail("v7_chain/seed location schema", db.error_message)
+		_close_and_cleanup()
 		return
 
 	if not NPCSchema.create(db):
 		_fail("v7_chain/seed npc schema", db.error_message)
+		_close_and_cleanup()
 		return
 
 	if not DatabaseSchema._migrate_v8_create_npc_relations_with_trust(db):
 		_fail("v7_chain/seed npc_relations schema", db.error_message)
+		_close_and_cleanup()
 		return
 
 	if not db.query_with_bindings(
@@ -184,6 +189,7 @@ func _run_v7_chain_test() -> void:
 		[LOCATION_A, "測試地點"]
 	):
 		_fail("v7_chain/seed location row", db.error_message)
+		_close_and_cleanup()
 		return
 
 	if not db.query_with_bindings(
@@ -194,6 +200,7 @@ func _run_v7_chain_test() -> void:
 		[NPC_B, "測試角色B", LOCATION_A]
 	):
 		_fail("v7_chain/seed npc rows", db.error_message)
+		_close_and_cleanup()
 		return
 
 	if not db.query_with_bindings(
@@ -205,10 +212,12 @@ func _run_v7_chain_test() -> void:
 		[NPC_A, NPC_B, 73, APPEARANCE]
 	):
 		_fail("v7_chain/seed npc_relations row", db.error_message)
+		_close_and_cleanup()
 		return
 
 	if not db.query("PRAGMA user_version = 7;"):
 		_fail("v7_chain/set user_version", db.error_message)
+		_close_and_cleanup()
 		return
 
 	_check(
@@ -241,9 +250,7 @@ func _run_v7_chain_test() -> void:
 		"PRAGMA foreign_key_check 回傳非空結果"
 	)
 
-	db.close_db()
-	db = null
-	_delete_test_db()
+	_close_and_cleanup()
 
 
 # =====================================================
@@ -387,11 +394,7 @@ func _fail(label: String, message: String) -> void:
 
 
 func _finish() -> void:
-	if db != null:
-		db.close_db()
-		db = null
-
-	_delete_test_db()
+	_close_and_cleanup()
 
 	print("")
 	print("=====================================================")
@@ -413,3 +416,15 @@ func _finish() -> void:
 func _delete_test_db() -> void:
 	if FileAccess.file_exists(TEST_DB_PATH):
 		DirAccess.remove_absolute(TEST_DB_PATH)
+
+
+## 每個測試案例（正常結束或提前 return）共用的收尾：關掉這條連線、清掉暫存檔，
+## 讓下一個測試案例（或 _finish()）重新打開一個乾淨的 db（CodeRabbit review
+## 抓到：原本提前 return 的失敗路徑沒關 db，_run_v7_chain_test() 接著把 db
+## 變數換成新的 SQLite.new() 卻沒先關舊連線，Windows 上舊檔可能還被鎖著）。
+func _close_and_cleanup() -> void:
+	if db != null:
+		db.close_db()
+		db = null
+
+	_delete_test_db()
