@@ -102,6 +102,28 @@ MCP 兩邊都**沒有**搬檔的 op，所以只能用 `git mv`。流程固定，
 > 都會寫回舊路徑。實際踩過 —— 它把 `ext_resource` 的 `uid=` 整個拿掉，
 > 只留下已經失效的 `path=`，而且 `force_reload` 也叫不回來。
 
+## 改「型別」沒有直接的 op，要用「建新的→搬子節點→刪舊的→改名」
+
+`node_manage` 沒有 change-type 操作。要把一個節點的型別換掉（例如純
+`Node` 換成 `Node2D`），流程是：`node_create` 建一個新型別的節點（先取
+不同名字）→ 把舊節點的每個子節點 `node_manage(op="reparent")` 搬進新節點
+→ `node_manage(op="delete")` 刪掉舊節點 → `node_manage(op="rename")`
+把新節點改回原本的名字。子節點的本地座標、collision layer/mask 等屬性
+會隨 reparent 保留，不用另外複製。
+
+> [!warning] reparent 一個「場景實例」節點（如 `Bubble` 這種 instance=
+> `ExtResource(...)` 的節點）可能被編輯器誤標成 editable children，
+> 把該實例內部本來就有的子節點明寫進目前這份場景檔，變成看似多出來的
+> override。若目前這份場景本身還會被別的場景繼承（Inherited Scene），
+> 這個誤標的 override 會跟繼承鏈更深層的同名節點撞名，Godot 開啟繼承
+> 場景時自動把外層節點改名（例如 `Box` 變 `Box2`），造成內容重複兩份。
+> 實際踩過：`character.tscn` 的 `Bubble`（`bubble.tscn` 的 instance）被
+> reparent 進新建的 `UI` 節點後，`Bubble/Box`／`Bubble/Box/Label` 被明寫
+> 進 `character.tscn`，`player.tscn`／`agent.tscn` 因此各自多出一份
+> `Box2`。修法是把這個多出來的 override 節點刪掉（`node_manage(op=
+> "delete")`），讓實例節點恢復成乾淨的純參照——存完務必用
+> `scene_get_hierarchy` 確認繼承場景裡沒有非預期的重複節點。
+
 ## Headless 驗證
 
 `mcp__godot__launch_editor` 用不了時（例如 Godot 不在 PATH），

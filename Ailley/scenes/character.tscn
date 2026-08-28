@@ -226,7 +226,7 @@ animation = &"idle_front"
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
 
-[node name="State" type="Node" parent="."]
+[node name="State" type="Node2D" parent="."]
 
 [node name="Stats" type="Node" parent="State"]
 script = ExtResource("2_2hyy3")
@@ -240,7 +240,7 @@ script = ExtResource("4_7eonc")
 [node name="Memory" type="Node" parent="State"]
 script = ExtResource("5_50cep")
 
-[node name="Sensing" type="Node" parent="."]
+[node name="Sensing" type="Node2D" parent="."]
 
 [node name="Vision" type="Area2D" parent="Sensing"]
 position = Vector2(0, 6)
@@ -251,7 +251,7 @@ script = ExtResource("6_8yvht")
 [node name="CollisionShape2D" type="CollisionShape2D" parent="Sensing/Vision"]
 shape = SubResource("CircleShape2D_rbud2")
 
-[node name="UI" type="Node" parent="."]
+[node name="UI" type="Node2D" parent="."]
 
 [node name="Bubble" parent="UI" instance=ExtResource("7_lagn4")]
 z_index = 10
