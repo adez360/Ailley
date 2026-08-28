@@ -3084,12 +3084,18 @@ func _pursue_buy_task() -> void:
 		stop_moving()
 		_pursued_place = ""
 		_pursuit_done = false
-		_current_task = {}
-		current_place = ""
-		current_state = "idle"
 		last_action_result = Character.BUY_TARGET_NOT_FOUND
 		if failed_task_source == "llm":
 			_remove_task(failed_task_id)
+		else:
+			# schedule 任務不會被移出池子，靠 window 自然退場——不加退避的話
+			# 下面 _reevaluate() 會在同一輪 trampoline 裡立刻重選到同一筆、
+			# 立刻再失敗一次，卡進無法跳出的同步迴圈（CodeRabbit review 抓到）
+			_mark_schedule_retry_backoff(_current_task)
+		# 用 _clear_current_task() 而不是手動清四個欄位：它會把這筆任務 id 記進
+		# _reevaluate_excluded_ids，這輪 trampoline 才不會又選回同一筆
+		# （CodeRabbit review 抓到，跟上面的退避是同一個問題的兩面）
+		_clear_current_task(false)
 		if llm_decision_enabled and not _awaiting_decision:
 			_request_next_decision(_today_plan_needs_new_goal())
 		_reevaluate()
