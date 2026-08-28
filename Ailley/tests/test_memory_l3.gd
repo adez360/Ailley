@@ -108,6 +108,19 @@ func test_rank_l3_candidates_orders_by_similarity_descending() -> void:
 	assert_eq(results[1]["id"], 1, "分數較低（正交）的那筆應該排第二")
 
 
+## 相關度下限（WU-YI-RU review）：語意相反（cosine < 0）的候選不該被當命中
+func test_rank_l3_candidates_excludes_negative_similarity() -> void:
+	var memory := _make_memory()
+	# query 是 (1,0)；entry_opposite 完全反向（分數 -1），entry_close 完全同向（分數 1）
+	_make_l3_entry(memory, 1, "語意相反的記憶", PackedFloat32Array([-1.0, 0.0]))
+	_make_l3_entry(memory, 2, "跟查詢很相關的記憶", PackedFloat32Array([1.0, 0.0]))
+
+	var results := memory._rank_l3_candidates(PackedFloat32Array([1.0, 0.0]), 5)
+
+	assert_eq(results.size(), 1, "語意相反那筆應該被排除，只剩同向那筆")
+	assert_eq(results[0]["id"], 2, "剩下的應該是同向、分數為正的那筆")
+
+
 func test_rank_l3_candidates_respects_max_results() -> void:
 	var memory := _make_memory()
 	for i in 5:

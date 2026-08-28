@@ -34,6 +34,15 @@ const RETRIEVAL_BONUS := 10.0
 const DECAY_MAX := 100.0
 const L3_SEARCH_MAX_RESULTS := 5
 
+## 相關度下限（WU-YI-RU review）：cosine 相似度可能是負值（語意相反），
+## top-N 只降冪取前幾名不保證選到的候選真的跟查詢有關——沒有這道門檻，語意
+## 相反的記憶也會被當命中延壽（mark_retrieved()）並注入 prompt。門檻只擋
+## 負分（真的語意相反），不擋 0 分（正交、單純不相關但不衝突）——
+## test_rank_l3_candidates_orders_by_similarity_descending() 明確驗證過
+## 正交候選要能回傳，這裡沿用同一個設計意圖，只是把「語意相反」這種更差的
+## 情況額外擋下來
+const L3_MIN_RELEVANCE := 0.0
+
 ## L1 固定 8 條，見《03》§1
 const L1_CAP := 8
 
@@ -170,6 +179,10 @@ func _rank_l3_candidates(query_embedding: PackedFloat32Array, max_results: int) 
 
 	var results: Array[Dictionary] = []
 	for i in mini(max_results, scored.size()):
+		# 相關度不到門檻就整批停止——scored 已經降冪排序，這一名不到門檻，
+		# 後面分數更低的也一定不到，不用逐一判斷再 continue（WU-YI-RU review）
+		if scored[i]["score"] < L3_MIN_RELEVANCE:
+			break
 		var entry: Dictionary = scored[i]["entry"]
 		# 《03》§4-2：語意檢索命中一樣要延長壽命，跟 PromptBuilder._memory_block()
 		# 對 L2 命中的處理是同一條規則，不是 L2 專屬的

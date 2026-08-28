@@ -143,6 +143,16 @@ var _noticed := {}
 # 但隔天還是會再觸發，不會變成終身只通知一次
 var _lost_reacted := {}
 
+# 這一次遭遇（走進視野到走出視野）已經對誰觸發過 L3 語意檢索（issue #571，
+# WU-YI-RU review）：_seen_in_l1() 只讀不寫，角色不在最近 8 條 L1 視窗時，
+# 同一人站在視野裡不動，vision.gd 每次重新 emit spotted 都會再打一次
+# search_l3()，把重複內容一直塞進 _pending_recalled（無去重、無上限），
+# 累積到下一輪 prompt 會放大 token 成本，違反《03》§7「不是每 tick 檢索」。
+# 跟 _noticed（終身只驚訝一次）、_lost_reacted（每天一次）都是不同的時間
+# 尺度——這張表在 _on_lost() 清除對應項，同一次持續遭遇只觸發一次，走出
+# 視野再走回來才會重新觸發
+var _l3_recalled_for := {}
+
 # 上一次真的呼叫 move_to()（或判定「已經到了」「走不到」）的地點。
 # _pursue_current_task() 每個遊戲分鐘都會跑，靠這個分辨「還在處理同一個地點」
 # 與「地點換了要重新起步」
@@ -1869,7 +1879,8 @@ func _on_spotted(other: Character) -> void:
 	# 生涯第一次見面那次）。跟下面 has_met() 問的「這輩子見沒見過」是兩個
 	# 不同的條件。call-and-forget（不 await，CodeRabbit review 抓到先前
 	# 誤加的 await 會拖住這裡，延誤下面 has_met() 判斷與跟丟／反應流程）
-	if not _seen_in_l1(other.character_name):
+	if not _seen_in_l1(other.character_name) and not _l3_recalled_for.has(other.character_id):
+		_l3_recalled_for[other.character_id] = true
 		_queue_recalled(other.character_name)
 
 	if _noticed.has(other.character_id):
@@ -1931,6 +1942,11 @@ func _react_to_spotted_fallback() -> void:
 # 沒有通用的驚呼可以套，schedule 模式（llm_decision_enabled 關著）就不處理，
 # 只在有 LLM 可問時把事實句排進下一次決策，要不要有反應交給模型自己判斷
 func _on_lost(other: Character) -> void:
+	# 離開視野就重置這次遭遇的 L3 觸發記錄——走出去再走回來要能重新觸發，
+	# 跟下面 llm_decision_enabled 關著時就 return 的邏輯無關，這裡不受那個
+	# 旗標影響，永遠先清
+	_l3_recalled_for.erase(other.character_id)
+
 	if is_in_conversation():
 		return
 	if not llm_decision_enabled:

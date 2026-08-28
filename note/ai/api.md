@@ -852,6 +852,11 @@ request_embedding("<text>") -> PackedFloat32Array  # 失敗一律回空陣列（
   不追蹤過去，避免繞過上面那條 loopback 限制
 † 呼叫頻率遠低於 AIService，不用它那套節點池／佇列／速率限制——每次呼叫各自建
   一個 HTTPRequest 節點，用完即丟
+† embedding.base_url 要含 API 路徑字首（例如 llama-server 是 /v1）：
+  request_embedding() 直接把 base_url 跟 "/embeddings" 接起來打，不會自動補這段——
+  填裸 host（例如只填 http://127.0.0.1:8081）會打到不存在的路徑，靜默 404、
+  回空陣列，沒有任何錯誤訊息，範例見 data/ai_config.example.json 的
+  "http://127.0.0.1:8081/v1"
 → 技術/LLM 串接與 AI 服務層「Embedding」
 ```
 
