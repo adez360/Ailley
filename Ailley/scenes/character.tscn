@@ -1,4 +1,4 @@
-[gd_scene load_steps=38 format=3 uid="uid://dv2awnrkam36p"]
+[gd_scene load_steps=39 format=3 uid="uid://dv2awnrkam36p"]
 
 [ext_resource type="Script" uid="uid://cqx2masxgq7si" path="res://scripts/character/character.gd" id="1_0dpix"]
 [ext_resource type="Script" uid="uid://clx4a8kt1td2c" path="res://scripts/character/stats.gd" id="2_2hyy3"]
@@ -9,6 +9,7 @@
 [ext_resource type="PackedScene" uid="uid://bu84ty6ven6ig" path="res://scenes/bubble.tscn" id="7_lagn4"]
 [ext_resource type="Script" uid="uid://cebdk6kq4c7ip" path="res://scripts/ui/work_progress.gd" id="8_x8k1v"]
 [ext_resource type="Script" uid="uid://t6axa01hiamc" path="res://scripts/ui/money_popup.gd" id="9_ih8y6"]
+[ext_resource type="Texture2D" uid="uid://psuc66kghr5u" path="res://assets/ui/chatbox-1.png" id="10_7eonc"]
 [ext_resource type="Texture2D" uid="uid://pcq7ouq5pyt8" path="res://assets/characters/16x16 Idle-Sheet.png" id="10_idle"]
 [ext_resource type="Texture2D" uid="uid://b4byn4agp2182" path="res://assets/characters/16x16 Walk-Sheet.png" id="11_walk"]
 
@@ -226,7 +227,7 @@ animation = &"idle_front"
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
 
-[node name="State" type="Node" parent="."]
+[node name="State" type="Node2D" parent="."]
 
 [node name="Stats" type="Node" parent="State"]
 script = ExtResource("2_2hyy3")
@@ -240,7 +241,7 @@ script = ExtResource("4_7eonc")
 [node name="Memory" type="Node" parent="State"]
 script = ExtResource("5_50cep")
 
-[node name="Sensing" type="Node" parent="."]
+[node name="Sensing" type="Node2D" parent="."]
 
 [node name="Vision" type="Area2D" parent="Sensing"]
 position = Vector2(0, 6)
@@ -251,11 +252,26 @@ script = ExtResource("6_8yvht")
 [node name="CollisionShape2D" type="CollisionShape2D" parent="Sensing/Vision"]
 shape = SubResource("CircleShape2D_rbud2")
 
-[node name="UI" type="Node" parent="."]
+[node name="UI" type="Node2D" parent="."]
 
 [node name="Bubble" parent="UI" instance=ExtResource("7_lagn4")]
 z_index = 10
 position = Vector2(0, -10)
+
+[node name="Box" type="NinePatchRect" parent="UI/Bubble"]
+texture = ExtResource("10_7eonc")
+region_rect = Rect2(7, 7, 37, 36)
+patch_margin_left = 10
+patch_margin_top = 9
+patch_margin_right = 11
+patch_margin_bottom = 12
+
+[node name="Label" type="Label" parent="UI/Bubble/Box"]
+layout_mode = 0
+theme_type_variation = &"BubbleLabel"
+horizontal_alignment = 1
+autowrap_mode = 3
+clip_text = true
 
 [node name="WorkProgress" type="Node2D" parent="UI"]
 z_index = 10
