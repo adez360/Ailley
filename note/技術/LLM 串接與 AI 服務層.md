@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-23
+updated: 2026-08-28
 ---
 
 # LLM 串接與 AI 服務層
@@ -869,6 +869,59 @@ poc 輸出裡有、《06》沒提到的欄位：`reasoning`／`inner_monologue`�
 **縮短延遲本身的槓桿（另一方向，同樣尚未實作）**：`REASONING_INSTRUCTION` 的
 100 字上限是延遲/品質的直接槓桿，往下砍會更快但決策品質會掉；其他槓桿是模型
 量化等級、llama-server 的 `--parallel` 設定，會影響全部呼叫，改動範圍更大。
+
+## 動態投放到真正依任務移動：卡點是冷卻共用，不是網路延遲（2026-08-28 實測）
+
+新角色從 `spawn_character()` 投放到任務池裡真的出現一筆任務、仲裁器選中它
+開始移動，中間的時間依投放路徑差非常多，關鍵在 `_generate_words_to_creator()`
+（`agent.gd`）跟第一次 plan 決策共用同一個 `requester_id`（`character_id`）、
+同一個 `AIService.Policy.SCHEDULED` 冷卻池（`min_interval_sec`，目前設定值
+30 秒）：
+
+```gdscript
+func _generate_words_to_creator() -> void:
+	if not words_to_creator.is_empty():
+		return
+	...
+	var result: Dictionary = await AIService.request(envelope, character_id, AIService.Policy.SCHEDULED)
+```
+
+`words_to_creator` 一旦不是空字串就直接跳過，不會打這通；是空字串就會在
+`_ready()` fire-and-forget 打一次，而且用的是跟決策一樣的 `SCHEDULED`
+政策，會佔用同一份冷卻。`game_manager.gd::activate_llm_decision_if_ready()`
+（issue #598）跟 `main_scene.gd::_apply_startup_ai_state()`（issue #357）
+都已經考慮到這件事，在真正呼叫 `debug_set_llm_decision(true)` 前會先讀
+`AIService.get_usage(character_id).cooldown_left` 並整段 `await` 完，
+避免決策請求同步被 `ERROR_RATE_LIMITED` 擋下、決策迴圈靜默卡住到下一次仲裁——
+這段邏輯本身寫在那兩個函式自己的註解裡，只是之前沒有抄進筆記庫。
+
+兩條投放路徑因此有完全不同的實際等待時間：
+
+- **debug 主控台 `spawn <template_id>`**（`debug_console.gd::_cmd_spawn()`）：
+  目前組 `identity` 時只給 `character_name`，**沒有**把模板已經算好的
+  `words_to_creator` 帶過去（模板 50 筆全部有內容，見 [[角色庫與投放]]，
+  但這個指令沒有讀那個欄位）。結果是每次用這個指令生出來的角色一定會
+  觸發 `_generate_words_to_creator()`，吃掉一次 30 秒冷卻，`activate_llm_decision_if_ready()`
+  會乖乖等滿它才送出第一次 plan 決策。實測：投放 → 進場（近乎瞬間，
+  instantiate 本身 <100ms）→ 冷卻 30 秒 → plan 決策網路延遲 0.6-1.9 秒
+  （量級同上一節 #118 校準值）→ push 進任務池 → 下一次仲裁（≤1 遊戲分鐘＝
+  1 現實秒）判斷贏過門檻才真的開始移動——**總計約 30 秒出頭**，不是網路
+  延遲的量級。
+- **正式的角色庫投放**（`GameManager.deploy_from_library()`）：這條路徑會
+  把角色庫裡已經生成好的 `words_to_creator` 一併放進 `identity`，
+  `_generate_words_to_creator()` 一看欄位非空就直接跳過，不佔用這份冷卻。
+  理論上只要一次 plan 決策的網路延遲（0.6-1.9 秒）就能進到任務池，沒有
+  上面那 30 秒——這條路徑尚未實測驗證，待確認。
+
+實測方法：`game_eval` 直接呼叫 `AIService.request()`／`AISchema.parse_completion()`／
+`AISchema.validate_tasks()` 逐階段拆解，搭配 `AIService.get_usage(character_id)`
+的 `cooldown_left` 欄位反推冷卻是在哪個時間點被佔用的——`game_eval` 有 8 秒
+執行預算，一次性的長輪詢迴圈（例如 `for i in range(200): await create_timer(0.1)`）
+會被腰斬成 `EVAL_HUNG`，殘留的 coroutine 之後再存取 `get_tree()` 會回傳
+`null`，把整個遊戲行程頂進 debugger break（`project_manage(op="stop")`
+可解除，不是真的崩潰）；改成多次分開的短呼叫，或直接 `await` 會自己
+resolve 的呼叫（例如 `debug_set_llm_decision()` 本身回傳的就是 await 完的
+結果字典），不要自己手動輪詢等待。
 
 ## 待對齊：組長發的資料夾結構規範，跟現有 `Ailley/CLAUDE.md` 不一樣
 
