@@ -1,7 +1,7 @@
 ---
 tags: [規格書, 架構]
 status: 大致定案
-updated: 2026-08-26
+updated: 2026-08-28
 ---
 
 # 04_Godot與AI資料介接規格
@@ -81,7 +81,7 @@ updated: 2026-08-26
 
 事件驅動架構下，決策請求以**單一角色**為單位發起，不再是每 tick 批次送出全體 NPC（見《10》§5.1、《12》§5.1）。
 
-**這些不是獨立行程的網路端點**——`AIService` 一律打同一個 `LocalLLM`／`RemoteLLM` 的 `/v1/chat/completions`。`AIService` 內部維護一個 `POOL_SIZE := 3` 的 `HTTPRequest` 節點池（跟 llama-server 的 `--parallel 3` 對齊），佇列裡的請求依序分派給空閒節點，可以同時有 3 筆在飛，不是單一節點依序排隊。差別只在 `PromptBuilder` 組出來的 `envelope.payload.type`（決定 system prompt、要不要帶 `response_format`），不是不同 URL——下表沿用「訊息類型」只是方便對照「這次呼叫要做什麼」，實際 wire format 見《技術/LLM 串接與 AI 服務層》與 `Ailley/scripts/ai/prompt_builder.gd`。
+**這些不是獨立行程的網路端點**——`AIService` 一律打同一個 `LocalLLM`／`RemoteLLM` 的 `/v1/chat/completions`。`AIService` 內部維護一個 `POOL_SIZE := 3` 的 `HTTPRequest` 節點池（跟 llama-server 的 `--parallel 3` 對齊），佇列依**優先序**分派給空閒節點：`CONVERSATION` 類請求先出隊，其餘照進來的順序（#492），可以同時有 3 筆在飛。差別只在 `PromptBuilder` 組出來的 `envelope.payload.type`（決定 system prompt、要不要帶 `response_format`），不是不同 URL——下表沿用「訊息類型」只是方便對照「這次呼叫要做什麼」，實際 wire format 見《技術/LLM 串接與 AI 服務層》與 `Ailley/scripts/ai/prompt_builder.gd`。
 
 啟動就緒檢查也不是獨立端點：`AIService._probe_models()` 打 provider 標準的 `GET {base_url}/models`（OpenAI 相容 API 既有端點，順便驗證 API 金鑰是否有效），不是下面曾經設想過的 `/health`——`ai_service.gd`／`ai_config.gd` 的註解都明講「刻意不用《04》§4-1 想像的 `/health`，那是沒有的」。
 
@@ -93,12 +93,13 @@ updated: 2026-08-26
 | `creation` | 建角完成當下生成 `words_to_creator` | `build_creation_envelope()` |
 | `reflection` | 睡眠反思、記憶壓縮 | `build_reflection_envelope()` |
 | `checkpoint` | 長動作固定間隔檢查點（issue #336）：問「繼續還是放棄」 | `build_checkpoint_envelope()` |
+| `last_words` | 角色死亡當下問一次臨終遺言，可回空字串或 `null`（《09》，issue #379） | `build_last_words_envelope()` |
 
 ---
 
 ## 4. 封包格式
 
-所有請求共用同一個信封形狀：`{"system": "<system prompt 字串>", "payload": {...}, "response_format": {...}}`（`response_format` 選填，只有 provider 支援 `json_schema` 時才會真的送出，見 §8）。下面每節只列 `payload` 與 AI 回應本體，信封外殼不重複寫。`self` 區塊（角色自身狀態）由 `plan`／`dialogue`／`reflection`／`checkpoint` 四種類型共用，形狀統一，見 4-2 第一次出現處，後面章節不重複列全部欄位。
+所有請求共用同一個信封形狀：`{"system": "<system prompt 字串>", "payload": {...}, "response_format": {...}}`（`response_format` 選填，只有 provider 支援 `json_schema` 時才會真的送出，見 §8）。下面每節只列 `payload` 與 AI 回應本體，信封外殼不重複寫。`self` 區塊（角色自身狀態）由 `plan`／`dialogue`／`reflection`／`checkpoint`／`last_words` 五種類型共用，形狀統一，見 4-2 第一次出現處，後面章節不重複列全部欄位。
 
 ### 4-1 就緒檢查
 
@@ -334,7 +335,7 @@ AI 回應裡本來就**沒有** `retries` 欄位回報（重試次數如果真�
 
 ### 4-7 `checkpoint`　長動作固定間隔檢查點
 
-本文件先前完全沒有這個訊息類型（issue #336，《02》§3）：長動作（`duration` 較長的任務）進行到一半，每 `LONG_ACTION_CHECKPOINT_INTERVAL := 10` 遊戲分鐘（跟 `MIN_ACTION_DURATION` 取同一個值，《99》P-14 #9）固定問一次「繼續還是放棄」，不是完整重新規劃，所以只帶 `self`（自身狀態），不帶 `visible`／`pool`／`memory`。放棄時若這個角色正在被別人依附（目前唯一情形是搬運中的目標，`get_checkpoint_dependents()`），依附者也會一併收到通知（`on_dependent_checkpoint()`），但通知走的是引擎內部呼叫，不是另一次 AI 請求。
+本文件先前完全沒有這個訊息類型（issue #336，《02》§3）：長動作（`duration` 較長的任務）進行到一半，每 `LONG_ACTION_CHECKPOINT_INTERVAL := 10` 遊戲分鐘（跟 `MIN_ACTION_DURATION` 取同一個值，《99》P-14 #9）固定問一次「繼續還是放棄」，不是完整重新規劃，所以只帶 `self`（自身狀態），不帶 `visible`／`pool`／`memory`。**每次檢查點觸發時**（不等 AI 回答、不分繼續或放棄），若這個角色正在被別人依附（目前唯一情形是搬運中的目標，`get_checkpoint_dependents()`），依附者也會同步收到一次通知（`on_dependent_checkpoint()`；`agent.gd` 檢查點分支），但通知走的是引擎內部呼叫，不是另一次 AI 請求。
 
 **Godot → AI**
 
@@ -427,7 +428,7 @@ Godot 操控層                房主機                    llama-server
 | `timeout` | `HTTPRequest` 逾時——`ai_config.gd::DEFAULT_TIMEOUT`（10 秒）是沒設定或設定非正值時的預設／後備值，provider 設定檔給的正值 `timeout` 會覆蓋它（`_parse_provider()`／`ai_service.gd::_send()`）；不是《99》P-11 舊決定寫的 LocalLLM 5 秒／RemoteLLM 15 秒／event 8 秒各自寫死，那組數字已被現況取代，見《99》P-11 |
 | `network` | `HTTPRequest` 本身失敗（DNS／連線層錯誤） |
 | `http` | HTTP 狀態碼非 2xx（格式 `http_<code> <回應內容前 200 字>`） |
-| `bad_json` | provider 回應不是合法 JSON——固定重試 1 次（`ai_service.gd::RETRY_LIMIT`），跟下面 AISchema 層依 `provider.max_validation_retries()` 的驗證重試是兩個獨立計數器，不共用次數 |
+| `bad_json` | provider 回應不是合法 JSON——**不重試**（`_interpret()` 回 `retryable=false`：HTTP 200 卻不是 JSON 通常是代理伺服器插進來的頁面，重試沒有意義）；會自動重試 1 次（`RETRY_LIMIT := 1`）的是 `network`（連線層失敗）與 HTTP **5xx** 的 `http`（4xx 不重試），且與下面 AISchema 層依 `provider.max_validation_retries()` 的驗證重試是兩個獨立計數器，不共用次數 |
 
 **AISchema 層**（`ai_schema.gd` 的 `ERROR_*`，格式／驗證失敗；`_decide_with_retry()` 依 `provider.max_validation_retries()` 自動重試，重試次數用完才把最後一次的失敗原因往上回）
 

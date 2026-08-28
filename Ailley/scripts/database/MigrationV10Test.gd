@@ -1,9 +1,9 @@
 extends Node
 
 ## =====================================================
-## MigrationV9Test
+## MigrationV10Test
 ##
-## 驗證 issue #601／DatabaseSchema migration 9：既有資料庫的 npc_relations
+## 驗證 issue #601／DatabaseSchema migration 10：既有資料庫的 npc_relations
 ## 帶著已經沒有引擎消費者的 relations_trust 欄位，跑過 DatabaseSchema.initialize()
 ## 之後這一欄消失、其餘欄位（character_id／target_id／relations_appearance_cache／
 ## updated_at）與資料保留、外鍵與索引仍然生效。做法跟 MigrationV3Test／
@@ -14,23 +14,24 @@ extends Node
 ## _migrate_rebuild_single_table() 的 INSERT ... SELECT *，這裡順便驗證
 ## 這條複製路徑沒有把資料錯位。
 ##
-## 種子資料把 user_version 設成 8（migration 8 之後、9 之前的狀態），
-## 讓 initialize() 只跑 migration 9，隔離驗證這一條。
+## 種子資料把 user_version 設成 9（migration 9 之後、10 之前的狀態），
+## 讓 initialize() 只跑 migration 10，隔離驗證這一條。
 ##
 ## 另外還跑一段 user_version = 7 的完整鏈測試（_run_v7_chain_test()）：
-## migration 8（issue #607）本身也會重建 npc_relations，而它拿掉 relations_trust
+## migration 9（issue #607／#561，原訂版號 8，見 DatabaseSchema.gd 的說明）
+## 本身也會重建 npc_relations，而它拿掉 relations_trust
 ## 之前是呼叫活的 NPCRelationsSchema——issue #601 把 relations_trust 從那個
-## class 移除後，DatabaseSchema._migrate_v8_notnull_primary_keys() 改成動態
+## class 移除後，DatabaseSchema._migrate_v9_notnull_primary_keys() 改成動態
 ## 判斷舊表有沒有這欄，有的話改用凍結的 _migrate_v8_create_npc_relations_with_trust()
-## 重建（原樣保留，留給 migration 9 拿掉）。這段測的就是這條動態判斷本身：
+## 重建（原樣保留，留給 migration 10 拿掉）。這段測的就是這條動態判斷本身：
 ## 種一個貨真價實帶 relations_trust 資料的 user_version=7 資料庫，驗證一路
-## 經過 migration 8、9 之後，資料沒有因為欄位形狀比對而中止、trust 正確消失。
+## 經過 migration 8、9、10 之後，資料沒有因為欄位形狀比對而中止、trust 正確消失。
 ##
 ## 使用方式：
-## 1. 本檔位置：res://scripts/database/MigrationV9Test.gd
+## 1. 本檔位置：res://scripts/database/MigrationV10Test.gd
 ## 2. 建立暫時測試場景：
 ##      Node
-##        └── MigrationV9Test（掛本腳本）
+##        └── MigrationV10Test（掛本腳本）
 ## 3. 執行測試場景。
 ##
 ## 注意：不使用 DatabaseManager 的正式資料庫，自己開一條獨立 SQLite 連線
@@ -38,11 +39,11 @@ extends Node
 ## =====================================================
 
 
-const TEST_DB_PATH := "user://__migration_v9_test.db"
+const TEST_DB_PATH := "user://__migration_v10_test.db"
 
-const NPC_A := "__migration_v9_test_npc_a"
-const NPC_B := "__migration_v9_test_npc_b"
-const LOCATION_A := "__migration_v9_test_loc_a"
+const NPC_A := "__migration_v10_test_npc_a"
+const NPC_B := "__migration_v10_test_npc_b"
+const LOCATION_A := "__migration_v10_test_loc_a"
 const APPEARANCE := "剪短灰髮、左手皮手套"
 
 var passed := 0
@@ -57,18 +58,18 @@ func _ready() -> void:
 func _run() -> void:
 	print("")
 	print("=====================================================")
-	print("[MigrationV9Test] START")
+	print("[MigrationV10Test] START")
 	print("=====================================================")
 
-	_run_isolated_v9_test()
+	_run_isolated_v10_test()
 	_run_v7_chain_test()
 
 	_finish()
 
 
-## 隔離測試：user_version 種在 8（migration 9 之前一步），只驗證 migration 9
+## 隔離測試：user_version 種在 9（migration 10 之前一步），只驗證 migration 10
 ## 自己那段「拿掉 relations_trust」的邏輯。
-func _run_isolated_v9_test() -> void:
+func _run_isolated_v10_test() -> void:
 	_delete_test_db()
 
 	db = SQLite.new()
@@ -147,9 +148,9 @@ func _run_isolated_v9_test() -> void:
 ## 完整鏈測試：user_version 種在 7，只種 location／npc（真實主鍵，不需要
 ## repair_null_pk）與帶 relations_trust 資料的 npc_relations——其餘表交給
 ## initialize() 內建的 schemas 陣列用 CREATE TABLE IF NOT EXISTS 自己補齊
-## （全新、0 筆資料，migration 8 重建它們時形狀天生一致，不需要另外種）。
-## 一路跑過 migration 8（動態判斷出 npc_relations 帶 relations_trust，改用
-## 凍結的 with-trust 形狀重建）與 migration 9（拿掉 relations_trust），
+## （全新、0 筆資料，migration 9 重建它們時形狀天生一致，不需要另外種）。
+## 一路跑過 migration 9（動態判斷出 npc_relations 帶 relations_trust，改用
+## 凍結的 with-trust 形狀重建）與 migration 10（拿掉 relations_trust），
 ## 驗證這條完整鏈不會被 issue #601 的欄位變更中止，資料正確保留。
 func _run_v7_chain_test() -> void:
 	_delete_test_db()
@@ -164,9 +165,9 @@ func _run_v7_chain_test() -> void:
 		return
 
 	# location／npc 直接用現行 *Schema.gd 建立（不是手刻舊版 SQL）：這裡不測
-	# migration 8 的 NOT NULL 修復（MigrationV8Test 已經測過），只是要有真實的
+	# migration 9 的 NOT NULL 修復（MigrationV8Test 已經測過），只是要有真實的
 	# 父表資料給 npc_relations 掛。用現行 schema 建立可以避免它們自己在
-	# migration 8 重建時撞上欄位形狀比對——道理跟下面 npc_relations 刻意用
+	# migration 9 重建時撞上欄位形狀比對——道理跟下面 npc_relations 刻意用
 	# 凍結形狀（而不是現行 NPCRelationsSchema）相反：npc_relations 才是這個
 	# migration 真正要驗證的那張表。
 	if not LocationSchema.create(db):
@@ -221,9 +222,9 @@ func _run_v7_chain_test() -> void:
 		return
 
 	_check(
-		"v7 資料庫（npc_relations 帶 relations_trust）一路跑過 migration 8／9 不中止",
+		"v7 資料庫（npc_relations 帶 relations_trust）一路跑過 migration 8／9／10 不中止",
 		DatabaseSchema.initialize(db),
-		"initialize() 回傳 false——migration 8 的動態判斷可能又被欄位形狀比對擋下"
+		"initialize() 回傳 false——migration 9 的動態判斷可能又被欄位形狀比對擋下"
 	)
 
 	_check(
@@ -239,7 +240,7 @@ func _run_v7_chain_test() -> void:
 	)
 
 	_check(
-		"v7_chain: npc_relations 資料經過 8／9 兩次重建沒有錯位或遺失",
+		"v7_chain: npc_relations 資料經過 9／10 兩次重建沒有錯位或遺失",
 		_relation_row_preserved(),
 		"重建後那筆資料的欄位值跟 seed 不符，或整筆不見了"
 	)
@@ -284,12 +285,12 @@ func _seed_legacy_schema() -> bool:
 
 	for sql in statements:
 		if not db.query(sql):
-			push_error("[MigrationV9Test] seed CREATE 失敗: " + db.error_message)
+			push_error("[MigrationV10Test] seed CREATE 失敗: " + db.error_message)
 			return false
 
 	if not db.query_with_bindings("INSERT INTO npc (npc_id) VALUES (?);", [NPC_A]) \
 			or not db.query_with_bindings("INSERT INTO npc (npc_id) VALUES (?);", [NPC_B]):
-		push_error("[MigrationV9Test] seed npc 失敗: " + db.error_message)
+		push_error("[MigrationV10Test] seed npc 失敗: " + db.error_message)
 		return false
 
 	if not db.query_with_bindings(
@@ -300,11 +301,11 @@ func _seed_legacy_schema() -> bool:
 		""",
 		[NPC_A, NPC_B, 73, APPEARANCE]
 	):
-		push_error("[MigrationV9Test] seed npc_relations 失敗: " + db.error_message)
+		push_error("[MigrationV10Test] seed npc_relations 失敗: " + db.error_message)
 		return false
 
-	if not db.query("PRAGMA user_version = 8;"):
-		push_error("[MigrationV9Test] 設定 user_version 失敗: " + db.error_message)
+	if not db.query("PRAGMA user_version = 9;"):
+		push_error("[MigrationV10Test] 設定 user_version 失敗: " + db.error_message)
 		return false
 
 	return true
@@ -357,7 +358,7 @@ func _relation_row_preserved() -> bool:
 func _can_insert_orphan_relation() -> bool:
 	return db.query_with_bindings(
 		"INSERT INTO npc_relations (character_id, target_id) VALUES (?, ?);",
-		["__migration_v9_test_nonexistent", NPC_B]
+		["__migration_v10_test_nonexistent", NPC_B]
 	)
 
 
@@ -398,15 +399,15 @@ func _finish() -> void:
 
 	print("")
 	print("=====================================================")
-	print("[MigrationV9Test] RESULT")
+	print("[MigrationV10Test] RESULT")
 	print("=====================================================")
 	print("PASS: ", passed)
 	print("FAIL: ", failed)
 
 	if failed == 0:
-		print("[MigrationV9Test] ALL TESTS PASSED")
+		print("[MigrationV10Test] ALL TESTS PASSED")
 	else:
-		push_error("[MigrationV9Test] %d test(s) failed." % failed)
+		push_error("[MigrationV10Test] %d test(s) failed." % failed)
 
 	print("=====================================================")
 

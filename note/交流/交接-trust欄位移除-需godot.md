@@ -1,7 +1,7 @@
 ---
 tags: [交流, 交接]
 status: 進行中
-updated: 2026-08-27
+updated: 2026-08-29
 ---
 
 # 交接：issue #601 trust 欄位移除（需要 Godot 編輯器）
@@ -29,12 +29,15 @@ PR #557（全專案稽核分支）裡，還沒進 main。**這則 PR 刻意不�
 - [x] `Ailley/scripts/character/relationships.gd`（commit `edb4197`）：拿掉 trust
   欄位、`get_trust()`/`add_trust()`、`TRUST_MIN`/`MAX`，`load_save_data()` 已清理
 - [x] `NPCRelationsSchema.gd`：移除 `relations_trust` 欄位＋CHECK
-- [x] `DatabaseSchema.gd`：`CURRENT_VERSION` 8→9，新增 migration v9
-  `_migrate_v9_drop_relations_trust`（改名→重建→明確列欄位複製→刪暫存表，
+- [x] `DatabaseSchema.gd`：`CURRENT_VERSION` 8→10，新增 migration v10
+  `_migrate_v10_drop_relations_trust`（改名→重建→明確列欄位複製→刪暫存表，
   不能用 `_migrate_rebuild_single_table` 因為欄位數變了）。開發時版號跟 PR #607
-  撞號取 8，#607 先合併，rebase 時重編為 9（照 repo v6/v7 撞號慣例）
-- [x] `MigrationV9Test.gd`（新增，比照 `MigrationV6Test.gd`）：17 項全 PASS，
-  含驗證 v7 舊資料庫（真的帶 `relations_trust` 資料）一路跑過 migration 8／9
+  撞號取 8，#607 先合併，rebase 時重編為 9；合併 main 又發現 9 已被同一條
+  NOT NULL 重建佔走（8 被 following_npc_id／#576 插隊，重建順延為 9），
+  再順延為 10（照 repo v6/v7 撞號慣例）
+- [x] `MigrationV10Test.gd`（新增，比照 `MigrationV6Test.gd`，合併 main 前叫
+  `MigrationV9Test.gd`）：17 項全 PASS，
+  含驗證 v7 舊資料庫（真的帶 `relations_trust` 資料）一路跑過 migration 8／9／10
   不中止的完整鏈測試
 - [x] `sqlite_save_service.gd`：`get_character()`／`_replace_relationships()`／docstring 拿掉 trust 映射
 - [x] `prompt_builder.gd`：`_listener_block()` 移除 trust
@@ -76,19 +79,40 @@ rebase 過來後把這條的 migration 改編成 **9**，`MigrationV8Test.gd`／
 順帶修好一個 rebase 才浮現的相容性坑：#607 的 migration 8 重建 `npc_relations` 時
 呼叫的是活的 `NPCRelationsSchema`；這條拿掉 `relations_trust` 之後，任何
 `user_version ≤ 7` 的舊資料庫會在 migration 8 就因為欄位形狀對不上而中止整個
-`initialize()`。改法：`_migrate_v8_notnull_primary_keys()` 動態判斷舊表實際上有沒有
+`initialize()`。改法：`_migrate_v9_notnull_primary_keys()`（原
+`_migrate_v8_notnull_primary_keys`，合併 main 後跟著 migration 重編改名）動態判斷
+舊表實際上有沒有
 `relations_trust`，有就用新增的 `_migrate_v8_create_npc_relations_with_trust()`
-（凍結 #601 之前的形狀）重建，留給 migration 9 拿掉；沒有則維持原本行為。
-`MigrationV9Test.gd` 新增 `_run_v7_chain_test()` 專門驗證這條路徑。
+（凍結 #601 之前的形狀）重建，留給 migration 10 拿掉；沒有則維持原本行為。
+`MigrationV10Test.gd`（合併 main 前叫 `MigrationV9Test.gd`）新增 `_run_v7_chain_test()` 專門驗證這條路徑。
 
 編輯器內驗證（`ailley@905f`，2026-08-27，臨時場景 `_tmp_migration_v9_test.tscn`
-掛 `MigrationV9Test.gd`，跑完即刪）：
+掛當時的 `MigrationV9Test.gd`——版號為「當時」的 8／9 編號，跑完即刪）：
 - 真實 dev DB（原本停在 v8）：`Migration 9 ... applied`、`schema version 9`，正常升級
 - `MigrationV9Test` 隔離測試（`user_version=8` 起跑）：9 項全 PASS
 - `MigrationV9Test._run_v7_chain_test()`（`user_version=7` 起跑，真的帶 `relations_trust`
   資料）：`Migration 8 ... applied` 接著 `Migration 9 ... applied`，全程沒有中止，
   5 項全 PASS
 - 總計 `PASS: 17 FAIL: 0`
+
+### 合併 main 後續（2026-08-29，migration 再撞號順延為 10）
+
+main 又往前走了（#645／#646／#687 等）：migration 8 被
+world_character_state.following_npc_id（issue #576）插隊，#607 的 npc/location
+NOT NULL 重建在 main 上順延為 **9**（函式一併改名
+`_migrate_v9_notnull_primary_keys`）。merge origin/main 進來後，這條 trust
+migration 再順延為 **10**，`CURRENT_VERSION` 9→10：
+- `_migrate_v9_drop_relations_trust` → `_migrate_v10_drop_relations_trust`
+  （暫存表名 `npc_relations__migrate_v10_old` 同步改）
+- `MigrationV9Test.gd`／`.uid` 改名 `MigrationV10Test.gd`／`.uid`
+- 隔離測試種 `user_version=9`（原 8），只跑 migration 10
+- `_run_v7_chain_test()` 種 `user_version=7` 不變，現在會跑過 migration
+  8（following_npc_id，冪等）→ 9（NOT NULL 重建＋動態判斷）→ 10（拿掉 trust）
+- 《99》P-60 條目的「DB migration 9」引用同步改為 10
+
+merge 衝突只有 `DatabaseSchema.gd` 一個檔，兩側語意都保留（main 的重編＋
+動態判斷、branch 的 trust 移除）。**改名重編後的 headless／編輯器驗證還沒重跑**，
+下面「完成後開 PR」之前先補跑一次 `MigrationV10Test`。
 
 分支已經 rebase 到最新 main（原本落後 20 個 commit），力度推送（history 改寫過）
 前記得跟使用者確認一次。

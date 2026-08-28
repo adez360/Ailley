@@ -523,12 +523,12 @@ func _cmd_act(args: PackedStringArray) -> void:
 		])
 		return
 
-	# talk／attack／bury 的參數是人不是地點（見 agent.gd::_pursue_talk_task()／
-	# _pursue_attack_task()／_pursue_bury_task()），其餘動作一律吃 place。
+	# talk／attack／bury／follow 的參數是人不是地點（見 agent.gd::_pursue_talk_task()／
+	# _pursue_attack_task()／_pursue_bury_task()／_pursue_follow_task()），其餘動作一律吃 place。
 	# 這裡照 action 分流，不要求下指令的人自己記得填哪個 key
 	var params := {}
 	if args.size() == 3:
-		params["target" if ["talk", "attack", "bury"].has(action) else "place"] = args[2]
+		params["target" if ["talk", "attack", "bury", "follow"].has(action) else "place"] = args[2]
 
 	# is_in_group("agents") 不會幫 GDScript 縮窄靜態型別，顯式轉型才能讓
 	# debug_push_task()（Agent-only）這個呼叫真的是型別安全的

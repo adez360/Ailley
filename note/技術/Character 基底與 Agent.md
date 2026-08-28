@@ -2,10 +2,10 @@
 tags:
   - agent
   - character
-scene: scenes/main.tscn
+scene: scenes/character.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-21
+updated: 2026-08-28
 ---
 
 # Character 基底與 Agent
@@ -21,13 +21,33 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 | `scripts/character/character.gd` | `class_name Character`，共用基底 |
 | `scripts/character/player.gd` | `extends Character`，WASD 輸入驅動 |
 | `scripts/character/agent.gd` | `extends Character`，行程表驅動 |
-| `scenes/player.tscn` / `scenes/agent.tscn` | 共用同一份三向 SpriteFrames |
+| `scenes/character.tscn` | Player／Agent 共用的 Inherited Scene 基底：三向 SpriteFrames、`State`/`Sensing`/`UI` 元件節點、根節點 collision layer/mask |
+| `scenes/player.tscn` / `scenes/agent.tscn` | 繼承 `character.tscn`（Godot Inherited Scene），只覆寫各自差異 |
 
 ## 分工
 
 基底管「怎麼走、怎麼演」：A\* 移動、三向動畫、卡住偵測、`move_finished` 訊號、
-以及元件子節點（`Stats` / `Relationships` / `Bubble` / `Vision`，全部
-`get_node_or_null`，沒掛也不會壞）。
+以及元件子節點（`State/Stats`、`State/Relationships`、`State/Inventory`、
+`State/Memory`、`Sensing/Vision`、`UI/Bubble`、`UI/WorkProgress`、
+`UI/MoneyPopup`，全部 `get_node_or_null`，沒掛也不會壞）。
+
+節點依功能分成三個子節點分類——`State`（數值/關係/背包/記憶）、`Sensing`
+（感測）、`UI`（介面）——場景結構跟 `character.gd` 的 `get_node_or_null` 路徑
+一一對應。`player.tscn`／`agent.tscn` 用 Inherited Scene 繼承 `character.tscn`，
+只覆寫根腳本、collision 半徑，以及 Player 專屬的 `Sensing/InteractArea`／
+`UI/WaypointIndicator`（Agent 沒有這兩個節點）。`vision.gd`／
+`waypoint_indicator.gd` 用 `owner`（場景根節點）取得所屬 Character，不用
+`get_parent()`——分類進子節點後直接父節點不再是 Character 本體（issue #616）。
+
+> [!warning] 三個分類節點必須是 `Node2D`，不能是純 `Node`（issue #673）
+> Godot 的 CanvasItem 算 `global_position` 只認緊鄰的父節點
+> （`CanvasItem::get_parent_item()` 只查 `get_parent()`，不會往上跳過非
+> CanvasItem 節點找）。`State`／`Sensing`／`UI` 底下掛的都是 `Node2D`／
+> `Area2D`（`Vision`、`InteractArea`、`Bubble`、`WorkProgress`、
+> `MoneyPopup`、`WaypointIndicator`），這三個分類節點只要退回純 `Node`，
+> 底下全部斷了座標繼承，`global_position` 卡在自己 `.tscn` 裡存的本地座標，
+> 不會跟著角色移動——視野／互動偵測會直接失效，UI 元件會飄在角色出生點附近。
+> 曾經因為場景重構誤設成 `Node` 整個系統跑不動，實測數據與修法見 #673。
 
 子類別只覆寫 `_decide_velocity()` 決定「往哪走」：
 
@@ -217,8 +237,9 @@ accessor，不用 `get_record()`：後者每筆都 `duplicate(true)` 深拷一�
 角色的 mask 是 1，所以照樣撞牆。層名寫在 `project.godot` 的 `layer_names/2d_physics`。
 
 > [!important] 設定寫在 `.tscn`，不寫在 `character.gd`
-> 位置是 `player.tscn` 與 `agent.tscn` 的 root（`main.tscn` 兩者都是 instance，
-> 自動繼承）。寫在腳本裡的話，inspector 改了會被程式蓋掉。
+> 位置是 `character.tscn` 的 root（`player.tscn`／`agent.tscn` 用 Inherited
+> Scene 機制繼承，不必各自設定；`main.tscn` 裡的 instance 再自動繼承一次）。
+> 寫在腳本裡的話，inspector 改了會被程式蓋掉。
 
 驗證用物理查詢不是目測：在 Agent 位置用 Player 的 mask 查回傳空、
 開全部 layer 查得到 Agent、用同一個 mask 在牆的位置查得到 TileMapLayer。

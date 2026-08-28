@@ -5,26 +5,19 @@ status: 已拍板
 date: 2026-08-20
 ---
 
-# Issue #216：SUCCESS_PARAMS 的 6 個動作都不在 MVP-1 範圍內
+# Issue #216：SUCCESS_PARAMS 動作接上執行層前要當作未驗證程式碼看待
 
 ## 問題確認
 
-`Agent.SUCCESS_PARAMS` 中的 6 個動作：
-- `hunt_small`（打獵小型）
-- `hunt_large`（打獵大型）
-- `gather`（採集）
-- `fish`（捕魚）
-- `steal`（偷竊）
-- `perform`（演奏）
+`Agent.SUCCESS_PARAMS` 原本列了 6 個動作，成功率公式與修正項（體力、傷勢、醉酒）都已經在規格書《01-2》定義，但直到 2026-08-20 為止**沒有一個是已實作、真的被 `resolve()` 擲骰過的動作**——這些動作都不在當時的 `IMPLEMENTED_ACTIONS` 上，`_roll_success()` 本身雖然會被 MVP-1 其他動作呼叫，但一律在 `params.is_empty()` 那關直接放行，成功率公式那段分支從沒被執行過。
 
-這些動作的成功率公式與修正項（體力、傷勢、醉酒）都已經在規格書《01-2》定義，但**沒有一個是 MVP-1 範圍內的已實作動作**。`_roll_success()` 本身會被 MVP-1 的其他動作呼叫，但這些動作都不在 `SUCCESS_PARAMS` 上，一律在 `params.is_empty()` 那關直接放行，結果是成功率公式那段分支在 MVP-1 全程都不會被執行過一次。
+`gather`（採集）已於 2026-08-24 拉進 MVP、issue #574 接上執行層，是這 6 個動作裡第一個真正跑過 `_roll_success()` 擲骰的——落地時發現的坑（`resolve()` 不能只在 llm 來源才呼叫、`_pursue_gather_task()` 移動順序要先驗證再走）印證了下面「決策」段落的警告，其餘 5 個仍待接上：
 
 ## 原因
 
 | 動作 | 狀態 | 理由 |
 | --- | --- | --- |
 | `hunt_small`/`hunt_large` | 完整版 | MVP 食物從商店來，不自己採 |
-| `gather` | 完整版 | 生產鏈推遲到完整版 |
 | `fish` | 完整版 | 生產鏈推遲到完整版 |
 | `steal` | 完整版 | 規格書《13》§三明列為之後實作 |
 | `perform` | 完整版 | 規格書《13》§三明列為之後實作 |
@@ -35,17 +28,18 @@ date: 2026-08-20
 
 ## 影響
 
-實際上，**`struggle`（掙脫搬運）是唯一有機會在 MVP-1 內把擲骰系統跑起來的動作**。規格書《01-2》§3 給了它 `base: 30%`、`courage` 係數、`0.003` 修正項，但當前 `SUCCESS_PARAMS` 裡沒有這一筆。
+`struggle`（掙脫搬運）仍未補進 `SUCCESS_PARAMS`。規格書《01-2》§3 給了它 `base: 30%`、`courage` 係數、`0.003` 修正項，但當前表上沒有這一筆。
 
 ## 決策
 
-**這則是記錄性 issue，暫不補呼叫端。**
+**這則是記錄性 issue，只記警告，不代替實作 issue 補呼叫端。**
 
 當 #337 或之後任何「要把 `SUCCESS_PARAMS` 表上動作接進 `IMPLEMENTED_ACTIONS` 的 issue」到來時，要把 `_roll_success()` 本身當成**未驗證的程式碼**看待：
 
 - 不要預設它已經被測過
 - `struggle` 不擲骰的「雙人搬運必敗」例外尤其要特別注意 —— 那是繞過公式的分支
 - stamina 中性值（50）、injury／alcohol 修正項、`_failure_reason()` 選最負修正項當理由，這三項都要視為潛在風險
+- 排程來源（`source == "schedule"`）任務若也可能落到這個動作，成功或失敗都要記得掛 `_mark_schedule_retry_backoff()`——沒有 satiety 那種會隨動作完成自然下降的分數時，同一窗期內每個遊戲分鐘都可能被立即重選中、重複執行（`gather` 落地時發現的坑）
 
 ## 實裝建議
 
