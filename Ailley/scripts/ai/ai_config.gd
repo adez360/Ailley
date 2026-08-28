@@ -55,6 +55,13 @@ const DEFAULT_MAX_CALLS_PER_GAME_DAY := 20
 ## 對話呼叫已經走一般 max_calls_per_game_day 路徑，不需要疊加第二層限制
 const DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY := 30
 
+## 建角一次性生成（words_to_creator）的每日呼叫上限。CREATION policy 無條件
+## 豁免冷卻與配額（見 ai_service.gd Policy 的說明），沒有這個旋鈕的話成本
+## 保護完全敞開——雖然結構上每個角色一輩子只打一次，但生成失敗時每次開局／
+## 投放都會重打，累積請求數沒有上限。0＝不限（預設，維持「結構上只打一次」
+## 的既有行為），跟對話上限同一套慣例；想保住帳單的人可以設一個數字兜底
+const DEFAULT_MAX_CREATION_CALLS_PER_GAME_DAY := 0
+
 ## 對話輪次要不要豁免上面兩條限制。預設豁免 ——
 ## MIN_INTERVAL_SEC 是為「行程重排」訂的，而對話輪次是秒級間隔，
 ## 套上去會從第二輪起全部回 rate_limited，等於對話根本接不起來。
@@ -144,6 +151,7 @@ var providers := {}					# 名字 -> Provider
 var min_interval_sec := DEFAULT_MIN_INTERVAL_SEC
 var max_calls_per_game_day := DEFAULT_MAX_CALLS_PER_GAME_DAY
 var dialogue_exempt := DEFAULT_DIALOGUE_EXEMPT
+var max_creation_calls_per_game_day := DEFAULT_MAX_CREATION_CALLS_PER_GAME_DAY
 var max_dialogue_calls_per_game_day := DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY
 
 
@@ -251,6 +259,9 @@ func _apply(data: Dictionary) -> void:
 	dialogue_exempt = bool(data.get("dialogue_exempt", DEFAULT_DIALOGUE_EXEMPT))
 	max_dialogue_calls_per_game_day = maxi(0, int(
 		data.get("max_dialogue_calls_per_game_day", DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY)
+	))
+	max_creation_calls_per_game_day = maxi(0, int(
+		data.get("max_creation_calls_per_game_day", DEFAULT_MAX_CREATION_CALLS_PER_GAME_DAY)
 	))
 
 	default_provider = str(data.get("default_provider", "")).strip_edges()

@@ -788,7 +788,7 @@ static func closing() -> String
 
 ```gdscript
 const POOL_SIZE := 3                         # HTTPRequest 節點數
-enum Policy { SCHEDULED, CONVERSATION }      # SCHEDULED 吃冷卻/配額；CONVERSATION 豁免但照樣計數
+enum Policy { SCHEDULED, CONVERSATION, CREATION }  # SCHEDULED 吃冷卻/配額；CONVERSATION/CREATION 豁免但照樣計數
 const RETRY_LIMIT := 1
 const MAX_ERROR_CHARS := 200
 
@@ -831,6 +831,9 @@ get_usage -> {game_day, calls_today, max_calls, dialogue_today, max_dialogue, to
 † CONVERSATION 豁免冷卻/配額但照樣計數（_dialogue_calls_today）——豁免的是限制不是帳
 † 豁免成立時另外吃 max_dialogue_calls_per_game_day（count >= max 就 ERROR_DAILY_QUOTA，0=不限，#434）——
   這個旋鈕只在 dialogue_exempt=true 時有意義，false 時對話走一般 max_calls_per_game_day 路徑
+† CREATION（建角一次性生成，#682）同樣豁免冷卻/配額但照樣計數（_creation_calls_today），
+  另吃 max_creation_calls_per_game_day（count >= max 就 ERROR_DAILY_QUOTA，0=不限）——
+  結構上每個角色一輩子只打一次，但失敗時每次開局/投放會重打，累積數要有兜底
 † is_retry=true 只跳過 min_interval_sec 冷卻，不跳過每日配額——同一次決策內容驗證
   失敗重試（agent.gd::_decide_with_retry()）用，SCHEDULED policy 沒有 CONVERSATION
   那種豁免，重試間隔只有幾秒，不加這個會被自己剛送出的呼叫冷卻擋死

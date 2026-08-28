@@ -61,7 +61,7 @@ CON_INV_GIVE_FAILED,"塞 {item} 失敗：{reason}","Failed to give {item}: {reas
 CON_MONEY_OK,"{name} 的金錢：{money}","{name}'s money: {money}"
 CON_MONEY_FAILED,"金錢異動失敗：{reason}","Money change failed: {reason}"
 CON_AI_DISABLED,"AI 未啟用：{reason}","AI is disabled: {reason}"
-CON_AI_USAGE,"第 {day} 遊戲日   行程 {calls}/{max} 次   對話 {dialogue}/{max_dialogue} 次（{exempt}）   冷卻剩 {cooldown}s   佇列 {queued}   飛行中 {inflight}","Game day {day}   scheduled {calls}/{max}   dialogue {dialogue}/{max_dialogue} ({exempt})   cooldown {cooldown}s   queued {queued}   in flight {inflight}"
+CON_AI_USAGE,"第 {day} 遊戲日   行程 {calls}/{max} 次   對話 {dialogue}/{max_dialogue} 次（{exempt}）   建角 {creation}/{max_creation} 次   冷卻剩 {cooldown}s   佇列 {queued}   飛行中 {inflight}","Game day {day}   scheduled {calls}/{max}   dialogue {dialogue}/{max_dialogue} ({exempt})   creation {creation}/{max_creation}   cooldown {cooldown}s   queued {queued}   in flight {inflight}"
 CON_AI_EXEMPT,"豁免","exempt"
 CON_AI_NOT_EXEMPT,"不豁免","not exempt"
 CON_POLICY_CONVERSATION,"對話","conversation"

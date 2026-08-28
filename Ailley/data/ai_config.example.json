@@ -21,5 +21,6 @@
 	"min_interval_sec": 30.0,
 	"max_calls_per_game_day": 20,
 	"dialogue_exempt": true,
-	"max_dialogue_calls_per_game_day": 30
+	"max_dialogue_calls_per_game_day": 30,
+	"max_creation_calls_per_game_day": 0
 }

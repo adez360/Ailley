@@ -584,10 +584,12 @@ pattern 這類字串格式約束，格式與未來時間的檢查落在驗證層
 `ai_config.gd`／`ai_service.gd`／`ai_schema.gd`／`data/ai_config.example.json`，
 autoload 已註冊，主控台加了 `ai` 指令。
 
-- `request(envelope, requester_id, policy)`：`enum Policy { SCHEDULED, CONVERSATION }`，
-  `CONVERSATION` 跳過冷卻與每日配額但照樣計數（走獨立的 `_dialogue_calls_today`），
-  預設 `SCHEDULED`——忘了指定的呼叫端落在保守那邊，不會意外拿到無限額度
-- 速率限制三個旋鈕搬進 `user://ai_config.json`（皆可設 0＝不限），預設值與規格數值
+- `request(envelope, requester_id, policy)`：`enum Policy { SCHEDULED, CONVERSATION, CREATION }`，
+  `CONVERSATION`／`CREATION` 跳過冷卻與每日配額但照樣計數（分別走獨立的
+  `_dialogue_calls_today`／`_creation_calls_today`），`CREATION` 是建角一次性生成
+  （words_to_creator，#682），預設 `SCHEDULED`——忘了指定的呼叫端落在保守那邊，
+  不會意外拿到無限額度
+- 速率限制旋鈕搬進 `user://ai_config.json`（皆可設 0＝不限），預設值與規格數值
   見 `ai/api.md`（`AIConfig`）／規格書《13》§5
 - 回傳一律 `{"ok": bool, "data": Dictionary, "error": String}`，呼叫端一律 `await`
 - 4xx 不重試；網路錯誤／5xx 重試 1 次
