@@ -1078,15 +1078,24 @@ func leave_conversation() -> void:
 ## 廣播 speech_heard 不分呼叫來源——一般聊天輸入框（chat_input.gd）跟
 ## talk_to() 正式對話（conversation.gd）都算「說了一句話」，《07》§3
 ## 定義的「聽覺（一般說話）3 格」是物理上聽不聽得到，不分是哪種介面講出來的
-## （issue #669）
-func say(line: String, interrupt: bool = false) -> void:
+## （issue #669）。
+##
+## broadcast=false：內部系統 fallback 泡泡（`!?`／`！` 這類感測不到 LLM
+## 回應時的寫死反應）不是「這個角色真的說了什麼」，不該算進《07》§3 的
+## 「聽得到的對話」——放行的話，鄰近的 LLM 角色會把這句 `!?` 當成一句話
+## 排進自己的事實句佇列、觸發一次決策，決策若同樣問不到結果又冒出自己的
+## `!?`，在 3 格範圍內連環擴散成一波決策請求風暴（CodeRabbit review 抓到，
+## PR #674）。所有這類 fallback 泡泡呼叫端都要傳 false，見 agent.gd／player.gd
+## 的 _on_noise_heard()／_on_speech_heard()／_react_to_spotted_fallback()
+func say(line: String, interrupt: bool = false, broadcast: bool = true) -> void:
 	if bubble == null:
 		return
 	if interrupt:
 		bubble.clear()
 	bubble.say(line)
 	spoke.emit(line)
-	_broadcast_speech(line)
+	if broadcast:
+		_broadcast_speech(line)
 
 ## 行為失敗時統一的回報方式（issue #180），取代原本三個呼叫點（player.gd
 ## 的 work_at／talk_to、vending_menu.gd 的 buy_from）各自手寫的

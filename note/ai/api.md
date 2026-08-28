@@ -136,7 +136,7 @@ func is_talk_interruptible() -> bool          # 基底 `not _working`；Agent �
 func enter_conversation(conversation: Node) -> void
 func exit_conversation() -> void
 func leave_conversation() -> void
-func say(line: String, interrupt := false) -> void   # interrupt=true 蓋掉現在這句；同時廣播 speech_heard
+func say(line: String, interrupt := false, broadcast := true) -> void   # interrupt=true 蓋掉現在這句；broadcast=false 給系統 fallback 泡泡（!?／！）用，不廣播 speech_heard，避免鄰近 LLM 角色連環反應（issue #669）
 func speech_duration(line: String) -> float
 func face_towards(other: Character) -> void
 func update_animation(desired_velocity: Vector2) -> void   # facing 讀解算前的期望方向，不是解算後的 velocity（#108）
@@ -335,10 +335,13 @@ _on_move_finished()：move_finished 是共用訊號（debug 主控台的 goto �
   靠 last_move_target 比對是不是自己 current_place 的錨點才算數（issue #91）
 spotted 且 !relationships.has_met() → say("！") + stop_moving() + 2s + 重算行程
   _noticed 表確保每個對象只觸發一次
-noise_heard 且 !is_in_conversation() → say("!?")，無去重，每次都會反應
+noise_heard 且 !is_in_conversation() → say("!?", false, false)，無去重，每次都會反應
+  （broadcast=false：fallback 泡泡不再觸發 speech_heard，PR #674，見下）
 speech_heard 且 !is_in_conversation()（issue #669）：
   llm_decision_enabled 開著 → 事實句「你聽到附近的 X 說：『...』」排隊 + 立刻請求下一次決策，
-    問不到結果才退回 say("!?")；關著（排程模式）→ 不冒 !?（頻率遠高於 noise，見 [[聽覺感測]]）
+    問不到結果才退回 say("!?", false, false)；關著（排程模式）→ 不冒 !?（頻率遠高於 noise，見 [[聽覺感測]]）
+  fallback 泡泡一律 broadcast=false（不再觸發 speech_heard），避免鄰近 LLM 角色把 !? 當一句話
+    排進自己的事實句佇列、連環觸發決策（PR #674，見 character.gd::say()）
 ⚠ 抵達判定 = 距離 ≤ ARRIVE_DISTANCE(2px) OR 已在目標格內(16px)
   只比距離的話 2..11px 是死角：距離說沒到，find_path() 卻因同格只回一個點
   → move_to() false → 假的「走不到」。每次重算行程都會噴

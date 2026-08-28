@@ -1853,7 +1853,10 @@ func _on_spotted(other: Character) -> void:
 # 陌生人反應的寫死版本，兩種情況共用：排程模式（沒有 LLM 可問）、以及
 # llm_decision_enabled 開著但這次決策問不到結果
 func _react_to_spotted_fallback() -> void:
-	say(L10n.t("DLG_SURPRISE"))
+	# broadcast=false：這是系統 fallback 泡泡，不是角色真的說了什麼，不該被
+	# 3 格內的人當成「聽到的對話」——同 _on_noise_heard()／_on_speech_heard()
+	# 的理由，見 character.gd::say() 的說明（CodeRabbit review 抓到，PR #674）
+	say(L10n.t("DLG_SURPRISE"), false, false)
 	stop_moving()
 
 	# _reacting 期間 _pursue_current_task() 不重新起步。少了它，1 秒後
@@ -1918,11 +1921,11 @@ func _on_noise_heard(_source: Character) -> void:
 		if is_dead:
 			return
 		if result.get("triggered", false) and not result.get("ok", false):
-			say(L10n.t("DLG_NOISE_ALERT"))
+			say(L10n.t("DLG_NOISE_ALERT"), false, false)
 		return
 
 	# fallback（排程模式，沒有 LLM 可問）：維持原本寫死的 !? 反應
-	say(L10n.t("DLG_NOISE_ALERT"))
+	say(L10n.t("DLG_NOISE_ALERT"), false, false)
 
 # 範圍內有人說話（一般聊天輸入框或 talk_to() 對話，見 character.gd::say()
 # 的廣播，issue #669）。跟 _on_noise_heard() 同一種感測/反應分離，差別是
@@ -1947,7 +1950,7 @@ func _on_speech_heard(source: Character, line: String) -> void:
 		if is_dead:
 			return
 		if result.get("triggered", false) and not result.get("ok", false):
-			say(L10n.t("DLG_NOISE_ALERT"))
+			say(L10n.t("DLG_NOISE_ALERT"), false, false)
 
 # 把一次性事件（看到陌生人、聽到聲音）排進下一次決策的事實句佇列
 # （#402／#407）。見 _pending_reaction_lines 的欄位說明
