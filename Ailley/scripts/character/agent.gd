@@ -322,7 +322,9 @@ var _appointment_broken_pending_line := ""
 ## 也跟 _daily_events（agent.gd 另一處，睡前送給 LLM 評分用）不是同一份：
 ## 那份會被清空／評分消耗，這份只給 UI 顯示，不進 prompt（《15》§1-2）、
 ## 不進存檔（重開遊戲後「今天」這個概念本身就重新開始，見《15》§2-5 末）
-const TODAY_LOG_CAP := 30
+## 50 筆，超過從最舊丟（issue #518／《99》P-38：一筆只是四欄位的小 Dictionary，
+## 記憶體成本可忽略，太小丟掉早上的事比太大多佔一點記憶體嚴重，先抓寬鬆值）
+const TODAY_LOG_CAP := 50
 var _today_log: Array[Dictionary] = []		# 由新到舊 push 到陣列尾端，UI 端自己反轉顯示
 
 ## 上一輪決策回應有沒有問「下次能不能讓我改 today_plan」——見
