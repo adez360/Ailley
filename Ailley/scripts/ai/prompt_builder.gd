@@ -683,10 +683,36 @@ static func _memory_block(
 ## 「我對這個人什麼觀感」不再由引擎給一個數字，交給模型自己從對話與記憶判斷
 static func _listener_block(speaker: Character, listener: Character) -> Dictionary:
 	var met_count := 0
+	var has_met := false
+	var last_seen_day := int(Relationships.DEFAULT_RECORD["last_seen"])
 	if speaker.relationships != null:
 		met_count = speaker.relationships.get_met_count(listener.character_id)
+		has_met = speaker.relationships.has_met(listener.character_id)
+		last_seen_day = speaker.relationships.get_last_seen(listener.character_id)
 
 	return {
 		"name": listener.character_name,
 		"met_count": met_count,
+		"last_seen": _last_seen_sentence(listener.character_name, has_met, last_seen_day),
 	}
+
+## 上次見面距今幾天前，壓成事實句（issue #497 拍板，比照 today_plan 的做法：
+## 壓成自然語言而不是丟原始時間戳讓模型自己算）。跟 _push_daily_event() 那組
+## 事實句同一種語言（世界內容給模型看的是中文，跟系統指令模板本身的英文分開，
+## 見 DIALOGUE_SYSTEM／_today_plan_sentence() 的既有慣例）。只陳述天數差，
+## 不加「好久不見」這類情緒推測（《00》原則二）
+##
+## has_met 為真但 last_seen_day 仍是 -1（`get_last_seen()` 的「從沒見過」預設值）
+## 是舊存檔的過渡態：#497 之前的存檔只有 met_count、沒有 last_seen 欄位，
+## `load_save_data()` 缺欄位一律退回 -1（見 relationships.gd 該函式的說明）。
+## 這裡若不特判會算出 `GameClock.day - (-1)` 這種假天數，往後每次決策都送出
+## 錯誤事實句，直到下次真的 note_meeting() 才自癒——寧可先退回「還沒見過」
+## 這句同樣不精確但不會塞一個編造出來的數字給模型
+static func _last_seen_sentence(listener_name: String, has_met: bool, last_seen_day: int) -> String:
+	if not has_met or last_seen_day < 0:
+		return "你還沒見過%s。" % listener_name
+
+	var days_ago := GameClock.day - last_seen_day
+	if days_ago <= 0:
+		return "你今天已經見過%s了。" % listener_name
+	return "你上次見到%s是%d天前。" % [listener_name, days_ago]
