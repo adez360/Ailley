@@ -4311,6 +4311,13 @@ func _bury_failure_message(failure: String) -> String:
 # 互動，所以 resolve() 只在真正抵達、即將執行的這一刻呼叫一次，不是每個
 # pursue tick 都呼叫（那樣會變成每分鐘重骰一次，違反《01-2》§2「一次決策
 # 一次骰」）
+#
+# resolve() 不分來源都要呼叫——跟 attack／bury（硬規則過了就必中，不擲骰）
+# 不同，hunt_small／hunt_large 在 SUCCESS_PARAMS 上是真的擲骰；只在 llm 來源
+# 才骰的話，schedule 來源的 hunt（目前 npc_schedule.json 沒有，但介面上合法，
+# 已在 IMPLEMENTED_ACTIONS 白名單裡）會完全跳過擲骰、直接必中，違反《01-2》
+# §2 的成功率公式——跟 _pursue_gather_task() 修過的同一個問題（見那裡的
+# CodeRabbit review 記錄），這裡照抄同一個修法
 func _pursue_hunt_task() -> void:
 	var action: String = str(_current_task.get("action", ""))
 	var game_type := "small_game" if action == "hunt_small" else "large_game"
@@ -4346,13 +4353,12 @@ func _pursue_hunt_task() -> void:
 
 	stop_moving()
 
-	if _current_task.get("source", "") == "llm":
-		var result := resolve(action, _current_task.get("params", {}))
-		last_action_result = result["reason"]
-		if not result["success"]:
-			_track_action_result_for_facts(action, false)
-			_finish_task_and_request_next()
-			return
+	var result := resolve(action, _current_task.get("params", {}))
+	last_action_result = result["reason"]
+	if not result["success"]:
+		_track_action_result_for_facts(action, false)
+		_finish_task_and_request_next()
+		return
 
 	var item_id := animal.game_type
 	var hunt_failure := hunt(animal)
