@@ -181,7 +181,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if work_reason == WORK_OK:
 			return
 		if other == null:
-			report_action_failure("work_at", work_reason)
+			_report_work_failure(workstation, work_reason)
 			return
 		# 工作失敗但旁邊還有人可以互動——對方正在表演的話跟下面主路徑同一種
 		# 判斷，開打賞選單而不是搭話（CodeRabbit review 抓到：這條 return
@@ -193,7 +193,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		# 否則先試搭話，兩邊都失敗才回報，不然「工作站被佔用」跟「搭話失敗」
 		# 會疊成兩則訊息一起蹦出來
 		if talk_to(other) != TALK_OK:
-			report_action_failure("work_at", work_reason)
+			_report_work_failure(workstation, work_reason)
 		return
 	# 販賣機不是立刻執行動作，是開商品選單——真正的購買發生在
 	# vending_menu.gd 裡點下某一項的時候。vending_menu 理論上一定找得到
@@ -223,6 +223,18 @@ func _unhandled_input(event: InputEvent) -> void:
 	var talk_reason := talk_to(other)
 	if talk_reason != TALK_OK:
 		report_action_failure("talk_to", talk_reason)
+
+## work_at() 失敗的回報——WORK_OCCUPIED 額外算出還要等幾分鐘（issue #663），
+## 比通用的 FAIL_OCCUPIED 訊息更有用：玩家才知道該站在這裡等還是先去做別的
+## 事。其餘原因碼（TOO_FAR／BUSY／TARGET_NOT_FOUND）沒有額外資訊可加，照走
+## report_action_failure() 既有的通用路徑
+func _report_work_failure(workstation: Workstation, reason: String) -> void:
+	if reason != WORK_OCCUPIED:
+		report_action_failure("work_at", reason)
+		return
+	var minutes := workstation.get_wait_minutes()
+	push_warning("%s: work_at 失敗（%s，還要 %d 分鐘）" % [character_name, reason, minutes])
+	say(L10n.tf("FAIL_OCCUPIED_WITH_TIME", {"minutes": minutes}))
 
 # 面向判定的錐角容許值：跟面向方向的內積要 >= 這個值才算「面對著」。
 # 0.5 大約是 ±60 度的錐角——夠寬容得下斜向靠近的誤差，又不會寬到整個
