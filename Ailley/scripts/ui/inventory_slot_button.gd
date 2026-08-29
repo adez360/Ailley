@@ -72,6 +72,8 @@ static func slot_text(slot: Dictionary) -> String:
 	var item_id: String = slot["item_id"]
 	var count: int = slot["count"]
 	var shown := ItemDatabase.get_display_name(item_id)
+	if not ItemDatabase.has_item(item_id):
+		shown = shown.to_upper()	# 未知 item_id 退回 item_id 本身；維持舊碼的大寫慣例（BRE，不是 bre）
 	if shown.length() > MAX_NAME_CHARS:
 		shown = shown.substr(0, MAX_NAME_CHARS)
 	return "%s\n%d" % [shown, count] if count > 1 else shown
