@@ -1,0 +1,34 @@
+name: PR assign & review request
+
+# 開 PR / 草稿轉正時：自動把作者設為 Assignee、request robot-ru 與 coderabbitai 審查。
+# 規則本文在 CLAUDE.md「PR 審查與指派」；這個 workflow 是防忘記的保底，不是替代。
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign author
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --add-assignee "$AUTHOR"
+
+      - name: Request reviews (robot-ru + coderabbitai)
+        # robot-ru 自己開的 PR（代開）不能再 request 自己，GitHub 會報錯；
+        # coderabbitai 沒裝在 repo 時 request 會失敗——兩者都是非致命，吞掉即可
+        if: ${{ github.event.pull_request.user.login != 'robot-ru' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --add-reviewer robot-ru || true
+          gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --add-reviewer coderabbitai || true
+

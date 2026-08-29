@@ -163,3 +163,23 @@ GitHub 的 rename API 不會把已開的 PR 轉到新分支，它直接把那則
 
 只在真的有依賴關係時才引用別的 issue，而且**寫之前先確認那個編號是對的**。
 引錯編號比不引用更糟 —— 讀的人會照著跳過去，然後看到一則不相干的東西。
+
+### PR 審查與指派：Assignee 一定要設；robot-ru 與 coderabbitai 同級審查
+
+- **開 PR 時必須把 Assignee 設成自己。** PR 的產權人就是作者；審查未通過時
+  PR 要指回作者修，沒有 Assignee 就沒有人接到「該修了」的訊號，PR 會爛在列表裡。
+  （CI 會自動補，但補錯了責任還是在作者——自己設才是保證。）
+- **開 PR 後 CI 會自動 request 兩個 reviewer：`robot-ru` 跟 `coderabbitai`，
+  兩邊同級，任一邊的 `Approved` 都算通過。**
+  - `coderabbitai` 是自動審查：PR 一開就會跑；被 rate limit 或 push 後想重審，
+    留言 `@coderabbitai review` 觸發。
+  - `robot-ru` 是人工審查（實機行為、設計取捨、AI 審查抓不到的語意問題）。
+    兩邊意見衝突時，具體 bug 以能重現的證據為準，取嚴格的那邊。
+- **審查結果一律用 GitHub 正式 review 狀態記錄，不是留言而已**：
+  - `Approved`：通過，可以合併。
+  - `Changes requested`：未通過，逐項修正。
+  作者判斷狀態看 PR 頁面的 review 區塊（Conversation 頁最上方的 review 摘要），
+  不要只掃留言。
+- 收到 `Changes requested` 修完 push 之後，**回到 review 區塊點
+  「Re-request review」**重新排隊。不要開新 PR、不要只留言說改好了——
+  正式 review 狀態要靠 re-request 才會重跑。
