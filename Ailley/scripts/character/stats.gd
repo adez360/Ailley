@@ -37,10 +37,10 @@ const MAX := 100.0
 const CRITICAL := 30.0		# 低於這個值算「該處理了」
 
 const SPEC := {
-	"satiety": {"label": "STAT_SATIETY", "drift": 3.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "tavern"},
-	"hydration": {"label": "STAT_HYDRATION", "drift": 2.0, "toward": 0.0, "start": 80.0, "is_need": true, "place": "tavern"},
-	"stamina": {"label": "STAT_STAMINA", "drift": 1.0, "toward": 0.0, "start": 80.0, "is_need": true, "place": "home"},
-	"wakefulness": {"label": "STAT_WAKEFULNESS", "drift": 1.2, "toward": 0.0, "start": 90.0, "is_need": true, "place": "home"},
+	"satiety": {"label": "STAT_SATIETY", "drift": 0.28, "toward": 0.0, "start": 100.0, "is_need": true, "place": "tavern"},
+	"hydration": {"label": "STAT_HYDRATION", "drift": 0.28, "toward": 0.0, "start": 100.0, "is_need": true, "place": "tavern"},
+	"stamina": {"label": "STAT_STAMINA", "drift": 0.35, "toward": 0.0, "start": 100.0, "is_need": true, "place": "home"},
+	"wakefulness": {"label": "STAT_WAKEFULNESS", "drift": 0.42, "toward": 0.0, "start": 100.0, "is_need": true, "place": "home"},
 	"hygiene": {"label": "STAT_HYGIENE", "drift": 0.0, "toward": 0.0, "start": 70.0, "is_need": false, "place": ""},
 	"alcohol": {"label": "STAT_ALCOHOL", "drift": 3.0, "toward": 0.0, "start": 0.0, "is_need": false, "place": ""},
 	"health": {"label": "STAT_HEALTH", "drift": 0.0, "toward": 100.0, "start": 100.0, "is_need": false, "place": ""},
