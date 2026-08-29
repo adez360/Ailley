@@ -120,6 +120,24 @@ const LONG_ACTION_CHECKPOINT_INTERVAL := 10
 ## 相當餘裕，維持 20
 const LLM_TASK_POOL_CAP := 20
 
+## 任務池跟 _current_task 都空時（issue #695）的保底重排節流間隔。**不能**
+## 跟 MIN_ACTION_DURATION 一樣抓 10：AIService 的 min_interval_sec（預設 30）
+## 是「真實」秒，跟 GameClock.seconds_per_game_minute（預設 1.0）換算後，
+## 10 遊戲分鐘只等於 10 真實秒，比 AIService 自己的冷卻還短——真正的攻速
+## 瓶頸會是 AIService 那邊的 30 秒，不是這裡。一隻整天卡住的角色會每 30
+## 真實秒成功打一次、吃掉一次 max_calls_per_game_day（預設 20）：
+## 20 × 30 秒 = 600 真實秒，只是一個完整遊戲日（1440 遊戲分鐘 × 1.0 秒
+## = 1440 真實秒）的 42%，代表卡住的角色會在遊戲日前半就把全天配額燒光，
+## 剩下時間連真的發生事件（玩家走過去）都問不了模型。
+##
+## 抓 72：1440 遊戲分鐘 ÷ max_calls_per_game_day(20) ≈ 72，讓「整天都卡住」
+## 這個最壞情況的補救嘗試次數本身就不超過每日配額，配額才留得住給任務
+## 完成、事件觸發這些真正該優先的重排時機用。這個數字綁定兩個設定檔常數
+## 的比例關係，AIConfig 的預設值之後若調整，這裡要跟著重新計算，不是
+## 寫死不變的量級常數（跟 MIN_ACTION_DURATION 那種純粹的「動作最小顆粒」
+## 性質不同）
+const STUCK_RETRY_INTERVAL_MINUTES := 72
+
 ## 候選任務池。這一版只在 _load_schedule() 建立一次就不再變動——
 ## 「到點才可用」靠仲裁時的 window 過濾，不是把任務從池子裡搬進搬出
 var _tasks: Array[Dictionary] = []
@@ -239,6 +257,11 @@ var _bury_pursuit_last_distance := INF
 var _follow_pursuit_stuck_ticks := 0
 var _follow_pursuit_last_distance := INF
 
+# hunt_small／hunt_large 任務用的卡住偵測（#573），跟 _attack_pursuit_* 同一套
+# 理由與收尾方式——目標是會動的 Animal 節點，不是 place 錨點
+var _hunt_pursuit_stuck_ticks := 0
+var _hunt_pursuit_last_distance := INF
+
 # 送達（已對目標開口，不論對方是否忙碌拒絕）後設 true，擋掉 _pursue_persuade_task()
 # 後續每個 tick 重複呼叫 try_record_pending_persuade()／move_to()（P-09，
 # CodeRabbit review 抓到：persuade 原本送達當下就 _finish_task_and_request_next()，
@@ -279,6 +302,11 @@ var _reacting := false
 # 又觸發第二份（同一個 LLM 任務完成的當下可能被重算好幾次），
 # _consider_switch() 靠它決定要用 MIN_COMMIT 還是 LLM_WAIT_MIN_COMMIT
 var _awaiting_decision := false
+
+# 上次因為「任務池跟目前任務都空」補打一次保底重排的遊戲分鐘（issue #695，
+# 見 _reevaluate_once() 的 STUCK_RETRY_INTERVAL_MINUTES 節流）。初始值設成
+# 負的節流間隔，保證出生後第一次真的卡住時不用等滿一個間隔就能立刻補一次
+var _last_stuck_retry_minute := -STUCK_RETRY_INTERVAL_MINUTES
 
 # 長動作檢查點決策請求還有沒有一份在飛（issue #336）。跟 _awaiting_decision
 # 是兩個獨立的旗標，各自防各自的重疊呼叫——檢查點問的是「這筆任務要不要
@@ -1300,6 +1328,18 @@ func _request_next_decision(
 	if _awaiting_decision:
 		return {"ok": false, "triggered": false}
 	_awaiting_decision = true
+
+	# 行程決策（plan）沒有像對話那樣「答案自己就是要顯示的內容」，等待期間
+	# 畫面上完全沒有回饋——套用 next_line() 已經在用的同一招：先蓋一顆「…」
+	# 氣泡讓玩家知道角色在想，不是卡住。interrupt=true 理由跟 next_line() 相同
+	# （見那裡的註解）；bubble.say() 自己的計時器到了就會自動收掉，這裡不用
+	# 另外在決策結束時清除（issue #480）。broadcast=false：跟 next_line() 同一個
+	# 理由（issue #674）——這是內部狀態泡泡，不是角色真的說了什麼，廣播出去
+	# 會讓 3 格內每個 llm_decision_enabled 的鄰居把「…」當事實句排進決策佇列、
+	# 各自觸發一次決策，決策若同樣問不到結果又冒出自己的「…」，連環擴散成
+	# 決策請求風暴（code review 抓到）
+	say(AI_THINKING_TEXT, true, false)
+
 	var my_generation := _decision_generation
 
 	# 記下消費前的值，等這次回應因世代不符被丟棄時原封不動還回去——
@@ -1339,7 +1379,7 @@ func _request_next_decision(
 	var envelope := PromptBuilder.build_plan_envelope(
 		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan,
 		_fact_lines_summary(), had_pending_persuade, current_place, allow_appointment,
-		allow_perform_tip, _recalled_summary()
+		allow_perform_tip, _recalled_summary(), _workplaces_summary()
 	)
 	var validator := func(data: Dictionary) -> Dictionary:
 		return AISchema.validate_tasks(
@@ -1382,6 +1422,29 @@ func _request_next_decision(
 		print("[llm_decision] %s inner_monologue: %s" % [character_name, data.get("inner_monologue", "")])
 
 		var tasks_added := _push_llm_tasks(data["tasks"], data)
+
+		# 回應合法地帶回空 tasks 陣列（規格「不更新就是空陣列」）、且現在
+		# 真的沒有任何事在做時，補一筆頂著（issue #699）——不這樣做的話角色
+		# 會卡在完全沒有任何任務的狀態，唯一接得上的「動作做完」事件驅動
+		# 重排永遠不會發生，只能靠 #695 那個獨立節流的保底重排撐著。補一筆
+		# 之後兩者行為一致：duration 到期就正常觸發下一次決策，不需要為
+		# 「決策回應空手而歸」另外燒一份跟仲裁器候選池不相干的冷卻預算。
+		# 優先度給 0——就算池子裡還留著別的候選（例如 schedule 任務進了
+		# 窗口），也不該搶贏它們
+		#
+		# stats.get_lowest_need_place()（《系統分析計畫》§5 早就指定的
+		# fallback 路徑：問不到 AI 就先去滿足最低的那項需求，不是站在原地）
+		# 一直沒有任何呼叫端接上——只有真的有需求跌破 CRITICAL 時才用它排
+		# move_to，沒有需求需要處理時維持原本的 idle，不會讓角色沒事也到處
+		# 亂晃
+		if tasks_added == 0 and _current_task.is_empty():
+			var fallback_place := ""
+			if stats != null and stats.needs_attention():
+				fallback_place = stats.get_lowest_need_place()
+			if not fallback_place.is_empty():
+				_push_llm_tasks([{"action": "move_to", "params": {"place": fallback_place}, "priority": 0.0}], data)
+			else:
+				_push_llm_tasks([{"action": "idle", "params": {}, "priority": 0.0}], data)
 
 		# emotion（#351）：每次決策都必填，validate_tasks() 已經驗證過 type／
 		# intensity 合法，這裡直接套用，不再二次判斷——AI 自己宣告的內在狀態，
@@ -1848,6 +1911,26 @@ func _task_pool_summary() -> Array[Dictionary]:
 			"source": task.get("source", ""),
 		})
 	return summary
+
+## work 動作能選的地點清單（#700），給 PromptBuilder 組 plan 信封用——LLM
+## 看不到場上有哪些工作站就只能瞎猜 place 該填什麼，跟 #605/#647 販賣機清單
+## 同一種「模型看不到就只能瞎猜」的問題。不是列出全部 7 個地點錨點——只有
+## 真的有 Workstation 節點的地點才進清單，跟 _pursue_work_task() 篩選工作站
+## 用的同一個 resolve_from_position() 反查，兩邊對「這個工作站算哪個地點」
+## 的認定不會兜不起來
+func _workplaces_summary() -> Array[String]:
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null:
+		return []
+
+	var places: Array[String] = []
+	for ws in get_tree().get_nodes_in_group("workstations"):
+		if not ws is Workstation:
+			continue
+		var place: String = anchors.resolve_from_position((ws as Workstation).global_position, ACTUAL_PLACE_RADIUS)
+		if not place.is_empty() and not places.has(place):
+			places.append(place)
+	return places
 
 # 工作結束後同理：那 5 個遊戲分鐘可能已經跨過行程的整點，而 work_at() 開頭的
 # stop_moving() 把原本的路徑清掉了，不重算的話會一路站到下一個整點字串吻合為止
@@ -2547,6 +2630,8 @@ func _reevaluate_once() -> void:
 		_persuade_pursuit_last_distance = INF
 		_bury_pursuit_stuck_ticks = 0
 		_bury_pursuit_last_distance = INF
+		_hunt_pursuit_stuck_ticks = 0
+		_hunt_pursuit_last_distance = INF
 
 	# 剛睡醒的偵測要在這裡的任何選任務邏輯跑之前先記下「進來的時候是不是
 	# 在睡」——選任務邏輯本身就可能把 current_state 從 sleep 換掉，這個
@@ -2595,6 +2680,7 @@ func _reevaluate_once() -> void:
 			and _current_task.get("source", "") == "llm" \
 			and _current_task.get("id", "") != _active_talk_task_id \
 			and not is_performing() \
+			and not _current_task.get("_logged", false) \
 			and now_minutes - _current_task_started_at >= int(ceil(_effective_action_duration(_current_task.get("duration", 0.0)))):
 		# 做完的那筆要先離開池子。llm 任務沒有 window，不像 schedule 靠時間窗
 		# 自然退場——留著的話它會用原本的分數繼續參加下一輪算分，被重新選中，
@@ -2620,6 +2706,21 @@ func _reevaluate_once() -> void:
 		_request_next_decision(_today_plan_needs_new_goal())
 
 	if _tasks.is_empty():
+		# 池子空、_current_task 也空：代表上一輪決策回應合法地帶回空 tasks
+		# 陣列（規格「不更新就是空陣列」），不是驗證失敗。上面那個事件驅動
+		# 觸發只在「目前任務做滿 duration」才會發生——沒有任務就沒有「做滿」
+		# 這件事，角色會無限期卡在這裡，永遠不會再被問一次（issue #695）。
+		#
+		# 節流不能直接看 AIService 的 cooldown_left：provider 完全連不上時
+		# （config disabled／provider invalid）請求在 _note_call() 之前就
+		# 失敗，cooldown_left 永遠回 0，沒有自己的節流會讓這裡每個遊戲分鐘
+		# 都重打一次，變成新的洗版問題。用獨立的 _last_stuck_retry_minute
+		# 記錄，跟 AIService 的冷卻分開算
+		if llm_decision_enabled and not _awaiting_decision \
+				and (_current_task.is_empty() or _current_task.get("_logged", false)) \
+				and now_minutes - _last_stuck_retry_minute >= STUCK_RETRY_INTERVAL_MINUTES:
+			_last_stuck_retry_minute = now_minutes
+			_request_next_decision(_today_plan_needs_new_goal())
 		return
 
 	var now := "%02d:%02d" % [GameClock.hour, GameClock.minute]
@@ -2941,15 +3042,14 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			if inventory == null or _find_drink_slot().is_empty():
 				return {"success": false, "reason": "背包裡沒有飲品可以喝"}
 		"buy":
-			# 檢查錢夠不夠（需要先找機器查價格）、商品存不存在、背包有沒有空間
+			# 檢查錢夠不夠（需要先查地點的商店目錄）、商品存不存在、背包有沒有空間
 			var place: String = str(params.get("place", ""))
-			var machine := _find_vending_machine_at_place(place)
-			if machine == null:
-				return {"success": false, "reason": "找不到販賣機"}
+			if not Shop.has_shop(place):
+				return {"success": false, "reason": "這裡沒有商店"}
 			var item_id: String = str(params.get("item_id", ""))
-			var price := machine.get_price(item_id)
+			var price := Shop.get_price(place, item_id)
 			if price < 0:
-				return {"success": false, "reason": "販賣機裡沒有這個商品"}
+				return {"success": false, "reason": "這間商店沒有這個商品"}
 			if inventory == null:
 				return {"success": false, "reason": "背包裡沒有地方放東西"}
 			if inventory.get_money() < price:
@@ -3047,6 +3147,16 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 				return {"success": false, "reason": "身上沒有樂器，沒辦法表演"}
 			if stats == null:
 				return {"success": false, "reason": "沒有身體狀態資料，沒辦法表演"}
+		"hunt_small", "hunt_large":
+			# hunt_small／hunt_large 在 SUCCESS_PARAMS 表上，會擲骰——跟 attack／bury
+			# 不同，這裡的硬規則過了**不能**直接 return true，要落進下面的
+			# _roll_success()。硬規則只管「附近有沒有動物可獵」，_pursue_hunt_task()
+			# 已經先把角色走到動物旁邊才呼叫這裡，這關只是防呆（動物在移動完成
+			# 之後、resolve() 真正被呼叫之前的空窗期跑走／被別人先獵走）
+			var game_type := "small_game" if action == "hunt_small" else "large_game"
+			var animal := _find_nearest_animal(game_type)
+			if animal == null or get_body_position().distance_to(animal.global_position) > Character.HUNT_RANGE:
+				return {"success": false, "reason": "附近沒有可以獵的動物"}
 		# move_to/sleep/nap/rest/wash/idle/eat/shout 目前都沒有額外的硬規則要擋
 		# （eat 落地後要在這裡加「宣稱吃了背包裡沒有的食物」的檢查，見 #114；
 		# shout 沒有目標、沒有前提，天生沒有硬規則可擋）
@@ -3138,6 +3248,8 @@ func _select(task: Dictionary, now_minutes: int, outgoing_ok: bool = true) -> vo
 	_bury_pursuit_last_distance = INF
 	_follow_pursuit_stuck_ticks = 0
 	_follow_pursuit_last_distance = INF
+	_hunt_pursuit_stuck_ticks = 0
+	_hunt_pursuit_last_distance = INF
 	# 排程任務的 id 是穩定的 schedule_%d，同一筆 buy 任務會在下一個遊戲日
 	# 重用同一個 id——不歸零的話，前一天走不到販賣機留下的 _buy_pursuit_task_id
 	# 與 _pursuit_done=true 會讓新一天同 id 的任務直接被守衛判定「已處理過」，
@@ -3216,6 +3328,12 @@ func _pursue_current_task() -> void:
 	# bury（#380）跟 attack／give 同理：目標是另一個角色（屍體），不是固定地點
 	if current_state == "bury":
 		_pursue_bury_task()
+		return
+
+	# hunt_small／hunt_large（#573）跟 attack／bury 同理：目標是場上的 Animal
+	# 節點，不是固定地點
+	if current_state == "hunt_small" or current_state == "hunt_large":
+		_pursue_hunt_task()
 		return
 
 	# talk 任務的目標是另一個角色，不是固定地點——current_place 對它一律是空的
@@ -3639,16 +3757,26 @@ func _pursue_work_task() -> void:
 	_pursued_place = current_place
 	_pursuit_done = true
 
-	# 找最近的工作站（MVP 只有一個，但用最近的方式向前相容）
+	# 找 current_place 這個地點對應的工作站，同一地點多台時取最近的（MVP 只有
+	# 一個，但用最近的方式向前相容）。#700 開放 work 給 LLM 選之前，place 永遠
+	# 是 npc_schedule.json 排好的值、場上又只有一台工作站，「不管 place 直接
+	# 抓全場最近」跟「照 place 篩」結果一樣看不出差異；LLM 能自己選 place 之後
+	# 兩者才會分岔——place 沒有工作站時要老實回 WORK_TARGET_NOT_FOUND，不能
+	# 撿一個地點對不上的工作站頂替
 	var workstations: Array = get_tree().get_nodes_in_group("workstations")
 	var nearest_workstation: Workstation = null
 	var nearest_distance := INF
 
 	for ws in workstations:
-		var distance := get_body_position().distance_to(ws.global_position)
+		if not ws is Workstation:
+			continue
+		var ws_node := ws as Workstation
+		if anchors.resolve_from_position(ws_node.global_position, ACTUAL_PLACE_RADIUS) != current_place:
+			continue
+		var distance := get_body_position().distance_to(ws_node.global_position)
 		if distance < nearest_distance:
 			nearest_distance = distance
-			nearest_workstation = ws
+			nearest_workstation = ws_node
 
 	# 呼叫 work_at() 並記錄結果
 	var reason := work_at(nearest_workstation)
@@ -3706,29 +3834,26 @@ func _pursue_perform_task() -> void:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
 
-# buy 任務的執行（#340）：先找到販賣機並移動到其位置，再呼叫 buy_from()。
-# 販賣機透過 params.place 指定（餐酒館或藥草鋪）
-#
-# 導航目標刻意不是 machine.global_position（#670）：販賣機是 NavGrid 上的
-# 障礙格（見 vending_machine.gd 開頭註解），終點格永遠不可走，尋徑只會把
-# 路徑收斂到鄰近可走格，跟 _has_arrived_at() 的判定（2px 或同一格）永遠對不上，
-# 是結構性死結，不是機率問題。改跟 _pursue_work_task() 同一套，用 PlaceAnchors
-# 預先擺在可走格上的錨點當導航目標；買東西那一刻的距離判定（buy_from()，
-# character.gd）維持看 machine.global_position，不受影響，四個方向一樣能買
+# buy 任務的執行（#340，issue #572 後改成地點導向）：先走到地點錨點，
+# 抵達後再呼叫 buy_from()。商店透過 params.place 指定（"tavern" 或
+# "herb_shop"），跟 _pursue_work_task() 同一套「先走、到了才執行」結構——
+# 商店不再是場景裡的實體物件，PlaceAnchors 本來就擺在可走格上，
+# 沒有 #670 那種「導航終點是碰撞障礙格」的問題
 func _pursue_buy_task() -> void:
 	var buy_task_id: String = str(_current_task.get("id", ""))
 	var place: String = str(_current_task.get("params", {}).get("place", ""))
-	var machine := _find_vending_machine_at_place(place)
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
 
-	# 找不到販賣機，或販賣機所在地點沒有對應的可走錨點：立即返回失敗
-	if not machine or anchors == null or not anchors.has_for(self, place):
+	# 這個地點沒有商店，或沒有對應的可走錨點：立即返回失敗——issue #572
+	# 拿掉了販賣機實體道具，商店綁在地點本身（見 world/shop.gd），不再需要
+	# 另外找一個機台節點
+	if not Shop.has_shop(place) or anchors == null or not anchors.has_for(self, place):
 		# 要先讀 source／id 再清空 _current_task——清空之後兩個 get() 都只會
 		# 讀到空字典的預設值，llm 任務永遠判斷不是 llm、也移除不掉，會卡在
 		# 池子裡讓 _reevaluate() 重複選到同一筆（CodeRabbit review 抓到）
 		var failed_task_source: String = str(_current_task.get("source", ""))
 		var failed_task_id: String = str(_current_task.get("id", ""))
-		push_warning("Agent %s: 找不到販賣機 %s" % [character_name, place])
+		push_warning("Agent %s: %s 不是商店地點" % [character_name, place])
 		# 清掉任務前先停下——不然角色若正走去先前目標，會帶著已失效的
 		# 路徑繼續走（CodeRabbit review 抓到）
 		stop_moving()
@@ -3769,7 +3894,7 @@ func _pursue_buy_task() -> void:
 			# 卡在這個守衛出不去，永遠記錄不到失敗結果、也不會請求下一次決策
 			# （CodeRabbit review 抓到）
 			if _pursuit_done and _current_task.get("source", "") == "llm":
-				last_action_result = "走不到販賣機，無法購買"
+				last_action_result = "走不到商店，無法購買"
 				_finish_task_and_request_next()
 			return
 		_buy_pursuit_task_id = buy_task_id
@@ -3777,18 +3902,18 @@ func _pursue_buy_task() -> void:
 		_pursuit_done = false
 		_buy_pursuit_target = approach_target
 		if not move_to(approach_target):
-			push_warning("Agent %s: 走不到販賣機 %s" % [character_name, place])
+			push_warning("Agent %s: 走不到商店 %s" % [character_name, place])
 			# schedule 任務維持原本的停止重試行為，靠 window 自然退場；
 			# llm 任務沒有 window 這條退路，只設 _pursuit_done 的話會一直卡在
 			# buy 狀態，等不到失敗結果、也不會請求下一個決策（CodeRabbit review 抓到）
 			if _current_task.get("source", "") == "llm":
-				last_action_result = "走不到販賣機，無法購買"
+				last_action_result = "走不到商店，無法購買"
 				_finish_task_and_request_next()
 			else:
 				_pursuit_done = true
 		return
 
-	# 已到達販賣機位置，執行購買
+	# 已到達商店地點，執行購買
 	stop_moving()
 	_pursued_place = current_place
 	_pursuit_done = true
@@ -3801,7 +3926,7 @@ func _pursue_buy_task() -> void:
 
 	if proceed:
 		var item_id: String = str(_current_task.get("params", {}).get("item_id", ""))
-		var reason := buy_from(machine, item_id)
+		var reason := buy_from(place, item_id)
 		last_action_result = reason
 		if reason != Character.BUY_OK:
 			push_warning("Agent %s: buy 失敗（%s）" % [character_name, reason])
@@ -3821,26 +3946,6 @@ func _pursue_buy_task() -> void:
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
-
-# 根據地點找到對應的販賣機。場景中每台機器都有一個對應的地點：
-# - "tavern" → VendingMachine
-# - "herb_shop" → VendingMachineHerbShop
-# 靠節點名稱來區分，更新日期 2026-08-20
-func _find_vending_machine_at_place(place: String) -> VendingMachine:
-	var machines := get_tree().get_nodes_in_group("vending_machines")
-
-	for machine in machines:
-		if not machine is VendingMachine:
-			continue
-
-		var machine_name: String = machine.name.to_lower()
-		# VendingMachineHerbShop → "herb_shop"，VendingMachine → "tavern"
-		if place == "herb_shop" and machine_name.contains("herb"):
-			return machine
-		elif place == "tavern" and not machine_name.contains("herb"):
-			return machine
-
-	return null
 
 # gather 任務的執行（#574）：跟 _pursue_work_task() 同理，先走到地點錨點，
 # 抵達後才執行；跟 eat／drink／buy 同理，呼叫一次就完成，不像 nap 那樣佔滿
@@ -4283,6 +4388,108 @@ func _bury_failure_message(failure: String) -> String:
 			return "墓園的墓碑格滿了，安葬不了"
 		_:
 			return "安葬沒有成功"
+
+# hunt_small／hunt_large 任務的執行（#573）：目標是場上的 Animal 節點（不是
+# 角色），沿用跟 attack／bury 同一套「走一次、卡住偵測」節流。跟 attack／bury
+# 不同的是這兩個動作在 SUCCESS_PARAMS 表上會擲骰——《07》拍板的簡化版追逐是
+# 「走到動物旁邊、直接呼叫現成的成功率判定一次」，不做動物邊逃邊被追的即時
+# 互動，所以 resolve() 只在真正抵達、即將執行的這一刻呼叫一次，不是每個
+# pursue tick 都呼叫（那樣會變成每分鐘重骰一次，違反《01-2》§2「一次決策
+# 一次骰」）
+#
+# resolve() 不分來源都要呼叫——跟 attack／bury（硬規則過了就必中，不擲骰）
+# 不同，hunt_small／hunt_large 在 SUCCESS_PARAMS 上是真的擲骰；只在 llm 來源
+# 才骰的話，schedule 來源的 hunt（目前 npc_schedule.json 沒有，但介面上合法，
+# 已在 IMPLEMENTED_ACTIONS 白名單裡）會完全跳過擲骰、直接必中，違反《01-2》
+# §2 的成功率公式——跟 _pursue_gather_task() 修過的同一個問題（見那裡的
+# CodeRabbit review 記錄），這裡照抄同一個修法
+func _pursue_hunt_task() -> void:
+	var action: String = str(_current_task.get("action", ""))
+	var game_type := "small_game" if action == "hunt_small" else "large_game"
+	var animal := _find_nearest_animal(game_type)
+
+	if animal == null:
+		last_action_result = "附近沒有可以獵的動物"
+		_track_action_result_for_facts(action, false)
+		_finish_task_and_request_next()
+		return
+
+	var distance := get_body_position().distance_to(animal.global_position)
+	if distance > Character.HUNT_RANGE:
+		if not move_to(animal.global_position):
+			push_warning("Agent %s: 走不到獵物" % character_name)
+			last_action_result = "靠近不了獵物，獵不到"
+			_track_action_result_for_facts(action, false)
+			_finish_task_and_request_next()
+			return
+
+		if distance >= _hunt_pursuit_last_distance - 1.0:
+			_hunt_pursuit_stuck_ticks += 1
+		else:
+			_hunt_pursuit_stuck_ticks = 0
+		_hunt_pursuit_last_distance = distance
+
+		if _hunt_pursuit_stuck_ticks >= 3:
+			push_warning("Agent %s: 獵物卡住走不到，放棄" % character_name)
+			last_action_result = "靠近不了獵物，獵不到"
+			_track_action_result_for_facts(action, false)
+			_finish_task_and_request_next()
+		return
+
+	stop_moving()
+
+	var result := resolve(action, _current_task.get("params", {}))
+	last_action_result = result["reason"]
+	if not result["success"]:
+		_track_action_result_for_facts(action, false)
+		_finish_task_and_request_next()
+		return
+
+	var item_id := animal.game_type
+	var hunt_failure := hunt(animal)
+	last_action_result = _hunt_failure_message(hunt_failure)
+	_track_action_result_for_facts(action, hunt_failure == Character.HUNT_OK)
+
+	if hunt_failure == Character.HUNT_OK:
+		_push_daily_event("你獵到了一隻%s。" % ItemDatabase.get_display_name(item_id))
+
+	_finish_task_and_request_next()
+
+# 場上距離最近、type 相符的活體 Animal——跟 _pursue_work_task() 找最近工作站
+# 同一套寫法。不限定在森林範圍內找：目前只有森林會擺 Animal 節點，之後若有
+# 其他地點也放動物，這裡不用改
+func _find_nearest_animal(game_type: String) -> Animal:
+	var nearest: Animal = null
+	var nearest_distance := INF
+
+	for node in get_tree().get_nodes_in_group("animals"):
+		if not node is Animal:
+			continue
+		var animal := node as Animal
+		if animal.game_type != game_type or animal.is_queued_for_deletion():
+			continue
+		var distance := get_body_position().distance_to(animal.global_position)
+		if distance < nearest_distance:
+			nearest_distance = distance
+			nearest = animal
+
+	return nearest
+
+# hunt() 失敗原因碼轉中文，格式跟 _attack_failure_message() 一致
+func _hunt_failure_message(failure: String) -> String:
+	match failure:
+		Character.HUNT_OK:
+			return ""
+		Character.HUNT_TARGET_NOT_FOUND:
+			return "獵物已經跑走了"
+		Character.HUNT_TOO_FAR:
+			return "距離太遠，獵不到"
+		Character.HUNT_NO_INVENTORY:
+			return "沒有背包，沒辦法帶走獵物"
+		Character.HUNT_NO_SPACE:
+			return "背包滿了，帶不走獵物"
+		_:
+			return "打獵沒有成功"
 
 # persuade 任務的執行（#227）：目標跟 talk／give 一樣是會動的角色，走到範圍
 # 內才生效，不擲骰、恆送達——「送不送達」（有沒有走到、對方在不在）跟

@@ -1,6 +1,758 @@
-[gd_scene load_steps=2 format=3 uid="uid://cefpexpl7arvm"]
+[gd_scene load_steps=18 format=3 uid="uid://cefpexpl7arvm"]
 
-[ext_resource type="Script" path="res://scripts/ui/character_create.gd" id="1_7hjmm"]
+[ext_resource type="Script" uid="uid://26jx2ncabjet" path="res://scripts/ui/character_create.gd" id="1_7hjmm"]
+[ext_resource type="StyleBox" uid="uid://db8gj58uccemy" path="res://scenes/ui/panel_style_box_texture.tres" id="2_c105j"]
+[ext_resource type="ButtonGroup" uid="uid://cscidioakocuh" path="res://assets/ui/character_create_gender_group.tres" id="3_c105j"]
+[ext_resource type="ButtonGroup" uid="uid://ceyrq0cu0ey8e" path="res://assets/ui/character_create_source_group.tres" id="4_xcdvd"]
+[ext_resource type="ButtonGroup" uid="uid://ct7ppa7xvi5ip" path="res://assets/ui/character_create_style_group.tres" id="5_3khhy"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_6mjhx"]
+bg_color = Color(0.3647059, 0.2901961, 0.21960784, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.3647059, 0.2901961, 0.21960784, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_5gncn"]
+bg_color = Color(0.3647059, 0.2901961, 0.21960784, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.7882353, 0.42352942, 0.13725491, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_lrlx7"]
+bg_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_jg8qp"]
+bg_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.7882353, 0.42352942, 0.13725491, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_oygqr"]
+bg_color = Color(0.8509804, 0.76862746, 0.6039216, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.8509804, 0.76862746, 0.6039216, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_8sa7r"]
+bg_color = Color(0.8509804, 0.76862746, 0.6039216, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.7882353, 0.42352942, 0.13725491, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bymik"]
+bg_color = Color(0.3647059, 0.38039216, 0.27058825, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.3647059, 0.38039216, 0.27058825, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_fg5gj"]
+bg_color = Color(0.3647059, 0.38039216, 0.27058825, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.7882353, 0.42352942, 0.13725491, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_gyemt"]
+bg_color = Color(0.54509807, 0.12156863, 0.078431375, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.54509807, 0.12156863, 0.078431375, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_k13k3"]
+bg_color = Color(0.54509807, 0.12156863, 0.078431375, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.7882353, 0.42352942, 0.13725491, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_3xldy"]
+bg_color = Color(0.49411765, 0.5411765, 0.5764706, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.49411765, 0.5411765, 0.5764706, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_an1pm"]
+bg_color = Color(0.49411765, 0.5411765, 0.5764706, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.7882353, 0.42352942, 0.13725491, 1)
 
 [node name="CharacterCreate" type="CanvasLayer"]
+layer = 80
 script = ExtResource("1_7hjmm")
+
+[node name="Scrim" type="ColorRect" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0.1, 0.08, 0.07, 0.55)
+
+[node name="Center" type="CenterContainer" parent="Scrim"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Row" type="HBoxContainer" parent="Scrim/Center"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="TemplateStrip" type="PanelContainer" parent="Scrim/Center/Row"]
+custom_minimum_size = Vector2(140, 344)
+layout_mode = 2
+theme_override_styles/panel = ExtResource("2_c105j")
+
+[node name="MarginContainer" type="MarginContainer" parent="Scrim/Center/Row/TemplateStrip"]
+layout_mode = 2
+
+[node name="Col" type="VBoxContainer" parent="Scrim/Center/Row/TemplateStrip/MarginContainer"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="HeaderRow" type="HBoxContainer" parent="Scrim/Center/Row/TemplateStrip/MarginContainer/Col"]
+layout_mode = 2
+
+[node name="TitleLabel" type="Label" parent="Scrim/Center/Row/TemplateStrip/MarginContainer/Col/HeaderRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+text = "UI_CL_TITLE"
+
+[node name="CapacityLabel" type="Label" parent="Scrim/Center/Row/TemplateStrip/MarginContainer/Col/HeaderRow"]
+auto_translate_mode = 2
+layout_mode = 2
+theme_override_colors/font_color = Color(0.3647059, 0.2901961, 0.21960784, 1)
+
+[node name="Rule" type="ColorRect" parent="Scrim/Center/Row/TemplateStrip/MarginContainer/Col"]
+custom_minimum_size = Vector2(0, 1)
+layout_mode = 2
+color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+
+[node name="ScrollContainer" type="ScrollContainer" parent="Scrim/Center/Row/TemplateStrip/MarginContainer/Col"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="List" type="VBoxContainer" parent="Scrim/Center/Row/TemplateStrip/MarginContainer/Col/ScrollContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 2
+
+[node name="Panel" type="PanelContainer" parent="Scrim/Center/Row"]
+custom_minimum_size = Vector2(412, 344)
+layout_mode = 2
+theme_override_styles/panel = ExtResource("2_c105j")
+
+[node name="MarginContainer" type="MarginContainer" parent="Scrim/Center/Row/Panel"]
+layout_mode = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 10
+
+[node name="Col" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Header" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col"]
+layout_mode = 2
+
+[node name="TitleLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+text = "UI_CC_TITLE"
+
+[node name="SlotsLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/Header"]
+auto_translate_mode = 2
+layout_mode = 2
+theme_override_colors/font_color = Color(0.3647059, 0.2901961, 0.21960784, 1)
+
+[node name="Rule1" type="ColorRect" parent="Scrim/Center/Row/Panel/MarginContainer/Col"]
+custom_minimum_size = Vector2(0, 1)
+layout_mode = 2
+color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+
+[node name="TabContainer" type="TabContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col"]
+layout_mode = 2
+current_tab = 0
+tab_focus_mode = 0
+
+[node name="TabBasic" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer"]
+layout_mode = 2
+theme_override_constants/separation = 6
+metadata/_tab_index = 0
+
+[node name="NameRow" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="NameLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/NameRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+text = "UI_CC_NAME"
+
+[node name="NameEdit" type="LineEdit" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/NameRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+max_length = 12
+
+[node name="AgeRow" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="AgeLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/AgeRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+text = "UI_CC_AGE"
+
+[node name="AgeSlider" type="HSlider" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/AgeRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 16.0
+max_value = 70.0
+value = 16.0
+
+[node name="AgeValueLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/AgeRow"]
+auto_translate_mode = 2
+custom_minimum_size = Vector2(20, 0)
+layout_mode = 2
+size_flags_horizontal = 8
+horizontal_alignment = 2
+
+[node name="GenderRow" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="GenderLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/GenderRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+text = "UI_CC_GENDER"
+
+[node name="MaleButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/GenderRow"]
+layout_mode = 2
+focus_mode = 0
+toggle_mode = true
+button_group = ExtResource("3_c105j")
+text = "UI_CC_GENDER_MALE"
+
+[node name="FemaleButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/GenderRow"]
+layout_mode = 2
+focus_mode = 0
+toggle_mode = true
+button_group = ExtResource("3_c105j")
+text = "UI_CC_GENDER_FEMALE"
+
+[node name="OtherButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/GenderRow"]
+layout_mode = 2
+focus_mode = 0
+toggle_mode = true
+button_group = ExtResource("3_c105j")
+text = "UI_CC_GENDER_OTHER"
+
+[node name="Rule3" type="ColorRect" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic"]
+custom_minimum_size = Vector2(0, 1)
+layout_mode = 2
+color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+
+[node name="DecisionSourceBlock" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="SourceLabelRow" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock"]
+layout_mode = 2
+
+[node name="SourceLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock/SourceLabelRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+text = "UI_CC_SOURCE"
+
+[node name="SourceButtonsRow" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="LocalButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock/SourceButtonsRow"]
+layout_mode = 2
+focus_mode = 0
+toggle_mode = true
+button_group = ExtResource("4_xcdvd")
+text = "UI_CC_SOURCE_LOCAL"
+
+[node name="CloudButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock/SourceButtonsRow"]
+layout_mode = 2
+focus_mode = 0
+toggle_mode = true
+button_group = ExtResource("4_xcdvd")
+text = "UI_CC_SOURCE_CLOUD"
+
+[node name="HumanButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock/SourceButtonsRow"]
+layout_mode = 2
+focus_mode = 0
+toggle_mode = true
+button_group = ExtResource("4_xcdvd")
+text = "UI_CC_SOURCE_HUMAN"
+
+[node name="ModelDropdown" type="OptionButton" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock"]
+layout_mode = 2
+
+[node name="ModelHint" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock"]
+auto_translate_mode = 2
+layout_mode = 2
+theme_override_colors/font_color = Color(0.54509807, 0.12156863, 0.078431375, 1)
+autowrap_mode = 3
+
+[node name="TabPersonality" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer"]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 4
+metadata/_tab_index = 1
+
+[node name="SliderBlock" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="HonestyRow" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Label" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/HonestyRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+text = "UI_CC_HEX_HONESTY"
+
+[node name="LoLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/HonestyRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+text = "UI_CC_HEX_HONESTY_LO"
+
+[node name="Slider" type="HSlider" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/HonestyRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+step = 5.0
+value = 50.0
+
+[node name="HiLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/HonestyRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+text = "UI_CC_HEX_HONESTY_HI"
+
+[node name="ValueLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/HonestyRow"]
+auto_translate_mode = 2
+custom_minimum_size = Vector2(20, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+horizontal_alignment = 2
+
+[node name="EmotionalityRow" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Label" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/EmotionalityRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+text = "UI_CC_HEX_EMOTIONALITY"
+
+[node name="LoLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/EmotionalityRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+text = "UI_CC_HEX_EMOTIONALITY_LO"
+
+[node name="Slider" type="HSlider" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/EmotionalityRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+step = 5.0
+value = 50.0
+
+[node name="HiLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/EmotionalityRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+text = "UI_CC_HEX_EMOTIONALITY_HI"
+
+[node name="ValueLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/EmotionalityRow"]
+auto_translate_mode = 2
+custom_minimum_size = Vector2(20, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+horizontal_alignment = 2
+
+[node name="ExtraversionRow" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Label" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/ExtraversionRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+text = "UI_CC_HEX_EXTRAVERSION"
+
+[node name="LoLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/ExtraversionRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+text = "UI_CC_HEX_EXTRAVERSION_LO"
+
+[node name="Slider" type="HSlider" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/ExtraversionRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+step = 5.0
+value = 50.0
+
+[node name="HiLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/ExtraversionRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+text = "UI_CC_HEX_EXTRAVERSION_HI"
+
+[node name="ValueLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/ExtraversionRow"]
+auto_translate_mode = 2
+custom_minimum_size = Vector2(20, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+horizontal_alignment = 2
+
+[node name="AgreeablenessRow" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Label" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/AgreeablenessRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+text = "UI_CC_HEX_AGREEABLENESS"
+
+[node name="LoLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/AgreeablenessRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+text = "UI_CC_HEX_AGREEABLENESS_LO"
+
+[node name="Slider" type="HSlider" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/AgreeablenessRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+step = 5.0
+value = 50.0
+
+[node name="HiLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/AgreeablenessRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+text = "UI_CC_HEX_AGREEABLENESS_HI"
+
+[node name="ValueLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/AgreeablenessRow"]
+auto_translate_mode = 2
+custom_minimum_size = Vector2(20, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+horizontal_alignment = 2
+
+[node name="ConscientiousnessRow" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Label" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/ConscientiousnessRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+text = "UI_CC_HEX_CONSCIENTIOUSNESS"
+
+[node name="LoLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/ConscientiousnessRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+text = "UI_CC_HEX_CONSCIENTIOUSNESS_LO"
+
+[node name="Slider" type="HSlider" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/ConscientiousnessRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+step = 5.0
+value = 50.0
+
+[node name="HiLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/ConscientiousnessRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+text = "UI_CC_HEX_CONSCIENTIOUSNESS_HI"
+
+[node name="ValueLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/ConscientiousnessRow"]
+auto_translate_mode = 2
+custom_minimum_size = Vector2(20, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+horizontal_alignment = 2
+
+[node name="OpennessRow" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Label" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/OpennessRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+text = "UI_CC_HEX_OPENNESS"
+
+[node name="LoLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/OpennessRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+text = "UI_CC_HEX_OPENNESS_LO"
+
+[node name="Slider" type="HSlider" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/OpennessRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+step = 5.0
+value = 50.0
+
+[node name="HiLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/OpennessRow"]
+custom_minimum_size = Vector2(48, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+text = "UI_CC_HEX_OPENNESS_HI"
+
+[node name="ValueLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock/OpennessRow"]
+auto_translate_mode = 2
+custom_minimum_size = Vector2(20, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+horizontal_alignment = 2
+
+[node name="StrengthBlock" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="StrengthLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/StrengthBlock"]
+auto_translate_mode = 2
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+
+[node name="HintLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/StrengthBlock"]
+auto_translate_mode = 2
+layout_mode = 2
+autowrap_mode = 3
+
+[node name="TabDescription" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer"]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 4
+metadata/_tab_index = 2
+
+[node name="DescriptionBlock" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabDescription"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="DescHeadRow" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabDescription/DescriptionBlock"]
+layout_mode = 2
+
+[node name="DescCaption" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabDescription/DescriptionBlock/DescHeadRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+text = "UI_CC_DESC"
+
+[node name="DescCount" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabDescription/DescriptionBlock/DescHeadRow"]
+auto_translate_mode = 2
+layout_mode = 2
+theme_override_colors/font_color = Color(0.3647059, 0.2901961, 0.21960784, 1)
+
+[node name="DescEdit" type="TextEdit" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabDescription/DescriptionBlock"]
+custom_minimum_size = Vector2(0, 60)
+layout_mode = 2
+wrap_mode = 1
+
+[node name="DescHint" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabDescription/DescriptionBlock"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+text = "UI_CC_DESC_HINT"
+autowrap_mode = 3
+
+[node name="TabAppearance" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer"]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 4
+metadata/_tab_index = 3
+
+[node name="StyleGrid" type="GridContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance"]
+layout_mode = 2
+theme_override_constants/h_separation = 4
+theme_override_constants/v_separation = 4
+columns = 3
+
+[node name="Style1Cell" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid"]
+layout_mode = 2
+
+[node name="Swatch" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid/Style1Cell"]
+custom_minimum_size = Vector2(48, 48)
+layout_mode = 2
+focus_mode = 0
+theme_override_styles/normal = SubResource("StyleBoxFlat_6mjhx")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_5gncn")
+toggle_mode = true
+button_group = ExtResource("5_3khhy")
+
+[node name="NameLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid/Style1Cell"]
+auto_translate_mode = 2
+layout_mode = 2
+horizontal_alignment = 1
+
+[node name="Style2Cell" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid"]
+layout_mode = 2
+
+[node name="Swatch" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid/Style2Cell"]
+custom_minimum_size = Vector2(48, 48)
+layout_mode = 2
+focus_mode = 0
+theme_override_styles/normal = SubResource("StyleBoxFlat_lrlx7")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_jg8qp")
+toggle_mode = true
+button_group = ExtResource("5_3khhy")
+
+[node name="NameLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid/Style2Cell"]
+auto_translate_mode = 2
+layout_mode = 2
+horizontal_alignment = 1
+
+[node name="Style3Cell" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid"]
+layout_mode = 2
+
+[node name="Swatch" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid/Style3Cell"]
+custom_minimum_size = Vector2(48, 48)
+layout_mode = 2
+focus_mode = 0
+theme_override_styles/normal = SubResource("StyleBoxFlat_oygqr")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_8sa7r")
+toggle_mode = true
+button_group = ExtResource("5_3khhy")
+
+[node name="NameLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid/Style3Cell"]
+auto_translate_mode = 2
+layout_mode = 2
+horizontal_alignment = 1
+
+[node name="Style4Cell" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid"]
+layout_mode = 2
+
+[node name="Swatch" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid/Style4Cell"]
+custom_minimum_size = Vector2(48, 48)
+layout_mode = 2
+focus_mode = 0
+theme_override_styles/normal = SubResource("StyleBoxFlat_bymik")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_fg5gj")
+toggle_mode = true
+button_group = ExtResource("5_3khhy")
+
+[node name="NameLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid/Style4Cell"]
+auto_translate_mode = 2
+layout_mode = 2
+horizontal_alignment = 1
+
+[node name="Style5Cell" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid"]
+layout_mode = 2
+
+[node name="Swatch" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid/Style5Cell"]
+custom_minimum_size = Vector2(48, 48)
+layout_mode = 2
+focus_mode = 0
+theme_override_styles/normal = SubResource("StyleBoxFlat_gyemt")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_k13k3")
+toggle_mode = true
+button_group = ExtResource("5_3khhy")
+
+[node name="NameLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid/Style5Cell"]
+auto_translate_mode = 2
+layout_mode = 2
+horizontal_alignment = 1
+
+[node name="Style6Cell" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid"]
+layout_mode = 2
+
+[node name="Swatch" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid/Style6Cell"]
+custom_minimum_size = Vector2(48, 48)
+layout_mode = 2
+focus_mode = 0
+theme_override_styles/normal = SubResource("StyleBoxFlat_3xldy")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_an1pm")
+toggle_mode = true
+button_group = ExtResource("5_3khhy")
+
+[node name="NameLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid/Style6Cell"]
+auto_translate_mode = 2
+layout_mode = 2
+horizontal_alignment = 1
+
+[node name="StyleHint" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
+text = "UI_CC_STYLE_HINT"
+autowrap_mode = 3
+
+[node name="Footer" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="FooterSpacer" type="Control" parent="Scrim/Center/Row/Panel/MarginContainer/Col/Footer"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="RandomButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/Footer"]
+layout_mode = 2
+focus_mode = 0
+text = "UI_CC_BTN_RANDOM"
+
+[node name="CancelButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/Footer"]
+layout_mode = 2
+focus_mode = 0
+text = "UI_CC_BTN_CANCEL"
+
+[node name="SaveTemplateButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/Footer"]
+layout_mode = 2
+focus_mode = 0
+text = "UI_CC_BTN_SAVE"
+
+[node name="DeployButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/Footer"]
+layout_mode = 2
+focus_mode = 0
+text = "UI_CL_BTN_DEPLOY"

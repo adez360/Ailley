@@ -1,12 +1,12 @@
 <!--
 開 PR 前先讀 CLAUDE.md 的「PR 審查與指派」：
-Assignee 設自己，reviewer request `robot-ru`＋`coderabbitai`（任一邊 Approved 即通過），
+Assignee 設自己，主審是 `coderabbitai`（CI 自動 request；額度用完才由 robot-ru 人工接手），
 審查結果看正式 review 狀態。
 
 ## 自查（開 PR 前勾完）
 
 - [ ] Assignee 已設為自己
-- [ ] Reviewer 已 request `robot-ru` 與 `coderabbitai`
+- [ ] Reviewer 已 request `coderabbitai`（robot-ru 僅在其沒審到時補位）
 
 ## 對應 issue
 

@@ -1,0 +1,71 @@
+[gd_scene load_steps=3 format=3 uid="uid://byam6jwe3kml6"]
+
+[ext_resource type="Theme" uid="uid://dktke2k785jv0" path="res://assets/ui/ailley_theme.tres" id="1_5odfh"]
+[ext_resource type="Script" uid="uid://dd0c5rk3hycom" path="res://scripts/ui/character_sidebar.gd" id="1_w7yd3"]
+
+[node name="SideBar" type="CanvasLayer"]
+script = ExtResource("1_w7yd3")
+
+[node name="Control" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 11
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -14.0
+offset_right = 140.0
+grow_horizontal = 0
+grow_vertical = 2
+theme = ExtResource("1_5odfh")
+
+[node name="HBoxContainer" type="HBoxContainer" parent="Control"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 0
+
+[node name="Button" type="Button" parent="Control/HBoxContainer"]
+custom_minimum_size = Vector2(14, 40)
+layout_mode = 2
+size_flags_vertical = 4
+focus_mode = 0
+theme_type_variation = &"SideBarButton"
+toggle_mode = true
+
+[node name="PanelContainer" type="PanelContainer" parent="Control/HBoxContainer"]
+custom_minimum_size = Vector2(140, 0)
+layout_mode = 2
+size_flags_horizontal = 0
+
+[node name="MarginContainer" type="MarginContainer" parent="Control/HBoxContainer/PanelContainer"]
+layout_mode = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Control/HBoxContainer/PanelContainer/MarginContainer"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Label" type="Label" parent="Control/HBoxContainer/PanelContainer/MarginContainer/VBoxContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+text = "UI_CS_TITLE"
+horizontal_alignment = 1
+
+[node name="HSeparator" type="HSeparator" parent="Control/HBoxContainer/PanelContainer/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="ScrollContainer" type="ScrollContainer" parent="Control/HBoxContainer/PanelContainer/MarginContainer/VBoxContainer"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="List" type="VBoxContainer" parent="Control/HBoxContainer/PanelContainer/MarginContainer/VBoxContainer/ScrollContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 2
+
+[node name="AddButton" type="Button" parent="Control/HBoxContainer/PanelContainer/MarginContainer/VBoxContainer"]
+layout_mode = 2
+focus_mode = 0
+text = "UI_CS_BTN_ADD"
