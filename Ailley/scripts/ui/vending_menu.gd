@@ -74,7 +74,7 @@ func open(place: String, buyer: Character) -> void:
 
 	for item_id in Shop.list_items(place):
 		var button := Button.new()
-		button.text = "%s　%d" % [item_id, Shop.get_price(place, item_id)]
+		button.text = "%s　%d" % [ItemDatabase.get_display_name(item_id), Shop.get_price(place, item_id)]
 		button.focus_mode = Control.FOCUS_NONE		# 理由跟 hotbar.gd 的格子按鈕同一段註解
 		button.pressed.connect(_buy.bind(item_id))
 		item_list.add_child(button)
