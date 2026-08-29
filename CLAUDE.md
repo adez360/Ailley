@@ -177,6 +177,10 @@ GitHub 的 rename API 不會把已開的 PR 轉到新分支，它直接把那則
   1. coderabbitai 沒有出正式審查（額度上限、review 被跳過）；
   2. 它的審查有明顯漏抓（作者或讀者發現具體疑點）。
   接手時由 robot-ru 手動 request 自己或直接提交正式 review。
+- **AI 審查只審「被叫的那個版本」**：push 新修正後 AI 不會自動重審。
+  作者改完要自己留言 `@coderabbitai review` 觸發重審；留言後看到
+  rate limit（額度用完）就表示該 robot-ru 接手了——這是明確訊號，
+  不要默默等。
 - **審查結果一律用 GitHub 正式 review 狀態記錄，不是留言而已**：
   - `Approved`：通過，可以合併（coderabbitai 或 robot-ru 任一邊 Approved 即算過）。
   - `Changes requested`：未通過，逐項修正。
