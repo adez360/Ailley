@@ -120,6 +120,24 @@ const LONG_ACTION_CHECKPOINT_INTERVAL := 10
 ## 相當餘裕，維持 20
 const LLM_TASK_POOL_CAP := 20
 
+## 任務池跟 _current_task 都空時（issue #695）的保底重排節流間隔。**不能**
+## 跟 MIN_ACTION_DURATION 一樣抓 10：AIService 的 min_interval_sec（預設 30）
+## 是「真實」秒，跟 GameClock.seconds_per_game_minute（預設 1.0）換算後，
+## 10 遊戲分鐘只等於 10 真實秒，比 AIService 自己的冷卻還短——真正的攻速
+## 瓶頸會是 AIService 那邊的 30 秒，不是這裡。一隻整天卡住的角色會每 30
+## 真實秒成功打一次、吃掉一次 max_calls_per_game_day（預設 20）：
+## 20 × 30 秒 = 600 真實秒，只是一個完整遊戲日（1440 遊戲分鐘 × 1.0 秒
+## = 1440 真實秒）的 42%，代表卡住的角色會在遊戲日前半就把全天配額燒光，
+## 剩下時間連真的發生事件（玩家走過去）都問不了模型。
+##
+## 抓 72：1440 遊戲分鐘 ÷ max_calls_per_game_day(20) ≈ 72，讓「整天都卡住」
+## 這個最壞情況的補救嘗試次數本身就不超過每日配額，配額才留得住給任務
+## 完成、事件觸發這些真正該優先的重排時機用。這個數字綁定兩個設定檔常數
+## 的比例關係，AIConfig 的預設值之後若調整，這裡要跟著重新計算，不是
+## 寫死不變的量級常數（跟 MIN_ACTION_DURATION 那種純粹的「動作最小顆粒」
+## 性質不同）
+const STUCK_RETRY_INTERVAL_MINUTES := 72
+
 ## 候選任務池。這一版只在 _load_schedule() 建立一次就不再變動——
 ## 「到點才可用」靠仲裁時的 window 過濾，不是把任務從池子裡搬進搬出
 var _tasks: Array[Dictionary] = []
@@ -279,6 +297,11 @@ var _reacting := false
 # 又觸發第二份（同一個 LLM 任務完成的當下可能被重算好幾次），
 # _consider_switch() 靠它決定要用 MIN_COMMIT 還是 LLM_WAIT_MIN_COMMIT
 var _awaiting_decision := false
+
+# 上次因為「任務池跟目前任務都空」補打一次保底重排的遊戲分鐘（issue #695，
+# 見 _reevaluate_once() 的 STUCK_RETRY_INTERVAL_MINUTES 節流）。初始值設成
+# 負的節流間隔，保證出生後第一次真的卡住時不用等滿一個間隔就能立刻補一次
+var _last_stuck_retry_minute := -STUCK_RETRY_INTERVAL_MINUTES
 
 # 長動作檢查點決策請求還有沒有一份在飛（issue #336）。跟 _awaiting_decision
 # 是兩個獨立的旗標，各自防各自的重疊呼叫——檢查點問的是「這筆任務要不要
@@ -1389,6 +1412,29 @@ func _request_next_decision(
 		print("[llm_decision] %s inner_monologue: %s" % [character_name, data.get("inner_monologue", "")])
 
 		var tasks_added := _push_llm_tasks(data["tasks"], data)
+
+		# 回應合法地帶回空 tasks 陣列（規格「不更新就是空陣列」）、且現在
+		# 真的沒有任何事在做時，補一筆頂著（issue #699）——不這樣做的話角色
+		# 會卡在完全沒有任何任務的狀態，唯一接得上的「動作做完」事件驅動
+		# 重排永遠不會發生，只能靠 #695 那個獨立節流的保底重排撐著。補一筆
+		# 之後兩者行為一致：duration 到期就正常觸發下一次決策，不需要為
+		# 「決策回應空手而歸」另外燒一份跟仲裁器候選池不相干的冷卻預算。
+		# 優先度給 0——就算池子裡還留著別的候選（例如 schedule 任務進了
+		# 窗口），也不該搶贏它們
+		#
+		# stats.get_lowest_need_place()（《系統分析計畫》§5 早就指定的
+		# fallback 路徑：問不到 AI 就先去滿足最低的那項需求，不是站在原地）
+		# 一直沒有任何呼叫端接上——只有真的有需求跌破 CRITICAL 時才用它排
+		# move_to，沒有需求需要處理時維持原本的 idle，不會讓角色沒事也到處
+		# 亂晃
+		if tasks_added == 0 and _current_task.is_empty():
+			var fallback_place := ""
+			if stats != null and stats.needs_attention():
+				fallback_place = stats.get_lowest_need_place()
+			if not fallback_place.is_empty():
+				_push_llm_tasks([{"action": "move_to", "params": {"place": fallback_place}, "priority": 0.0}], data)
+			else:
+				_push_llm_tasks([{"action": "idle", "params": {}, "priority": 0.0}], data)
 
 		# emotion（#351）：每次決策都必填，validate_tasks() 已經驗證過 type／
 		# intensity 合法，這裡直接套用，不再二次判斷——AI 自己宣告的內在狀態，
@@ -2602,6 +2648,7 @@ func _reevaluate_once() -> void:
 			and _current_task.get("source", "") == "llm" \
 			and _current_task.get("id", "") != _active_talk_task_id \
 			and not is_performing() \
+			and not _current_task.get("_logged", false) \
 			and now_minutes - _current_task_started_at >= int(ceil(_effective_action_duration(_current_task.get("duration", 0.0)))):
 		# 做完的那筆要先離開池子。llm 任務沒有 window，不像 schedule 靠時間窗
 		# 自然退場——留著的話它會用原本的分數繼續參加下一輪算分，被重新選中，
@@ -2627,6 +2674,21 @@ func _reevaluate_once() -> void:
 		_request_next_decision(_today_plan_needs_new_goal())
 
 	if _tasks.is_empty():
+		# 池子空、_current_task 也空：代表上一輪決策回應合法地帶回空 tasks
+		# 陣列（規格「不更新就是空陣列」），不是驗證失敗。上面那個事件驅動
+		# 觸發只在「目前任務做滿 duration」才會發生——沒有任務就沒有「做滿」
+		# 這件事，角色會無限期卡在這裡，永遠不會再被問一次（issue #695）。
+		#
+		# 節流不能直接看 AIService 的 cooldown_left：provider 完全連不上時
+		# （config disabled／provider invalid）請求在 _note_call() 之前就
+		# 失敗，cooldown_left 永遠回 0，沒有自己的節流會讓這裡每個遊戲分鐘
+		# 都重打一次，變成新的洗版問題。用獨立的 _last_stuck_retry_minute
+		# 記錄，跟 AIService 的冷卻分開算
+		if llm_decision_enabled and not _awaiting_decision \
+				and (_current_task.is_empty() or _current_task.get("_logged", false)) \
+				and now_minutes - _last_stuck_retry_minute >= STUCK_RETRY_INTERVAL_MINUTES:
+			_last_stuck_retry_minute = now_minutes
+			_request_next_decision(_today_plan_needs_new_goal())
 		return
 
 	var now := "%02d:%02d" % [GameClock.hour, GameClock.minute]
