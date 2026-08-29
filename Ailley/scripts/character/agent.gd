@@ -3391,6 +3391,14 @@ func _pursue_current_task() -> void:
 
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
 	if anchors == null or not anchors.has_for(self, current_place):
+		# home_location_id 還沒指派時 has_for() 對 "home" 一定回傳 false——
+		# 動態生成的 Agent 在 CharacterStatePersistence 完成同步之前就可能
+		# 先跑一次 _reevaluate()，這是會自己好的暫時狀態，不是打錯字。不能
+		# 落地 _pursued_place／_pursuit_done：落地的話 home_location_id
+		# 到位後，下面的「地點沒換」收斂判斷會把這次暫時失敗誤判成已有
+		# 結論，永遠不會再呼叫 move_to()（CodeRabbit review 抓到，PR #727）
+		if current_place == anchors.HOME_PLACE_NAME and home_location_id.is_empty():
+			return
 		# 地點打錯只報一次。這個函式每個遊戲分鐘跑一次，不擋的話一個 typo
 		# 就是每小時三千多則 error 洗掉整個面板
 		if current_place != _pursued_place:

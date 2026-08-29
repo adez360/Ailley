@@ -1927,10 +1927,13 @@ func _ensure_npc_record(
 
 		# 舊 Character 節點重新進場（例如讀檔後重生）時，把 DB 裡已經
 		# 分配過的家同步回記憶體欄位——round-robin 只在建立新 npc 記錄
-		# 那一次跑，這裡不重新分配，只是把權威值（DB）同步回來
+		# 那一次跑，這裡不重新分配。但 DB 值本身也可能是 issue #391 之前
+		# 的舊 fallback（home_001 這類），直接信任會讓這個值繞過格式驗證
+		# 一路留到 has_for()/resolve_for() 才發現解不開——一樣要走
+		# _reconcile_home_location() 驗證（CodeRabbit review 抓到，PR #727）
 		if character.home_location_id.is_empty():
 			character.home_location_id = db_home_location_id
-			return true
+			return _reconcile_home_location(character, db_home_location_id, character_id)
 
 		# 記憶體值（可能來自讀檔還原的存檔）跟 DB 現存值不一致：DB 才是
 		# _occupied_home_location_ids() 判斷占用的依據，兩邊沒同步會讓
@@ -1939,15 +1942,7 @@ func _ensure_npc_record(
 		# 結果寫回 DB，不能只在記憶體端悄悄接受讀檔帶回來的值
 		# （code review 抓到，PR #727）
 		if character.home_location_id != db_home_location_id:
-			var resolved_home_location_id := _resolve_home_location(character)
-			character.home_location_id = resolved_home_location_id
-			if resolved_home_location_id != db_home_location_id:
-				DatabaseManager.update(
-					NPC_TABLE,
-					{"home_location_id": resolved_home_location_id},
-					"npc_id = '%s'"
-					% DatabaseManager.escape_sql_string(character_id)
-				)
+			return _reconcile_home_location(character, db_home_location_id, character_id)
 
 		return true
 
@@ -2027,6 +2022,40 @@ func _ensure_npc_record(
 ## 不支援依人數上限動態生成，見《99》P-58
 const HOME_LOCATION_COUNT := 5
 const HOME_LOCATION_PREFIX := "loc_home_"
+
+
+## _ensure_npc_record() 的共用收尾：用 _resolve_home_location() 驗證／必要時
+## 重新分配 character 目前的 home_location_id，寫回記憶體；若跟 DB 現存值不同
+## 才寫回 DB。回傳值就是「這次同步算不算成功」——DB 寫入失敗時要往上傳，不能
+## 悄悄吞掉：吞掉的話記憶體已經換成新值、DB 還停在舊值，
+## _occupied_home_location_ids()（讀 DB）跟實際分配會分歧，跟不寫回 DB 是
+## 同一種脫鉤（CodeRabbit review 抓到，PR #727）
+func _reconcile_home_location(
+	character: Character,
+	db_home_location_id: String,
+	character_id: String
+) -> bool:
+
+	var resolved_home_location_id := _resolve_home_location(character)
+	character.home_location_id = resolved_home_location_id
+
+	if resolved_home_location_id == db_home_location_id:
+		return true
+
+	var update_ok := DatabaseManager.update(
+		NPC_TABLE,
+		{"home_location_id": resolved_home_location_id},
+		"npc_id = '%s'"
+		% DatabaseManager.escape_sql_string(character_id)
+	)
+
+	if not update_ok:
+		push_error(
+			"[CharacterStatePersistence] %s home_location_id 同步失敗（%s → %s）"
+			% [character_id, db_home_location_id, resolved_home_location_id]
+		)
+
+	return update_ok
 
 
 func _resolve_home_location(
