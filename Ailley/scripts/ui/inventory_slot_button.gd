@@ -10,11 +10,15 @@ extends TextureButton
 ## 圖示系統做出來之後這塊要整個換掉，不是拿去微調。
 ##
 ## 格子只有 26×28px（見 note/技術/UI 版面與素材規格.md），塞不下最長的
-## 4 字品名（「小型獵物」「大型獵物」「一般衣物」）——`NAME_FONT_SIZE` 把字級
-## 從預設 11 降到 8，但單靠 `clip_text` 逐像素裁切在中文字上會從字中間切
-## 一刀，裁出來的殘缺字形比整份名稱少顯示一個字還醜（實機截圖驗證過）。
-## 所以改成先用 `MAX_NAME_CHARS` 在組字串階段就砍到完整字元數，`clip_text`
-## 只當漏網之魚的最後防線。這是暫時的示意畫法，不是要在文字排版上做到完美。
+## 4 字品名（「小型獵物」「大型獵物」「一般衣物」）。字級維持全 UI 統一的 11
+## （《UI 版面與素材規格》§字型：點陣中文字型只在原生尺寸才銳利，降級會糊，
+## 所以不另開字級），改用 `MAX_NAME_CHARS` 在組字串階段砍到 2 個完整字元——
+## 11px × 2 字 = 22px，進得去 26px 的格子。代價：`herb`「藥草」與
+## `herb_soup`「藥草湯」截斷後撞成同一個「藥草」，目前物品清單裡只有這一組
+## 撞名，且兩者本就同源（湯是草煮的），暫時接受，等圖示系統做出來自然分辨。
+## 單靠 `clip_text` 逐像素裁切會從中文字中間切一刀、裁出殘缺字形，所以
+## `clip_text` 只當漏網之魚的最後防線。這是暫時的示意畫法，不是要在文字排版
+## 上做到完美。
 ##
 ## slot_index 是這格對應到 Inventory.slots 的絕對索引（0-35，快捷欄 0-8、
 ## 主背包 9-35，見 inventory.gd）。跟 hotbar.gd／inventory_panel.gd 一樣不快取
@@ -28,8 +32,7 @@ extends TextureButton
 ## 常駐列跟背包面板裡的格子（不管是主背包 27 格還是面板內嵌的快捷欄 9 格）
 ## 天生就能互拖，不需要額外接線。
 
-const NAME_FONT_SIZE := 8		# 預設 11 太大，4 字品名在 26px 寬的格子裡幾乎全被 clip 掉
-const MAX_NAME_CHARS := 3		# 實機驗證：4 字在 8 級字下會被 clip_text 從字中間裁開，裁出殘缺字形
+const MAX_NAME_CHARS := 2		# 11px × 2 字 = 22px 進得去 26px 格；字級維持全 UI 統一 11 不降級（藥草／藥草湯撞名的取捨見檔頭）
 
 var slot_index := -1
 
@@ -48,7 +51,6 @@ func _ready() -> void:
 	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_label.clip_text = true
-	_label.add_theme_font_size_override("font_size", NAME_FONT_SIZE)
 	add_child(_label)
 
 	# 掛 Inventory.changed，不是每幀重畫——36 個格子各輪詢一次 get_slot()
