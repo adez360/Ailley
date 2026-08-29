@@ -168,12 +168,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	var candidates := _get_interact_candidates()
 	var workstation: Workstation = candidates["workstation"]
 	var machine: VendingMachine = candidates["machine"]
+	var downed: Character = candidates["downed"]
 	var other: Character = candidates["other"]
 
 	# 失敗要往下掉到搭話，不是直接 return。工作站被別人佔用（WORK_OCCUPIED）
 	# 或自己正在工作（WORK_BUSY）時直接 return 的話，E 整個沒反應 ——
 	# 玩家連站在眼前那個正在工作的人都搭不了話
 	if workstation != null and candidates["to_work"] <= candidates["to_machine"] \
+			and candidates["to_work"] <= candidates["to_downed"] \
 			and candidates["to_work"] <= candidates["to_other"]:
 		var work_reason := work_at(workstation)
 		if work_reason == WORK_OK:
@@ -196,8 +198,17 @@ func _unhandled_input(event: InputEvent) -> void:
 	# 販賣機不是立刻執行動作，是開商品選單——真正的購買發生在
 	# vending_menu.gd 裡點下某一項的時候。vending_menu 理論上一定找得到
 	# （場景裡固定掛著），這裡多防一手是避免場景漏掛的話直接炸掉
-	elif machine != null and candidates["to_machine"] <= candidates["to_other"] and vending_menu != null:
+	elif machine != null and candidates["to_machine"] <= candidates["to_downed"] \
+			and candidates["to_machine"] <= candidates["to_other"] and vending_menu != null:
 		vending_menu.open(machine, self)
+		return
+	# 昏迷角色跟可搭話對象互斥（見 _get_interact_candidates() 的說明），
+	# 這裡不是比大小決優先序，純粹是「範圍內有沒有昏迷者」決定 E 是搬運
+	# 還是搭話（issue #637）
+	elif downed != null and candidates["to_downed"] <= candidates["to_other"]:
+		var haul_reason := start_haul(downed)
+		if haul_reason != HAUL_OK:
+			report_action_failure("start_haul", haul_reason)
 		return
 
 	# 對方正在表演時，E 開的是打賞選單而不是搭話——玩家（天神）主動打賞是
@@ -226,7 +237,7 @@ func _is_facing(target: Vector2) -> bool:
 		return true
 	return get_facing_direction().dot(to_target.normalized()) >= FACING_DOT_THRESHOLD
 
-## 找出目前附近的三種互動候選（工作站／販賣機／可搭話的人）跟各自的距離。
+## 找出目前附近的四種互動候選（工作站／販賣機／昏迷角色／可搭話的人）跟各自的距離。
 ## `_unhandled_input()`（按 E 真的觸發）跟 `_process()`（每幀更新高亮）共用
 ## 這個函式——兩邊要看到同一個答案，不然會出現「亮的是這個，按下去卻打到
 ## 另一個」的狀況，比原本沒有高亮更誤導人。
@@ -235,7 +246,7 @@ func _is_facing(target: Vector2) -> bool:
 ## 落在某個地點錨點的互動半徑內（`square` 那張距錨點 21px < WORK_RANGE 32），
 ## agent 的行程又正好把 NPC 帶去那些錨點，NPC 幾乎必然比物件更近，物件因此
 ## 永遠打不到。改成先用 `_is_facing()` 把沒面向的候選直接排除，玩家沒面向
-## 任何東西時三個候選都是 null——這是刻意拍板的硬性門檻，不是「面向只影響
+## 任何東西時四個候選都是 null——這是刻意拍板的硬性門檻，不是「面向只影響
 ## 排序」：站在物件正上方但背對著，不該選得到它，玩家得自己轉身面對。
 ##
 ## 這套判斷沒有做成套用任何「可互動物件」共通分類的通用系統，是延續 #63
@@ -247,20 +258,31 @@ func _is_facing(target: Vector2) -> bool:
 ## 呼叫都掃過整個 group 的寫法。角色候選改用 vision.get_visible_characters()，
 ## 不另開一個 Area2D（issue #109 拍板，見 note/技術/talk 動作設計.md）——
 ## 反正 talk_to() 已經要做視線判定，搭話候選跟著視線走沒理由重複維護兩份
+##
+## 昏迷角色（`downed`）跟可搭話對象（`other`）從同一份 vision 清單分流、互斥——
+## 昏迷者不進 `other`：talk_to() 沒有擋昏迷目標（is_talk_interruptible() 只看
+## _working／is_dead），兩邊都收會讓同一個人同時是搭話候選又是搬運候選，
+## 距離又剛好一樣（HAUL_RANGE == TALK_RANGE），還得另外決哪個優先。分流後
+## 兩邊各自呼叫一次 _nearest_facing()，跟 workstation／machine 同一種寫法（issue #637）
 func _get_interact_candidates() -> Dictionary:
 	var workstation := _nearest_facing(_nearby_group("workstations"), WORK_RANGE, func(n): return n.global_position) as Workstation
 	var machine := _nearest_facing(_nearby_group("vending_machines"), BUY_RANGE, func(n): return n.global_position) as VendingMachine
 	var visible_characters: Array = vision.get_visible_characters() if vision != null else []
-	var other := _nearest_facing(visible_characters, TALK_RANGE, func(n): return (n as Character).get_body_position()) as Character
+	var downed_characters := visible_characters.filter(func(n): return (n as Character).has_condition(CONDITION_INCAPACITATED))
+	var talkable_characters := visible_characters.filter(func(n): return not (n as Character).has_condition(CONDITION_INCAPACITATED))
+	var downed := _nearest_facing(downed_characters, HAUL_RANGE, func(n): return (n as Character).get_body_position()) as Character
+	var other := _nearest_facing(talkable_characters, TALK_RANGE, func(n): return (n as Character).get_body_position()) as Character
 
 	# 不在範圍內／沒被面向的候選距離是 INF，直接輸掉比較，不用另外再寫一層
 	# null 判斷
 	return {
 		"workstation": workstation,
 		"machine": machine,
+		"downed": downed,
 		"other": other,
 		"to_work": get_body_position().distance_to(workstation.global_position) if workstation != null else INF,
 		"to_machine": get_body_position().distance_to(machine.global_position) if machine != null else INF,
+		"to_downed": get_body_position().distance_to(downed.get_body_position()) if downed != null else INF,
 		"to_other": get_body_position().distance_to(other.get_body_position()) if other != null else INF,
 	}
 
@@ -328,6 +350,7 @@ func _process(_delta: float) -> void:
 	var candidates := _get_interact_candidates()
 	var workstation: Workstation = candidates["workstation"]
 	var machine: VendingMachine = candidates["machine"]
+	var downed: Character = candidates["downed"]
 	var other: Character = candidates["other"]
 
 	var target_workstation: Workstation = null
@@ -338,12 +361,19 @@ func _process(_delta: float) -> void:
 	# 重試那段——重試只在真的按下 E、真的失敗時才有意義，高亮只回答
 	# 「等一下按下去會先試誰」。machine 分支的 vending_menu != null 防呆
 	# 也要跟 _unhandled_input() 對齊：場景漏掛選單節點時那邊會直接退回
-	# 搭話，這裡不跟著擋的話高亮會亮著販賣機、但按下去其實打到人
+	# 搭話，這裡不跟著擋的話高亮會亮著販賣機、但按下去其實打到人。
+	# downed 併進 target_other（沿用同一個高亮 setter）——玩家看到的只是
+	# 「這個人會被 E 打到」，會搬運還是搭話由 _unhandled_input() 決定，
+	# 高亮視覺不用另外分兩種（issue #637）
 	if workstation != null and candidates["to_work"] <= candidates["to_machine"] \
+			and candidates["to_work"] <= candidates["to_downed"] \
 			and candidates["to_work"] <= candidates["to_other"]:
 		target_workstation = workstation
-	elif machine != null and candidates["to_machine"] <= candidates["to_other"] and vending_menu != null:
+	elif machine != null and candidates["to_machine"] <= candidates["to_downed"] \
+			and candidates["to_machine"] <= candidates["to_other"] and vending_menu != null:
 		target_machine = machine
+	elif downed != null and candidates["to_downed"] <= candidates["to_other"]:
+		target_other = downed
 	elif other != null:
 		target_other = other
 
