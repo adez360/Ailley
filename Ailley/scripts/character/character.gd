@@ -97,6 +97,7 @@ const PERFORM_DURATION_MINUTES := 10
 ## 原樣轉傳 Inventory 的 ADD_NO_SPACE，不重新取名（#574）
 const GATHER_OK := ""
 const GATHER_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法採集
+const GATHER_NO_STATS := "NO_STATS"	# 沒有 Stats 的角色沒地方扣 hygiene（跟 PERFORM_NO_STATS 同一個理由）
 
 ## use_selected_item() 的失敗原因碼，形狀比照 EAT_*／DRINK_*（#611）。除了這四個，
 ## use_selected_item() 還會**原樣轉傳** Inventory.use_item() 自己的原因碼
@@ -1350,11 +1351,29 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 # 地點對不對、擲不擲得過成功率是 resolve() 的事（見 agent.gd 的 SUCCESS_PARAMS／
 # _roll_success()），這裡假設呼叫端已經確認過那兩件事才會呼叫。add_item()
 # 內部已處理堆疊規則，回傳值直接轉傳（ADD_OK 剛好也是空字串，跟 GATHER_OK
-# 同一個值，不用另外映射）
+# 同一個值，不用另外映射）。hygiene 扣點（《99》P-65）只在真的採到東西時扣——
+# 背包滿了採集失敗，不該連累角色平白變髒
 func gather() -> String:
 	if inventory == null:
 		return GATHER_NO_INVENTORY
-	return inventory.add_item("herb")
+	if stats == null:
+		return GATHER_NO_STATS
+	var reason := inventory.add_item("herb")
+	if reason == Inventory.ADD_OK:
+		_apply_action_dirty("gather")
+	return reason
+
+# 依 Stats.ACTION_DIRTY 表，把某個離散動作對應的扣點一次套用到 stats 上。
+# 跟 agent.gd 的 ACTION_RECOVERY／_apply_action_recovery() 是同一張表的反面
+# ——那邊是「持續狀態每遊戲分鐘回一點」，這裡是「動作執行成功時扣一次」，
+# 放在 Character 而不是 Agent：gather()／perform() 兩個呼叫端都在這個基底，
+# Player 也要能觸發，不能只讓 Agent 看得到
+func _apply_action_dirty(action: String) -> void:
+	if stats == null:
+		return
+	var dirty_list: Array = Stats.ACTION_DIRTY.get(action, [])
+	for dirty in dirty_list:
+		stats.add(dirty["stat"], dirty["amount"])
 
 
 # ---- 人格 ----
@@ -1469,8 +1488,9 @@ func is_performing() -> bool:
 ## 工作站）。跟 eat()／drink() 一樣先做前置檢查、才有副作用；但表演不是瞬間
 ## 完成，是跟 work_at() 同一種「立刻回傳 OK、實際過程交給協程跑」的長動作
 ## ——duration 夠長，範圍內的路人才有機會被 Vision 偵測到、問過自己的 AI
-## 要不要打賞。hygiene -1 是一次性扣點（每次「開始表演」扣一次），不是既有
-## drift 機制的量級，這裡刻意不套用 Stats 既有的每分鐘漂移模式
+## 要不要打賞。hygiene 扣點（《99》P-65，`Stats.ACTION_DIRTY`）是一次性
+## （每次「開始表演」扣一次），不是既有 drift 機制的量級，這裡刻意不套用
+## Stats 既有的每分鐘漂移模式
 func perform() -> String:
 	if inventory == null:
 		return PERFORM_NO_INVENTORY
@@ -1481,7 +1501,7 @@ func perform() -> String:
 	if is_in_conversation() or _working or _performing or _is_movement_locked():
 		return PERFORM_BUSY
 
-	stats.add("hygiene", -1.0)
+	_apply_action_dirty("perform")
 	_performing = true
 	stop_moving()
 	_run_perform(_perform_session_id)
