@@ -1,7 +1,7 @@
 # CLAUDE.md — Ailley Godot 專案
 
 本檔規範「在這個 Godot 專案裡怎麼工作」。
-上層 `../CLAUDE.md`（note/ 筆記庫規則）與全域 `~/.claude/CLAUDE.md` 仍然有效，
+上層 `../.claude/CLAUDE.md`（note/ 筆記庫規則）與全域 `~/.claude/CLAUDE.md` 仍然有效，
 衝突時以本檔為準。
 
 ## 專案概況
@@ -87,6 +87,12 @@
 - 不要碰 `.godot/`（本機快取，已 gitignore）
 - 不要刪除 autoload `_mcp_game_helper` 或停用 `godot_ai` 外掛
 - 不要在專案根目錄亂放暫存檔（`scenes/` 只放 .tscn、腳本一律進 `scripts/<領域>/`）
+
+> [!warning] 手改 `.tscn` 不只是壞參照風險，改動會被靜默丟掉
+> 編輯器開著某個場景時，`project_run` 會 autosave 那份場景 —— 用記憶體裡的舊
+> 版本覆寫磁碟。所以在編輯器外手改 `.tscn`、接著 `project_run` 驗證，改動會
+> 消失得無聲無息（執行期只看到 `@onready` 節點是 null）。實際踩過：
+> `character_create.tscn` 的 Footer 新節點被整個蓋掉。
 
 ## 搬移或改名檔案
 

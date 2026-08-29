@@ -12,7 +12,21 @@ note/.obsidian/cache
 # 的，這類資訊一旦進 commit history 就洗不掉。這個資料夾整個不進版控，
 # 團隊內部要分享這類筆記走各自的加密管道，不要移出這個資料夾
 note/本機/
+# Godot LSP stdio bridge (omp lsp tool dependency)
+node_modules/
 
 # gh 帳號設定（含 token，勿入庫）
 .gh-config/
 .envrc
+
+# Dolphin／檔案管理員的每個資料夾檢視設定（純本機，Ailley/assets、scenes、
+# scripts 底下都會冒出來）
+.directory
+
+# Claude Code／omp 的本機覆寫設定（官方慣例不入庫，會蓋掉團隊共用的
+# settings.json）
+**/.claude/settings.local.json
+
+# omp 的 LSP 設定寫死了本機絕對路徑（node_modules 下的 godot-lsp-stdio-bridge），
+# 換一台機器就不對。同一個資料夾裡的 .omp/RULES.md 是團隊規則，要進版控
+.omp/lsp.json
