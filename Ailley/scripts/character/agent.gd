@@ -838,7 +838,7 @@ func _actual_place_of(character: Character) -> String:
 		return ""
 	# to_ai_place_name()：issue #391 之後這裡可能反查到 loc_home_0N 這種
 	# 物理錨點名稱，呼叫端（事實句／跟 current_place 比對）看到的要是抽象值
-	var physical_place := anchors.resolve_from_position(
+	var physical_place: String = anchors.resolve_from_position(
 		character.get_body_position(), ACTUAL_PLACE_RADIUS
 	)
 	return anchors.to_ai_place_name(physical_place)
