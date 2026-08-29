@@ -346,6 +346,13 @@ func set_selected_index(index: int) -> void:
 func get_money() -> int:
 	return _money
 
+# 從存檔覆寫金額（CharacterStatePersistence 載入 npc_wallet 用）。跳過
+# add_money()／spend() 的正負向驗證——存檔值是要直接覆蓋現有金額，不是
+# 相對異動，跟 slots 存檔載入時直接覆寫陣列是同一種做法。呼叫端自己決定
+# 要不要接著呼叫 notify_changed() 通知 UI
+func set_money(amount: int) -> void:
+	_money = maxi(0, amount)
+
 # 進帳。amount 非正數回原因碼而不是默默放行——要扣錢的呼叫端該用 spend()，
 # 讓 add_money(-50) 成立的話，「收入」與「支出」就會走同一條沒有餘額檢查的路
 func add_money(amount: int) -> String:

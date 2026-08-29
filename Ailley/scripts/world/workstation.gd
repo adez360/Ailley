@@ -48,3 +48,10 @@ func try_occupy(character: Character) -> bool:
 func release(character: Character) -> void:
 	if occupant == character:
 		occupant = null
+
+# 佔用中還要幾遊戲分鐘才會空出來（issue #663）。沒人佔用回 0——呼叫端該先用
+# is_occupied() 判斷要不要顯示這個數字，這裡不重複判斷「是否該顯示」，只管算數
+func get_wait_minutes() -> int:
+	if not is_occupied():
+		return 0
+	return occupant.get_work_minutes_remaining()
