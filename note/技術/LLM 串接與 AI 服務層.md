@@ -331,7 +331,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 `max_turns`，不是遞增的 `turns_so_far`；這裡描述的是設計目標，接回程式碼是
 獨立的後續動作，不在 #482 範圍內。
 
-> [!note] `turns_so_far` 口徑尚未定案，接線時要挑一個
+> [!note] `turns_so_far` 現在等於 `_turns.size()`，不用另外挑一種算法
 > `conversation.gd::_run()` 的迴圈變數 `turn`（從 0 起算）跟 `_turns.size()`
 > （陣列長度）在同一輪呼叫 `next_line()` 的當下是同一個數字——開場白已改成
 > 一律過 LLM（issue #630／《99》P-67），不再有「`turn` 不含開場白、`_turns.size()`
