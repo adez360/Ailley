@@ -908,7 +908,7 @@ poc 輸出裡有、《06》沒提到的欄位：`reasoning`／`inner_monologue`�
 
 **體感層面的解法（#480，2026-08-27 落地）**：`Agent._request_next_decision()`
 在確定要送出請求、真正打網路之前，套用跟 `next_line()`（Step 1 對話）
-完全同一招——`say(AI_THINKING_TEXT, true)` 立刻蓋一顆「…」氣泡，
+完全同一招——`say(AI_THINKING_TEXT, true, false)` 立刻蓋一顆「…」氣泡，
 `interrupt=true` 蓋掉正在顯示的舊訊息。不縮短延遲本身，只讓觸發當下不是
 死寂一片。
 
