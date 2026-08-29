@@ -1783,16 +1783,38 @@ func _ensure_npc_record(
 
 
 	if not existing.is_empty():
+
+		var db_home_location_id := str(
+			existing[0].get(
+				"home_location_id",
+				""
+			)
+		)
+
 		# 舊 Character 節點重新進場（例如讀檔後重生）時，把 DB 裡已經
 		# 分配過的家同步回記憶體欄位——round-robin 只在建立新 npc 記錄
 		# 那一次跑，這裡不重新分配，只是把權威值（DB）同步回來
 		if character.home_location_id.is_empty():
-			character.home_location_id = str(
-				existing[0].get(
-					"home_location_id",
-					""
+			character.home_location_id = db_home_location_id
+			return true
+
+		# 記憶體值（可能來自讀檔還原的存檔）跟 DB 現存值不一致：DB 才是
+		# _occupied_home_location_ids() 判斷占用的依據，兩邊沒同步會讓
+		# round-robin 的占用判斷跟實際分配脫鉤（例如兩人各自「以為」分到
+		# 同一間）。用 _resolve_home_location() 驗證／必要時重分配，
+		# 結果寫回 DB，不能只在記憶體端悄悄接受讀檔帶回來的值
+		# （code review 抓到，PR #727）
+		if character.home_location_id != db_home_location_id:
+			var resolved_home_location_id := _resolve_home_location(character)
+			character.home_location_id = resolved_home_location_id
+			if resolved_home_location_id != db_home_location_id:
+				DatabaseManager.update(
+					NPC_TABLE,
+					{"home_location_id": resolved_home_location_id},
+					"npc_id = '%s'"
+					% DatabaseManager.escape_sql_string(character_id)
 				)
-			)
+
 		return true
 
 
@@ -1877,10 +1899,23 @@ func _resolve_home_location(
 	character: Character
 ) -> String:
 
+	# seed 一定要排在沿用檢查之前：新 DB（例如剛建立、還沒跑過任何一次
+	# _ensure_npc_record()）讀舊存檔時 location 表是空的，沿用檢查若先跑
+	# 會查不到任何一列、誤判存檔帶回來的 loc_home_0N 無效，靜默重分配一個
+	# 新的——先 seed 好，沿用檢查才有東西可以比對（code review 抓到，PR #727）
+	_ensure_home_locations_seeded()
+
+
 	var value := character.home_location_id
 
 
-	if not value.is_empty():
+	# 值本身也要驗證是這一批 loc_home_01～loc_home_05 命名，不能只驗證
+	# location 表裡「有沒有這一列」——舊 fallback（issue #391 之前）寫的
+	# home_001 那類值在 location 表裡也確實有一列，會通過純存在性檢查，
+	# 但場景裡沒有同名錨點，has_for()/resolve_for() 永遠解析不到、每次都
+	# push_error，而且沒有任何自我修復路徑。這裡驗證命名格式，格式不對的
+	# 舊值一律當無效值處理，落到下面重新分配（code review 抓到，PR #727）
+	if _is_valid_home_location_id(value):
 
 		var requested_rows := (
 			DatabaseManager.select_where(
@@ -1900,10 +1935,28 @@ func _resolve_home_location(
 			return value
 
 
-	_ensure_home_locations_seeded()
-
-
 	return _assign_next_home_location()
+
+
+## value 是不是這一批 loc_home_01～loc_home_05 其中一個合法命名——只檢查
+## 格式，不查 DB（DB 存在性由呼叫端另外查）。用來擋掉 issue #391 之前的
+## 舊 fallback 值（例如 home_001）與其他任何不屬於這批命名的殘留值
+func _is_valid_home_location_id(value: String) -> bool:
+
+	if value.is_empty():
+		return false
+
+	if not value.begins_with(HOME_LOCATION_PREFIX):
+		return false
+
+	var suffix := value.substr(HOME_LOCATION_PREFIX.length())
+
+	if not suffix.is_valid_int():
+		return false
+
+	var index := int(suffix)
+
+	return index >= 1 and index <= HOME_LOCATION_COUNT
 
 
 ## 5 間 loc_home_01~05 是這個 issue 新加的 location 列，只在缺的時候補——
@@ -1959,12 +2012,30 @@ func _assign_next_home_location() -> String:
 			_set_home_cursor((index + 1) % HOME_LOCATION_COUNT)
 			return location_id
 
-	push_error(
-		"[CharacterStatePersistence] "
-		+ "5 間家全滿，issue #391 MVP 範圍假設不會發生（見《99》P-58）。"
+	# 溢出安全閥，不是刻意設計的同居功能：5 間全滿在 DEPLOY_CAP=5 的
+	# 世界人數上限下「理論上」不會發生（見《規格書07_地點/家》），但玩家
+	# 本身也會走這條路徑要一間家（見 _ensure_npc_record()），main.tscn
+	# 目前仍留有一個沒走 deploy_from_library() 的設計期測試用 Player 節點
+	# （見 note/技術/村莊地圖.md），會把實際需求推到 6，讓這裡真的碰得到。
+	# home_location_id 在 NPCSchema 是 NOT NULL，回傳空字串會讓
+	# _ensure_npc_record() 整筆失敗、state/wallet/inventory 同步永久卡死
+	# ——寧可讓這個角色暫時跟游標當下那一間共用，也不要讓整套同步斷掉。
+	# 同居本身不是這則拍板的功能（留待《99》P-58 Phase 3/4），這裡只是
+	# 容量耗盡時的防呆，push_warning 不是 push_error（code review 抓到，
+	# PR #727）
+	var overflow_location_id := (
+		"%s%02d" % [HOME_LOCATION_PREFIX, cursor + 1]
 	)
 
-	return ""
+	_set_home_cursor((cursor + 1) % HOME_LOCATION_COUNT)
+
+	push_warning(
+		"[CharacterStatePersistence] "
+		+ "5 間家全滿，%s 溢出共用（容量安全閥，非刻意同居設計，見《99》P-58）。"
+		% overflow_location_id
+	)
+
+	return overflow_location_id
 
 
 func _occupied_home_location_ids() -> Dictionary:
