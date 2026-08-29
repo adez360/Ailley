@@ -46,11 +46,21 @@ const POOL_SIZE := 3
 ## SCHEDULED   —— 行程重排等由系統自己發動的呼叫。吃冷卻與每日配額
 ## CONVERSATION —— 對話輪次。玩家等在螢幕前面，而且輪次是秒級間隔，
 ##                 依 2026-08-05 的決定豁免冷卻與配額（可在設定檔關掉）
-enum Policy { SCHEDULED, CONVERSATION }
+## CREATION     —— 建角當下的一次性生成（例如 words_to_creator）。結構上
+##                 每個角色一輩子只會打這一次（呼叫端自己用 is_empty()
+##                 擋重複觸發），沒有 CONVERSATION 那種「可能被無限次觸發」
+##                 的濫用風險，所以直接無條件豁免冷卻與配額，不像
+##                 CONVERSATION 需要 dialogue_exempt 開關。成本保護不敞開：
+##                 豁免之後另有可設定的每日上限 max_creation_calls_per_game_day
+##                 頂著（0＝不限）。不跟 SCHEDULED 共用同一個 requester_id
+##                 冷卻池，是因為這通會在行程重排之前搶先打一次，佔掉冷卻
+##                 會讓緊接著的第一次行程決策被 ERROR_RATE_LIMITED 同步擋下
+##                 （issue #682）
+enum Policy { SCHEDULED, CONVERSATION, CREATION }
 
-# 速率限制的兩個數字（同 requester_id 的最短真實間隔、每遊戲日上限）住在
-# AIConfig，不在這裡：它們是「花多少錢」的旋鈕，玩家改得到。
-# 預設值見 AIConfig.DEFAULT_MIN_INTERVAL_SEC / DEFAULT_MAX_CALLS_PER_GAME_DAY。
+# 速率限制的數字（同 requester_id 的最短真實間隔、每遊戲日上限，加上對話／
+# 建角豁免後各自的每日上限）住在 AIConfig，不在這裡：它們是「花多少錢」的
+# 旋鈕，玩家改得到。
 #
 # 用真實秒不用遊戲時間，因為要擋的是 API 帳單與 provider 的 rate limit，
 # 那兩者都活在真實時間裡；掛 requester_id 不掛全域，因為多人版的帳單
@@ -88,6 +98,7 @@ var _queue: Array = []			# 等節點的 _Job，出隊順序見 _next_job_index()
 var _last_call_msec := {}			# requester_id -> Time.get_ticks_msec()，只記受限的呼叫
 var _calls_today := {}				# requester_id -> 今天已用的「受限」次數，吃配額
 var _dialogue_calls_today := {}		# requester_id -> 今天的對話輪次，只計帳不設限
+var _creation_calls_today := {}		# requester_id -> 今天的建角一次性生成次數，只計帳不設限
 
 var _readiness := {}				# provider 名字 -> {"ready": bool, "reason": String}
 
@@ -393,14 +404,17 @@ func get_usage(requester_id: String) -> Dictionary:
 	var elapsed := Time.get_ticks_msec() - int(_last_call_msec.get(requester_id, -999999))
 	var calls := int(_calls_today.get(requester_id, 0))
 	var dialogue := int(_dialogue_calls_today.get(requester_id, 0))
+	var creation := int(_creation_calls_today.get(requester_id, 0))
 	return {
 		"game_day": GameClock.day,
 		"calls_today": calls,
 		"max_calls": config.max_calls_per_game_day,
-		# 對話輪次不佔配額，但一樣是錢，所以分開報而不是不報
+		# 對話輪次、建角一次性生成都不佔配額，但一樣是錢，所以分開報而不是不報
 		"dialogue_today": dialogue,
 		"max_dialogue": config.max_dialogue_calls_per_game_day,
-		"total_today": calls + dialogue,
+		"creation_today": creation,
+		"max_creation": config.max_creation_calls_per_game_day,
+		"total_today": calls + dialogue + creation,
 		"dialogue_exempt": config.dialogue_exempt,
 		"cooldown_left": maxf(0.0, config.min_interval_sec - elapsed / 1000.0),
 		"queued": _queue.size(),
@@ -408,19 +422,34 @@ func get_usage(requester_id: String) -> Dictionary:
 	}
 
 
-# 對話輪次豁免的實作點。豁免的是這裡的檢查，不是 _note_call() 的計數
+# 豁免的實作點。豁免的是這裡的檢查，不是 _note_call() 的計數。CREATION
+# 無條件豁免（見 Policy 的說明），CONVERSATION 依設定檔的 dialogue_exempt 開關
 func _is_exempt(policy: Policy) -> bool:
-	return policy == Policy.CONVERSATION and config.dialogue_exempt
+	match policy:
+		Policy.CONVERSATION:
+			return config.dialogue_exempt
+		Policy.CREATION:
+			return true
+		_:
+			return false
 
 
 func _check_rate_limit(requester_id: String, policy: Policy, skip_cooldown: bool = false) -> String:
 	if _is_exempt(policy):
-		# 豁免的是冷卻與「行程重排」那份配額，不是完全不設上限——對話輪次
-		# 沒有這條護欄的話，一場對話可以無限輪講下去，成本無上限（#395 提案，
-		# #434 落地）。0 代表不限，跟 max_calls_per_game_day 同一套慣例；
-		# 用 >= 不用 >，跟下面對 max_calls_per_game_day 的判斷式一致
-		if config.max_dialogue_calls_per_game_day > 0 \
+		# CONVERSATION 豁免的是冷卻與「行程重排」那份配額，不是完全不設
+		# 上限——對話輪次沒有這條護欄的話，一場對話可以無限輪講下去，成本
+		# 無上限（#395 提案，#434 落地）。0 代表不限，跟 max_calls_per_game_day
+		# 同一套慣例；用 >= 不用 >，跟下面對 max_calls_per_game_day 的判斷式
+		# 一致
+		if policy == Policy.CONVERSATION and config.max_dialogue_calls_per_game_day > 0 \
 				and int(_dialogue_calls_today.get(requester_id, 0)) >= config.max_dialogue_calls_per_game_day:
+			return ERROR_DAILY_QUOTA
+		# CREATION 同理：豁免不等於完全不設限。結構上每個角色一輩子只打一次，
+		# 但生成失敗時每次開局／投放都會重打（agent.gd／game_manager.gd 的
+		# _generate_words_to_creator() 都是 fire-and-forget、不重試也不擋流程），
+		# 累積請求數還是要有個能設定的兜底（#434 同一套慣例，0＝不限）
+		if policy == Policy.CREATION and config.max_creation_calls_per_game_day > 0 \
+				and int(_creation_calls_today.get(requester_id, 0)) >= config.max_creation_calls_per_game_day:
 			return ERROR_DAILY_QUOTA
 		return ""
 
@@ -438,22 +467,27 @@ func _check_rate_limit(requester_id: String, policy: Policy, skip_cooldown: bool
 
 
 # 豁免的呼叫只計數，不動 _last_call_msec 也不動 _calls_today ——
-# 動了的話一輪對話就會把行程重排的冷卻往後推 30 秒，或把它的每日配額吃光。
-# 「豁免」要是雙向的：不受限，也不佔別人的額度
+# 動了的話一輪對話就會把行程重排的冷卻往後推 30 秒或把它的每日配額吃光，
+# 建角生成也一樣不該佔用行程重排的冷卻池（issue #682）。「豁免」要是雙向的：
+# 不受限，也不佔別人的額度
 func _note_call(requester_id: String, policy: Policy) -> void:
 	if _is_exempt(policy):
-		_dialogue_calls_today[requester_id] = int(_dialogue_calls_today.get(requester_id, 0)) + 1
+		if policy == Policy.CONVERSATION:
+			_dialogue_calls_today[requester_id] = int(_dialogue_calls_today.get(requester_id, 0)) + 1
+		else:
+			_creation_calls_today[requester_id] = int(_creation_calls_today.get(requester_id, 0)) + 1
 		return
 
 	_last_call_msec[requester_id] = Time.get_ticks_msec()
 	_calls_today[requester_id] = int(_calls_today.get(requester_id, 0)) + 1
 
 
-# 跨日、或開新遊戲（#618）就把兩本帳清掉。日計數在 GameClock，這裡不自己數 ——
+# 跨日、或開新遊戲（#618）就把三本帳清掉。日計數在 GameClock，這裡不自己數 ——
 # 私有計數重開遊戲會歸零，每日配額就能靠重開遊戲繞過
 func _on_day_changed(_day: int) -> void:
 	_calls_today.clear()
 	_dialogue_calls_today.clear()
+	_creation_calls_today.clear()
 
 
 # 有閒節點就派工。每次有節點空出來都要再叫一次，佇列才不會卡住
