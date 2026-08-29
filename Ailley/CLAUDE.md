@@ -1,170 +1,134 @@
-# CLAUDE.md — Ailley Godot 專案
+# CLAUDE.md
 
-本檔規範「在這個 Godot 專案裡怎麼工作」。
-上層 `../CLAUDE.md`（note/ 筆記庫規則）與全域 `~/.claude/CLAUDE.md` 仍然有效，
-衝突時以本檔為準。
+## 筆記庫規則 (Obsidian Vault Rules)
 
-## 專案概況
+本專案使用 `note/` 目錄作為 Obsidian 筆記庫 (vault)。
 
-- Godot **4.5.1-stable**，renderer: `gl_compatibility`（2D 像素風，`default_texture_filter=0`）
-- 主場景：`project.godot` 的 `run/main_scene`（以 uid 指定，目前是 `scenes/main.tscn`）
-- Autoload：`GameManager`、`GameClock`、`AIService`、
-  `_mcp_game_helper`（godot_ai 執行期輔助，勿手動移除）
-- 已啟用外掛：`TileMapDual`、`godot_ai`
+- **專案的所有文件都在 `note/`**，一則都不例外：想法、計畫、進度、技術決策，
+  以及 API 參考、指令速查這類純查閱資料。
+  唯一的例外是 repo 根目錄的 `README.md`（GitHub 入口，給還沒進 vault 的人看）。
+- **不要在別的地方另開文件目錄。** 尤其不要在 Godot 專案裡開 `Ailley/docs/` ——
+  文件散成兩處之後，vault 就失去「一個地方查得到全部」的意義，
+  而且寫在 vault 外的 `[[wikilink]]` 全部是死的。
+- 操作筆記庫時，**使用 Obsidian CLI**（`obsidian <subcommand>`，需 Obsidian app 執行中）
+  來讀取、建立、搬移、搜尋與管理筆記。
+- 撰寫筆記時使用 Obsidian Flavored Markdown：wikilinks（`[[...]]`）、embeds、callouts、frontmatter properties、tags。
+- 在開始或推進任何工作前，先到 `note/` 查閱相關筆記；完成後把進度與決策更新回筆記庫。
 
-目錄：
+### vault 結構
 
-| 路徑 | 內容 |
-| --- | --- |
-| `scenes/` | 全部 `.tscn`，不放腳本 |
-| `scripts/core/` | autoload：時鐘、靜態資料 |
-| `scripts/character/` | Character 基底、Player/Agent、Stats/Relationships/Vision 元件 |
-| `scripts/world/` | NavGrid、FollowCamera |
-| `scripts/dialogue/` | Conversation、DialogueLines |
-| `scripts/ai/` | LLM 服務層。**全專案唯一碰網路的地方** |
-| `scripts/ui/` | Bubble、ChatInput、DebugConsole、DebugOverlay、TimeLabel |
-| `data/*.json` | NPC 排程、地點資料、AI 設定範本 |
-| `assets/`、`addons/` | 素材、外掛 |
+依**誰讀**分三層。分類靠資料夾 + frontmatter，不要再引入編號資料夾
+（曾經的 `10-` / `30-` 只是把第一個 tag 再寫一次）。
 
-文件全部在 `../note/` 筆記庫：入口 `Ailley.md`、公開介面 `ai/api.md`、
-設計理由看 `技術/` 底下各系統自己那則。**不要在 Godot 專案裡另開 `docs/`。**
+| 資料夾 | 讀者 | 裝什麼 |
+| --- | --- | --- |
+| `交流/` | 人類 ⇄ AI | **暫存**的溝通區：現況、待拍板的問題。**不寫技術細節**，溝通完就刪掉 |
+| `技術/` | 人類與 AI | API 技術文件：各系統怎麼運作、有哪些介面可叫、為什麼這樣設計、踩過的坑 |
+| `ai/` | **AI** | 密集格式的參考資料。不必是散文，人類不必讀 |
 
-## 核心規則：Godot 相關操作一律走 godot-ai MCP
+`note/規格書/` 是另一塊，跟上面三層平行：完整的產品規格集，自成 00~99 的編號體系，
+依編號閱讀、00 是上位文件。不算三層之一，不套用上面「誰讀」的分法。
 
-**只要任務碰到場景、節點、資源、輸入映射、autoload、動畫、執行遊戲，
-第一步就是呼叫 `mcp__godot-ai__*` 工具，不要用 Read/Edit/Bash 去猜 `.tscn` 的內容。**
+規格書與 `技術/`／`ai/` 筆記內容不一致時，**以規格書為準**。技術/ai 筆記裡有、
+規格書沒有寫的具體規格，要補進規格書對應章節；技術/ai 筆記跟規格書兜不起來的，
+列入《99_待規劃項目清單》待決策，不要各自為準各寫各的。
 
-理由：`.tscn`/`.tres` 是帶 uid 與內部 id 的序列化格式，手改極易產生
-壞掉的 ExtResource/SubResource 參照；MCP 直接操作執行中的編輯器，
-改完即時生效且由編輯器自己負責序列化。
+《99》的每一列只記內容（問題是什麼、選項有哪些），不記工作流。
+「誰負責、何時要有結果」改開 GitHub issue 追蹤，issue 編號填回《99》
+對應列的「負責」／「期限」欄；不要在表格裡手填人名與日期——
+沒有東西會提醒你更新它，issue 才有指派通知與到期提醒。
 
-### 每次開工的前置檢查（省略會拿到 EDITOR_NOT_READY）
+入口是 `note/Ailley.md`，新增 `技術/` 或 `ai/` 筆記後回去對應表格加一列。
+`交流/` 的筆記不進表格 —— 它們會被刪掉。
 
-1. `session_manage(op="list")` — 確認編輯器有連線
-2. 多個 session 時 `session_activate` 綁定到 `project_path` 為本專案者
-3. `editor_state` — 確認 `readiness=ready`、`game_status.status`、目前開啟的場景
+### `交流/` 是暫存的，不要從外面引用
 
-若沒有任何 session：代表 Godot 編輯器沒開或 godot_ai 外掛沒載入。
-**回報使用者請他開啟編輯器，不要改用手工編輯 .tscn 繞過。**
+`交流/` 裝的是「這件事還在談」。談完、拍板完，那則筆記就被移除。所以：
 
-### 工具對照表（要做什麼 → 用哪個）
+- **其他地方不要引用 `交流/`。** `技術/`、`ai/`、`Ailley.md`、issue、PR、commit
+  都不要用 `[[wikilink]]` 或路徑指進去 —— 被引用的筆記隨時會消失，連結全部變死的。
+- 要長期留著的結論，**抄進 `技術/` 或 `ai/`**，寫成該系統自己的一段，
+  而不是留一條「詳見 `交流/…`」。
+- 反向可以：`交流/` 的筆記可以引用 `技術/` 與 `ai/`。
 
-| 目的 | 用這個 | 不要用 |
-|---|---|---|
-| 看場景結構 | `scene_get_hierarchy` | Read `.tscn` |
-| 找節點 | `node_find` | grep `.tscn` |
-| 看/改節點屬性 | `node_get_properties` / `node_set_property` | 手改 `.tscn` |
-| 新增/刪除/搬移/改名節點 | `node_create` / `node_manage` | 手改 `.tscn` |
-| 開啟、另存、儲存場景 | `scene_open` / `scene_manage` / `scene_save` | — |
-| 建立腳本並掛上節點 | `script_create` + `script_attach` | Write + 手改 `.tscn` |
-| 訊號連接 | `signal_manage` | 手改 `.tscn` 的 `[connection]` |
-| Autoload 增修 | `autoload_manage` | 手改 `project.godot` |
-| 專案設定 | `project_manage(op="settings_get"/"settings_set")` | 手改 `project.godot` |
-| 輸入映射 | `input_map_manage` | 手改 `project.godot` |
-| TileMap / TileSet | `tilemap_manage` / `tileset_manage` | 手改 `.tscn` |
-| 動畫 | `animation_create` / `animation_manage` | 手改 `.tres` |
-| 資源、檔案總管操作 | `resource_manage` / `filesystem_manage` | `mv` / `rm` |
-| 查 Godot 4.5 類別 API | `api_manage` | 憑印象寫（4.x 之間差異大） |
-
-腳本內容：**純 GDScript 邏輯**可以用 Read + Edit 直接改（`scripts/` 底下
-都是一般文字檔）；但若該檔案正被編輯器開著，改完呼叫一次
-`filesystem_manage`（rescan）或 `script_manage(op="read")` 確認編輯器已同步。
-需要精準片段替換時 `script_patch` 比 Edit 更安全。
-
-### 完成後一定要驗證
-
-不准只說「應該可以了」。依情境擇一並附上實際輸出：
-
-- `project_run` 跑起來 → `logs_read` 檢查有無錯誤 → `project_manage(op="stop")`
-- 視覺類改動：`editor_screenshot` 附上結果
-- 執行期狀態查驗：`editor_manage(op="game_eval")`
-- 有測試時：`test_run` → `test_manage(op="results_get")`
-- 多步驟一次做完：`batch_execute`（比逐一呼叫快，但錯誤定位較難，改動大時分開做）
-
-## 禁止事項
-
-- 不要手動編輯 `.tscn`、`.tres`、`.import`、`.uid`、`project.godot` 的結構性內容
-- 不要碰 `.godot/`（本機快取，已 gitignore）
-- 不要刪除 autoload `_mcp_game_helper` 或停用 `godot_ai` 外掛
-- 不要在專案根目錄亂放暫存檔（`scenes/` 只放 .tscn、腳本一律進 `scripts/<領域>/`）
-
-## 搬移或改名檔案
-
-MCP 兩邊都**沒有**搬檔的 op，所以只能用 `git mv`。流程固定，順序不能改：
-
-1. 關掉編輯器（`editor_manage(op="quit")`）
-2. `git mv` 檔案與它的 `.uid` / `.import` sidecar（一定要一起搬，uid 存在裡面）
-3. `--headless --path . --import` 重建 uid 快取
-4. 重開編輯器，把每個受影響的場景 `scene_open` + `scene_save` 一次
-5. 手動改字串路徑 —— `load("res://...")` 這種沒有任何工具會幫你改
-
-> 開著編輯器搬檔會壞：它把搬檔前的場景副本留在記憶體，之後任何一次存檔
-> 都會寫回舊路徑。實際踩過 —— 它把 `ext_resource` 的 `uid=` 整個拿掉，
-> 只留下已經失效的 `path=`，而且 `force_reload` 也叫不回來。
-
-## Headless 驗證
-
-`mcp__godot__launch_editor` 用不了時（例如 Godot 不在 PATH），
-不需要編輯器連線也能驗兩件事：
-
-```bash
-G=$(command -v godot || echo /usr/share/godot/Godot_v4.5.1-stable_linux.x86_64)
-$G --headless --path . --check-only --script scripts/<領域>/x.gd   # 語法
-$G --headless --path . --quit-after 300                            # 開得起來嗎
+```yaml
+---
+tags: [技術, character]
+status: 已實作        # 已實作 / 進行中 / 規劃中 / 現況 / 參考
+scene: scenes/main.tscn
+script: scripts/character/vision.gd
+updated: 2026-08-07
+---
 ```
 
-> [!warning] `--check-only` 認不得 autoload 與新註冊的 class
-> 它只 parse 單一檔案，所以引用 `GameManager`／`GameClock`／`AIService` 的檔案
-> 一定會報 `Identifier not found`，那是模式限制不是程式錯誤。
-> 剛加了新的 `class_name` 也一樣 —— 要先 `filesystem_manage(op="scan")`
-> 讓編輯器把它註冊進 global class 快取，否則整個檔案都是 Parse Error。
+### 寫筆記的規則
 
-結尾的 `RID allocations ... leaked at exit` / `ObjectDB instances leaked`
-是 `--quit-after` 強制結束的正常雜訊，不是專案錯誤。
+- **寫現況，不要寫流水帳。** 事情改了就改內容 ——
+  不要在後面追加一節說「前面那段已過時」，那會讓查資料的人讀到錯的東西。
+- **不要留「原本是什麼、後來改成什麼」的紀錄。** 更新筆記時直接把舊的那段刪掉、
+  換成新的，不要寫成對照（「原本 X → 現在 Y」「這篇推翻了哪幾條」）。
+  沿革要查 git log 與 `note/ai/changelog.md`，筆記本身只回答「現在是什麼」。
+  一整篇都是過程紀錄的筆記（評估、拍板問答），拍完板就整份刪掉。
+- **不要留考古內容。** 已經刪掉的程式碼、已經放棄的方案，除非還在影響現在的決策，
+  否則不要在筆記裡描述它們。
+- 需要人類拍板的問題寫進 `交流/`，拍板後把結論抄回 `技術/` 或 `ai/`。
+- 筆記一律中文，`ai/` 也是。AI 讀中文散文沒有比較吃力，
+  改用英文換不到理解力，卻換掉「人類想抽查時看得懂」。
+  程式識別字、API 名稱、檔案路徑照舊保持原樣。
 
-> [!warning] Headless 測不到時間相關的邏輯
-> 沒有視窗時幀率不受限，`--quit-after 300` 可能連 1 秒真實時間都不到。
-> 任何靠 `_process` 計時、`create_timer`、或訊號節流的行為都不會觸發 ——
-> 這種一定要在編輯器裡用 `project_run` + `game_eval` 驗。
+## 遊戲機制規格：AI 自主性自檢
 
-> [!warning] `-s <script>.gd` 自訂主迴圈一樣認不得 autoload，跟 `--check-only` 同一個病根
-> 想寫一支 throwaway 的 `extends SceneTree` 腳本、`instantiate()` main.tscn
-> 來做端到端驗證時，只要場景裡任何一個腳本引用了 `GameClock`／`AIService`
-> 這類 autoload，一樣會在 `_initialize()` 階段直接 `Identifier not found`
-> 編譯失敗——用 `print(GameClock.day)` 這種最小化腳本就能重現，跟你自己的
-> 改動無關。原因是 autoload 掛進場景樹、註冊成 GDScript 編譯器認得的全域
-> 名字，發生在引擎正常開機流程的某個時間點；`-s` 模式下你的腳本**取代了
-> 主迴圈**，`_initialize()` 執行的時機比那個時間點早，`await process_frame`
-> 也救不回來——卡編譯期的那一行本身就已經編譯失敗了，跟後面有沒有 await
-> 無關。這種端到端驗證目前**只能靠 `--quit-after` 完整開機**（main_scene
-> 走正常流程載入，autoload 會就緒）或編輯器 Play，`-s` 這條路走不通。
+寫進 note/規格書 前，比照《00 設計原則與架構》原則二自我審查：
 
-> [!warning] headless 裡帶執行緒的 `HTTPRequest` 完成時間不可信，比正常環境慢很多
-> 用 `--quit-after` 驗證真的打網路的流程（例如 `AIService.request()`）時，
-> 同一個請求用 `curl` 測不到 1 秒回應，在 headless 裡卻可能卡超過 20 秒才
-> 觸發 `request_completed`——不是請求真的卡死，是**headless 環境下
-> `use_threads = true` 的 `HTTPRequest` 完成得比正常視窗模式慢很多**，
-> 具體慢多少沒有穩定數字。踩過一次：把 `--quit-after` 的秒數設得跟正常
-> 網路延遲差不多（例如 20 秒），結果請求還沒回來視窗就先關了，看起來像
-> 「卡住」，其實只是等得不夠久。
->
-> 這是上面那條「headless 測不到時間相關邏輯」的同類問題，但這裡具體到
-> **連 HTTP 逾時／回應時間都不能拿正常環境的直覺去估**。要驗證真的打網路
-> 的流程，`--quit-after` 的秒數要抓寬（例如平常 3 秒內會回的請求，
-> 給到 30-60 秒的窗口），或乾脆在編輯器裡 Play 驗，那邊的時間感才準。
+> 引擎只給事件，不給情緒。引擎報告發生什麼，AI 決定這算不算一回事。
 
-## 備援與疑難排解
+發現新機制讓引擎預先幫 AI 貼上主觀感受、意圖、或道德/敵對定性的標籤時，
+先把問題拋出來讓使用者拍板，不自己直接寫進規格書。
 
-- 另有 `mcp__godot__*`（@coding-solo/godot-mcp）server。它只能做基本操作
-  且不需要編輯器連線；**預設用 `godot-ai`**，只有在 godot-ai 完全連不上、
-  且任務只是 `get_project_info` / `launch_editor` 這類簡單事情時才用它。
-- 寫入被擋 `EDITOR_NOT_READY (state=playing)`：先 `editor_state` 同步快取，
-  再重試；仍不行就 `project_manage(op="stop")`。
-- `game_status.status="break"`：遊戲卡在遠端偵錯中斷（常見於開機期 parse error），
-  不會自己恢復，呼叫 `project_manage(op="stop")`。
-- 改了外掛程式碼：`editor_reload_plugin`。
+標籤不一定要真的注入給 AI 看才算數——引擎內部用固定公式幫一個動作的性質定性
+（例如藉此決定 `relations` 該扣多少），本質上是同一種標籤，一樣要先拋出來，
+不要因為它只存在後端運算、或被歸類成「客觀事實」欄位，就以為不受這條規則管。
 
-## 筆記
+## GitHub issue 與 PR
 
-依上層規則，所有文件寫進 `../note/` Obsidian vault，
-用 `obsidian <subcommand>` CLI 操作（需 Obsidian app 執行中），不要寫在程式碼註解。
+### 開始處理 issue：用 `gh issue develop` 開分支
+
+```
+gh issue develop <N> -c -n <branch-name>
+```
+
+**不要自己 `git switch -c`。** 手開的分支沒有跟 issue 連動，
+issue 頁面上看不到「哪條分支在做這件事」，PR 也不會自動關掉它。
+在動第一行程式碼之前就先開分支，不要改到一半才補。
+
+**分支名是 `<type>/<描述>`**，type 用 commit 的那一組（`feat` / `fix` / `refactor` / `docs`），
+描述用英文 kebab-case：`fix/chat-input-esc-close`。
+`-n` 不要省略 —— 自動生成的名字是 issue 標題整串，長且不帶 type。
+
+分支開錯名字就讓它錯到底，**不要事後改名**。
+GitHub 的 rename API 不會把已開的 PR 轉到新分支，它直接把那則 PR 關掉，
+只能重開一則新的，等於白白多一個作廢編號。
+
+**標題用英文，內文用中文。** 組員不讀英文，但標題是拿來掃清單的，短而一致比較好認。
+程式碼識別字、檔案路徑、指令一律保持原樣，不要翻譯。
+
+### 一則 issue 只寫那一件事
+
+該寫的：**問題是什麼、造成什麼影響、建議怎麼做、相關檔案在哪**。
+
+**不該寫進去的：**
+
+- **對話脈絡。** issue 是給沒參與討論的人讀的。
+  「順帶一提，這跟你剛才問的 X 是兩件事」這種句子對他們沒有意義。
+- **對別的提案的反駁。** 如果某個做法被否決了，理由屬於技術筆記或 PR 討論，
+  不是 issue 內文。issue 描述的是要做什麼，不是曾經考慮過什麼。
+- **「順手做一下」的別件事。** 那是另一則 issue。
+  夾帶進來之後，關掉這則就等於把夾帶的那件事一起弄丟了。
+
+例外是**範圍界線**：明講「這則不包含 X」是有用的，因為它防止 scope creep。
+但只寫界線，不要順著解釋 X 該怎麼做。
+
+### 交叉引用要確認編號
+
+只在真的有依賴關係時才引用別的 issue，而且**寫之前先確認那個編號是對的**。
+引錯編號比不引用更糟 —— 讀的人會照著跳過去，然後看到一則不相干的東西。
