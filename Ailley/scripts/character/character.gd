@@ -223,6 +223,11 @@ const CONDITION_PETRIFIED := "petrified"
 ## 留空就沿用節點名 —— 不能退回 character_id，那是一串沒人讀得懂的 UUID
 @export var character_name := ""
 
+## 這個角色專屬的家，指向 location 表的其中一筆 loc_home_0N（《規格書01》§1-1，
+## issue #391）。玩家不選，建角時由 CharacterStatePersistence._resolve_home_location()
+## round-robin 自動分配並寫回這裡；留空是正常初始狀態，代表還沒建過 npc 記錄
+var home_location_id := ""
+
 ## 最近一次 LLM 決策的動作被 resolve() 判定的結果，中文自然語言，成功是空字串
 ## （#120，《01-2》§1 流程圖的「④ 寫回 last_action_result」）。目前只有 Agent
 ## 會寫這個欄位，Player 沒有 LLM 決策，留在 Character 是給 UI/debug 共用的掛點
@@ -1760,6 +1765,7 @@ func get_save_data() -> Dictionary:
 	var data := {
 		"character_id": character_id,
 		"character_name": character_name,
+		"home_location_id": home_location_id,
 		"incapacitation_start_minute": _incapacitation_start_minute,
 		"is_being_carried": _is_being_carried,
 		"treatment_start_minute": _treatment_start_minute,
@@ -1813,6 +1819,10 @@ func load_save_data(data: Dictionary) -> void:
 	# UI 找不到或顯示空白名稱，跟型別不對一樣沿用現有值
 	var loaded_name: Variant = data.get("character_name", character_name)
 	character_name = loaded_name if loaded_name is String and not loaded_name.is_empty() else character_name
+	# 缺席（issue #391 前的舊存檔）沿用目前值，不強制清空——讀檔當下
+	# _ensure_npc_record() 若發現這裡是空字串，本來就會重新跑 round-robin 分配
+	var loaded_home: Variant = data.get("home_location_id", home_location_id)
+	home_location_id = loaded_home if loaded_home is String else home_location_id
 
 	# 還原昏迷與治療狀態（用 -1 作為哨兵值表示未進入該狀態，其餘合法值是
 	# GameClock.hour*60+GameClock.minute 那個 [0, 1439] 範圍——只驗證 is int

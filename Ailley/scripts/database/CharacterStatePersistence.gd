@@ -1776,12 +1776,23 @@ func _ensure_npc_record(
 			character_id
 		],
 		[
-			"npc_id"
+			"npc_id",
+			"home_location_id"
 		]
 	)
 
 
 	if not existing.is_empty():
+		# 舊 Character 節點重新進場（例如讀檔後重生）時，把 DB 裡已經
+		# 分配過的家同步回記憶體欄位——round-robin 只在建立新 npc 記錄
+		# 那一次跑，這裡不重新分配，只是把權威值（DB）同步回來
+		if character.home_location_id.is_empty():
+			character.home_location_id = str(
+				existing[0].get(
+					"home_location_id",
+					""
+				)
+			)
 		return true
 
 
@@ -1846,38 +1857,37 @@ func _ensure_npc_record(
 		return false
 
 
+	character.home_location_id = home_location_id
+
+
 	return true
 
 
 # =====================================================
-# Home Location
+# Home Location（issue #391，《規格書07_地點/家》round-robin 分配）
 # =====================================================
+
+## 地圖上固定的家數量。MVP／Phase 2 拍板固定 5 間（見 issue #370 決策），
+## 不支援依人數上限動態生成，見《99》P-58
+const HOME_LOCATION_COUNT := 5
+const HOME_LOCATION_PREFIX := "loc_home_"
+
 
 func _resolve_home_location(
 	character: Character
 ) -> String:
 
-	var value = character.get(
-		"home_location_id"
-	)
+	var value := character.home_location_id
 
 
-	if (
-		value != null
-		and not str(value).is_empty()
-	):
-
-		var requested := str(
-			value
-		)
-
+	if not value.is_empty():
 
 		var requested_rows := (
 			DatabaseManager.select_where(
 				"location",
 				"location_id = ?",
 				[
-					requested
+					value
 				],
 				[
 					"location_id"
@@ -1887,54 +1897,130 @@ func _resolve_home_location(
 
 
 		if not requested_rows.is_empty():
-			return requested
+			return value
 
 
-	var rows := DatabaseManager.select(
-		"location",
-		"",
-		[
-			"location_id"
-		]
-	)
+	_ensure_home_locations_seeded()
 
 
-	if not rows.is_empty():
+	return _assign_next_home_location()
 
-		return str(
-			rows[0].get(
-				"location_id",
-				""
-			)
+
+## 5 間 loc_home_01~05 是這個 issue 新加的 location 列，只在缺的時候補——
+## 已存在（例如上次啟動已經建過）就不動它，避免覆寫掉未來可能加上的
+## 客製欄位（名稱／danger 等）
+func _ensure_home_locations_seeded() -> void:
+
+	for i in range(1, HOME_LOCATION_COUNT + 1):
+
+		var location_id := (
+			"%s%02d" % [HOME_LOCATION_PREFIX, i]
 		)
 
+		var rows := DatabaseManager.select_where(
+			"location",
+			"location_id = ?",
+			[location_id],
+			["location_id"]
+		)
 
-	var inserted := DatabaseManager.insert(
-		"location",
-		{
-			"location_id": "home_001",
-			"name": "Default Home",
-			"description": "Default test home",
-			"location_type": "home",
-			"capacity": 10,
-			"danger": 0,
-			"is_active": 1
-		}
-	)
+		if rows.is_empty():
+
+			DatabaseManager.insert(
+				"location",
+				{
+					"location_id": location_id,
+					"name": "Home %d" % i,
+					"description": "",
+					"location_type": "home",
+					"capacity": 1,
+					"danger": 0,
+					"is_active": 1
+				}
+			)
 
 
-	if inserted:
-		return "home_001"
+## round-robin：從游標位置沿固定順序找第一間沒有任何現存 npc 記錄佔用的家，
+## 分配後游標移到它的下一個位置（mod N）。刪除角色騰出的家會在下一輪
+## 巡覽時自然被撿回來，游標本身不回退（《規格書07_地點/家》拍板細節）
+func _assign_next_home_location() -> String:
 
+	var cursor := _get_home_cursor()
+	var occupied := _occupied_home_location_ids()
+
+	for offset in range(HOME_LOCATION_COUNT):
+
+		var index := (cursor + offset) % HOME_LOCATION_COUNT
+		var location_id := (
+			"%s%02d" % [HOME_LOCATION_PREFIX, index + 1]
+		)
+
+		if not occupied.has(location_id):
+			_set_home_cursor((index + 1) % HOME_LOCATION_COUNT)
+			return location_id
 
 	push_error(
 		"[CharacterStatePersistence] "
-		+ "無法建立預設 location：%s"
-		% DatabaseManager.db.error_message
+		+ "5 間家全滿，issue #391 MVP 範圍假設不會發生（見《99》P-58）。"
 	)
 
-
 	return ""
+
+
+func _occupied_home_location_ids() -> Dictionary:
+
+	var rows := DatabaseManager.select(
+		NPC_TABLE,
+		"",
+		["home_location_id"]
+	)
+
+	var occupied := {}
+
+	for row in rows:
+
+		var location_id := str(
+			row.get("home_location_id", "")
+		)
+
+		if not location_id.is_empty():
+			occupied[location_id] = true
+
+	return occupied
+
+
+func _get_home_cursor() -> int:
+
+	var rows := DatabaseManager.select(
+		"home_assignment",
+		"id = 1",
+		["next_index"]
+	)
+
+	if rows.is_empty():
+		return 0
+
+	return int(rows[0].get("next_index", 0))
+
+
+func _set_home_cursor(value: int) -> void:
+
+	if DatabaseManager.select(
+		"home_assignment", "id = 1", ["id"]
+	).is_empty():
+
+		DatabaseManager.insert(
+			"home_assignment",
+			{"id": 1, "next_index": value}
+		)
+
+	else:
+
+		DatabaseManager.update(
+			"home_assignment",
+			{"next_index": value},
+			"id = 1"
+		)
 
 
 # =====================================================

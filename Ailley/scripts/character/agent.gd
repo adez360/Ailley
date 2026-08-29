@@ -812,9 +812,9 @@ func _is_own_pursuit_target(world_position: Vector2) -> bool:
 	if current_place.is_empty():
 		return false
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
-	if anchors == null or not anchors.has(current_place):
+	if anchors == null or not anchors.has_for(self, current_place):
 		return false
-	return world_position.distance_to(anchors.resolve(current_place)) <= ARRIVE_DISTANCE
+	return world_position.distance_to(anchors.resolve_for(self, current_place)) <= ARRIVE_DISTANCE
 
 # 給事實句（_push_daily_event()）用的即時位置反查（issue #426）：current_place
 # 是目前任務的目的地，不是即時座標——移動中會提早等於目的地，talk／追逐這類
@@ -836,7 +836,12 @@ func _actual_place_of(character: Character) -> String:
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
 	if anchors == null:
 		return ""
-	return anchors.resolve_from_position(character.get_body_position(), ACTUAL_PLACE_RADIUS)
+	# to_ai_place_name()：issue #391 之後這裡可能反查到 loc_home_0N 這種
+	# 物理錨點名稱，呼叫端（事實句／跟 current_place 比對）看到的要是抽象值
+	var physical_place := anchors.resolve_from_position(
+		character.get_body_position(), ACTUAL_PLACE_RADIUS
+	)
+	return anchors.to_ai_place_name(physical_place)
 
 # 先問資料檔這隻角色被指派了哪份行程，沒有指派才用場景裡的 @export 後備值。
 # 順序不能反過來：@export 一定有值（agent.tscn 的預設），反過來的話 assignments 永遠不生效
@@ -3267,7 +3272,7 @@ func _pursue_current_task() -> void:
 		return
 
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
-	if anchors == null or not anchors.has(current_place):
+	if anchors == null or not anchors.has_for(self, current_place):
 		# 地點打錯只報一次。這個函式每個遊戲分鐘跑一次，不擋的話一個 typo
 		# 就是每小時三千多則 error 洗掉整個面板
 		if current_place != _pursued_place:
@@ -3276,7 +3281,7 @@ func _pursue_current_task() -> void:
 			_pursuit_done = true
 		return
 
-	var target: Vector2 = anchors.resolve(current_place)
+	var target: Vector2 = anchors.resolve_for(self, current_place)
 
 	# 已經在目的地就沒事要做。這一步不做的話，「早就到了」會被誤報成「走不到」：
 	# move_to() 對「路徑不足兩點」一律回傳 false，而站在原地正好就是這種情形
@@ -3359,13 +3364,13 @@ func _pursue_talk_task() -> void:
 	# LLM talk（target_name 非空）維持現有行為：直接追蹤目標角色。
 	if target_name.is_empty() and not current_place.is_empty():
 		var anchors := get_tree().get_first_node_in_group("place_anchors")
-		if anchors == null or not anchors.has(current_place):
+		if anchors == null or not anchors.has_for(self, current_place):
 			if current_place != _pursued_place:
 				push_error("Agent %s: 沒有這個地點 %s" % [character_name, current_place])
 				_pursued_place = current_place
 			return
 
-		var place_pos: Vector2 = anchors.resolve(current_place)
+		var place_pos: Vector2 = anchors.resolve_for(self, current_place)
 		if not _has_arrived_at(place_pos):
 			# 還沒到——跟 _pursue_current_task() 的節流邏輯一樣：
 			# 同一個地點只起步一次，還在走就繼續走
@@ -3594,7 +3599,7 @@ func _pursue_drink_task() -> void:
 func _pursue_work_task() -> void:
 	# 檢查是否已到達工作地點
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
-	if anchors == null or current_place.is_empty() or not anchors.has(current_place):
+	if anchors == null or current_place.is_empty() or not anchors.has_for(self, current_place):
 		last_action_result = Character.WORK_TARGET_NOT_FOUND
 		push_warning("Agent %s: work 失敗（無法解析地點 %s）" % [character_name, current_place])
 		# 完整重設追逐狀態，不然下一筆任務可能沿用舊路徑，或被追逐節流
@@ -3612,7 +3617,7 @@ func _pursue_work_task() -> void:
 		_clear_current_task(false)
 		return
 
-	var target: Vector2 = anchors.resolve(current_place)
+	var target: Vector2 = anchors.resolve_for(self, current_place)
 
 	# 還沒到達就先走過去
 	if not _has_arrived_at(target):
@@ -3717,7 +3722,7 @@ func _pursue_buy_task() -> void:
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
 
 	# 找不到販賣機，或販賣機所在地點沒有對應的可走錨點：立即返回失敗
-	if not machine or anchors == null or not anchors.has(place):
+	if not machine or anchors == null or not anchors.has_for(self, place):
 		# 要先讀 source／id 再清空 _current_task——清空之後兩個 get() 都只會
 		# 讀到空字典的預設值，llm 任務永遠判斷不是 llm、也移除不掉，會卡在
 		# 池子裡讓 _reevaluate() 重複選到同一筆（CodeRabbit review 抓到）
@@ -3751,7 +3756,7 @@ func _pursue_buy_task() -> void:
 		_reevaluate()
 		return
 
-	var approach_target: Vector2 = anchors.resolve(place)
+	var approach_target: Vector2 = anchors.resolve_for(self, place)
 
 	# 還沒到達就先走過去
 	if not _has_arrived_at(approach_target):
@@ -3855,7 +3860,7 @@ func _pursue_gather_task() -> void:
 	# 原本只檢查「這個名字有沒有對應到任何錨點」，place 給一個真實存在但不是
 	# herb_field 的地點（例如 tavern）時會先走過去，抵達後才靠 resolve() 判定
 	# 失敗，等於明知走錯地方還是先走過去，浪費遊戲時間）
-	if place != "herb_field" or anchors == null or not anchors.has(place):
+	if place != "herb_field" or anchors == null or not anchors.has_for(self, place):
 		var failed_task_source: String = str(_current_task.get("source", ""))
 		var failed_task_id: String = str(_current_task.get("id", ""))
 		push_warning("Agent %s: 沒有這個採集地點 %s" % [character_name, place])
@@ -3879,7 +3884,7 @@ func _pursue_gather_task() -> void:
 		_reevaluate()
 		return
 
-	var target: Vector2 = anchors.resolve(place)
+	var target: Vector2 = anchors.resolve_for(self, place)
 
 	# 還沒到達就先走過去——跟 _pursue_work_task()／_pursue_buy_task() 同一套
 	# 收斂邏輯：地點沒換就只起步一次，已有結論（含 move_to() 失敗）不重試
@@ -4597,9 +4602,9 @@ func _ask_player_persuade(player: Character, reason: String, proposed_task: Dict
 		if place.is_empty():
 			return
 		var anchors := get_tree().get_first_node_in_group("place_anchors")
-		if anchors == null or not anchors.has(place) or player.waypoint_indicator == null:
+		if anchors == null or not anchors.has_for(player, place) or player.waypoint_indicator == null:
 			return
-		player.waypoint_indicator.show_waypoint(anchors.resolve(place), Callable(), Callable())
+		player.waypoint_indicator.show_waypoint(anchors.resolve_for(player, place), Callable(), Callable())
 		return
 
 	# 純思想說服：沿用 #227 對 Agent 目標的效果，寫進被說服者（這裡是玩家）

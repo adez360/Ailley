@@ -1039,6 +1039,7 @@ static func initialize(db) -> bool:
 
 		WorldSchema,
 		LocationSchema,
+		HomeAssignmentSchema,
 
 		# NPC Core
 		NPCSchema,
