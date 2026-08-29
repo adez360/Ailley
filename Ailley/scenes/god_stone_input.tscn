@@ -23,7 +23,7 @@ anchor_bottom = 0.5
 offset_left = -130.0
 offset_top = -42.0
 offset_right = 130.0
-offset_bottom = 42.0
+offset_bottom = 64.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
@@ -60,13 +60,22 @@ offset_top = 32.0
 offset_right = -10.0
 offset_bottom = 54.0
 
+[node name="RecordButton" type="Button" parent="Panel"]
+layout_mode = 0
+anchor_right = 1.0
+offset_left = 10.0
+offset_top = 58.0
+offset_right = -10.0
+offset_bottom = 78.0
+text = "UI_GOD_STONE_RECORD_TITLE"
+
 [node name="StatusLabel" type="Label" parent="Panel"]
 layout_mode = 0
 anchor_right = 1.0
 offset_left = 10.0
-offset_top = 60.0
+offset_top = 82.0
 offset_right = -10.0
-offset_bottom = 76.0
+offset_bottom = 98.0
 theme_override_colors/font_color = Color(0.3647059, 0.2901961, 0.21960784, 1)
 horizontal_alignment = 1
 clip_text = true

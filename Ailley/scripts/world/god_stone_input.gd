@@ -15,16 +15,18 @@ extends CanvasLayer
 ## （《10》B19）所以面板置中，不沿用 chat_input.tscn 的底部位置。
 ##
 ## 化身鎖定（《15》§3、《07_地點/天神之石》，2026-08-20 拍板）：玩家一旦化身
-## （場上有節點掛在 "player" 分組），說話功能鎖住，點石頭改開「地點事件記錄」
-## 查看面板。判斷「是否化身」跟 game_manager.gd::get_world_save_data() 存檔時
-## 用的同一個訊號——get_first_node_in_group("player") 找不到節點就是純觀察者
-## （這個分組沒有人在場，觀察者模式本來就是空的）。
+## （從角色庫以 as_player=true 投放），說話功能鎖住，點石頭改開「地點事件記錄」
+## 查看面板。判斷「是否化身」看 game_manager.gd::embodied_character_id——只有
+## deploy 路徑會改變的即時化身狀態，存檔記的也是同一個值。刻意不問
+## get_first_node_in_group("player")：main.tscn 從頭就站著一個設計時期的測試用
+## Player，分組在「從未化身」的場上也不是空的（robot-ru review 抓到）。
 ##
 ## 記錄面板照《15》§3-5「具體版面留待實作 issue 補」在程式碼裡組
-## （跟 character_create.gd 同一種理由：內容是逐筆生成的清單，不是固定版面），
-## 不修改 god_stone_input.tscn——化身玩家要先走到石頭旁（RECORD_VIEW_RANGE）
-## 才點得開，純觀察者／純 AI 模式沒有這個距離限制（《15》§3-5 開頭那條「位置性
-## 約束的是村民，不是玩家的滑鼠」，這裡延伸成「約束的是化身玩家，不是純觀察者」）。
+## （跟 character_create.gd 同一種理由：內容是逐筆生成的清單，不是固定版面）；
+## 純觀察者的第二入口——話語輸入框下方的「地點事件記錄」按鈕——是固定版面，
+## 走 god_stone_input.tscn。化身玩家要先走到石頭旁（RECORD_VIEW_RANGE）才點得開，
+## 純觀察者／純 AI 模式沒有這個距離限制（《15》§3-5 開頭那條「位置性約束的是
+## 村民，不是玩家的滑鼠」，這裡延伸成「約束的是化身玩家，不是純觀察者」）。
 
 const MAX_LENGTH := 40
 const COOLDOWN_SECONDS := 5.0
@@ -49,6 +51,7 @@ const LOAM := Color("5D4A38")
 
 @onready var panel: Panel = $Panel
 @onready var input: LineEdit = $Panel/Input
+@onready var record_button: Button = $Panel/RecordButton
 @onready var status_label: Label = $Panel/StatusLabel
 
 var _cooldown_remaining := 0.0
@@ -66,6 +69,7 @@ var _record_list: VBoxContainer
 func _ready() -> void:
 	input.max_length = MAX_LENGTH
 	input.text_submitted.connect(_on_submitted)
+	record_button.pressed.connect(_open_record_view)
 	panel.hide()
 
 	_stone = get_tree().get_first_node_in_group("god_stone")
@@ -104,14 +108,17 @@ func _input(event: InputEvent) -> void:
 	if world_pos.distance_to(_stone.global_position) > CLICK_RADIUS:
 		return
 
-	var player_node := get_tree().get_first_node_in_group("player") as Character
-	if player_node == null:
+	# 觀察者沒有化身（見 class 註解）：開話語輸入框，框上的「地點事件記錄」
+	# 按鈕是觀察者回顧記錄的入口（《15》§3-5：觀察者不受距離限制）
+	if GameManager.embodied_character_id.is_empty():
 		_set_open(true)
 		return
 
 	# 化身玩家：位置性限制（見 class 註解），太遠就當沒點到，靜默不理——
-	# 不是要顯示的錯誤，走過去再點就好
-	if player_node.get_body_position().distance_to(_stone.global_position) <= RECORD_VIEW_RANGE:
+	# 不是要顯示的錯誤，走過去再點就好。目前操控的身體照舊從 "player" 分組
+	# 查——這裡只負責量距離，化身與否的判定在上面
+	var player_node := get_tree().get_first_node_in_group("player") as Character
+	if player_node != null and player_node.get_body_position().distance_to(_stone.global_position) <= RECORD_VIEW_RANGE:
 		_open_record_view()
 
 func _set_open(open: bool) -> void:
@@ -232,8 +239,8 @@ func _refresh_record_list() -> void:
 
 	for entry in _location_records:
 		var label := Label.new()
-		label.text = "%02d:%02d  %s" % [
-			int(entry["hour"]), int(entry["minute"]), str(entry["text"])
+		label.text = "D%d %02d:%02d  %s" % [
+			int(entry["day"]), int(entry["hour"]), int(entry["minute"]), str(entry["text"])
 		]
 		label.add_theme_color_override("font_color", LOAM)
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD
