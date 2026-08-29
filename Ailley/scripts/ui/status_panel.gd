@@ -295,10 +295,9 @@ func _refresh_items_tab() -> void:
 			rect.modulate = NORMAL_TINT
 			continue
 
-		var item_id: String = slot["item_id"]
-		var count: int = slot["count"]
-		var shown := item_id.substr(0, 3).to_upper()
-		label.text = "%s\n%d" % [shown, count] if count > 1 else shown
+		# 格子文字單一來源：InventorySlotButton.slot_text()（中文名稱最多 2 字，
+		# 數量 > 1 才多印一行）——《15》§2-6 的「沿用 inventory_slot_button.gd」
+		label.text = InventorySlotButton.slot_text(slot)
 
 		# 手持格（快捷欄第一列裡被選中的那格）疊 Amber，跟 InventoryPanel
 		# 同一種標記法（《15》§2-6）

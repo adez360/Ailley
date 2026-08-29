@@ -64,6 +64,18 @@ func _ready() -> void:
 		inventory.changed.connect(_refresh_label)
 	_refresh_label()
 
+## 格子文字的單一來源：查 `ItemDatabase.get_display_name()`、截到
+## `MAX_NAME_CHARS` 個完整字元、`count > 1` 才多印一行數量。status_panel.gd
+## 的物品分頁共用這個組法（《15》§2-6 的「沿用 inventory_slot_button.gd」），
+## 不另外複製一份邏輯。
+static func slot_text(slot: Dictionary) -> String:
+	var item_id: String = slot["item_id"]
+	var count: int = slot["count"]
+	var shown := ItemDatabase.get_display_name(item_id)
+	if shown.length() > MAX_NAME_CHARS:
+		shown = shown.substr(0, MAX_NAME_CHARS)
+	return "%s\n%d" % [shown, count] if count > 1 else shown
+
 func _refresh_label() -> void:
 	var inventory := _get_inventory()
 	var slot: Dictionary = {}
@@ -75,17 +87,7 @@ func _refresh_label() -> void:
 		_label.text = ""
 		return
 
-	var item_id: String = slot["item_id"]
-	var count: int = slot["count"]
-	var shown := ItemDatabase.get_display_name(item_id)
-	if shown.length() > MAX_NAME_CHARS:
-		shown = shown.substr(0, MAX_NAME_CHARS)
-
-	_label.text = (
-		"%s\n%d" % [shown, count]
-		if count > 1
-		else shown
-	)
+	_label.text = slot_text(slot)
 
 func _get_inventory() -> Inventory:
 	var player := get_tree().get_first_node_in_group("player")
