@@ -400,6 +400,17 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 			return _fail(ERROR_BAD_SHAPE)
 		buy_params["place"] = (place as String).strip_edges()
 
+	# move_to 動作的 params 驗證：跟 buy／gather 同一套「place 是必填
+	# 字串」——這個動作原本完全沒有逐欄位驗證，缺 place 或給空字串會直接
+	# 放行到執行層才發現走不到任何地方，跟這個檔案「外來內容一律不信任、
+	# 不等執行層才發現資料是空的」的原則不一致
+	if action == "move_to":
+		var move_params: Dictionary = task.get("params", {})
+		var move_place: Variant = move_params.get("place")
+		if not move_place is String or (move_place as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+		move_params["place"] = (move_place as String).strip_edges()
+
 	# gather 動作的 params 驗證（#574）：跟 buy 同一套「place 是必填字串」——
 	# 藥草叢目前是唯一的採集地點，但仍要求 LLM 明講去哪裡，place 錯了在
 	# 執行層才失敗、給理由（見 agent.gd::resolve() 的 "gather" 分支），跟這
