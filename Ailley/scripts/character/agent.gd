@@ -1376,15 +1376,27 @@ func _request_next_decision(
 		var tasks_added := _push_llm_tasks(data["tasks"], data)
 
 		# 回應合法地帶回空 tasks 陣列（規格「不更新就是空陣列」）、且現在
-		# 真的沒有任何事在做時，補一筆 idle 頂著（issue #699）——不這樣做的
-		# 話角色會卡在完全沒有任何任務的狀態，唯一接得上的「動作做完」事件
-		# 驅動重排永遠不會發生，只能靠 #695 那個獨立節流的保底重排撐著。
-		# 補一筆 idle 之後兩者行為一致：duration 到期就正常觸發下一次決策，
-		# 不需要為「決策回應空手而歸」另外燒一份跟仲裁器候選池不相干的
-		# 冷卻預算。優先度給 0——就算池子裡還留著別的候選（例如 schedule
-		# 任務進了窗口），也不該搶贏它們
+		# 真的沒有任何事在做時，補一筆頂著（issue #699）——不這樣做的話角色
+		# 會卡在完全沒有任何任務的狀態，唯一接得上的「動作做完」事件驅動
+		# 重排永遠不會發生，只能靠 #695 那個獨立節流的保底重排撐著。補一筆
+		# 之後兩者行為一致：duration 到期就正常觸發下一次決策，不需要為
+		# 「決策回應空手而歸」另外燒一份跟仲裁器候選池不相干的冷卻預算。
+		# 優先度給 0——就算池子裡還留著別的候選（例如 schedule 任務進了
+		# 窗口），也不該搶贏它們
+		#
+		# stats.get_lowest_need_place()（《系統分析計畫》§5 早就指定的
+		# fallback 路徑：問不到 AI 就先去滿足最低的那項需求，不是站在原地）
+		# 一直沒有任何呼叫端接上——只有真的有需求跌破 CRITICAL 時才用它排
+		# move_to，沒有需求需要處理時維持原本的 idle，不會讓角色沒事也到處
+		# 亂晃
 		if tasks_added == 0 and _current_task.is_empty():
-			_push_llm_tasks([{"action": "idle", "params": {}, "priority": 0.0}], data)
+			var fallback_place := ""
+			if stats != null and stats.needs_attention():
+				fallback_place = stats.get_lowest_need_place()
+			if not fallback_place.is_empty():
+				_push_llm_tasks([{"action": "move_to", "params": {"place": fallback_place}, "priority": 0.0}], data)
+			else:
+				_push_llm_tasks([{"action": "idle", "params": {}, "priority": 0.0}], data)
 
 		# emotion（#351）：每次決策都必填，validate_tasks() 已經驗證過 type／
 		# intensity 合法，這裡直接套用，不再二次判斷——AI 自己宣告的內在狀態，
@@ -2537,6 +2549,7 @@ func _reevaluate_once() -> void:
 			and _current_task.get("source", "") == "llm" \
 			and _current_task.get("id", "") != _active_talk_task_id \
 			and not is_performing() \
+			and not _current_task.get("_logged", false) \
 			and now_minutes - _current_task_started_at >= int(ceil(_effective_action_duration(_current_task.get("duration", 0.0)))):
 		# 做完的那筆要先離開池子。llm 任務沒有 window，不像 schedule 靠時間窗
 		# 自然退場——留著的話它會用原本的分數繼續參加下一輪算分，被重新選中，
@@ -2572,7 +2585,8 @@ func _reevaluate_once() -> void:
 		# 失敗，cooldown_left 永遠回 0，沒有自己的節流會讓這裡每個遊戲分鐘
 		# 都重打一次，變成新的洗版問題。用獨立的 _last_stuck_retry_minute
 		# 記錄，跟 AIService 的冷卻分開算
-		if llm_decision_enabled and not _awaiting_decision and _current_task.is_empty() \
+		if llm_decision_enabled and not _awaiting_decision \
+				and (_current_task.is_empty() or _current_task.get("_logged", false)) \
 				and now_minutes - _last_stuck_retry_minute >= STUCK_RETRY_INTERVAL_MINUTES:
 			_last_stuck_retry_minute = now_minutes
 			_request_next_decision(_today_plan_needs_new_goal())
