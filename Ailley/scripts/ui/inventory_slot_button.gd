@@ -10,10 +10,11 @@ extends TextureButton
 ## 圖示系統做出來之後這塊要整個換掉，不是拿去微調。
 ##
 ## 格子只有 26×28px（見 note/技術/UI 版面與素材規格.md），塞不下最長的
-## 4 字品名（「小型獵物」「大型獵物」「一般衣物」）。字級維持全 UI 統一的 11
-## （《UI 版面與素材規格》§字型：點陣中文字型只在原生尺寸才銳利，降級會糊，
-## 所以不另開字級），改用 `MAX_NAME_CHARS` 在組字串階段砍到 2 個完整字元——
-## 11px × 2 字 = 22px，進得去 26px 的格子。代價：`herb`「藥草」與
+## 4 字品名（「小型獵物」「大型獵物」「一般衣物」）。字級在 `_ready()` 明確
+## override 成 11（theme 的 Label 預設是 12，見 `ailley_theme.tres`；11 是 Cubic
+## 11 的原生尺寸——《UI 版面與素材規格》§字型：點陣中文字型只在原生尺寸或其
+## 整數倍才銳利，12 已是放大渲染），改用 `MAX_NAME_CHARS` 在組字串階段砍到
+## 2 個完整字元——11px × 2 字 = 22px，進得去 26px 的格子。代價：`herb`「藥草」與
 ## `herb_soup`「藥草湯」截斷後撞成同一個「藥草」，目前物品清單裡只有這一組
 ## 撞名，且兩者本就同源（湯是草煮的），暫時接受，等圖示系統做出來自然分辨。
 ## 單靠 `clip_text` 逐像素裁切會從中文字中間切一刀、裁出殘缺字形，所以
@@ -32,7 +33,8 @@ extends TextureButton
 ## 常駐列跟背包面板裡的格子（不管是主背包 27 格還是面板內嵌的快捷欄 9 格）
 ## 天生就能互拖，不需要額外接線。
 
-const MAX_NAME_CHARS := 2		# 11px × 2 字 = 22px 進得去 26px 格；字級維持全 UI 統一 11 不降級（藥草／藥草湯撞名的取捨見檔頭）
+const NAME_FONT_SIZE := 11		# Cubic 11 原生尺寸；theme 的 Label 預設是 12（ailley_theme.tres），_ready() 明確 override（理由見檔頭）
+const MAX_NAME_CHARS := 2		# 11px × 2 字 = 22px 進得去 26px 格；字級 NAME_FONT_SIZE = 11 不降級（藥草／藥草湯撞名的取捨見檔頭）
 
 var slot_index := -1
 
@@ -50,6 +52,10 @@ func _ready() -> void:
 	_label.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	# theme 的 Label 預設字級是 12（ailley_theme.tres），這裡明確 override 成 11：
+	# Cubic 11 的原生尺寸（《UI 版面與素材規格》§字型），11px × 2 字 = 22px 也才
+	# 進得去 26px 格——算式的輸入值由此釘死，不跟著 theme 漂
+	_label.add_theme_font_size_override("font_size", NAME_FONT_SIZE)
 	_label.clip_text = true
 	add_child(_label)
 
