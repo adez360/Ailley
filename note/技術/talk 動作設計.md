@@ -90,8 +90,54 @@ updated: 2026-08-22
 key 用對方的 `character_id` 而不是 name —— name 會改，用它當 key 等於改名即失憶。
 每筆存成 Dictionary 而不是單一浮點數：欄位是 `trust`／`met_count`／
 `appearance_cache`（規格《01》3-1、《99》P-08）／`appearance_state`（#498，
-見下方外觀異動偵測），之後要加最後見面時間（見 #497）、印象標籤也一樣不用
-改結構。
+見下方外觀異動偵測）／`last_seen`（#497，見下方），印象標籤之後要加也一樣
+不用改結構。
+
+## 上次見面時間（#497）
+
+`last_seen`：上次 `note_meeting()`（好好講完一場話）當下的 `GameClock.day`，
+-1 表示從沒見過。只有 `note_meeting()` 會寫入，跟 `met_count` 同一次更新，
+判斷「有沒有上次見面」要查 `Relationships.has_met()`，不要拿 -1 當合法天數
+去算差值。
+
+送進 `context.listener` 時壓成中文事實句（`prompt_builder.gd::_last_seen_sentence()`），
+不送原始時間戳讓模型自己算——跟 `_today_plan_sentence()` 同一種「輸入端一律
+注入、但壓成自然語言句子」做法（2026-08-27 issue #497 拍板）。只陳述天數差
+（「你上次見到 TAMMY 是 3 天前」／「你今天已經見過 TAMMY 了」／「你還沒見過
+TAMMY」），不加「好久不見」這類情緒推測，符合《00》原則二。
+
+只落地 JSON 存檔路徑（`Character.get_save_data()`／`load_save_data()` 通用
+機制自動涵蓋，不用改）。SQLite 路徑（`npc_relations` 表）目前連既有的
+`met_count` 都存不進去（見 `sqlite_save_service.gd` 檔尾「schema 缺口」清單），
+`last_seen` 一併登記在同一個缺口清單，不單獨補 schema——要不要幫 SQLite 補
+這兩個欄位是《99》待規劃項目，不是這則 issue 的範圍。
+
+### 驗證
+
+`test_run(suite="relationships")`：6/6 通過（`get_last_seen()`／
+`load_save_data()` 型別驗證與退回預設值邏輯，不依賴 GameClock）。全套件
+31/33 通過，唯二失敗是既有的 `test_shout_reaches_player.gd`（issue #624
+追蹤），與本次改動無關。
+
+`project_run` + `game_eval` 對主 checkout 動態 spawn 一隻 Agent，直接呼叫
+`player.relationships.note_meeting()` 與 `PromptBuilder._listener_block()`
+驗證三種情境的實際字串：從沒見過（「你還沒見過 TestLastSeen。」）、剛見過面
+（`note_meeting()` 當下同一天，「你今天已經見過 TestLastSeen 了。」）、倒回
+3 天前（手動改 `last_seen` 欄位模擬，「你上次見到 TestLastSeen 是 3 天前。」）。
+另外驗證 `get_save_data()`／`load_save_data()` round-trip 保留 `last_seen`。
+
+> [!important] 舊存檔過渡態（`has_met=true`、`last_seen=-1`）不能算天數差（PR #641 review 抓到）
+> `_last_seen_sentence()` 原本只查 `has_met`，沒有另外擋 `last_seen_day < 0`——
+> #497 之前的存檔只有 `met_count`、沒有 `last_seen` 欄位，讀回來時
+> `has_met()` 為真（`met_count > 0`）但 `last_seen` 退回預設值 `-1`，
+> 會算出 `GameClock.day - (-1)` 這種編造出來的天數，往後每次決策都送出
+> 錯誤事實句，直到下次真的 `note_meeting()` 才自癒。已補上
+> `last_seen_day < 0` 判斷，這種過渡態一律退回「你還沒見過」。
+> `game_eval` 對 `PromptBuilder._last_seen_sentence()` 四種情境實測：
+> `(has_met=false, -1)` → 「你還沒見過阿吉。」；
+> `(has_met=true, last_seen_day=-1)`（過渡態）→ 「你還沒見過阿吉。」（修復前會算成假天數）；
+> `(has_met=true, last_seen_day=GameClock.day)` → 「你今天已經見過阿吉了。」；
+> `(has_met=true, last_seen_day=GameClock.day-3)` → 「你上次見到阿吉是 3 天前。」。
 
 外觀異動偵測（#498 拍板）：`appearance_cache`（自由文字、初次相遇的外觀描述，
 P-08 已拍板但從沒有任何呼叫端寫入過）繼續維持原樣不動，這次新增一個獨立欄位
@@ -186,11 +232,13 @@ schema 欄位名稱、是否要額外佔用一次 AI 呼叫頻率配額（見《
 
 候選角色偵測（原本 `character.gd` 裡找最近角色的方法，未曾被 `player.gd` 實際呼叫過、
 是死代碼，已移除）改成 `player.gd` 直接濾 `Vision.get_visible_characters()`——反正都要
-視線判定，沒理由重複維護兩份。工作站／販賣機的候選則改用 `player.gd` 新增的
+視線判定，沒理由重複維護兩份。工作站的候選則改用 `player.gd` 新增的
 `InteractArea`（`Area2D`，半徑 `maxf(WORK_RANGE, TALK_RANGE, BUY_RANGE)`，動態算不寫死），
-偵測 `project.godot` 新增的 `interactable` collision layer（`workstation.tscn`／
-`vending_machine.tscn` 的 `collision_layer` 從純 `terrain` 改成 `terrain | interactable`，
-NavGrid 的障礙判定只查 `terrain`，不受影響），取代原本每次呼叫都掃過整個 group 的寫法。
+偵測 `project.godot` 新增的 `interactable` collision layer（`workstation.tscn` 的
+`collision_layer` 從純 `terrain` 改成 `terrain | interactable`，NavGrid 的障礙判定
+只查 `terrain`，不受影響），取代原本每次呼叫都掃過整個 group 的寫法。商店（issue #572
+後不再是場上物件）不走這條 `InteractArea` 路徑，`_nearest_shop_place()` 直接對
+`SHOP_PLACES` 逐一比 `PlaceAnchors` 錨點距離，見 [[販賣機]]。
 
 ## 已定案的參數
 

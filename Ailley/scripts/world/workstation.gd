@@ -136,3 +136,17 @@ func _update_status_label() -> void:
 			soonest = _remaining_minutes[i]
 	status_label.visible = true
 	status_label.text = "客滿・約 %d 分鐘後有空位" % soonest
+
+# 佔用中還要幾遊戲分鐘才會空出來（issue #663，#737 接上玩家失敗訊息）。
+# 多名額語意：取所有工作中名額剩餘分鐘的最小值，跟 _update_status_label()
+# 的 ETA 同一套算法——冷卻只鎖釋放者，等的人不該被算進冷卻時間。全部名額
+# 都沒有在工作中角色時回 0——呼叫端該先用 is_occupied() 判斷要不要顯示，
+# 這裡不重複判斷「是否該顯示」，只管算數
+func get_wait_minutes() -> int:
+	_sweep_invalid_occupants()
+	var soonest := -1
+	for i in MAX_OCCUPANTS:
+		if _occupants[i] != null:
+			if soonest == -1 or _remaining_minutes[i] < soonest:
+				soonest = _remaining_minutes[i]
+	return maxi(soonest, 0)
