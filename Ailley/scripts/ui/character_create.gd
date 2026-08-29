@@ -115,6 +115,7 @@ const HONEY := Color("F0A94E")
 	$Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/StyleGrid/Style6Cell/NameLabel,
 ]
 
+@onready var _missing_label: Label = $Scrim/Center/Row/Panel/MarginContainer/Col/Footer/MissingLabel
 @onready var _cancel_button: Button = $Scrim/Center/Row/Panel/MarginContainer/Col/Footer/CancelButton
 @onready var _save_template_button: Button = $Scrim/Center/Row/Panel/MarginContainer/Col/Footer/SaveTemplateButton
 @onready var _deploy_button: Button = $Scrim/Center/Row/Panel/MarginContainer/Col/Footer/DeployButton
@@ -377,17 +378,27 @@ func _extreme_min() -> int:
 	var has_desc := not _desc_edit.text.strip_edges().is_empty()
 	return EXTREME_MIN_WITH_DESC if has_desc else EXTREME_MIN_WITHOUT_DESC
 
-func _can_save() -> bool:
-	var n := _extreme_count()
-	if n < _extreme_min() or n > EXTREME_MAX:
-		return false
+## 目前還沒填完的項目，順序 = 分頁順序（分頁 1 姓名／分頁 2 個性強度／
+## 分頁 4 造型／分頁 1 型號）。存檔驗證與 footer 提示共用這一份清單，
+## 免得兩邊條件走鐘
+func _missing_items() -> Array[String]:
+	var items: Array[String] = []
 	if _name_edit.text.strip_edges().is_empty():
-		return false
+		items.append(L10n.t("UI_CC_MISSING_NAME"))
+	var n := _extreme_count()
+	var required := _extreme_min()
+	if n < required:
+		items.append(L10n.tf("UI_CC_MISSING_EXTREME", {"n": required - n}))
+	elif n > EXTREME_MAX:
+		items.append(L10n.tf("UI_CC_MISSING_EXTREME_HIGH", {"n": n - EXTREME_MAX}))
 	if _style_selected < 0:
-		return false
+		items.append(L10n.t("UI_CC_MISSING_STYLE"))
 	if _decision_source in ["local", "cloud"] and _model_name.is_empty():
-		return false
-	return true
+		items.append(L10n.t("UI_CC_MISSING_MODEL"))
+	return items
+
+func _can_save() -> bool:
+	return _missing_items().is_empty()
 
 
 func _refresh_all() -> void:
@@ -395,12 +406,14 @@ func _refresh_all() -> void:
 	for i in _sliders.size():
 		_refresh_slider(i)
 	_refresh_description()
-	_refresh_strength()
 	_age_value_label.text = str(int(_age_slider.value))
 	_refresh_gender_buttons()
 	_refresh_source_buttons()
 	_refresh_model_dropdown()
 	_refresh_style_buttons()
+	# 個性強度／footer 提示放最後：_refresh_model_dropdown() 會補上自動選中的
+	# 型號，先算的話提示會停在「還缺 AI 型號」
+	_refresh_strength()
 	_decision_source_container.visible = not _embodiment_mode
 
 func _deployed_count() -> int:
@@ -436,8 +449,18 @@ func _refresh_strength() -> void:
 		_hint_label.text = L10n.t("UI_CC_STRENGTH_OK")
 		_hint_label.add_theme_color_override("font_color", MOSS)
 
-	_save_template_button.disabled = not _can_save()
-	_deploy_button.disabled = not _can_save()
+	_refresh_footer()
+
+## footer 提示：把還沒填完的項目列在按鈕左邊，玩家不用逐頁翻找為什麼存檔／
+## 投放是灰的。項目多的時候靠 Label autowrap 換行，footer 高度跟著長一列，
+## 不截字——面板高度是 344 的固定下限，多一列吃得下
+func _refresh_footer() -> void:
+	var missing := _missing_items()
+	_missing_label.text = "" if missing.is_empty() else L10n.tf("UI_CC_MISSING", {
+		"items": L10n.t("UI_CC_MISSING_SEP").join(missing),
+	})
+	_save_template_button.disabled = not missing.is_empty()
+	_deploy_button.disabled = not missing.is_empty()
 
 func _refresh_gender_buttons() -> void:
 	_male_button.button_pressed = (_gender_selected == "male")

@@ -733,9 +733,14 @@ autowrap_mode = 3
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="FooterSpacer" type="Control" parent="Scrim/Center/Row/Panel/MarginContainer/Col/Footer"]
+[node name="MissingLabel" type="Label" parent="Scrim/Center/Row/Panel/MarginContainer/Col/Footer"]
+auto_translate_mode = 2
+custom_minimum_size = Vector2(80, 0)
 layout_mode = 2
 size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.54509807, 0.12156863, 0.078431375, 1)
+theme_override_font_sizes/font_size = 12
+autowrap_mode = 3
 
 [node name="RandomButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/Footer"]
 layout_mode = 2
