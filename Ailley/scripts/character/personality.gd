@@ -33,6 +33,22 @@ const PERSONALITY_KEYS := [
 	"romanticism", "curiosity", "grudge", "greed", "honesty",
 ]
 
+## PERSONALITY_KEYS -> L10n key，給玩家看的人格面板用（issue #385 改範圍後的
+## 墓碑查看面板）。跟 Stats.SPEC 的 "label" 同一種做法——顯示用的翻譯鍵跟
+## 引擎欄位名分開存一份對照表，不是欄位名本身拿去查 L10n
+const PERSONALITY_LABELS := {
+	"diligence": "TRAIT_DILIGENCE",
+	"courage": "TRAIT_COURAGE",
+	"sociability": "TRAIT_SOCIABILITY",
+	"morality": "TRAIT_MORALITY",
+	"stability": "TRAIT_STABILITY",
+	"romanticism": "TRAIT_ROMANTICISM",
+	"curiosity": "TRAIT_CURIOSITY",
+	"grudge": "TRAIT_GRUDGE",
+	"greed": "TRAIT_GREED",
+	"honesty": "TRAIT_HONESTY",
+}
+
 ## 極端項的門檻（《01-1》§2-3）。26~74 一律不輸出任何字——不是輸出「普通」，
 ## 是整條略過，中間值就是留給 AI 的自主空間
 const EXTREME_LOW := 25

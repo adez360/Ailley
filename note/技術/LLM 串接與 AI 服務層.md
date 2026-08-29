@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-28
+updated: 2026-08-29
 ---
 
 # LLM 串接與 AI 服務層
@@ -205,6 +205,16 @@ system: 人格敘述 ＋ 行為規則 ＋ 輸出 schema ＋ 動作白名單     
 user:   <下方 JSON 字串化>                                    ← 每次變
 ```
 
+`system` 段最後固定接一句語言規則（`PromptBuilder.OUTPUT_LANGUAGE_RULE`，issue
+#656）：本機小模型沒有明確語言限制時，容易在中文句子裡夾雜訓練資料帶出來的
+英文詞彙。這句只管「自由文字（台詞、心聲、吐槽）要用繁體中文」，不影響 JSON
+欄位名／enum 值——所以接在規則段最後面而不是最前面，避免被誤讀成連 schema
+都要中文。`build_dialogue_envelope`／`build_plan_envelope`／
+`build_reflection_envelope`／`build_checkpoint_envelope`／
+`build_last_words_envelope`／`build_words_to_creator_envelope`（都經過
+`_system()`）跟 `build_creation_envelope`（不吃 `Character`，另外接一次）
+全部套用同一句。
+
 ```json
 {
   "type": "dialogue",
@@ -331,11 +341,13 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 `max_turns`，不是遞增的 `turns_so_far`；這裡描述的是設計目標，接回程式碼是
 獨立的後續動作，不在 #482 範圍內。
 
-> [!note] `turns_so_far` 口徑尚未定案，接線時要挑一個
-> `conversation.gd::_run()` 的迴圈變數 `turn`（從 0 起算、不含開場白）跟
-> `_turns.size()`（陣列長度，含開場白那一句）是兩個不同的數字——下面 A/B/C
-> 實驗腳本用的是前者（`turn`），跟 `_turns` 陣列本身的長度不等價。接回真代碼
-> 時要明確選一種當 `turns_so_far` 的定義，`Ailley/scripts/ai/prompt_builder.gd::build_dialogue_envelope()`
+> [!note] `turns_so_far` 現在等於 `_turns.size()`，不用另外挑一種算法
+> `conversation.gd::_run()` 的迴圈變數 `turn`（從 0 起算）跟 `_turns.size()`
+> （陣列長度）在同一輪呼叫 `next_line()` 的當下是同一個數字——開場白已改成
+> 一律過 LLM（issue #630／《99》P-67），不再有「`turn` 不含開場白、`_turns.size()`
+> 含開場白」那個固定 1 的落差。下面 A/B/C 實驗跑在這個落差還存在的舊版上，
+> 腳本用的是 `turn`；接回真代碼時兩邊現在算的是同一件事，選哪個當
+> `turns_so_far` 都可以，`Ailley/scripts/ai/prompt_builder.gd::build_dialogue_envelope()`
 > 沿用同一個公式，不要兩邊各自算一套。
 
 **A/B/C 實測在本次樣本中大幅改善收尾行為**（issue #482，2026-08-23，本機 llama-server
@@ -446,16 +458,19 @@ max_dialogue_calls_per_game_day`，不是 `>`——跟既有
 > 這樣講清楚，不是無條件對兩種設定都生效
 
 **預設值 30 的依據**：這次記的樣本是 `_turns.size()`（對話輪數），不是真正的
-`AIService.request()` 呼叫次數——每場開頭的 `DialogueLines.opening()` 不打
-LLM，7.0 輪／場扣掉這句開場白，實際是雙方合計約 **6.0 次呼叫／場**（這次
-樣本全是 NPC 對 NPC，不涉及玩家回合那個額外的不打 LLM 因素）。
+`AIService.request()` 呼叫次數。這次樣本測的是舊版行為——開場白當時還是
+`DialogueLines.opening()` 寫死的模板句，不打 LLM，7.0 輪／場扣掉這句開場白，
+換算成雙方合計約 6.0 次呼叫／場。開場白改成一律過 LLM 之後（issue #630／
+《99》P-67），這個扣減不再成立，同一份 7.0 輪／場的樣本换算下來會更接近
+**7.0 次呼叫／場**（每一輪都打 LLM）；這個數字本身也是舊樣本套新規則的
+粗算，不是重新量測的結果。
 >
 > [!warning] 配額 scope 是 per-`requester_id`（單一角色），不是 per-對話（CodeRabbit review 抓到）
 > `_dialogue_calls_today[requester_id]` 算的是**單一角色**今天講了幾輪，不是
-> 一場對話兩隻角色合計打了幾次。上面「6.0 次呼叫／場」是雙方合計，若對話
-> 輪流發言、大致平均分攤，換算成單一角色的負擔是約 **3 次呼叫／場**——30
-> 次配額對單一角色來說約可撐 **10 場**均值對話，不是拿雙方合計數去除的
-> 5 場。這個換算本身也只是「輪流均分」的粗略假設，實際上兩隻角色誰先開口、
+> 一場對話兩隻角色合計打了幾次。上面「7.0 次呼叫／場」是雙方合計，若對話
+> 輪流發言、大致平均分攤，換算成單一角色的負擔是約 **3.5 次呼叫／場**——30
+> 次配額對單一角色來說約可撐 **8～9 場**均值對話，不是拿雙方合計數去除的
+> 場次。這個換算本身也只是「輪流均分」的粗略假設，實際上兩隻角色誰先開口、
 > 誰講得多不會完全對半分，正式訂數字前要用同一個 per-角色口徑重新記樣本，
 > 不是延用這次雙方合計的數字
 >
@@ -618,10 +633,12 @@ pattern 這類字串格式約束，格式與未來時間的檢查落在驗證層
 `ai_config.gd`／`ai_service.gd`／`ai_schema.gd`／`data/ai_config.example.json`，
 autoload 已註冊，主控台加了 `ai` 指令。
 
-- `request(envelope, requester_id, policy)`：`enum Policy { SCHEDULED, CONVERSATION }`，
-  `CONVERSATION` 跳過冷卻與每日配額但照樣計數（走獨立的 `_dialogue_calls_today`），
-  預設 `SCHEDULED`——忘了指定的呼叫端落在保守那邊，不會意外拿到無限額度
-- 速率限制三個旋鈕搬進 `user://ai_config.json`（皆可設 0＝不限），預設值與規格數值
+- `request(envelope, requester_id, policy)`：`enum Policy { SCHEDULED, CONVERSATION, CREATION }`，
+  `CONVERSATION`／`CREATION` 跳過冷卻與每日配額但照樣計數（分別走獨立的
+  `_dialogue_calls_today`／`_creation_calls_today`），`CREATION` 是建角一次性生成
+  （words_to_creator，#682），預設 `SCHEDULED`——忘了指定的呼叫端落在保守那邊，
+  不會意外拿到無限額度
+- 速率限制旋鈕搬進 `user://ai_config.json`（皆可設 0＝不限），預設值與規格數值
   見 `ai/api.md`（`AIConfig`）／規格書《13》§5
 - 回傳一律 `{"ok": bool, "data": Dictionary, "error": String}`，呼叫端一律 `await`
 - 4xx 不重試；網路錯誤／5xx 重試 1 次
@@ -642,7 +659,9 @@ autoload 已註冊，主控台加了 `ai` 指令。
 `DialogueLines`。`MAX_TURNS` 換成 `SAFETY_MAX_TURNS`（純保險，收尾由 `end` 欄位決定），
 `character.gd` 有 `signal spoke`，玩家在對話中打的字也送得進上下文。
 
-開場白仍然是模板句：對話由 `DialogueLines.opening()` 起頭，第二輪才進 LLM。
+開場白（turn 0，被搭話的一方）也一律過 LLM（issue #630／《99》P-67），多開放
+一個 `engage` 欄位，可以選擇不理會這次搭話；`DialogueLines.opening()` 只在
+turn 0 的 LLM 呼叫失敗時當 fallback 使用，跟 `closing()` 是同一種定位。
 
 ### Step 2 — 任務池與仲裁器 ✅ 完成
 
@@ -767,7 +786,6 @@ JSON Schema → GBNF 的轉換器。
   `JsonSaveService`：`SqliteSaveService` 尚未讀寫 `memory` 欄位，SQLite
   round-trip 會遺失記憶（見 [[存檔]]「SQLite 後端現況」）
 - **交誼區 WebSocket 線** —— 伺服器技術棧尚未決定，見 #476
-- `preconditions` 求值 —— 結構留欄位，v1 一律通過，見 #477
 - 白名單中除 `move_to` / `talk` / `sleep` 外的動作實作——白名單本身已經是
   《07》《11》拍板的 22 個（issue #88），但 `IMPLEMENTED_ACTIONS` 沒有跟著擴
 - `speech` 觸發對話交接（issue #90）
@@ -776,7 +794,8 @@ JSON Schema → GBNF 的轉換器。
 
 ## 待決（正式線）
 
-- [ ] 「…」氣泡的等待體感要實跑才知道能不能接受，見 #480
+- [x] **「…」氣泡擴大套用到行程決策已落地**（#480，2026-08-27）：`_request_next_decision()`
+      套用跟 `next_line()` 同一招，細節見下方「延遲」一節
 - [x] **LLM 成本上限完全沒有防護**——研究與提案已由 #395 完成（本機
       Qwen2.5-7B，6 場對話均值 7.0 輪／場，`max_dialogue_calls_per_game_day`
       旋鈕設計案見上方「每日對話呼叫上限提案」一節），落地實作見 #434
@@ -889,33 +908,47 @@ poc 輸出裡有、《06》沒提到的欄位：`reasoning`／`inner_monologue`�
 《06》全 snake_case 無中英夾雜，poc 的 `intent.action`（中文）跟 `action_en`
 （英文）同時存在，是重複資訊。
 
-## 延遲：實測 2.5-4 秒，體感層面的解法尚未實作
+## 延遲：實測 2.5-4 秒，體感層面靠「…」氣泡頂著
 
 編輯器實測「玩家靠近就打一次決策」：從靠近到角色真的有反應中間約 2.5-4 秒
 （時間主要花在 llama-server 的 grammar 約束生成，不是網路或 Godot 端）。
 對「玩家靠近、期待即時反應」這種互動模式來說很明顯，玩家靠近後畫面上完全
-沒有回饋，3 秒後突然講話/移動。正式線接對話與行程時會碰到同一個數量級。
+沒有回饋、3 秒後突然講話/移動的話體感會很差。正式線接對話與行程時會碰到
+同一個數量級。
 
-**體感層面的解法（想法已記錄，尚未實作）**：觸發當下先給立即視覺回饋——氣泡
-顯示「…」思考中，或角色停下腳步做「在想事情」的小動作，等決策回來才換成
-真正的台詞/動作。不用真的縮短延遲，體感會差很多。
+**體感層面的解法（#480，2026-08-27 落地）**：`Agent._request_next_decision()`
+在確定要送出請求、真正打網路之前，套用跟 `next_line()`（Step 1 對話）
+完全同一招——`say(AI_THINKING_TEXT, true, false)` 立刻蓋一顆「…」氣泡，
+`interrupt=true` 蓋掉正在顯示的舊訊息。不縮短延遲本身，只讓觸發當下不是
+死寂一片。
 
-**縮短延遲本身的槓桿（另一方向，同樣尚未實作）**：`REASONING_INSTRUCTION` 的
+> [!note] 「…」氣泡撐不滿整段等待，是刻意接受的取捨
+> `bubble.gd::say()` 的顯示時長跟著文字長度算（`MIN_DURATION` 1.2 秒），
+> 「…」只有一個字，1.2 秒後就自動收掉——比 2.5-4 秒的實測延遲短，決策
+> 真正回來前氣泡多半已經消失。`next_line()` 的既有取捨是「早一點給回饋
+> 比精準對齊網路延遲更重要」，這裡沿用同一個立場，沒有另外做「撐滿整段
+> 等待」的機制（例如改用不會自動收掉的 `hold()`）。用 `game_eval` 直接呼叫
+> `_request_next_decision()` 白箱驗證過：`spoke` 訊號確實以 `"…"` 觸發、
+> 氣泡當下 `visible=true`、且會蓋掉呼叫當下正在顯示的舊訊息。角色停下腳步
+> 做「在想事情」小動作是筆記原本提過的替代方案，#480 沒有採用，兩案只能
+> 二選一時選了跟對話一致、成本較低的氣泡方案。
+
+**縮短延遲本身的槓桿（另一方向，尚未實作）**：`REASONING_INSTRUCTION` 的
 100 字上限是延遲/品質的直接槓桿，往下砍會更快但決策品質會掉；其他槓桿是模型
 量化等級、llama-server 的 `--parallel` 設定，會影響全部呼叫，改動範圍更大。
 
-## 動態投放到真正依任務移動：冷卻問題待修（PR #684），真正的卡點是空任務回應沒有補救機制（2026-08-28 實測）
+## 動態投放到真正依任務移動：冷卻問題已修（PR #684），真正的卡點是空任務回應沒有補救機制（2026-08-28 實測）
 
-`_generate_words_to_creator()`（`agent.gd`／`game_manager.gd` 各一份）目前
-仍跟第一次 plan 決策共用同一個 `AIService.Policy.SCHEDULED` 冷卻池
-（origin/main 的 `Policy` enum 只有 `SCHEDULED`／`CONVERSATION`），導致
-投放後多等一輪完整冷卻（目前 30 秒）才送得出第一次決策。修法（issue #682，
-**實作在尚未合併的 PR #684**）：新增 `AIService.Policy.CREATION`，讓這通
-一次性生成呼叫無條件豁免冷卻與每日配額，不再跟決策共用池子。合併後不管走
+`_generate_words_to_creator()`（`agent.gd`／`game_manager.gd` 各一份）在
+#684 之前跟第一次 plan 決策共用同一個 `AIService.Policy.SCHEDULED` 冷卻池
+（當時 `Policy` enum 只有 `SCHEDULED`／`CONVERSATION`），導致投放後多等一輪
+完整冷卻（當時 30 秒）才送得出第一次決策。修法（issue #682，
+**實作在 PR #684，已併入 main**）：新增 `AIService.Policy.CREATION`，讓這通
+一次性生成呼叫無條件豁免冷卻與每日配額，不再跟決策共用池子。現在不管走
 debug 主控台 `spawn` 還是正式的 `GameManager.deploy_from_library()`，
-投放到送出第一次 plan 決策預期只要一次網路延遲（0.6-1.9 秒，量級同上一節
-#118 校準值；此數值是在 #684 分支上實測的，尚未進 main），不再有那 30 秒
-——透過 `Continue`（讀檔重生）真實路徑重新投放已生成過 `words_to_creator`
+投放到送出第一次 plan 決策只要一次網路延遲（0.6-1.9 秒，量級同上一節
+#118 校準值；此數值是在 #684 分支上實測的，已隨 #684 進 main），不再有那
+30 秒——透過 `Continue`（讀檔重生）真實路徑重新投放已生成過 `words_to_creator`
 的角色驗證過：`AIService.get_usage()` 顯示 `calls_today: 1`，沒有被搶先
 佔用冷卻。
 

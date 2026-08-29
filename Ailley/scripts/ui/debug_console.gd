@@ -397,7 +397,6 @@ func _cmd_status(args: PackedStringArray) -> void:
 			var record: Dictionary = snapshot["relations"][other_id]
 			lines.append(L10n.tf("CON_RELATION_ENTRY", {
 				"id": other_id,
-				"trust": "%.1f" % record["trust"],
 				"count": record["met_count"],
 			}))
 		_field("CON_FIELD_RELATIONS", SEP.join(lines))
@@ -451,6 +450,7 @@ func _cmd_tasks(args: PackedStringArray) -> void:
 		var score: Dictionary = info["score"]
 		var marker := "→" if info["is_current"] else " "
 		var window_note := "" if info["in_window"] else "[color=888888]（窗外）[/color]"
+		var precond_note := "" if info["preconditions_met"] else "[color=888888]（前提不成立）[/color]"
 
 		# 一律 .get()：仲裁器本身允許任務沒有 window（`_in_window_or_unwindowed`
 		# 直接當成隨時可選），硬取 task["window"]["start"] 會在第一筆這種任務上
@@ -458,9 +458,9 @@ func _cmd_tasks(args: PackedStringArray) -> void:
 		var window = task.get("window")
 		var window_text := "隨時" if window == null else "%s..%s" % [window["start"], window["end"]]
 
-		_print("[color=888888]%s %s[/color]  %s  params=%s  window=%s%s" % [
+		_print("[color=888888]%s %s[/color]  %s  params=%s  window=%s%s%s" % [
 			marker, task.get("source", "?"), task.get("action", "?"),
-			JSON.stringify(task.get("params", {})), window_text, window_note,
+			JSON.stringify(task.get("params", {})), window_text, window_note, precond_note,
 		])
 		_print("[color=888888]    score=%.1f = base %.1f + time %.1f + need %.1f + age %.1f[/color]" % [
 			score["total"], score["base"], score["time"], score["need"], score["age"],
@@ -1094,6 +1094,8 @@ func _cmd_ai(args: PackedStringArray) -> void:
 		"max": usage["max_calls"],
 		"dialogue": usage["dialogue_today"],
 		"max_dialogue": usage["max_dialogue"],
+		"creation": usage["creation_today"],
+		"max_creation": usage["max_creation"],
 		"exempt": L10n.t("CON_AI_EXEMPT" if usage["dialogue_exempt"] else "CON_AI_NOT_EXEMPT"),
 		"cooldown": "%.0f" % usage["cooldown_left"],
 		"queued": usage["queued"],

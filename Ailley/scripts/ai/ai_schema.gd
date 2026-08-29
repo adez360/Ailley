@@ -98,6 +98,11 @@ const ALLOWED_ACTIONS := [
 # 任務池」模式（_pursue_bury_task()），差別是目標必須是已死亡且尚未安葬的
 # 屍體，且雙方都要在墓園錨點附近，見 Character.bury() 的檢查順序
 #
+# hunt_small／hunt_large 是 #573 接上的：目標不是角色而是場上的 Animal 節點，
+# 一樣「走到旁邊、一次執行完就退出任務池」（_pursue_hunt_task()），但這兩個
+# 動作在 SUCCESS_PARAMS 表上——會擲骰，不是像 attack／bury 那樣硬規則過了就
+# 直接放行，見 agent.gd::resolve() 的對應分支
+#
 # gather 是 #574 接上的：跟 buy 同一套「先走到地點才執行」模式
 # （_pursue_gather_task()），差別是沒有販賣機這種場景物件——place 直接對應
 # PlaceAnchors 底下的「herb_field」錨點。跟 eat／drink／buy 不同的是 gather
@@ -117,7 +122,7 @@ const ALLOWED_ACTIONS := [
 # 這次只是把它跟 buy／gather 一樣開放給 LLM 選。跟 gather 同一套「先走到地點
 # 才執行」模式，差別是地點錯了（沒有工作站）時失敗原因是 WORK_TARGET_NOT_FOUND
 # 而不是專屬的地點名檢查——見 agent.gd::_pursue_work_task() 的說明
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "gather", "follow", "perform", "work"]
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "hunt_small", "hunt_large", "gather", "follow", "perform", "work"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -305,6 +310,22 @@ static func validate_dialogue(data: Dictionary) -> Dictionary:
 
 	return _ok({"line": line, "end": end})
 
+## 對話第一輪（turn 0，被搭話的那一方）專用：多開放 engage 欄位，可以選擇
+## 不理會這次搭話（issue #630——「他想講就講不想講就算了，跟真實社交一樣」）。
+## engage=false 時不強求 line/end 有內容，直接固定回一個空殼；其餘情況
+## （省略或 true）比照一般規則整個丟給 validate_dialogue()，正常回一句話，
+## 不要維護兩份幾乎一樣的檢查邏輯
+static func validate_dialogue_open(data: Dictionary) -> Dictionary:
+	if data.has("engage"):
+		if not data["engage"] is bool:
+			return _fail(ERROR_BAD_SHAPE)
+		if not data["engage"]:
+			return _ok({"engage": false, "line": "", "end": true})
+
+	var validated := validate_dialogue(data)
+	if validated["ok"]:
+		validated["data"]["engage"] = true
+	return validated
 
 # 單筆任務的通用邊界檢查：action 白名單、params 型別、talk/attack/give 的
 # 逐欄位檢查、expires_in_minutes 換算、priority／duration 範圍。從
@@ -390,6 +411,17 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 		if not place is String or (place as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
 		buy_params["place"] = (place as String).strip_edges()
+
+	# move_to 動作的 params 驗證：跟 buy／gather 同一套「place 是必填
+	# 字串」——這個動作原本完全沒有逐欄位驗證，缺 place 或給空字串會直接
+	# 放行到執行層才發現走不到任何地方，跟這個檔案「外來內容一律不信任、
+	# 不等執行層才發現資料是空的」的原則不一致
+	if action == "move_to":
+		var move_params: Dictionary = task.get("params", {})
+		var move_place: Variant = move_params.get("place")
+		if not move_place is String or (move_place as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+		move_params["place"] = (move_place as String).strip_edges()
 
 	# gather 動作的 params 驗證（#574）：跟 buy 同一套「place 是必填字串」——
 	# 藥草叢目前是唯一的採集地點，但仍要求 LLM 明講去哪裡，place 錯了在
