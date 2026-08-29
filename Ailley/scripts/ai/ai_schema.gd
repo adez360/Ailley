@@ -96,6 +96,11 @@ const ALLOWED_ACTIONS := [
 # 任務池」模式（_pursue_bury_task()），差別是目標必須是已死亡且尚未安葬的
 # 屍體，且雙方都要在墓園錨點附近，見 Character.bury() 的檢查順序
 #
+# hunt_small／hunt_large 是 #573 接上的：目標不是角色而是場上的 Animal 節點，
+# 一樣「走到旁邊、一次執行完就退出任務池」（_pursue_hunt_task()），但這兩個
+# 動作在 SUCCESS_PARAMS 表上——會擲骰，不是像 attack／bury 那樣硬規則過了就
+# 直接放行，見 agent.gd::resolve() 的對應分支
+#
 # gather 是 #574 接上的：跟 buy 同一套「先走到地點才執行」模式
 # （_pursue_gather_task()），差別是沒有販賣機這種場景物件——place 直接對應
 # PlaceAnchors 底下的「herb_field」錨點。跟 eat／drink／buy 不同的是 gather
@@ -110,7 +115,7 @@ const ALLOWED_ACTIONS := [
 # perform 是 #575 接上的：跟 work 同一套「立刻回傳 OK、協程跑完才收尾」的
 # 長動作模式（_pursue_perform_task()），差別是不用先到工作站——任意地點皆可，
 # 只認背包裡有沒有 instrument
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "gather", "follow", "perform"]
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "hunt_small", "hunt_large", "gather", "follow", "perform"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、

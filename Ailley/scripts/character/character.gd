@@ -975,6 +975,40 @@ func _erect_unmarked_grave() -> void:
 	print_debug("Character %s 腐壞見底，自動立無名碑" % character_name)
 
 
+# ---- 打獵 ----
+
+const HUNT_RANGE := 32.0		# 跟 ATTACK_RANGE／BURY_RANGE 同一種距離門檻，2 格
+
+const HUNT_OK := ""
+const HUNT_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const HUNT_TOO_FAR := "TOO_FAR"
+const HUNT_NO_INVENTORY := "NO_INVENTORY"
+const HUNT_NO_SPACE := "NO_SPACE"
+
+## 打獵（issue #573）。跟 attack()／bury() 同一種寫法：一路檢查，任何一關
+## 不過就回失敗碼，全過才真的寫入狀態——但成不成功這件事本身**不是**這裡決定的：
+## hunt_small／hunt_large 在《01-2》SUCCESS_PARAMS 表上，擲骰已經在
+## Agent.resolve() 那關做完，這個函式只在骰過「成功」之後才會被呼叫，
+## 這裡的檢查只是防呆（動物在擲骰之後、真正執行之前的這段空窗期跑走／被
+## 別人先獵走），不是機率判定
+func hunt(animal: Animal) -> String:
+	if animal == null or not is_instance_valid(animal) or animal.is_queued_for_deletion():
+		return HUNT_TARGET_NOT_FOUND
+	if get_body_position().distance_to(animal.global_position) > HUNT_RANGE:
+		return HUNT_TOO_FAR
+	if inventory == null:
+		return HUNT_NO_INVENTORY
+
+	var item_id: String = animal.game_type
+	var add_reason := inventory.add_item(item_id)
+	if add_reason != Inventory.ADD_OK:
+		return HUNT_NO_SPACE
+
+	animal.remove_from_world()
+	print_debug("Character %s 獵到了一隻 %s" % [character_name, item_id])
+	return HUNT_OK
+
+
 # ---- 移動 ----
 
 # 這次 move_to() 的目標世界座標。move_to() 的呼叫端不只一個（仲裁器、
