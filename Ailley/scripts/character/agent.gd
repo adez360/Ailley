@@ -1300,8 +1300,12 @@ func _request_next_decision(
 	# 畫面上完全沒有回饋——套用 next_line() 已經在用的同一招：先蓋一顆「…」
 	# 氣泡讓玩家知道角色在想，不是卡住。interrupt=true 理由跟 next_line() 相同
 	# （見那裡的註解）；bubble.say() 自己的計時器到了就會自動收掉，這裡不用
-	# 另外在決策結束時清除（issue #480）
-	say(AI_THINKING_TEXT, true)
+	# 另外在決策結束時清除（issue #480）。broadcast=false：跟 next_line() 同一個
+	# 理由（issue #674）——這是內部狀態泡泡，不是角色真的說了什麼，廣播出去
+	# 會讓 3 格內每個 llm_decision_enabled 的鄰居把「…」當事實句排進決策佇列、
+	# 各自觸發一次決策，決策若同樣問不到結果又冒出自己的「…」，連環擴散成
+	# 決策請求風暴（code review 抓到）
+	say(AI_THINKING_TEXT, true, false)
 
 	var my_generation := _decision_generation
 
