@@ -18,6 +18,9 @@ static func create(db) -> bool:
 				length(relations_appearance_cache) <= 20
 			),
 
+		relations_met_count INTEGER NOT NULL DEFAULT 0
+			CHECK (relations_met_count >= 0),
+
 		updated_at TEXT NOT NULL
 			DEFAULT CURRENT_TIMESTAMP,
 
