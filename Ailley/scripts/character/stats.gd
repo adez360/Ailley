@@ -21,7 +21,10 @@ extends Node
 ## 維護（計畫 §5.1）時一併處理，那時「家在哪」本來就要變成角色的屬性
 ##
 ## satiety/hydration/stamina/wakefulness/hygiene/alcohol/health/injury 8 項是
-## 規格書《01》§4-1 `state.physical` 的欄位，drift 數值取自該表「每 tick」欄。
+## 規格書《01》§4-1 `state.physical` 的欄位。satiety/hydration/stamina/
+## wakefulness 4 項 drift 已改依 issue #730 的節奏重新推導（一天總掉量對齊
+## 最好的食物/飲料道具補的量，或 CRITICAL 門檻），不再是《01》表訂原始值——
+## 那份原始值換算成現實時間遠比一輪 LLM 決策快，角色不到一天就會餓死/渴死。
 ## alcohol/injury 是事件累積型（預設 0，靠外部事件推高），is_need 故意留 false，
 ## 不參與 get_lowest_need()/needs_attention()（見《99》P-32 追加決策）；
 ## hygiene/health 雖然也是「越高越好」，但目前沒有對應的 place 可去，
@@ -36,10 +39,10 @@ const MAX := 100.0
 const CRITICAL := 30.0		# 低於這個值算「該處理了」
 
 const SPEC := {
-	"satiety": {"label": "STAT_SATIETY", "drift": 3.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "tavern"},
-	"hydration": {"label": "STAT_HYDRATION", "drift": 2.0, "toward": 0.0, "start": 80.0, "is_need": true, "place": "tavern"},
-	"stamina": {"label": "STAT_STAMINA", "drift": 1.0, "toward": 0.0, "start": 80.0, "is_need": true, "place": "home"},
-	"wakefulness": {"label": "STAT_WAKEFULNESS", "drift": 1.2, "toward": 0.0, "start": 90.0, "is_need": true, "place": "home"},
+	"satiety": {"label": "STAT_SATIETY", "drift": 0.278, "toward": 0.0, "start": 100.0, "is_need": true, "place": "tavern"},
+	"hydration": {"label": "STAT_HYDRATION", "drift": 0.278, "toward": 0.0, "start": 80.0, "is_need": true, "place": "tavern"},
+	"stamina": {"label": "STAT_STAMINA", "drift": 0.35, "toward": 0.0, "start": 80.0, "is_need": true, "place": "home"},
+	"wakefulness": {"label": "STAT_WAKEFULNESS", "drift": 0.42, "toward": 0.0, "start": 90.0, "is_need": true, "place": "home"},
 	"hygiene": {"label": "STAT_HYGIENE", "drift": 0.0, "toward": 0.0, "start": 70.0, "is_need": false, "place": ""},
 	"alcohol": {"label": "STAT_ALCOHOL", "drift": 3.0, "toward": 0.0, "start": 0.0, "is_need": false, "place": ""},
 	"health": {"label": "STAT_HEALTH", "drift": 0.0, "toward": 100.0, "start": 100.0, "is_need": false, "place": ""},
