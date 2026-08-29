@@ -1202,6 +1202,12 @@ func _broadcast_speech(line: String) -> void:
 
 var _working := false
 
+## 這次工作已經過了幾個遊戲分鐘——跟 work_progress 的進度條算的是同一個數字
+## （_run_work() 每過一個 GameClock.time_changed 就加一），只是這裡另外存一份
+## 給 get_work_minutes_remaining() 讀，讓工作站能告訴等待中的其他角色「還要
+## 幾分鐘」（issue #663），不用另外重算或動 work_progress 那個純顯示元件
+var _work_elapsed_minutes := 0
+
 ## _end_work() 需要的 workstation 參照，讓 force_interrupt() 可以在不依賴
 ## _run_work() 協程本地變數的情況下，自己也呼叫得到 _end_work()
 var _current_workstation: Workstation = null
@@ -1239,11 +1245,19 @@ func work_at(workstation: Workstation) -> String:
 
 	_working = true
 	_current_workstation = workstation
+	_work_elapsed_minutes = 0
 	stop_moving()
 	if work_progress != null:
 		work_progress.show_progress(0.0)
 	_run_work(workstation, _work_session_id)
 	return WORK_OK
+
+## 這次工作還要幾分鐘才會做滿——沒在工作回 0。給 Workstation.get_wait_minutes()
+## 讀，不是這個角色自己會用到（issue #663：讓等待中的其他角色知道還要等多久）
+func get_work_minutes_remaining() -> int:
+	if not _working:
+		return 0
+	return maxi(0, WORK_DURATION_MINUTES - _work_elapsed_minutes)
 
 # 數 GameClock.time_changed 發了幾次來算「過了幾個遊戲分鐘」，不是掛
 # get_tree().create_timer()——後者是現實時間，跟 GameClock 的時間刻度脫鉤，
@@ -1274,6 +1288,7 @@ func _run_work(workstation: Workstation, session_id: int) -> void:
 			_end_work(workstation)
 			return
 
+		_work_elapsed_minutes = i + 1
 		if work_progress != null:
 			work_progress.show_progress(float(i + 1) / float(WORK_DURATION_MINUTES))
 
