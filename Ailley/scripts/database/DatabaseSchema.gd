@@ -34,7 +34,7 @@ extends RefCounted
 ## CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
-const CURRENT_VERSION := 10
+const CURRENT_VERSION := 11
 
 
 ## 版本落後時依序套用的變更，每個 entry：
@@ -92,6 +92,11 @@ const MIGRATIONS: Array[Dictionary] = [
 		"version": 10,
 		"name": "Drop npc_relations.relations_trust (issue #601)",
 		"apply": Callable(DatabaseSchema, "_migrate_v10_drop_relations_trust")
+	},
+	{
+		"version": 11,
+		"name": "Add npc_relations.relations_met_count (issue #651)",
+		"apply": Callable(DatabaseSchema, "_migrate_v11_add_relations_met_count")
 	}
 ]
 
@@ -797,6 +802,40 @@ static func _migrate_v10_drop_relations_trust(db) -> bool:
 		return false
 
 	return true
+
+
+## Migration 11：補上 npc_relations.relations_met_count（issue #651）。
+## `get_character()`／`_replace_relationships()` 的讀寫映射一直只接
+## relations_appearance_cache，met_count 完全沒有對應欄位，round-trip 後遺失。
+## npc_relations 沒有其他表外鍵指向它，單純加欄位不影響其他表，跟 migration 8
+## 的 world_character_state.following_npc_id 同一種簡單 ADD COLUMN 案例，不需要
+## 整表重建。DEFAULT 0 是新關係的合理起點——跟 Relationships.DEFAULT_RECORD
+## 的 met_count 起始值一致，既有資料列補這個值也不會誤植成「已經見過面」。
+static func _migrate_v11_add_relations_met_count(db) -> bool:
+	if not db.query("PRAGMA table_info(npc_relations);"):
+		push_error(
+			"[DatabaseSchema] Migration 11: Failed to read columns of npc_relations: "
+			+ db.error_message
+		)
+		return false
+
+	var existing_columns: Array = (db.query_result as Array).map(
+		func(row): return row.get("name", "")
+	)
+	if existing_columns.has("relations_met_count"):
+		return true
+
+	if not db.query(
+		"ALTER TABLE npc_relations ADD COLUMN relations_met_count INTEGER NOT NULL DEFAULT 0 CHECK (relations_met_count >= 0);"
+	):
+		push_error(
+			"[DatabaseSchema] Migration 11: Failed to add relations_met_count: "
+			+ db.error_message
+		)
+		return false
+
+	return true
+
 
 ## Migration 6：npc_action_history 是同一輪開發（#428）才新增的表，
 ## NPCActionHistorySchema.gd 最初把 idx_npc_action_history_npc 只建在

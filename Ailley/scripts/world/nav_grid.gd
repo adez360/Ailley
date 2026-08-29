@@ -26,7 +26,7 @@ func _ready() -> void:
 		tile_map = _find_sibling_tile_map()
 
 	# TileMapDual 的顯示層是執行時生成的，地形碰撞體不會在第一幀就進到物理空間；
-	# 場景裡手動放的 StaticBody2D（workstation、vending_machine 等）則從第一幀就是
+	# 場景裡手動放的 StaticBody2D（workstation 等）則從第一幀就是
 	# 實體，掃到障礙不代表地形也就位了——「掃到就停」在有這種靜態物件時會太早 break。
 	# 改成連續兩次掃到同樣的 solid_count 才停：地形填完後計數會穩定下來，
 	# 靜態物件從頭到尾都算在計數裡，不需要另外區分來源。
