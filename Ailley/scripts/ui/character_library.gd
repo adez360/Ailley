@@ -3,9 +3,10 @@ extends CanvasLayer
 ## 角色庫首頁（規格書 05 §7-1，issue #122）。
 ##
 ## 列出 GameManager.character_library 裡「已建立‧未投放」與已投放的角色，
-## 提供編輯（僅未投放者）／刪除／投放／複製四個操作。沒有立繪縮圖與六維
-## 雷達圖——素材與繪圖元件都還沒有，MVP 用一行文字摘要代替，跟 status_panel.gd
-## 的 StatsBox／hotbar.gd 同一種「資料變動時動態長出 Row、不在場景裡手排」寫法。
+## 提供編輯（僅未投放者）／刪除／投放／操控／複製五個操作。沒有立繪縮圖與
+## 六維雷達圖——素材與繪圖元件都還沒有，MVP 用一行文字摘要代替，跟
+## status_panel.gd 的 StatsBox／hotbar.gd 同一種「資料變動時動態長出 Row、
+## 不在場景裡手排」寫法。
 ##
 ## 跟建角面板一樣獨立 CanvasLayer，open()/close()，Esc 關閉。「＋」按鈕與
 ## 「編輯」都是切去建角面板（用 group 找到它，兩個面板不用互相持節點參照），
@@ -198,6 +199,12 @@ func _row(entry: Dictionary) -> Control:
 	deploy_button.pressed.connect(_on_deploy_pressed.bind(id))
 	row.add_child(deploy_button)
 
+	var embody_button := Button.new()
+	embody_button.text = "UI_CL_BTN_EMBODY"
+	embody_button.disabled = deployed		# 跟「投放」同一個前提：只有未投放者能換上
+	embody_button.pressed.connect(_on_embody_pressed.bind(id))
+	row.add_child(embody_button)
+
 	var delete_button := Button.new()
 	delete_button.text = "UI_CL_BTN_DELETE"
 	delete_button.disabled = deployed		# 已投放的不能刪（見 GameManager.remove_from_library()）
@@ -240,6 +247,18 @@ func _on_deploy_pressed(id: String) -> void:
 	# （CodeRabbit review 抓到）。沿用既有的 _capacity_label 顯示位置，
 	# 不用另外開一塊 UI——下次 _refresh() 會把它蓋回正常的容量文字
 	if GameManager.deploy_from_library(id) == null:
+		_capacity_label.text = L10n.t("UI_CL_DEPLOY_FAILED")
+		_capacity_label.add_theme_color_override("font_color", EMBER)
+		return
+	_capacity_label.remove_theme_color_override("font_color")
+	_refresh()
+
+## 換上「由我操控」——deploy_from_library() 的 as_player=true 分支（issue #659），
+## 取代原本只能靠 debug 指令 embody <id> 手動輸入角色庫 UUID 的唯一入口。
+## deploy_from_library() 內部會先清掉場景裡既有的 player 節點，同一時間只有
+## 一個真人操控的身體，不用這裡另外處理
+func _on_embody_pressed(id: String) -> void:
+	if GameManager.deploy_from_library(id, true) == null:
 		_capacity_label.text = L10n.t("UI_CL_DEPLOY_FAILED")
 		_capacity_label.add_theme_color_override("font_color", EMBER)
 		return

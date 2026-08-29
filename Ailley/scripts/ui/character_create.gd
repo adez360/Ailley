@@ -199,8 +199,11 @@ func collect() -> Dictionary:
 	data["decision_source"] = _decision_source
 	data["model_name"] = _model_name
 	# appearance[] 的實際內容（item_id／label）待《99》P-38 填，MVP 只驗證
-	# 「有沒有選」（_can_save() 那關），不在這裡假造內容
+	# 「有沒有選」（_can_save() 那關），不在這裡假造內容。但選中哪一格
+	# 這件事本身要存下來——不存的話，_style_selected 只活在這次面板開啟
+	# 期間，下次 edit() 同一筆角色庫紀錄時完全查不到選過什麼
 	data["appearance"] = []
+	data["appearance_style_index"] = _style_selected
 	if not _editing_id.is_empty():
 		data["id"] = _editing_id
 	return data
@@ -224,9 +227,11 @@ func _load_entry(entry: Dictionary) -> void:
 	for i in DIMENSIONS.size():
 		_sliders[i].value = hexaco.get(DIMENSIONS[i]["field"], DEFAULT_VALUE)
 	_desc_edit.text = str(entry.get("character", ""))
-	# appearance[] 內容本來就是空的（P-38 待填），沒有索引可以還原選中哪一格——
-	# 編輯外觀分頁時強制重選，不是這裡少寫了什麼
-	_style_selected = -1
+	# appearance[] 內容本身還是空的（P-38 待填），但選中哪一格的索引是
+	# collect() 存的 appearance_style_index，讀回來還原——沒有這筆紀錄
+	# （舊角色庫資料、或從沒存過）才落回 -1 要求重選
+	var loaded_style: Variant = entry.get("appearance_style_index", -1)
+	_style_selected = int(loaded_style) if loaded_style is int and loaded_style >= 0 and loaded_style < STYLE_COUNT else -1
 	_decision_source = str(entry.get("decision_source", "human"))
 	_model_name = str(entry.get("model_name", ""))
 

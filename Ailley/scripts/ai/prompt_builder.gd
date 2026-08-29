@@ -165,6 +165,12 @@ Reply with JSON only, no prose, no code fence:
  "tasks": [{"action": "<one of the allowed actions>", "params": {}, "priority": 10, "duration": 15}]}
 An empty "tasks" array means don't change anything."""
 
+## 本機小模型（Qwen2.5 等）在沒有明確語言限制時，容易在中文句子裡夾雜訓練資料
+## 帶出來的英文詞彙（issue #656）。接在每種 rules 段最後面，不放最前面——
+## 系統規則的 JSON 欄位名／enum 值本來就是英文，混在規則段開頭容易被誤讀成
+## 「連 schema 都要中文」，接在最後面明確只管「自由文字要用中文」這一件事
+const OUTPUT_LANGUAGE_RULE := "\n\nWrite all free-text you generate — dialogue lines, spoken words, inner thoughts, remarks — in Traditional Chinese (繁體中文) only. Do not mix in English words. This does not apply to JSON field names or enum values, which stay as specified above."
+
 ## 角色的人格段 ＋ 遊戲規則，順序固定不可調換（#117，《01-3》§5「組裝順序」）。
 ##
 ## 人格段一定排最前面：規格要求 System 段排在 prompt 最前面且逐字元一致，那是
@@ -174,7 +180,7 @@ An empty "tasks" array means don't change anything."""
 ## 角色沒有人格資料時 system_prompt 只有開場白跟結尾句（Personality 保證不是
 ## 空字串），所以這裡不需要處理「空段落」——一律接得起來
 static func _system(character: Character, rules: String) -> String:
-	return character.system_prompt + "\n\n" + rules
+	return character.system_prompt + "\n\n" + rules + OUTPUT_LANGUAGE_RULE
 
 ## #267：緊急門檻 = 仲裁器真正用來比較的那個數字（進時間窗的 schedule 任務
 ## 分數 SCHEDULE_BASE_PRIORITY+TIME_BONUS，加上要贏過它所需的 HYSTERESIS），
@@ -276,7 +282,7 @@ Write one short, first-person line — a wry, self-aware remark this character m
 
 static func build_creation_envelope(system_prompt: String) -> Dictionary:
 	return {
-		"system": system_prompt + "\n\n" + CREATION_SYSTEM,
+		"system": system_prompt + "\n\n" + CREATION_SYSTEM + OUTPUT_LANGUAGE_RULE,
 		"payload": {"type": "creation"},
 		"response_format": AISchema.creation_response_schema(),
 	}
