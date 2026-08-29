@@ -189,3 +189,15 @@ GitHub 的 rename API 不會把已開的 PR 轉到新分支，它直接把那則
 - 收到 `Changes requested` 修完 push 之後，**回到 review 區塊點
   「Re-request review」**重新排隊。不要開新 PR、不要只留言說改好了——
   正式 review 狀態要靠 re-request 才會重跑。
+
+### 作者沒回應時的代修
+
+審查意見給出後，不需要等，任何人隨時可以代修：
+
+- **代修前先在 PR 留言宣告**要修哪些項目——原作者回來看得見，也避免兩邊同時改。
+- **直接 push 到原分支，不開新 PR**；commit 訊息開頭標 `代修:`，讓人一眼分出哪些不是原作者寫的。
+- **Assignee 保持原作者不動**，代修身份用留言說明就好。
+- **代修者可以 Approve**，但要在 review 留言聲明「本人代修、審查由獨立
+  agent session 執行」，讓 PR 頁面看得出這是代修自審。例外：PR 作者本人
+  （如 robot-ru 代開的 PR）GitHub 禁止 self-approve，只能交給 coderabbitai。
+- 原作者任何時候回來想接手，代修者立即停止。
