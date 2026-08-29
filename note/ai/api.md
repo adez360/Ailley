@@ -603,23 +603,29 @@ func get_summary() -> Array[Dictionary]       # 不含空格，每筆補 slot �
 ## Workstation — scripts/world/workstation.gd · class_name · StaticBody2D
 
 ```gdscript
-var occupant: Character                      # 目前佔用者，沒人是 null
-func is_occupied() -> bool                   # is_instance_valid(occupant)
-func try_occupy(character) -> bool           # 已被佔用回 false
-func release(character) -> void              # 只有目前佔用者叫得動
-func set_highlighted(on: bool) -> void       # 切換 Highlight（Line2D）節點的 visible
+const MAX_OCCUPANTS := 3                    # 同時可卡位的名額數（issue #663）
+const COOLDOWN_MINUTES := 5                 # 名額釋放後的冷卻，= Character.WORK_DURATION_MINUTES
+
+func is_occupied() -> bool                  # 全部名額都有還在的角色在工作中；冷卻中不算佔用
+func try_occupy(character) -> bool          # 沒有名額可用給這個角色回 false（自己的冷卻也擋）
+func release(character) -> void             # 只有目前佔用者叫得動；釋放後該名額對其他人立即可用
+func set_highlighted(on: bool) -> void      # 切換 Highlight（Line2D）節點的 visible
 ```
 
 ```text
 _ready 自動 add_to_group("workstations")
+† 名額是內部狀態，不是單一 occupant — _occupants/_remaining_minutes/_last_released_ids
+  三條 Array 各 MAX_OCCUPANTS 格；冷卻只鎖 _last_released_ids 記的釋放者
+  （get_instance_id()），其他人（含玩家）當下就能入座 — 這是玩家搶得到位子的關鍵
 † 自己不查距離 — 候選偵測在 player.gd 的 InteractArea，最終把關在 Character.work_at()
 † StaticBody2D + CollisionShape2D 身兼兩職：NavGrid 的可走性查詢（物理查詢量出來的，
   桌子擋路），以及 collision_layer 疊的 interactable——InteractArea 靠偵測到這層
   才把工作站納入候選（issue #109）
-⚠ is_occupied() 必須用 is_instance_valid()，不能用 `occupant != null`
-  Godot 4 裡 freed 物件 `!= null` 仍成立 ⇒ 佔用者被移除後工作站永遠鎖死，
+⚠ 檢查 occupant 還在不在必須用 is_instance_valid()，不能用 `!= null`
+  Godot 4 裡 freed 物件 `!= null` 仍成立 ⇒ 佔用者被移除後名額永遠鎖死，
   而 release() 比對的是已經不存在的角色、永遠清不掉。這也是角色工作到一半被 free 時
   唯一會把位子放出來的地方 — 協程不會恢復，沒有人替它 release()
+  （三個讀取端共用的 _sweep_invalid_occupants() 掃掉，不套冷卻）
 → 技術/工作站
 ```
 

@@ -1334,8 +1334,9 @@ var _working := false
 
 ## 這次工作已經過了幾個遊戲分鐘——跟 work_progress 的進度條算的是同一個數字
 ## （_run_work() 每過一個 GameClock.time_changed 就加一），只是這裡另外存一份
-## 給 get_work_minutes_remaining() 讀，讓工作站能告訴等待中的其他角色「還要
-## 幾分鐘」（issue #663），不用另外重算或動 work_progress 那個純顯示元件
+## 給 get_work_minutes_remaining() 讀（issue #663）。注意：合併 #725 之後工作
+## 站的 ETA（get_wait_minutes()／飄字）改用工作站自己的 per-slot 計數器，這個
+## 方法目前沒有呼叫端，留作角色端的同一件事實視圖
 var _work_elapsed_minutes := 0
 
 ## _end_work() 需要的 workstation 參照，讓 force_interrupt() 可以在不依賴
@@ -1382,8 +1383,8 @@ func work_at(workstation: Workstation) -> String:
 	_run_work(workstation, _work_session_id)
 	return WORK_OK
 
-## 這次工作還要幾分鐘才會做滿——沒在工作回 0。給 Workstation.get_wait_minutes()
-## 讀，不是這個角色自己會用到（issue #663：讓等待中的其他角色知道還要等多久）
+## 這次工作還要幾分鐘才會做滿——沒在工作回 0。目前沒有呼叫端（工作站 ETA
+## 在 #725 多名額版改由 per-slot 計數器計算），留作角色端的事實視圖（issue #663）
 func get_work_minutes_remaining() -> int:
 	if not _working:
 		return 0
