@@ -10,13 +10,13 @@
 [node name="Node" type="Node"]
 script = ExtResource("1_o6xl0")
 
-[node name="World" type="Node2D" parent="."]
+[node name="World" type="Node2D" parent="." groups=["world"]]
 y_sort_enabled = true
 
 [node name="Level" parent="World" instance=ExtResource("1_tefeu")]
 
 [node name="Player" parent="World" instance=ExtResource("1_ljsu2")]
-position = Vector2(-94, 33)
+position = Vector2(-96, 19)
 character_name = "player"
 
 [node name="Workstation" parent="World" instance=ExtResource("12_0ld40")]
