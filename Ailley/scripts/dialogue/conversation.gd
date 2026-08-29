@@ -85,7 +85,20 @@ func _run() -> void:
 		if _bail_if_finished():
 			return
 
+		# 除錯用（issue #655：對話講到第 5 句左右就不再回應，追不到原因）。
+		# 每一輪印一次 speaker／ok／engage／end，重現時對照 Output/Debugger
+		# 面板看是哪一輪、哪個欄位開始不對勁——尤其要分清楚「result.ok=false
+		# （LLM 逾時/驗證失敗/配額用完，next_line() 本身失敗）」跟「result.end=true
+		# （LLM 自己決定收尾，是正常運作，不是 bug）」這兩種都會讓對話結束，
+		# 但成因完全不同。查清楚後這行要記得拿掉
+		print("[talk_debug] turn=%d speaker=%s ok=%s engage=%s end=%s line=%s" % [
+			turn, speaker.character_id, result.get("ok", false),
+			result.get("engage", true), result.get("end", false),
+			str(result.get("line", "")).left(20),
+		])
+
 		if not result.get("ok", false):
+			print("[talk_debug] next_line() 失敗（ok=false），走 _finish_with_fallback()——常見原因：LLM 逾時／驗證失敗次數用完／daily quota 撞到上限，見 ai_service.gd::_check_rate_limit()")
 			_finish_with_fallback(speaker, listener, turn == 0)
 			return
 
