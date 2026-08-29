@@ -1456,15 +1456,20 @@ func _on_work_finished() -> void:
 # 的補償式寫法，而不是買之前先用 find_first_empty() 猜背包放不放得下——
 # 猜的話還要重算一次 Inventory 內部的堆疊規則（同 item_id 可能疊進既有格，
 # 不一定要空格），退款反而更簡單可靠
-func buy_from(machine: VendingMachine, item_id: String) -> String:
-	if machine == null:
+## place 是地點名（"tavern"／"herb_shop"），不是機台節點——issue #572 拿掉了
+## 販賣機實體道具，商店綁在地點本身，見 world/shop.gd
+func buy_from(place: String, item_id: String) -> String:
+	if not Shop.has_shop(place):
 		return BUY_TARGET_NOT_FOUND
-	if get_body_position().distance_to(machine.global_position) > BUY_RANGE:
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null or not anchors.has(place):
+		return BUY_TARGET_NOT_FOUND
+	if get_body_position().distance_to(anchors.resolve(place)) > BUY_RANGE:
 		return BUY_TOO_FAR
 	if inventory == null:
 		return BUY_NO_INVENTORY
 
-	var price := machine.get_price(item_id)
+	var price := Shop.get_price(place, item_id)
 	if price < 0:
 		return BUY_ITEM_NOT_FOUND
 

@@ -3037,15 +3037,14 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			if inventory == null or _find_drink_slot().is_empty():
 				return {"success": false, "reason": "背包裡沒有飲品可以喝"}
 		"buy":
-			# 檢查錢夠不夠（需要先找機器查價格）、商品存不存在、背包有沒有空間
+			# 檢查錢夠不夠（需要先查地點的商店目錄）、商品存不存在、背包有沒有空間
 			var place: String = str(params.get("place", ""))
-			var machine := _find_vending_machine_at_place(place)
-			if machine == null:
-				return {"success": false, "reason": "找不到販賣機"}
+			if not Shop.has_shop(place):
+				return {"success": false, "reason": "這裡沒有商店"}
 			var item_id: String = str(params.get("item_id", ""))
-			var price := machine.get_price(item_id)
+			var price := Shop.get_price(place, item_id)
 			if price < 0:
-				return {"success": false, "reason": "販賣機裡沒有這個商品"}
+				return {"success": false, "reason": "這間商店沒有這個商品"}
 			if inventory == null:
 				return {"success": false, "reason": "背包裡沒有地方放東西"}
 			if inventory.get_money() < price:
@@ -3830,29 +3829,26 @@ func _pursue_perform_task() -> void:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
 
-# buy 任務的執行（#340）：先找到販賣機並移動到其位置，再呼叫 buy_from()。
-# 販賣機透過 params.place 指定（餐酒館或藥草鋪）
-#
-# 導航目標刻意不是 machine.global_position（#670）：販賣機是 NavGrid 上的
-# 障礙格（見 vending_machine.gd 開頭註解），終點格永遠不可走，尋徑只會把
-# 路徑收斂到鄰近可走格，跟 _has_arrived_at() 的判定（2px 或同一格）永遠對不上，
-# 是結構性死結，不是機率問題。改跟 _pursue_work_task() 同一套，用 PlaceAnchors
-# 預先擺在可走格上的錨點當導航目標；買東西那一刻的距離判定（buy_from()，
-# character.gd）維持看 machine.global_position，不受影響，四個方向一樣能買
+# buy 任務的執行（#340，issue #572 後改成地點導向）：先走到地點錨點，
+# 抵達後再呼叫 buy_from()。商店透過 params.place 指定（"tavern" 或
+# "herb_shop"），跟 _pursue_work_task() 同一套「先走、到了才執行」結構——
+# 商店不再是場景裡的實體物件，PlaceAnchors 本來就擺在可走格上，
+# 沒有 #670 那種「導航終點是碰撞障礙格」的問題
 func _pursue_buy_task() -> void:
 	var buy_task_id: String = str(_current_task.get("id", ""))
 	var place: String = str(_current_task.get("params", {}).get("place", ""))
-	var machine := _find_vending_machine_at_place(place)
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
 
-	# 找不到販賣機，或販賣機所在地點沒有對應的可走錨點：立即返回失敗
-	if not machine or anchors == null or not anchors.has(place):
+	# 這個地點沒有商店，或沒有對應的可走錨點：立即返回失敗——issue #572
+	# 拿掉了販賣機實體道具，商店綁在地點本身（見 world/shop.gd），不再需要
+	# 另外找一個機台節點
+	if not Shop.has_shop(place) or anchors == null or not anchors.has(place):
 		# 要先讀 source／id 再清空 _current_task——清空之後兩個 get() 都只會
 		# 讀到空字典的預設值，llm 任務永遠判斷不是 llm、也移除不掉，會卡在
 		# 池子裡讓 _reevaluate() 重複選到同一筆（CodeRabbit review 抓到）
 		var failed_task_source: String = str(_current_task.get("source", ""))
 		var failed_task_id: String = str(_current_task.get("id", ""))
-		push_warning("Agent %s: 找不到販賣機 %s" % [character_name, place])
+		push_warning("Agent %s: %s 不是商店地點" % [character_name, place])
 		# 清掉任務前先停下——不然角色若正走去先前目標，會帶著已失效的
 		# 路徑繼續走（CodeRabbit review 抓到）
 		stop_moving()
@@ -3893,7 +3889,7 @@ func _pursue_buy_task() -> void:
 			# 卡在這個守衛出不去，永遠記錄不到失敗結果、也不會請求下一次決策
 			# （CodeRabbit review 抓到）
 			if _pursuit_done and _current_task.get("source", "") == "llm":
-				last_action_result = "走不到販賣機，無法購買"
+				last_action_result = "走不到商店，無法購買"
 				_finish_task_and_request_next()
 			return
 		_buy_pursuit_task_id = buy_task_id
@@ -3901,18 +3897,18 @@ func _pursue_buy_task() -> void:
 		_pursuit_done = false
 		_buy_pursuit_target = approach_target
 		if not move_to(approach_target):
-			push_warning("Agent %s: 走不到販賣機 %s" % [character_name, place])
+			push_warning("Agent %s: 走不到商店 %s" % [character_name, place])
 			# schedule 任務維持原本的停止重試行為，靠 window 自然退場；
 			# llm 任務沒有 window 這條退路，只設 _pursuit_done 的話會一直卡在
 			# buy 狀態，等不到失敗結果、也不會請求下一個決策（CodeRabbit review 抓到）
 			if _current_task.get("source", "") == "llm":
-				last_action_result = "走不到販賣機，無法購買"
+				last_action_result = "走不到商店，無法購買"
 				_finish_task_and_request_next()
 			else:
 				_pursuit_done = true
 		return
 
-	# 已到達販賣機位置，執行購買
+	# 已到達商店地點，執行購買
 	stop_moving()
 	_pursued_place = current_place
 	_pursuit_done = true
@@ -3925,7 +3921,7 @@ func _pursue_buy_task() -> void:
 
 	if proceed:
 		var item_id: String = str(_current_task.get("params", {}).get("item_id", ""))
-		var reason := buy_from(machine, item_id)
+		var reason := buy_from(place, item_id)
 		last_action_result = reason
 		if reason != Character.BUY_OK:
 			push_warning("Agent %s: buy 失敗（%s）" % [character_name, reason])
@@ -3945,26 +3941,6 @@ func _pursue_buy_task() -> void:
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
-
-# 根據地點找到對應的販賣機。場景中每台機器都有一個對應的地點：
-# - "tavern" → VendingMachine
-# - "herb_shop" → VendingMachineHerbShop
-# 靠節點名稱來區分，更新日期 2026-08-20
-func _find_vending_machine_at_place(place: String) -> VendingMachine:
-	var machines := get_tree().get_nodes_in_group("vending_machines")
-
-	for machine in machines:
-		if not machine is VendingMachine:
-			continue
-
-		var machine_name: String = machine.name.to_lower()
-		# VendingMachineHerbShop → "herb_shop"，VendingMachine → "tavern"
-		if place == "herb_shop" and machine_name.contains("herb"):
-			return machine
-		elif place == "tavern" and not machine_name.contains("herb"):
-			return machine
-
-	return null
 
 # gather 任務的執行（#574）：跟 _pursue_work_task() 同理，先走到地點錨點，
 # 抵達後才執行；跟 eat／drink／buy 同理，呼叫一次就完成，不像 nap 那樣佔滿

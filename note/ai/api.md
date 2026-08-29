@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-28
+updated: 2026-08-29
 ---
 
 # api
@@ -38,7 +38,7 @@ player           玩家                  place_anchors  main.tscn 的 Node2D/Pla
 agents           全部 Agent            debug_overlay  DebugOverlay
 selection        Selection             follow_camera  FollowCamera
 workstations     全部 Workstation
-vending_machines 全部 VendingMachine
+vending_menu     VendingMenu（唯一一個，main.tscn 的 PersistentUI/VendingMenu）
 ```
 
 ## collision layers
@@ -47,11 +47,12 @@ vending_machines 全部 VendingMachine
 1 terrain      地形 TileSet physics_layer_0      layer=1        mask=—
 2 character    Player/Agent                      layer=2        mask=1
                Vision (Area2D)                   layer=0        mask=2
-3 interactable Workstation/VendingMachine         layer=1|4(*)  mask=—
+3 interactable Workstation                       layer=1|4(*)  mask=—
                InteractArea (Area2D，player.gd)   layer=0        mask=4
 † 沒有人的 mask 含 2 ⇒ 角色之間不互撞，但照樣撞牆
-† (*) Workstation/VendingMachine 的 collision_layer 疊了 terrain(1)+interactable(4)=5，
-  同一個 StaticBody2D 兼職 NavGrid 障礙判定跟 InteractArea 的候選偵測（issue #109）
+† (*) Workstation 的 collision_layer 疊了 terrain(1)+interactable(4)=5，同一個
+  StaticBody2D 兼職 NavGrid 障礙判定跟 InteractArea 的候選偵測（issue #109）——
+  商店（issue #572）沒有這層，不是 StaticBody2D，不佔 NavGrid 格子
 † 設定寫在 .tscn 不寫在腳本，避免 inspector 改了被程式蓋掉
 ```
 
@@ -190,21 +191,23 @@ get_state_snapshot() -> {
 ```gdscript
 func get_input_direction() -> Vector2        # WASD 正規化
 func get_facing_direction() -> Vector2       # Character 基底，facing/flip_h 重建方向向量
-func _get_interact_candidates() -> Dictionary  # {workstation, machine, other, to_work, to_machine, to_other}
+func _get_interact_candidates() -> Dictionary  # {workstation, shop_place, other, to_work, to_shop, to_other}
+func _nearest_shop_place() -> String          # SHOP_PLACES 裡距離+面向都合格的地點名，找不到回 ""
 ```
 
 ```text
 輸入優先：一按方向鍵就 stop_moving() 中斷 A*
-販賣機選單開著時（vending_menu.is_open()）：interact(E) 整段跳過，事件原樣
+商店選單開著時（vending_menu.is_open()）：interact(E) 整段跳過，事件原樣
   往下傳給 vending_menu.gd 自己的 _unhandled_input 處理；_process() 清空
   全部互動高亮並直接 return——選單不擋移動，這時候走位/轉向不該讓高亮亂跳
 interact(E)：對話中→leave_conversation()；否則呼叫 _get_interact_candidates()，
-  workstation/machine/other 三個候選比 to_* 分數，分數最低的先試。workstation
-  失敗（OCCUPIED/BUSY）只 push_warning，不會改試 machine，直接掉到
-  talk_to(other)；machine 成功只是開商品選單，不算「完成互動」
+  workstation/shop_place/other 三個候選比 to_* 分數，分數最低的先試。workstation
+  失敗（OCCUPIED/BUSY）只 push_warning，不會改試 shop_place，直接掉到
+  talk_to(other)；shop 贏了只是開商品選單，不算「完成互動」
 _process()：每幀重算 _get_interact_candidates()，跟 E 會打到誰同一套判斷，
-  更新 Workstation/VendingMachine 的 Highlight 節點與 Character.set_interact_highlighted()
-  ——玩家即時看得到「E 現在會打到誰」（issue #81）
+  更新 Workstation 的 Highlight 節點與 Character.set_interact_highlighted()——
+  商店贏了沒有節點可以描邊，直接 pass 跳過 other 的高亮，玩家走進 BUY_RANGE
+  面向商店就能按 E，沒有額外視覺提示（issue #81 的即時高亮只服務 workstation）
 make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不會冒 !?
 Player 不接 speech_heard（issue #669）：說話的人本來就會冒對話泡泡，真人玩家
   看畫面就知道附近有人在講什麼，不需要引擎再曝光一次（跟 noise_heard 不同——
@@ -212,18 +215,20 @@ Player 不接 speech_heard（issue #669）：說話的人本來就會冒對話�
 † gui_get_focus_owner() != null 時 get_input_direction() 回 ZERO
   Input.get_axis() 讀全域狀態，LineEdit 攔不住
 † 候選先被 _is_facing()（cone 判定）篩過一輪，沒被玩家面向的直接不算候選——
-  即使範圍內只有它一個、沒有別的候選能比，沒面向就是選不到。to_work/to_machine/
+  即使範圍內只有它一個、沒有別的候選能比，沒面向就是選不到。to_work/to_shop/
   to_other 是通過面向篩選後剩下候選的原始距離
-† workstation/machine 候選來自 InteractArea（Area2D，collision layer
-  "interactable"，半徑 maxf(WORK_RANGE, TALK_RANGE, BUY_RANGE)）；character
-  候選直接濾 vision.get_visible_characters()，不另開 Area2D（issue #109）
-⚠ 純比距離會讓工作站/販賣機永遠打不到——桌子/販賣機很容易落在地點錨點的
-  互動半徑內，agent 行程正好把人帶去那個錨點，NPC 幾乎必然比物件更近
+† workstation 候選來自 InteractArea（Area2D，collision layer "interactable"，
+  半徑 maxf(WORK_RANGE, TALK_RANGE, BUY_RANGE)）；shop_place 候選直接對
+  SHOP_PLACES（["tavern","herb_shop"]）逐一比 PlaceAnchors 錨點距離，不經過
+  Area2D——商店不是場上物件（issue #572）；character 候選直接濾
+  vision.get_visible_characters()，也不另開 Area2D（issue #109）
+⚠ 純比距離會讓工作站永遠打不到——桌子很容易落在地點錨點的互動半徑內，
+  agent 行程正好把人帶去那個錨點，NPC 幾乎必然比物件更近
 ⚠ 面向判定不是萬能解，四個真實朝向裡仍有一組會選錯（見 [[工作站]]），
   這是即時高亮存在的理由，不是純粹的裝飾
 ⚠ work_at() 失敗必須往下掉到搭話，不能 return — 否則工作站被佔用時 E 完全沒反應
 搭話失敗對玩家靜默，只有主控台印原因碼
-→ 技術/工作站（E 鍵優先序與即時高亮）
+→ 技術/工作站（E 鍵優先序與即時高亮）· 技術/販賣機
 ```
 
 ## Agent — scripts/character/agent.gd · extends Character
@@ -616,6 +621,37 @@ _ready 自動 add_to_group("workstations")
   而 release() 比對的是已經不存在的角色、永遠清不掉。這也是角色工作到一半被 free 時
   唯一會把位子放出來的地方 — 協程不會恢復，沒有人替它 release()
 → 技術/工作站
+```
+
+## Shop — scripts/world/shop.gd · class_name · RefCounted
+
+```gdscript
+const CATALOGS := {"tavern": {item_id: price, ...}, "herb_shop": {...}}
+static func has_shop(place: String) -> bool
+static func get_price(place: String, item_id: String) -> int   # 沒這項回 -1，0 是合法價格
+static func list_items(place: String) -> Array
+```
+
+```text
+純資料查表，不掛場景樹、沒有物理存在（issue #572）——商店綁在 PlaceAnchors
+的 tavern/herb_shop 錨點本身，不是另外的節點。Character.buy_from(place, item_id)
+與 VendingMenu.open(place, buyer) 都直接查這張表，不經過場景節點查找
+→ 技術/販賣機
+```
+
+## VendingMenu — scripts/ui/vending_menu.gd · class_name · CanvasLayer（main.tscn 唯一一個，PersistentUI 下）
+
+```gdscript
+func is_open() -> bool
+func open(place: String, buyer: Character) -> void   # 依 Shop.list_items(place) 動態長出按鈕
+func close() -> void
+```
+
+```text
+group "vending_menu"（唯一一個）。開：player.gd 判斷附近有商店才呼叫 open()；
+關：自己的 _unhandled_input 收 interact/ui_cancel，或 _process() 偵測買方走出
+Character.BUY_RANGE 自動關閉——選單不擋移動，這段收尾邏輯獨立於玩家輸入
+→ 技術/販賣機
 ```
 
 ## WorkProgress — scripts/ui/work_progress.gd · class_name · Node2D

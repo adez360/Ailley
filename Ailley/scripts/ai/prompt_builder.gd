@@ -547,33 +547,18 @@ static func _inventory_summary(character: Character) -> Dictionary:
 		totals[item_id] = int(totals.get(item_id, 0)) + int(slot["count"])
 	return totals
 
-## 販賣機清單摘要：{place: {item_id: price}}（issue #605）。只掛在
+## 商店清單摘要：{place: {item_id: price}}（issue #605）。只掛在
 ## build_plan_envelope() 的 context，不進 _self_block()——_self_block() 是
 ## 五種信封共用，dialogue（每句對話一次）／checkpoint／last_words／reflection
 ## 都用不到商品目錄，白付一份 token，也跟 CHECKPOINT_SYSTEM「只需要 self
 ## 區塊就夠」的註解相斥（複審抓到）。原本 buy 動作的 schema 要求填
-## item_id／place，但 prompt 完全沒告訴模型有哪些販賣機、賣什麼、多少錢，
+## item_id／place，但 prompt 完全沒告訴模型有哪些商店、賣什麼、多少錢，
 ## 模型只能瞎猜，buy 幾乎不會被選中，NPC 明明有錢卻活活餓死。全村目前
-## 只有 2 台（酒館／藥草鋪），先列全部，不特別篩「附近」——之後村莊擴大
-## 到會撞到 token 成本或選擇混亂時再收斂。place 值刻意跟
-## _find_vending_machine_at_place() 的判斷邏輯同一套（節點名含 "herb" 才是
-## 藥草鋪，其餘算酒館），維持全庫唯一一份「地點名怎麼定」的判斷依據
-static func _shop_summary(character: Character) -> Dictionary:
-	var shops := {}
-	for machine in character.get_tree().get_nodes_in_group("vending_machines"):
-		if not machine is VendingMachine:
-			continue
-		var place: String = "herb_shop" if str(machine.name).to_lower().contains("herb") else "tavern"
-		# 同地點多台販賣機只收錄第一台——跟 _find_vending_machine_at_place()
-		# 回傳第一台的取樣方向一致，不然「目錄看得到、buy 卻買不到」（複審
-		# 抓到：原本後到的機器直接覆蓋整份目錄，兩邊取樣順序還相反）
-		if shops.has(place):
-			continue
-		var catalog := {}
-		for item_id in machine.list_items():
-			catalog[item_id] = machine.get_price(item_id)
-		shops[place] = catalog
-	return shops
+## 只有 2 間（酒館／藥草鋪），先列全部，不特別篩「附近」——之後村莊擴大
+## 到會撞到 token 成本或選擇混亂時再收斂。商店不再是場景物件（issue #572），
+## 直接讀 world/shop.gd 的靜態表，不用掃場景樹
+static func _shop_summary(_character: Character) -> Dictionary:
+	return Shop.CATALOGS.duplicate(true)
 
 ## conditions 只帶 type，不帶 turns_left——跟 _memory_block() 不帶 decay_value
 ## 同一個理由：模型只需要知道自己現在有哪些異常狀態，不需要知道引擎內部的
