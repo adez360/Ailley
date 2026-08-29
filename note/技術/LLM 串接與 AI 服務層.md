@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-28
+updated: 2026-08-29
 ---
 
 # LLM 串接與 AI 服務層
@@ -205,6 +205,16 @@ system: 人格敘述 ＋ 行為規則 ＋ 輸出 schema ＋ 動作白名單     
 user:   <下方 JSON 字串化>                                    ← 每次變
 ```
 
+`system` 段最後固定接一句語言規則（`PromptBuilder.OUTPUT_LANGUAGE_RULE`，issue
+#656）：本機小模型沒有明確語言限制時，容易在中文句子裡夾雜訓練資料帶出來的
+英文詞彙。這句只管「自由文字（台詞、心聲、吐槽）要用繁體中文」，不影響 JSON
+欄位名／enum 值——所以接在規則段最後面而不是最前面，避免被誤讀成連 schema
+都要中文。`build_dialogue_envelope`／`build_plan_envelope`／
+`build_reflection_envelope`／`build_checkpoint_envelope`／
+`build_last_words_envelope`／`build_words_to_creator_envelope`（都經過
+`_system()`）跟 `build_creation_envelope`（不吃 `Character`，另外接一次）
+全部套用同一句。
+
 ```json
 {
   "type": "dialogue",
@@ -331,7 +341,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 `max_turns`，不是遞增的 `turns_so_far`；這裡描述的是設計目標，接回程式碼是
 獨立的後續動作，不在 #482 範圍內。
 
-> [!note] `turns_so_far` 口徑尚未定案，接線時要挑一個
+> [!note] `turns_so_far` 現在等於 `_turns.size()`，不用另外挑一種算法
 > `conversation.gd::_run()` 的迴圈變數 `turn`（從 0 起算）跟 `_turns.size()`
 > （陣列長度）在同一輪呼叫 `next_line()` 的當下是同一個數字——開場白已改成
 > 一律過 LLM（issue #630／《99》P-67），不再有「`turn` 不含開場白、`_turns.size()`
@@ -784,7 +794,8 @@ JSON Schema → GBNF 的轉換器。
 
 ## 待決（正式線）
 
-- [ ] 「…」氣泡的等待體感要實跑才知道能不能接受，見 #480
+- [x] **「…」氣泡擴大套用到行程決策已落地**（#480，2026-08-27）：`_request_next_decision()`
+      套用跟 `next_line()` 同一招，細節見下方「延遲」一節
 - [x] **LLM 成本上限完全沒有防護**——研究與提案已由 #395 完成（本機
       Qwen2.5-7B，6 場對話均值 7.0 輪／場，`max_dialogue_calls_per_game_day`
       旋鈕設計案見上方「每日對話呼叫上限提案」一節），落地實作見 #434
@@ -897,18 +908,32 @@ poc 輸出裡有、《06》沒提到的欄位：`reasoning`／`inner_monologue`�
 《06》全 snake_case 無中英夾雜，poc 的 `intent.action`（中文）跟 `action_en`
 （英文）同時存在，是重複資訊。
 
-## 延遲：實測 2.5-4 秒，體感層面的解法尚未實作
+## 延遲：實測 2.5-4 秒，體感層面靠「…」氣泡頂著
 
 編輯器實測「玩家靠近就打一次決策」：從靠近到角色真的有反應中間約 2.5-4 秒
 （時間主要花在 llama-server 的 grammar 約束生成，不是網路或 Godot 端）。
 對「玩家靠近、期待即時反應」這種互動模式來說很明顯，玩家靠近後畫面上完全
-沒有回饋，3 秒後突然講話/移動。正式線接對話與行程時會碰到同一個數量級。
+沒有回饋、3 秒後突然講話/移動的話體感會很差。正式線接對話與行程時會碰到
+同一個數量級。
 
-**體感層面的解法（想法已記錄，尚未實作）**：觸發當下先給立即視覺回饋——氣泡
-顯示「…」思考中，或角色停下腳步做「在想事情」的小動作，等決策回來才換成
-真正的台詞/動作。不用真的縮短延遲，體感會差很多。
+**體感層面的解法（#480，2026-08-27 落地）**：`Agent._request_next_decision()`
+在確定要送出請求、真正打網路之前，套用跟 `next_line()`（Step 1 對話）
+完全同一招——`say(AI_THINKING_TEXT, true, false)` 立刻蓋一顆「…」氣泡，
+`interrupt=true` 蓋掉正在顯示的舊訊息。不縮短延遲本身，只讓觸發當下不是
+死寂一片。
 
-**縮短延遲本身的槓桿（另一方向，同樣尚未實作）**：`REASONING_INSTRUCTION` 的
+> [!note] 「…」氣泡撐不滿整段等待，是刻意接受的取捨
+> `bubble.gd::say()` 的顯示時長跟著文字長度算（`MIN_DURATION` 1.2 秒），
+> 「…」只有一個字，1.2 秒後就自動收掉——比 2.5-4 秒的實測延遲短，決策
+> 真正回來前氣泡多半已經消失。`next_line()` 的既有取捨是「早一點給回饋
+> 比精準對齊網路延遲更重要」，這裡沿用同一個立場，沒有另外做「撐滿整段
+> 等待」的機制（例如改用不會自動收掉的 `hold()`）。用 `game_eval` 直接呼叫
+> `_request_next_decision()` 白箱驗證過：`spoke` 訊號確實以 `"…"` 觸發、
+> 氣泡當下 `visible=true`、且會蓋掉呼叫當下正在顯示的舊訊息。角色停下腳步
+> 做「在想事情」小動作是筆記原本提過的替代方案，#480 沒有採用，兩案只能
+> 二選一時選了跟對話一致、成本較低的氣泡方案。
+
+**縮短延遲本身的槓桿（另一方向，尚未實作）**：`REASONING_INSTRUCTION` 的
 100 字上限是延遲/品質的直接槓桿，往下砍會更快但決策品質會掉；其他槓桿是模型
 量化等級、llama-server 的 `--parallel` 設定，會影響全部呼叫，改動範圍更大。
 

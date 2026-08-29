@@ -50,6 +50,13 @@ extends Node
 ##
 ##   7. 「DELETE 0 筆」視為正常狀態。
 ##
+## Wallet 同步策略跟 Inventory 的第 1、2 點一樣（第一次遇到 Character 時
+## 從 npc_wallet 載入、沒有既有資料就沿用 runtime 初始值），但用自己一組
+## _wallet_loaded／_wallet_loading guard，不搭 Inventory.changed 訊號——
+## money 異動走 add_money()／spend()，不像 slots 有專門的「覆寫整包」入口，
+## 沒有對應的訊號可以掛；wallet 的持續同步交給既有的定期 state 同步
+## （_sync_all_characters_periodic()）覆蓋寫入。
+##
 ## =====================================================
 
 
@@ -87,6 +94,21 @@ var _inventory_sync_pending: Dictionary = {}
 
 # 是否已經排程 _flush_pending_inventory_sync()
 var _inventory_sync_deferred := false
+
+
+## -----------------------------------------------------
+## Wallet loading state
+## -----------------------------------------------------
+
+# npc_id -> true
+#
+# 跟 _inventory_loaded 分開追蹤：wallet 是獨立的表，
+# 不能沿用 inventory 那組 guard，否則其中一個先讀完
+# 會讓另一個誤判成「已經載入過」而跳過。
+var _wallet_loaded: Dictionary = {}
+
+# npc_id -> true
+var _wallet_loading: Dictionary = {}
 
 
 # =====================================================
@@ -480,10 +502,16 @@ func _save_character(
 
 	# -------------------------------------------------
 	# 第一次遇到 Character：
-	# 嘗試載入 DB inventory。
+	# 嘗試載入 DB inventory 與 wallet。
+	#
+	# 順序要在下面組 state_data／呼叫 _save_wallet() 之前——
+	# _save_wallet() 讀的是 character.inventory.get_money()，載入沒先做完
+	# 就存，存進去的會是 runtime 的初始值（DEFAULT_MONEY），把 DB 裡原本
+	# 累積的金額覆蓋掉，跟這個載入沒做時 inventory 會被清空是同一種問題。
 	# -------------------------------------------------
 
 	_load_inventory_once(character)
+	_load_wallet_once(character)
 
 
 	# -------------------------------------------------
@@ -910,6 +938,101 @@ func _load_inventory_once(
 
 
 # =====================================================
+# Wallet Load
+# =====================================================
+
+func _load_wallet_once(
+	character: Character
+) -> void:
+
+	if character == null:
+		return
+
+	if character.inventory == null:
+		return
+
+
+	var npc_id := character.character_id
+
+	if npc_id.is_empty():
+		return
+
+
+	# 已經正在 LOAD。
+	if _wallet_loading.has(npc_id):
+		return
+
+
+	# 已經完成 LOAD。
+	if _wallet_loaded.has(npc_id):
+		return
+
+
+	_wallet_loading[npc_id] = true
+
+
+	var rows := DatabaseManager.select_where(
+		WALLET_TABLE,
+		"npc_id = ?",
+		[
+			npc_id
+		],
+		[
+			"money"
+		]
+	)
+
+
+	if rows.is_empty():
+
+		print(
+			"[CharacterStatePersistence] "
+			+ "Wallet 無既有 DB 資料，沿用 runtime 初始值：%s"
+			% npc_id
+		)
+
+		_wallet_loaded[npc_id] = true
+
+		_wallet_loading.erase(
+			npc_id
+		)
+
+		return
+
+
+	# -------------------------------------------------
+	# 有 DB 資料：
+	# 用 DB snapshot 覆蓋 runtime。
+	# -------------------------------------------------
+
+	var money := int(
+		rows[0].get(
+			"money",
+			character.inventory.get_money()
+		)
+	)
+
+	character.inventory.set_money(money)
+
+	print(
+		"[CharacterStatePersistence] "
+		+ "Wallet LOAD %s：money=%d"
+		% [
+			npc_id,
+			money
+		]
+	)
+
+	_wallet_loaded[npc_id] = true
+
+	_wallet_loading.erase(
+		npc_id
+	)
+
+	character.inventory.notify_changed()
+
+
+# =====================================================
 # Inventory Signal Connection
 # =====================================================
 
@@ -1040,6 +1163,17 @@ func _on_character_tree_exited(
 	)
 
 	_inventory_loading.erase(
+		npc_id
+	)
+
+	# wallet 跟 inventory 用同一個 npc_id 生命週期：這個節點離開場景樹之後，
+	# 同 id 的角色若重新進場（例如換身），要重新從 npc_wallet 讀一次，
+	# 不能沿用舊節點留下的「已載入過」標記
+	_wallet_loaded.erase(
+		npc_id
+	)
+
+	_wallet_loading.erase(
 		npc_id
 	)
 

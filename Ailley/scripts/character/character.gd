@@ -97,6 +97,7 @@ const PERFORM_DURATION_MINUTES := 10
 ## 原樣轉傳 Inventory 的 ADD_NO_SPACE，不重新取名（#574）
 const GATHER_OK := ""
 const GATHER_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法採集
+const GATHER_NO_STATS := "NO_STATS"	# 沒有 Stats 的角色沒地方扣 hygiene（跟 PERFORM_NO_STATS 同一個理由）
 
 ## use_selected_item() 的失敗原因碼，形狀比照 EAT_*／DRINK_*（#611）。除了這四個，
 ## use_selected_item() 還會**原樣轉傳** Inventory.use_item() 自己的原因碼
@@ -974,6 +975,40 @@ func _erect_unmarked_grave() -> void:
 	print_debug("Character %s 腐壞見底，自動立無名碑" % character_name)
 
 
+# ---- 打獵 ----
+
+const HUNT_RANGE := 32.0		# 跟 ATTACK_RANGE／BURY_RANGE 同一種距離門檻，2 格
+
+const HUNT_OK := ""
+const HUNT_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const HUNT_TOO_FAR := "TOO_FAR"
+const HUNT_NO_INVENTORY := "NO_INVENTORY"
+const HUNT_NO_SPACE := "NO_SPACE"
+
+## 打獵（issue #573）。跟 attack()／bury() 同一種寫法：一路檢查，任何一關
+## 不過就回失敗碼，全過才真的寫入狀態——但成不成功這件事本身**不是**這裡決定的：
+## hunt_small／hunt_large 在《01-2》SUCCESS_PARAMS 表上，擲骰已經在
+## Agent.resolve() 那關做完，這個函式只在骰過「成功」之後才會被呼叫，
+## 這裡的檢查只是防呆（動物在擲骰之後、真正執行之前的這段空窗期跑走／被
+## 別人先獵走），不是機率判定
+func hunt(animal: Animal) -> String:
+	if animal == null or not is_instance_valid(animal) or animal.is_queued_for_deletion():
+		return HUNT_TARGET_NOT_FOUND
+	if get_body_position().distance_to(animal.global_position) > HUNT_RANGE:
+		return HUNT_TOO_FAR
+	if inventory == null:
+		return HUNT_NO_INVENTORY
+
+	var item_id: String = animal.game_type
+	var add_reason := inventory.add_item(item_id)
+	if add_reason != Inventory.ADD_OK:
+		return HUNT_NO_SPACE
+
+	animal.remove_from_world()
+	print_debug("Character %s 獵到了一隻 %s" % [character_name, item_id])
+	return HUNT_OK
+
+
 # ---- 移動 ----
 
 # 這次 move_to() 的目標世界座標。move_to() 的呼叫端不只一個（仲裁器、
@@ -1202,6 +1237,12 @@ func _broadcast_speech(line: String) -> void:
 
 var _working := false
 
+## 這次工作已經過了幾個遊戲分鐘——跟 work_progress 的進度條算的是同一個數字
+## （_run_work() 每過一個 GameClock.time_changed 就加一），只是這裡另外存一份
+## 給 get_work_minutes_remaining() 讀，讓工作站能告訴等待中的其他角色「還要
+## 幾分鐘」（issue #663），不用另外重算或動 work_progress 那個純顯示元件
+var _work_elapsed_minutes := 0
+
 ## _end_work() 需要的 workstation 參照，讓 force_interrupt() 可以在不依賴
 ## _run_work() 協程本地變數的情況下，自己也呼叫得到 _end_work()
 var _current_workstation: Workstation = null
@@ -1239,11 +1280,19 @@ func work_at(workstation: Workstation) -> String:
 
 	_working = true
 	_current_workstation = workstation
+	_work_elapsed_minutes = 0
 	stop_moving()
 	if work_progress != null:
 		work_progress.show_progress(0.0)
 	_run_work(workstation, _work_session_id)
 	return WORK_OK
+
+## 這次工作還要幾分鐘才會做滿——沒在工作回 0。給 Workstation.get_wait_minutes()
+## 讀，不是這個角色自己會用到（issue #663：讓等待中的其他角色知道還要等多久）
+func get_work_minutes_remaining() -> int:
+	if not _working:
+		return 0
+	return maxi(0, WORK_DURATION_MINUTES - _work_elapsed_minutes)
 
 # 數 GameClock.time_changed 發了幾次來算「過了幾個遊戲分鐘」，不是掛
 # get_tree().create_timer()——後者是現實時間，跟 GameClock 的時間刻度脫鉤，
@@ -1274,6 +1323,7 @@ func _run_work(workstation: Workstation, session_id: int) -> void:
 			_end_work(workstation)
 			return
 
+		_work_elapsed_minutes = i + 1
 		if work_progress != null:
 			work_progress.show_progress(float(i + 1) / float(WORK_DURATION_MINUTES))
 
@@ -1350,11 +1400,29 @@ func buy_from(machine: VendingMachine, item_id: String) -> String:
 # 地點對不對、擲不擲得過成功率是 resolve() 的事（見 agent.gd 的 SUCCESS_PARAMS／
 # _roll_success()），這裡假設呼叫端已經確認過那兩件事才會呼叫。add_item()
 # 內部已處理堆疊規則，回傳值直接轉傳（ADD_OK 剛好也是空字串，跟 GATHER_OK
-# 同一個值，不用另外映射）
+# 同一個值，不用另外映射）。hygiene 扣點（《99》P-65）只在真的採到東西時扣——
+# 背包滿了採集失敗，不該連累角色平白變髒
 func gather() -> String:
 	if inventory == null:
 		return GATHER_NO_INVENTORY
-	return inventory.add_item("herb")
+	if stats == null:
+		return GATHER_NO_STATS
+	var reason := inventory.add_item("herb")
+	if reason == Inventory.ADD_OK:
+		_apply_action_dirty("gather")
+	return reason
+
+# 依 Stats.ACTION_DIRTY 表，把某個離散動作對應的扣點一次套用到 stats 上。
+# 跟 agent.gd 的 ACTION_RECOVERY／_apply_action_recovery() 是同一張表的反面
+# ——那邊是「持續狀態每遊戲分鐘回一點」，這裡是「動作執行成功時扣一次」，
+# 放在 Character 而不是 Agent：gather()／perform() 兩個呼叫端都在這個基底，
+# Player 也要能觸發，不能只讓 Agent 看得到
+func _apply_action_dirty(action: String) -> void:
+	if stats == null:
+		return
+	var dirty_list: Array = Stats.ACTION_DIRTY.get(action, [])
+	for dirty in dirty_list:
+		stats.add(dirty["stat"], dirty["amount"])
 
 
 # ---- 人格 ----
@@ -1469,8 +1537,9 @@ func is_performing() -> bool:
 ## 工作站）。跟 eat()／drink() 一樣先做前置檢查、才有副作用；但表演不是瞬間
 ## 完成，是跟 work_at() 同一種「立刻回傳 OK、實際過程交給協程跑」的長動作
 ## ——duration 夠長，範圍內的路人才有機會被 Vision 偵測到、問過自己的 AI
-## 要不要打賞。hygiene -1 是一次性扣點（每次「開始表演」扣一次），不是既有
-## drift 機制的量級，這裡刻意不套用 Stats 既有的每分鐘漂移模式
+## 要不要打賞。hygiene 扣點（《99》P-65，`Stats.ACTION_DIRTY`）是一次性
+## （每次「開始表演」扣一次），不是既有 drift 機制的量級，這裡刻意不套用
+## Stats 既有的每分鐘漂移模式
 func perform() -> String:
 	if inventory == null:
 		return PERFORM_NO_INVENTORY
@@ -1481,7 +1550,7 @@ func perform() -> String:
 	if is_in_conversation() or _working or _performing or _is_movement_locked():
 		return PERFORM_BUSY
 
-	stats.add("hygiene", -1.0)
+	_apply_action_dirty("perform")
 	_performing = true
 	stop_moving()
 	_run_perform(_perform_session_id)
