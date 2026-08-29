@@ -214,7 +214,17 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 	if character.get("schedule_template") != null:
 		character.set("schedule_template", "")
 
-	get_tree().current_scene.add_child(character, true)
+	# 掛在 current_scene 底下會落在 World（y_sort_enabled）外面，跟 Player／
+	# Level 的裝飾物完全脫鉤——動態生成的角色彼此之間、跟其他角色之間都不會
+	# 按 Y 座標決定前後，只會照 add_child() 順序疊圖（使用者實測發現的現象）。
+	# World 沒有腳本，用場景檔的 groups=["world"]（main.tscn）取代
+	# add_to_group()，找不到就代表場景設定壞了，退回 current_scene 讓遊戲
+	# 至少能跑，但留下錯誤方便查
+	var spawn_parent := get_tree().get_first_node_in_group("world")
+	if spawn_parent == null:
+		push_error("GameManager.spawn_character: 場景裡沒有 world 群組節點，角色將無法正確 y-sort")
+		spawn_parent = get_tree().current_scene
+	spawn_parent.add_child(character, true)
 	character.name = character.character_id
 
 	# _ready() 期間 character_name 的 fallback 撿到的是上面那個臨時節點名，
