@@ -1374,7 +1374,7 @@ func _request_next_decision(
 	var envelope := PromptBuilder.build_plan_envelope(
 		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan,
 		_fact_lines_summary(), had_pending_persuade, current_place, allow_appointment,
-		allow_perform_tip, _recalled_summary()
+		allow_perform_tip, _recalled_summary(), _workplaces_summary()
 	)
 	var validator := func(data: Dictionary) -> Dictionary:
 		return AISchema.validate_tasks(
@@ -1906,6 +1906,26 @@ func _task_pool_summary() -> Array[Dictionary]:
 			"source": task.get("source", ""),
 		})
 	return summary
+
+## work 動作能選的地點清單（#700），給 PromptBuilder 組 plan 信封用——LLM
+## 看不到場上有哪些工作站就只能瞎猜 place 該填什麼，跟 #605/#647 販賣機清單
+## 同一種「模型看不到就只能瞎猜」的問題。不是列出全部 7 個地點錨點——只有
+## 真的有 Workstation 節點的地點才進清單，跟 _pursue_work_task() 篩選工作站
+## 用的同一個 resolve_from_position() 反查，兩邊對「這個工作站算哪個地點」
+## 的認定不會兜不起來
+func _workplaces_summary() -> Array[String]:
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null:
+		return []
+
+	var places: Array[String] = []
+	for ws in get_tree().get_nodes_in_group("workstations"):
+		if not ws is Workstation:
+			continue
+		var place: String = anchors.resolve_from_position((ws as Workstation).global_position, ACTUAL_PLACE_RADIUS)
+		if not place.is_empty() and not places.has(place):
+			places.append(place)
+	return places
 
 # 工作結束後同理：那 5 個遊戲分鐘可能已經跨過行程的整點，而 work_at() 開頭的
 # stop_moving() 把原本的路徑清掉了，不重算的話會一路站到下一個整點字串吻合為止
@@ -3733,16 +3753,26 @@ func _pursue_work_task() -> void:
 	_pursued_place = current_place
 	_pursuit_done = true
 
-	# 找最近的工作站（MVP 只有一個，但用最近的方式向前相容）
+	# 找 current_place 這個地點對應的工作站，同一地點多台時取最近的（MVP 只有
+	# 一個，但用最近的方式向前相容）。#700 開放 work 給 LLM 選之前，place 永遠
+	# 是 npc_schedule.json 排好的值、場上又只有一台工作站，「不管 place 直接
+	# 抓全場最近」跟「照 place 篩」結果一樣看不出差異；LLM 能自己選 place 之後
+	# 兩者才會分岔——place 沒有工作站時要老實回 WORK_TARGET_NOT_FOUND，不能
+	# 撿一個地點對不上的工作站頂替
 	var workstations: Array = get_tree().get_nodes_in_group("workstations")
 	var nearest_workstation: Workstation = null
 	var nearest_distance := INF
 
 	for ws in workstations:
-		var distance := get_body_position().distance_to(ws.global_position)
+		if not ws is Workstation:
+			continue
+		var ws_node := ws as Workstation
+		if anchors.resolve_from_position(ws_node.global_position, ACTUAL_PLACE_RADIUS) != current_place:
+			continue
+		var distance := get_body_position().distance_to(ws_node.global_position)
 		if distance < nearest_distance:
 			nearest_distance = distance
-			nearest_workstation = ws
+			nearest_workstation = ws_node
 
 	# 呼叫 work_at() 並記錄結果
 	var reason := work_at(nearest_workstation)
