@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-23
+updated: 2026-08-29
 ---
 
 # LLM 串接與 AI 服務層
@@ -52,6 +52,35 @@ LLM 一律走 `AIService`（`scripts/ai/ai_service.gd`）→ Godot ↔ Sidecar
   本機 llama-server 與 OpenRouter 兩條
 - 每次呼叫帶一份含 Agent 狀態與人格的 JSON，回傳也要 JSON
 
+### Embedding（L3 語意記憶檢索，issue #571）：獨立於對話 provider
+
+2026-08-26 拍板：embedding 是獨立於「玩家對話走 Local 還是 Cloud」的第三條線，
+**不管玩家選哪個對話 provider，embedding 這個計算步驟本身一律走本機**。理由：
+embedding 模型遠比對話模型輕量（bge-small 幾百 MB、CPU 就能跑），Cloud 玩家
+也負擔得起在自己機器常駐這一支，換來的是「產生向量」這件事兩種玩家都不用
+多一筆對外 API 呼叫的延遲與費用，也不用把記憶內容送給第三方 embedding 服務。
+
+> [!warning] 這不是「記憶內容整體都不出本機」的保證
+> `search_l3()` 命中的記憶**文字內容**會被塞進 `context.memory.recalled`，
+> 跟既有的 `recent`(L2)／`core`(L4) 一樣，整包 envelope 送進 `AIService.request()`，
+> 送去玩家選的哪個對話 provider（Local／Cloud）就跟哪個一樣，這裡沒有額外
+> 攔截。跟 L2／L4 記憶內容既有的行為一致，不是 L3 才有的例外，也沒有計畫
+> 幫 L3 加特殊隔離——2026-08-27 拍板維持這個一致性，只修正這裡過度承諾的
+> 文件敘述，不改變傳輸行為（CodeRabbit review 抓到，見 issue #571 討論）
+
+- 模型：`bge-small-zh-v1.5-q8_0.gguf`，`llama-server --embedding --pooling cls`
+  服務 OpenAI 相容的 `/v1/embeddings`。這組模型檔案原本就在遠端 GPU 機器
+  （見「遠端 GPU 機器連線手冊」）留著沒清掉，不用重新下載
+- 檢索本身用暴力法 cosine similarity，不引入向量 DB／延伸套件——L3 記憶量級
+  （單一 NPC 頂多幾十筆）用不上 ANN 索引，多一個套件只會增加打包風險
+- `ai_config.json` 新增一個跟 `providers` **平行**的頂層 `embedding` 區塊
+  （不是 `providers` 字典裡的一個 provider）——這條線不受玩家的 Local/Cloud
+  選擇影響，混在一起會讓語意不清楚
+- 開發期驗證：本機沒有 GPU，改在遠端 GPU 機器（`desktop-h9aniv5`）常駐這支
+  embedding server（沿用既有筆記記載的 `neonardooo@100.85.79.25:2222` SSH
+  存取方式），本機用 `ssh -N -L 8081:127.0.0.1:8081 ...` 建 tunnel 連過去測。
+  **這條 tunnel 是本機行程，機器關機／重開會中止**，下次要驗證前得重新建立
+
 ## 協定：HTTP，不是 WebSocket
 
 > [!important] 這題沒得選
@@ -83,8 +112,9 @@ WebSocket 在本專案有位置，但是**另一條線**：
 
 | 檔案 | 職責 |
 | --- | --- |
-| `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers` 與全域的速率限制三個旋鈕 |
-| `ai_service.gd` | **正式線唯一碰網路的地方**。autoload。節點池、佇列、逾時、速率限制、重試 |
+| `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers`、全域的速率限制三個旋鈕，以及跟 `providers` 平行的頂層 `embedding` 區塊（見上方「Embedding」一節） |
+| `ai_service.gd` | **對話／決策唯一碰網路的地方**。autoload。節點池、佇列、逾時、速率限制、重試——只打玩家自己選的 Local／Cloud 對話 provider |
+| `embedding_service.gd` | **L3 語意檢索唯一碰網路的地方**（issue #571）。autoload，跟 `ai_service.gd` 分開、各自獨立打各自的端點——這裡永遠打本機的 embedding-only server，不受玩家的對話 provider 選擇影響，也不共用 `ai_service.gd` 的節點池／佇列／速率限制（呼叫頻率遠低於對話，見《03》§7 觸發時機表，不需要那一整套） |
 | `ai_schema.gd` | 回應驗證：`JSON.parse_string` → null 檢查 → 逐欄位型別檢查 → `action` 白名單 |
 | `prompt_builder.gd` | 由 Character 組出請求信封（dialogue／plan／reflection／creation 皆已實作）。system 段前綴每個角色的人格摘要，見下方「人格資料」 |
 
@@ -109,9 +139,13 @@ llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key
 		"local":      {"base_url": "http://127.0.0.1:8080/v1", "api_key": "", "model": "qwen2.5-7b-instruct", "timeout": 10.0, "format_guaranteed": true},
 		"openrouter": {"base_url": "https://openrouter.ai/api/v1", "api_key": "sk-or-v1-…", "model": "openai/gpt-4o-mini", "timeout": 10.0}
 	},
+	"embedding": {"base_url": "http://127.0.0.1:8081/v1", "model": "bge-small-zh-v1.5-q8_0.gguf", "timeout": 10.0},
 	"min_interval_sec": 30.0
 }
 ```
+
+`embedding` 是跟 `providers` 平行的頂層區塊（見上方「Embedding」一節），不是
+`providers` 字典裡的一個 provider——這條線不受 `default_provider` 選擇影響。
 
 `min_interval_sec` / `max_calls_per_game_day` / `dialogue_exempt` 維持全域，
 **不逐 provider**：那是角色的成本控管，算在 `requester_id` 上，同一隻角色不管
@@ -170,6 +204,16 @@ creation 四種都已經實作（`PromptBuilder.build_dialogue_envelope()`／
 system: 人格敘述 ＋ 行為規則 ＋ 輸出 schema ＋ 動作白名單     ← 幾乎不變
 user:   <下方 JSON 字串化>                                    ← 每次變
 ```
+
+`system` 段最後固定接一句語言規則（`PromptBuilder.OUTPUT_LANGUAGE_RULE`，issue
+#656）：本機小模型沒有明確語言限制時，容易在中文句子裡夾雜訓練資料帶出來的
+英文詞彙。這句只管「自由文字（台詞、心聲、吐槽）要用繁體中文」，不影響 JSON
+欄位名／enum 值——所以接在規則段最後面而不是最前面，避免被誤讀成連 schema
+都要中文。`build_dialogue_envelope`／`build_plan_envelope`／
+`build_reflection_envelope`／`build_checkpoint_envelope`／
+`build_last_words_envelope`／`build_words_to_creator_envelope`（都經過
+`_system()`）跟 `build_creation_envelope`（不吃 `Character`，另外接一次）
+全部套用同一句。
 
 ```json
 {
@@ -297,11 +341,13 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 `max_turns`，不是遞增的 `turns_so_far`；這裡描述的是設計目標，接回程式碼是
 獨立的後續動作，不在 #482 範圍內。
 
-> [!note] `turns_so_far` 口徑尚未定案，接線時要挑一個
-> `conversation.gd::_run()` 的迴圈變數 `turn`（從 0 起算、不含開場白）跟
-> `_turns.size()`（陣列長度，含開場白那一句）是兩個不同的數字——下面 A/B/C
-> 實驗腳本用的是前者（`turn`），跟 `_turns` 陣列本身的長度不等價。接回真代碼
-> 時要明確選一種當 `turns_so_far` 的定義，`Ailley/scripts/ai/prompt_builder.gd::build_dialogue_envelope()`
+> [!note] `turns_so_far` 現在等於 `_turns.size()`，不用另外挑一種算法
+> `conversation.gd::_run()` 的迴圈變數 `turn`（從 0 起算）跟 `_turns.size()`
+> （陣列長度）在同一輪呼叫 `next_line()` 的當下是同一個數字——開場白已改成
+> 一律過 LLM（issue #630／《99》P-67），不再有「`turn` 不含開場白、`_turns.size()`
+> 含開場白」那個固定 1 的落差。下面 A/B/C 實驗跑在這個落差還存在的舊版上，
+> 腳本用的是 `turn`；接回真代碼時兩邊現在算的是同一件事，選哪個當
+> `turns_so_far` 都可以，`Ailley/scripts/ai/prompt_builder.gd::build_dialogue_envelope()`
 > 沿用同一個公式，不要兩邊各自算一套。
 
 **A/B/C 實測在本次樣本中大幅改善收尾行為**（issue #482，2026-08-23，本機 llama-server
@@ -412,16 +458,19 @@ max_dialogue_calls_per_game_day`，不是 `>`——跟既有
 > 這樣講清楚，不是無條件對兩種設定都生效
 
 **預設值 30 的依據**：這次記的樣本是 `_turns.size()`（對話輪數），不是真正的
-`AIService.request()` 呼叫次數——每場開頭的 `DialogueLines.opening()` 不打
-LLM，7.0 輪／場扣掉這句開場白，實際是雙方合計約 **6.0 次呼叫／場**（這次
-樣本全是 NPC 對 NPC，不涉及玩家回合那個額外的不打 LLM 因素）。
+`AIService.request()` 呼叫次數。這次樣本測的是舊版行為——開場白當時還是
+`DialogueLines.opening()` 寫死的模板句，不打 LLM，7.0 輪／場扣掉這句開場白，
+換算成雙方合計約 6.0 次呼叫／場。開場白改成一律過 LLM 之後（issue #630／
+《99》P-67），這個扣減不再成立，同一份 7.0 輪／場的樣本换算下來會更接近
+**7.0 次呼叫／場**（每一輪都打 LLM）；這個數字本身也是舊樣本套新規則的
+粗算，不是重新量測的結果。
 >
 > [!warning] 配額 scope 是 per-`requester_id`（單一角色），不是 per-對話（CodeRabbit review 抓到）
 > `_dialogue_calls_today[requester_id]` 算的是**單一角色**今天講了幾輪，不是
-> 一場對話兩隻角色合計打了幾次。上面「6.0 次呼叫／場」是雙方合計，若對話
-> 輪流發言、大致平均分攤，換算成單一角色的負擔是約 **3 次呼叫／場**——30
-> 次配額對單一角色來說約可撐 **10 場**均值對話，不是拿雙方合計數去除的
-> 5 場。這個換算本身也只是「輪流均分」的粗略假設，實際上兩隻角色誰先開口、
+> 一場對話兩隻角色合計打了幾次。上面「7.0 次呼叫／場」是雙方合計，若對話
+> 輪流發言、大致平均分攤，換算成單一角色的負擔是約 **3.5 次呼叫／場**——30
+> 次配額對單一角色來說約可撐 **8～9 場**均值對話，不是拿雙方合計數去除的
+> 場次。這個換算本身也只是「輪流均分」的粗略假設，實際上兩隻角色誰先開口、
 > 誰講得多不會完全對半分，正式訂數字前要用同一個 per-角色口徑重新記樣本，
 > 不是延用這次雙方合計的數字
 >
@@ -584,10 +633,12 @@ pattern 這類字串格式約束，格式與未來時間的檢查落在驗證層
 `ai_config.gd`／`ai_service.gd`／`ai_schema.gd`／`data/ai_config.example.json`，
 autoload 已註冊，主控台加了 `ai` 指令。
 
-- `request(envelope, requester_id, policy)`：`enum Policy { SCHEDULED, CONVERSATION }`，
-  `CONVERSATION` 跳過冷卻與每日配額但照樣計數（走獨立的 `_dialogue_calls_today`），
-  預設 `SCHEDULED`——忘了指定的呼叫端落在保守那邊，不會意外拿到無限額度
-- 速率限制三個旋鈕搬進 `user://ai_config.json`（皆可設 0＝不限），預設值與規格數值
+- `request(envelope, requester_id, policy)`：`enum Policy { SCHEDULED, CONVERSATION, CREATION }`，
+  `CONVERSATION`／`CREATION` 跳過冷卻與每日配額但照樣計數（分別走獨立的
+  `_dialogue_calls_today`／`_creation_calls_today`），`CREATION` 是建角一次性生成
+  （words_to_creator，#682），預設 `SCHEDULED`——忘了指定的呼叫端落在保守那邊，
+  不會意外拿到無限額度
+- 速率限制旋鈕搬進 `user://ai_config.json`（皆可設 0＝不限），預設值與規格數值
   見 `ai/api.md`（`AIConfig`）／規格書《13》§5
 - 回傳一律 `{"ok": bool, "data": Dictionary, "error": String}`，呼叫端一律 `await`
 - 4xx 不重試；網路錯誤／5xx 重試 1 次
@@ -608,7 +659,9 @@ autoload 已註冊，主控台加了 `ai` 指令。
 `DialogueLines`。`MAX_TURNS` 換成 `SAFETY_MAX_TURNS`（純保險，收尾由 `end` 欄位決定），
 `character.gd` 有 `signal spoke`，玩家在對話中打的字也送得進上下文。
 
-開場白仍然是模板句：對話由 `DialogueLines.opening()` 起頭，第二輪才進 LLM。
+開場白（turn 0，被搭話的一方）也一律過 LLM（issue #630／《99》P-67），多開放
+一個 `engage` 欄位，可以選擇不理會這次搭話；`DialogueLines.opening()` 只在
+turn 0 的 LLM 呼叫失敗時當 fallback 使用，跟 `closing()` 是同一種定位。
 
 ### Step 2 — 任務池與仲裁器 ✅ 完成
 
@@ -733,7 +786,6 @@ JSON Schema → GBNF 的轉換器。
   `JsonSaveService`：`SqliteSaveService` 尚未讀寫 `memory` 欄位，SQLite
   round-trip 會遺失記憶（見 [[存檔]]「SQLite 後端現況」）
 - **交誼區 WebSocket 線** —— 伺服器技術棧尚未決定，見 #476
-- `preconditions` 求值 —— 結構留欄位，v1 一律通過，見 #477
 - 白名單中除 `move_to` / `talk` / `sleep` 外的動作實作——白名單本身已經是
   《07》《11》拍板的 22 個（issue #88），但 `IMPLEMENTED_ACTIONS` 沒有跟著擴
 - `speech` 觸發對話交接（issue #90）
@@ -742,7 +794,8 @@ JSON Schema → GBNF 的轉換器。
 
 ## 待決（正式線）
 
-- [ ] 「…」氣泡的等待體感要實跑才知道能不能接受，見 #480
+- [x] **「…」氣泡擴大套用到行程決策已落地**（#480，2026-08-27）：`_request_next_decision()`
+      套用跟 `next_line()` 同一招，細節見下方「延遲」一節
 - [x] **LLM 成本上限完全沒有防護**——研究與提案已由 #395 完成（本機
       Qwen2.5-7B，6 場對話均值 7.0 輪／場，`max_dialogue_calls_per_game_day`
       旋鈕設計案見上方「每日對話呼叫上限提案」一節），落地實作見 #434
@@ -855,20 +908,160 @@ poc 輸出裡有、《06》沒提到的欄位：`reasoning`／`inner_monologue`�
 《06》全 snake_case 無中英夾雜，poc 的 `intent.action`（中文）跟 `action_en`
 （英文）同時存在，是重複資訊。
 
-## 延遲：實測 2.5-4 秒，體感層面的解法尚未實作
+## 延遲：實測 2.5-4 秒，體感層面靠「…」氣泡頂著
 
 編輯器實測「玩家靠近就打一次決策」：從靠近到角色真的有反應中間約 2.5-4 秒
 （時間主要花在 llama-server 的 grammar 約束生成，不是網路或 Godot 端）。
 對「玩家靠近、期待即時反應」這種互動模式來說很明顯，玩家靠近後畫面上完全
-沒有回饋，3 秒後突然講話/移動。正式線接對話與行程時會碰到同一個數量級。
+沒有回饋、3 秒後突然講話/移動的話體感會很差。正式線接對話與行程時會碰到
+同一個數量級。
 
-**體感層面的解法（想法已記錄，尚未實作）**：觸發當下先給立即視覺回饋——氣泡
-顯示「…」思考中，或角色停下腳步做「在想事情」的小動作，等決策回來才換成
-真正的台詞/動作。不用真的縮短延遲，體感會差很多。
+**體感層面的解法（#480，2026-08-27 落地）**：`Agent._request_next_decision()`
+在確定要送出請求、真正打網路之前，套用跟 `next_line()`（Step 1 對話）
+完全同一招——`say(AI_THINKING_TEXT, true, false)` 立刻蓋一顆「…」氣泡，
+`interrupt=true` 蓋掉正在顯示的舊訊息。不縮短延遲本身，只讓觸發當下不是
+死寂一片。
 
-**縮短延遲本身的槓桿（另一方向，同樣尚未實作）**：`REASONING_INSTRUCTION` 的
+> [!note] 「…」氣泡撐不滿整段等待，是刻意接受的取捨
+> `bubble.gd::say()` 的顯示時長跟著文字長度算（`MIN_DURATION` 1.2 秒），
+> 「…」只有一個字，1.2 秒後就自動收掉——比 2.5-4 秒的實測延遲短，決策
+> 真正回來前氣泡多半已經消失。`next_line()` 的既有取捨是「早一點給回饋
+> 比精準對齊網路延遲更重要」，這裡沿用同一個立場，沒有另外做「撐滿整段
+> 等待」的機制（例如改用不會自動收掉的 `hold()`）。用 `game_eval` 直接呼叫
+> `_request_next_decision()` 白箱驗證過：`spoke` 訊號確實以 `"…"` 觸發、
+> 氣泡當下 `visible=true`、且會蓋掉呼叫當下正在顯示的舊訊息。角色停下腳步
+> 做「在想事情」小動作是筆記原本提過的替代方案，#480 沒有採用，兩案只能
+> 二選一時選了跟對話一致、成本較低的氣泡方案。
+
+**縮短延遲本身的槓桿（另一方向，尚未實作）**：`REASONING_INSTRUCTION` 的
 100 字上限是延遲/品質的直接槓桿，往下砍會更快但決策品質會掉；其他槓桿是模型
 量化等級、llama-server 的 `--parallel` 設定，會影響全部呼叫，改動範圍更大。
+
+## 動態投放到真正依任務移動：冷卻問題已修（PR #684），真正的卡點是空任務回應沒有補救機制（2026-08-28 實測）
+
+`_generate_words_to_creator()`（`agent.gd`／`game_manager.gd` 各一份）在
+#684 之前跟第一次 plan 決策共用同一個 `AIService.Policy.SCHEDULED` 冷卻池
+（當時 `Policy` enum 只有 `SCHEDULED`／`CONVERSATION`），導致投放後多等一輪
+完整冷卻（當時 30 秒）才送得出第一次決策。修法（issue #682，
+**實作在 PR #684，已併入 main**）：新增 `AIService.Policy.CREATION`，讓這通
+一次性生成呼叫無條件豁免冷卻與每日配額，不再跟決策共用池子。現在不管走
+debug 主控台 `spawn` 還是正式的 `GameManager.deploy_from_library()`，
+投放到送出第一次 plan 決策只要一次網路延遲（0.6-1.9 秒，量級同上一節
+#118 校準值；此數值是在 #684 分支上實測的，已隨 #684 進 main），不再有那
+30 秒——透過 `Continue`（讀檔重生）真實路徑重新投放已生成過 `words_to_creator`
+的角色驗證過：`AIService.get_usage()` 顯示 `calls_today: 1`，沒有被搶先
+佔用冷卻。
+
+**冷卻修掉之後（#684），角色還是可能站著不動，原因換了一個**：任務池要真的有
+東西，仲裁器才有東西可選。決策回應的 `tasks` 欄位允許回傳空陣列（規格
+「不更新就是空陣列」），這是合法回應，不是驗證失敗。三隻分別測試過的
+角色（正式投放的 Gandalf、debug spawn 的 Gandalf（複製）、小海）在
+剛投放的頭幾輪決策，`reasoning` 都類似「沒有特定計畫，等待中」，回傳
+`tasks: []`——這種情況下 `_current_task` 維持空字典，**沒有「動作完成」
+這件事會發生，而目前唯一接上的重排時機正是「目前任務做滿」**（見
+[[行程佇列與任務仲裁]]「什麼時候會請 LLM 重排」），所以角色會無限期
+卡在原地，沒有任何機制會主動再問一次。
+
+跟這個案例外觀相似但成因不同、容易搞混的是「模型回了一筆 `idle` 任務」
+（有 `duration`，會真的進池子、被選中、佔滿 `_current_task`）——這種
+情況角色一樣站著不動（`idle` 本來就是原地不動的動作），但 `duration`
+到期後**會**正常觸發下一次決策，不會永久卡住。原始 Gandalf 那次實測
+就是這個模式：連續好幾輪 `idle`（reasoning 分別是「看不到 player，可能
+有問題」「村裡沒有玩家，沒有其他事情可做」）之後才轉成一筆 `talk`
+（target: player）。**空陣列回應**跟**內容是 `idle` 的正常任務**是兩種
+不同的「看起來都沒在動」，只有前者是真正卡死、需要補救機制；後者只是
+需要多等幾輪 `duration`。
+
+實測方法：`game_eval` 直接呼叫 `AIService.request()`／`AISchema.parse_completion()`／
+`AISchema.validate_tasks()` 逐階段拆解，搭配 `AIService.get_usage(character_id)`
+的 `cooldown_left` 欄位反推冷卻是在哪個時間點被佔用的——`game_eval` 有 8 秒
+執行預算，一次性的長輪詢迴圈（例如 `for i in range(200): await create_timer(0.1)`）
+會被腰斬成 `EVAL_HUNG`，殘留的 coroutine 之後再存取 `get_tree()` 會回傳
+`null`，把整個遊戲行程頂進 debugger break（`project_manage(op="stop")`
+可解除，不是真的崩潰）；改成多次分開的短呼叫，或直接 `await` 會自己
+resolve 的呼叫（例如 `debug_set_llm_decision()` 本身回傳的就是 await 完的
+結果字典），不要自己手動輪詢等待。
+
+## 兩隻 AI 同場互看：機制上通，但沒觀察到真的互相搭話（2026-08-28 實測）
+
+在同一個場景同時開兩隻角色的決策迴圈（同一位置、`vision` 確認互相看得到
+對方），驗證了幾件事：
+
+- `AIService` 的用量統計（`calls_today`／`cooldown_left`／配額）是逐
+  `requester_id`（`character_id`）分開算的，兩隻角色同時打不會互相污染
+  彼此的冷卻或配額，`POOL_SIZE=3` 的節點池在這個規模下沒有觀察到排隊卡住
+- `context.visible` 確實會把另一隻看得到的 NPC 列進去，`talk`／`give`／
+  `persuade`／`attack` 這幾個需要 `target` 的動作理論上都能選到對方
+  （不是只能選玩家）
+- 但這次兩隻測試角色頭幾輪決策都回傳空 `tasks`（見上一節），沒有實際
+  觀察到 NPC 對 NPC 的 `talk`/`give`/`persuade`/`attack` 真的被選中執行
+  ——這條路徑機制上打得通，但端到端沒有被這次測試驗證到，需要更長的
+  觀察窗（或用 `debug_push_task()` 強制塞一筆去驗執行層）才能確認
+
+## 投放位置沒有邏輯，落在跟玩家無關的世界原點（issue #685，已修，PR 待開）
+
+`spawn_character()` 原本完全沒有指定投放位置，動態生成的角色一律停在
+`Node2D` 預設座標 `(0, 0)`。實測：玩家出生點 `(-94, 33)` 距離世界原點
+約 99.6px，剛好落在角色 vision 半徑（80px，5 格 tile）之外——新投放的
+角色一睜眼就看不到玩家，`context.visible` 通常是空的，這是上面「空任務
+回應」問題最常見的觸發源頭：不是模型不想規劃，是它睜眼看到的世界本來
+就空的。兩隻以上動態角色同時投放（例如 debug 主控台連續 `spawn`）會
+全部疊在同一個 `(0,0)`，彼此看得到但一樣看不到玩家。
+
+修法：`spawn_character()` 在 `add_child()` 之後把新角色的 `global_position`
+設成 `PlaceAnchors`（`get_tree().get_first_node_in_group("place_anchors")`，
+見 `places.gd`）底下 `pavilion`（涼亭）錨點的座標——規格書裡本來就是
+社交聚集地，語意上最合理；錨點找不到就維持原點，不讓投放整個失敗。
+實測驗證：投放後 `global_position` 精確落在 `anchors.resolve("pavilion")`
+回傳的座標上。
+
+## 真實死亡個案：決策鏈沒斷，是執行鏈斷了（2026-08-28）
+
+玩家自建角色「000000」投放後遊戲時間過了約 28 小時（對應約 28 分鐘現實
+時間）沒有離開涼亭附近，存檔顯示瀕死：
+
+```
+is_dead: false, health: 18.0
+hydration: 0.0, satiety: 0.0, wakefulness: 0.0, stamina: 8.0
+is_exhausted: true
+today_plan: "喝水和吃飯"（從頭到尾沒變過）
+```
+
+`today_plan` 一直是「喝水和吃飯」，代表模型的判斷完全正確、也沒有放棄
+這個意圖——**決策層沒有問題**。真正斷掉的是執行層：`eat`／`drink` 從
+角色自己背包找東西（`_find_food_slot()`／`_find_drink_slot()`），新投放
+或玩家自建角色預設背包是空的；唯一能補貨的 `buy` 又因為上一節「LLM 從
+沒被告知地點清單存在」幾乎打不中。結果是模型每輪都誠實地想吃飯喝水，
+每次都因為背包沒東西而執行失敗，四項核心生存數值一路歸零，health 被
+拖到瀕死邊緣——**這代表 #605／PR #647（地點清單）不只是「決策內容比較
+豐富」的體驗改善，是攸關新角色存活與否的必要修復**，應優先合併。
+
+## `move_to`／`buy` 打不到：LLM 從沒被告知地點清單存在（issue #605，PR #647 進行中）
+
+`prompt_builder.gd::build_plan_envelope()` 送給模型的 `context` 只有
+`visible`／`pool`／`today_plan`／`fact_lines`／`memory`，沒有任何「這個
+村子有哪些地點」的欄位。`ai_schema.gd` 對 `buy`／`move_to` 的 `place`
+參數也只驗證非空字串，不驗證是否真實存在——模型因此只能盲猜地點代號
+（`home`／`herb_shop`／`tavern`／`pavilion`／`god_stone`／`cemetery`
+這幾個 `PlaceAnchors` 底下的真實名字），實務上幾乎不會被選中。
+
+issue #605／PR #647（draft，跟 #644 一起修）已經在補：`prompt_builder.gd`
+新增 `_shop_summary()`，把全村販賣機的 `{place: {item_id: price}}` 塞進
+`_self_block()`（plan／dialogue 共用），直接解掉 `buy` 這半；`#644` 順便
+把 `persuade` 的 appointment 地點也改成動態帶入 `PlaceAnchors.list()`。
+**但 #647 的範圍只涵蓋販賣機清單，不是一般性的地點清單**——`move_to`
+去涼亭純社交、去墓園這類不涉及購買的移動，模型依然不知道地點存在，
+#647 合併後這半仍待另外驗證。
+
+## `work` 對 AI 決策角色雙重不可達
+
+`ai_schema.gd::ALLOWED_ACTIONS` 刻意不含 `work`（「《07》《11》的動作裡
+沒有它，嚴格照 spec」），LLM 決策永遠選不到；`work` 只有場景固定 NPC
+靠 `npc_schedule.json` 的 `state` 欄位觸發 `_pursue_work_task()`。動態
+投放的角色（`spawn_character()` 生出來的）刻意不指派 `schedule_template`
+（見 [[角色庫與投放]]），所以連這條路也走不到。目前沒有追蹤這個缺口的
+issue——要讓 AI 自主決策的角色也能工作，需要另外設計「動態角色怎麼被
+分配工作站」，不是單純把 `work` 加進白名單就好。
 
 ## 待對齊：組長發的資料夾結構規範，跟現有 `Ailley/CLAUDE.md` 不一樣
 

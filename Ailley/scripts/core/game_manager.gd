@@ -26,9 +26,13 @@ var continue_requested := false
 var continue_load_failed := false
 
 ## 目前被玩家操控的 character_id，跟 allow_player_join 同一層世界存檔資料
-## （見 note/技術/存檔.md、issue #373）。存檔時從場景 "player" 分組即時算出來
-## （見 get_world_save_data()），不是這裡手動維護的即時狀態——這個變數只在
-## 讀檔時被寫入，放在這裡讓其他系統之後有地方可以查。
+## （見 note/技術/存檔.md、issue #373）。這裡是「玩家化過身沒」的唯一即時來源：
+## deploy_from_library() 以 as_player=true 投放時寫入，讀檔時由
+## apply_world_save_data() 從存檔還原，get_world_save_data() 原樣寫出。
+##
+## 刻意不從場景 "player" 分組反推：main.tscn 從頭就擺著設計時期的測試用 Player
+## 節點（見 deploy_from_library() 註解），分組在「從未化身」的場上也不是空的，
+## 「分組有沒有人」答不了「玩家化過身沒」——化身與否只有 deploy 路徑會改變。
 ##
 ## 目前沒有任何呼叫端會依這個值重新指派化身：真正的「換身」需要 #371（化身者
 ## 投放路由）先把「投放時選擇由玩家操控」這個機制做出來，這裡只先接上存讀路徑，
@@ -232,6 +236,16 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 	if not name_given:
 		character.character_name = character.name.to_lower()
 
+	# 動態生成的角色在這之前一律停在 Node2D 預設座標 (0, 0)，跟玩家的實際
+	# 出生點是兩個互不相關的座標，導致 vision 幾乎必然偵測不到玩家、
+	# LLM 決策收到「附近沒有任何人」而只能回傳 idle（issue #685）。落點選
+	# 涼亭（`pavilion`）——規格書裡本來就是社交聚集地，語意上最合理。
+	# 錨點需要透過 "place_anchors" 群組取得（見 places.gd），找不到就維持
+	# 原點，不讓投放整個失敗
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors != null and anchors.has("pavilion"):
+		character.global_position = anchors.resolve("pavilion")
+
 	return character
 
 
@@ -288,6 +302,10 @@ func _append_library_entry(data: Dictionary) -> String:
 		"hexaco": hexaco,
 		"character": description,
 		"appearance": data.get("appearance", []),
+		# 選中哪一格造型組的索引（appearance[] 內容本身待《99》P-38 填）。
+		# 編輯既有角色時要能還原這個選擇，不然 character_create.gd::_load_entry()
+		# 每次都被迫重置成 -1、鎖住存檔鈕直到重新手動選一次（issue #683）
+		"appearance_style_index": int(data.get("appearance_style_index", -1)),
 		"personality": persona["personality"],
 		"system_prompt": persona["system_prompt"],
 		"words_to_creator": "",
@@ -303,13 +321,18 @@ func _append_library_entry(data: Dictionary) -> String:
 # reflection 平行的第四種信封類型，只在這一刻打一次。fire-and-forget：
 # 存檔本身不等這通請求，跟 workstation.gd::_run_work() 同一種協程模式——
 # 角色已經進角色庫，AI 回應晚到只補 words_to_creator 這一個欄位。
-# requester_id 用角色自己的 id，跟其他角色/Agent 的行程重排各自分開算配額
+# requester_id 用角色自己的 id，走 Policy.CREATION——跟這隻角色之後投放時
+# 第一次 plan 決策（Policy.SCHEDULED）是各自獨立的冷卻池，這通不會佔掉
+# 那邊的額度（issue #682）
 func _generate_words_to_creator(entry: Dictionary) -> void:
 	var envelope := PromptBuilder.build_creation_envelope(entry["system_prompt"])
-	var result: Dictionary = await AIService.request(envelope, entry["id"], AIService.Policy.SCHEDULED)
+	var result: Dictionary = await AIService.request(envelope, entry["id"], AIService.Policy.CREATION)
 	if not result["ok"]:
 		return
-	var validated := AISchema.validate_creation(result["data"])
+	var parsed := AISchema.parse_completion(result["data"])
+	if not parsed["ok"]:
+		return
+	var validated := AISchema.validate_creation(parsed["data"])
 	if not validated["ok"]:
 		return
 	entry["words_to_creator"] = validated["data"]["words_to_creator"]
@@ -411,6 +434,10 @@ func deploy_from_library(id: String, as_player: bool = false) -> Character:
 			node.remove_from_group("player")
 			node.queue_free()
 
+		# 化身與否的唯一寫入點（見 embodied_character_id 的 var 註解）：
+		# 投放即化身，記下被操控的是誰
+		embodied_character_id = entry["id"]
+
 	var scene := preload("res://scenes/player.tscn") if as_player else preload("res://scenes/agent.tscn")
 	var character := spawn_character(scene, {
 		"character_id": entry["id"],
@@ -468,17 +495,10 @@ func activate_llm_decision_if_ready(character: Character) -> void:
 		return
 
 	# agent.gd::_ready() 剛剛可能已經 fire-and-forget 打過一次
-	# _generate_words_to_creator()（words_to_creator 沒預填才會真的送），
-	# 跟第一次決策共用同一個 requester_id／冷卻池——這裡不等冷卻結束就開
-	# 決策，第一次決策會被同步擋下 ERROR_RATE_LIMITED，決策迴圈靜默卡住到
-	# 下一次仲裁。main_scene.gd::_apply_startup_ai_state() 開場已經在等
-	# 這個冷卻，這裡跟著等同一套（CodeRabbit review 抓到）
-	var cooldown_left := float(AIService.get_usage(agent.character_id).get("cooldown_left", 0.0))
-	if cooldown_left > 0.0:
-		await get_tree().create_timer(cooldown_left).timeout
-		if not is_instance_valid(agent):
-			return
-
+	# _generate_words_to_creator()（words_to_creator 沒預填才會真的送）——
+	# 那通走 AIService.Policy.CREATION，跟這裡即將發起的第一次決策
+	# （Policy.SCHEDULED）是各自獨立的冷卻池，不用像 issue #682 之前那樣
+	# 等一輪冷卻才能開決策
 	agent.debug_set_llm_decision(true)
 
 
@@ -509,19 +529,25 @@ func get_world_save_data() -> Dictionary:
 		if character.get("current_place") != null:
 			entry["current_place"] = character.get("current_place")
 			entry["current_state"] = character.get("current_state")
+		# following_id 跟 current_place／current_state 同一種條件——只有
+		# Agent 才有這個欄位（issue #576），Player 沒有。空字串代表沒在
+		# 跟隨任何人，跟 GameManager/SqliteSaveService 對 current_place
+		# 的空字串規則一致，不用另外判斷 null
+		if character.get("following_id") != null:
+			var following_id: String = character.get("following_id")
+			if not following_id.is_empty():
+				entry["following_id"] = following_id
 		characters[character.character_id] = entry
 
-	# "player" 分組只會有玩家目前操控的那一個節點（player.gd::_ready() 裡
-	# add_to_group("player")），沒有玩家在場（觀察者模式）就是空的——跟
-	# characters 一樣即時從場景算，不吃快取的 embodied_character_id
-	var player_node := get_tree().get_first_node_in_group("player") as Character
-
+	# 化身與否不在這裡從場景反推——"player" 分組在從未化身的場上也不是空的
+	# （main.tscn 內建的測試用 Player），反推會把測試節點誤判成化身。直接寫出
+	# deploy／讀檔維護的即時值，見 embodied_character_id 的 var 註解
 	return {
 		"day": GameClock.day,
 		"hour": GameClock.hour,
 		"minute": GameClock.minute,
 		"allow_player_join": allow_player_join,
-		"embodied_character_id": player_node.character_id if player_node != null else "",
+		"embodied_character_id": embodied_character_id,
 		"characters": characters,
 		# deep duplicate：character_library 裡的巢狀 hexaco/personality 字典
 		# 不能跟目前記憶體裡那份共用參照，否則存檔之後繼續玩，字典被原地改到
@@ -684,15 +710,14 @@ func apply_world_save_data(data: Dictionary) -> void:
 	embodied_character_id = str(data.get("embodied_character_id", ""))
 
 	# 場景裡目前的 player 節點如果不是存檔記錄的那一個，代表需要換身——但
-	# 換身機制（#371）還沒做，這裡只能示警，不能真的動。不視為錯誤：MVP
-	# 現在場景裡固定只有一個 player 節點，兩者本來就該一致，只有先前手動
-	# 換過場景或存檔跨場次挪用時才會觸發。「沒有 player 節點」正規化成空字串
-	# 再比較，涵蓋「存檔記錄空但場景有 player」與「存檔記錄有 id 但場景沒
-	# player」兩種原本會被漏掉的不一致
-	var player_node := get_tree().get_first_node_in_group("player") as Character
-	var current_embodied_character_id := player_node.character_id if player_node != null else ""
-	if current_embodied_character_id != embodied_character_id:
-		push_warning("apply_world_save_data: 存檔記錄的化身角色 %s 跟場景目前的 player 節點 %s 不同，尚無自動換身機制（見 #371），需要手動處理" % [embodied_character_id, current_embodied_character_id])
+	# 換身機制（#371）還沒做，這裡只能示警，不能真的動。不視為錯誤。
+	# 記錄是空字串（從未化身）時不比對：main.tscn 內建的測試用 Player 讓場上
+	# 本來就站著一個 player 節點，這是正常狀態，不是需要手動處理的換身落差
+	if not embodied_character_id.is_empty():
+		var player_node := get_tree().get_first_node_in_group("player") as Character
+		var current_embodied_character_id := player_node.character_id if player_node != null else ""
+		if current_embodied_character_id != embodied_character_id:
+			push_warning("apply_world_save_data: 存檔記錄的化身角色 %s 跟場景目前的 player 節點 %s 不同，尚無自動換身機制（見 #371），需要手動處理" % [embodied_character_id, current_embodied_character_id])
 
 	var library_data = data.get("character_library", [])
 	# clear() 在型別檢查之前——存檔壞掉、library_data 不是 Array 時，也不該
@@ -763,6 +788,23 @@ func _apply_character_entry(character: Character, entry: Dictionary) -> void:
 	if entry.has("current_place") and character.get("current_place") != null:
 		character.set("current_place", entry.get("current_place", ""))
 		character.set("current_state", entry.get("current_state", "idle"))
+
+	# following_id 讀回（CodeRabbit review 抓到）：不能只在 entry 有這個欄位
+	# 時才套用——場上已經存在的 Agent（debug console 的 load 指令套用到
+	# 目前還活著的角色）可能在讀檔前正在跟隨某人，缺欄位代表存檔當下沒在
+	# 跟隨任何人，這裡要主動清成空字串，不是維持讀檔前殘留的舊值。型別不是
+	# String 的髒資料一律當作沒在跟隨，不把不明型別的 Variant 直接塞進去
+	if character.get("following_id") != null:
+		var raw_following_id: Variant = entry.get("following_id", "")
+		if raw_following_id is String:
+			character.set("following_id", raw_following_id)
+		else:
+			if entry.has("following_id"):
+				push_error(
+					"apply_world_save_data: %s 的 following_id 不是字串，已清空"
+					% character.character_id
+				)
+			character.set("following_id", "")
 
 # 存檔裡有記載、但場景裡目前沒有對應節點的角色——重新生成後套用存檔資料
 # （#344）。只有角色庫（character_library）還記得住身分的角色會被生出來：

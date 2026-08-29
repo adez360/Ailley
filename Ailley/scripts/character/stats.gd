@@ -21,30 +21,47 @@ extends Node
 ## 維護（計畫 §5.1）時一併處理，那時「家在哪」本來就要變成角色的屬性
 ##
 ## satiety/hydration/stamina/wakefulness/hygiene/alcohol/health/injury 8 項是
-## 規格書《01》§4-1 `state.physical` 的欄位，drift 數值取自該表「每 tick」欄。
+## 規格書《01》§4-1 `state.physical` 的欄位。satiety/hydration/stamina/
+## wakefulness 4 項 drift 已改依 issue #730 的節奏重新推導（一天總掉量對齊
+## 最好的食物/飲料道具補的量，或 CRITICAL 門檻），不再是《01》表訂原始值——
+## 那份原始值換算成現實時間遠比一輪 LLM 決策快，角色不到一天就會餓死/渴死。
 ## alcohol/injury 是事件累積型（預設 0，靠外部事件推高），is_need 故意留 false，
 ## 不參與 get_lowest_need()/needs_attention()（見《99》P-32 追加決策）；
 ## hygiene/health 雖然也是「越高越好」，但目前沒有對應的 place 可去，
 ## 同樣不參與這兩個函式，只靠外部事件寫入——hygiene 2026-08-24 起也拿掉 drift，
-## 不再自然漂移，改成打獵/採集/表演等工作動作直接扣（見《99》P-65、agent.gd
-## 之後要新增的 ACTION_DIRTY 表；那三個動作本身都還沒進 IMPLEMENTED_ACTIONS
-## 白名單，這裡先把 drift 歸零，等它們接上時 ACTION_DIRTY 才會真的把 hygiene
-## 往下扣）。沒有 drift 不等於數值凍結不動——`wash` 已經是既有的
-## `ACTION_RECOVERY` 項目，會直接把 hygiene 往上加，drift 只是不再自己往下掉
+## 不再自然漂移，改成打獵/採集/表演等工作動作直接扣（見《99》P-65、下面的
+## `ACTION_DIRTY` 表）。沒有 drift 不等於數值凍結不動——`wash` 已經是既有的
+## `ACTION_RECOVERY`（agent.gd）項目，會直接把 hygiene 往上加，drift 只是
+## 不再自己往下掉
 
 const MIN := 0.0
 const MAX := 100.0
 const CRITICAL := 30.0		# 低於這個值算「該處理了」
 
 const SPEC := {
-	"satiety": {"label": "STAT_SATIETY", "drift": 3.0, "toward": 0.0, "start": 100.0, "is_need": true, "place": "tavern"},
-	"hydration": {"label": "STAT_HYDRATION", "drift": 2.0, "toward": 0.0, "start": 80.0, "is_need": true, "place": "tavern"},
-	"stamina": {"label": "STAT_STAMINA", "drift": 1.0, "toward": 0.0, "start": 80.0, "is_need": true, "place": "home"},
-	"wakefulness": {"label": "STAT_WAKEFULNESS", "drift": 1.2, "toward": 0.0, "start": 90.0, "is_need": true, "place": "home"},
+	"satiety": {"label": "STAT_SATIETY", "drift": 0.278, "toward": 0.0, "start": 100.0, "is_need": true, "place": "tavern"},
+	"hydration": {"label": "STAT_HYDRATION", "drift": 0.278, "toward": 0.0, "start": 80.0, "is_need": true, "place": "tavern"},
+	"stamina": {"label": "STAT_STAMINA", "drift": 0.35, "toward": 0.0, "start": 80.0, "is_need": true, "place": "home"},
+	"wakefulness": {"label": "STAT_WAKEFULNESS", "drift": 0.42, "toward": 0.0, "start": 90.0, "is_need": true, "place": "home"},
 	"hygiene": {"label": "STAT_HYGIENE", "drift": 0.0, "toward": 0.0, "start": 70.0, "is_need": false, "place": ""},
 	"alcohol": {"label": "STAT_ALCOHOL", "drift": 3.0, "toward": 0.0, "start": 0.0, "is_need": false, "place": ""},
 	"health": {"label": "STAT_HEALTH", "drift": 0.0, "toward": 100.0, "start": 100.0, "is_need": false, "place": ""},
 	"injury": {"label": "STAT_INJURY", "drift": 0.5, "toward": 0.0, "start": 0.0, "is_need": false, "place": ""},
+}
+
+## 工作動作扣 hygiene 用（《99》P-65），形狀比照 agent.gd 的 `ACTION_RECOVERY`
+## 但語意相反：`ACTION_RECOVERY` 是「持續狀態每遊戲分鐘回一點」，這裡是
+## 「離散動作執行成功時一次性扣一次」，放在 Stats 而不是 Agent，是因為
+## `gather()`／`perform()` 的呼叫端 `Character` 是兩者共同的基底，Player
+## 也走得到，不能只讓 Agent 看得到這張表。
+## `hunt_small`／`hunt_large` 數值已定案，但那兩個動作本身還沒進
+## `IMPLEMENTED_ACTIONS` 白名單（見 #573），先留在表裡，實際扣點呼叫等
+## 該 issue 落地時再接上
+const ACTION_DIRTY := {
+	"hunt_small": [{"stat": "hygiene", "amount": -5.0}],
+	"hunt_large": [{"stat": "hygiene", "amount": -12.0}],
+	"gather": [{"stat": "hygiene", "amount": -3.0}],
+	"perform": [{"stat": "hygiene", "amount": -1.0}],
 }
 
 var values := {}

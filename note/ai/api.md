@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-24
+updated: 2026-08-28
 ---
 
 # api
@@ -87,12 +87,14 @@ ui_cancel                Esc（Godot 內建，project.godot 沒有覆寫）
 signal move_finished(reached: bool)          # 走完 true / 卡住放棄 false
 signal noise_heard(source: Character)        # 收到方會發，見 make_noise()
 signal spoke(line: String)                   # 講出任何一句話都會發（逐字稿/記憶的接點）
+signal speech_heard(source: Character, line: String)   # 收到方會發，見 say() 廣播（issue #669）
 
 const SPEED = 60.0                           # 2026-08-24 從 80 調降
 const ARRIVE_DISTANCE = 2.0
 const STUCK_TIME = 1.0
 const TALK_RANGE := 32.0                     # 2 格
 const NOISE_RADIUS := 128.0                  # 8 格，make_noise() 的預設半徑
+const SPEECH_HEARD_RADIUS := 48.0            # 3 格，say() 廣播 speech_heard 的半徑
 
 const TALK_OK := ""                          # 以下為 talk_to() 回傳值
 const TALK_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
@@ -134,11 +136,12 @@ func is_talk_interruptible() -> bool          # 基底 `not _working`；Agent �
 func enter_conversation(conversation: Node) -> void
 func exit_conversation() -> void
 func leave_conversation() -> void
-func say(line: String, interrupt := false) -> void   # interrupt=true 蓋掉現在這句
+func say(line: String, interrupt := false, broadcast := true) -> void   # interrupt=true 蓋掉現在這句；broadcast=false 給系統內部泡泡（!?／！／AI_THINKING_TEXT「…」）用，不廣播 speech_heard，避免鄰近 LLM 角色連環反應（issue #669）
 func speech_duration(line: String) -> float
 func face_towards(other: Character) -> void
 func update_animation(desired_velocity: Vector2) -> void   # facing 讀解算前的期望方向，不是解算後的 velocity（#108）
 func make_noise(radius: float = NOISE_RADIUS) -> void   # 廣播 noise_heard 給範圍內每個角色
+func _broadcast_speech(line: String) -> void   # say() 內部呼叫，廣播 speech_heard 給 SPEECH_HEARD_RADIUS 內每個角色
 
 const OUTLINE_SHADER := preload("res://assets/shaders/character_outline.gdshader")
 func get_pick_rect() -> Rect2                # 目前影格的矩形，世界座標
@@ -203,6 +206,9 @@ _process()：每幀重算 _get_interact_candidates()，跟 E 會打到誰同一�
   更新 Workstation/VendingMachine 的 Highlight 節點與 Character.set_interact_highlighted()
   ——玩家即時看得到「E 現在會打到誰」（issue #81）
 make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不會冒 !?
+Player 不接 speech_heard（issue #669）：說話的人本來就會冒對話泡泡，真人玩家
+  看畫面就知道附近有人在講什麼，不需要引擎再曝光一次（跟 noise_heard 不同——
+  聲音本身沒有畫面呈現，才需要 !? 曝光感測結果）
 † gui_get_focus_owner() != null 時 get_input_direction() 回 ZERO
   Input.get_axis() 讀全域狀態，LineEdit 攔不住
 † 候選先被 _is_facing()（cone 判定）篩過一輪，沒被玩家面向的直接不算候選——
@@ -241,8 +247,9 @@ const LLM_TASK_POOL_CAP := 20                # 只算 source=="llm" 的筆數
 const ACTION_RECOVERY := {sleep: {stat: stamina, amount: 6.0}, nap: {stat: stamina, amount: 4.0}, rest: {stat: stamina, amount: 2.0}}   # 動作->{stat,amount}（#112／#214），暫定值
 const DEBUG_TASK_PRIORITY := 999.0           # act 指令推進來的任務分數，壓過任何 schedule 任務
 const SUCCESS_PARAMS := {                    # 《01-2》§3 成功率表照抄，含尚未接執行邏輯的動作（#120）
-    hunt_small/hunt_large/gather/fish/steal/persuade/perform/attack
-    → {base, trait, coef}                    # struggle 例外太多，不套用這張表
+    hunt_small/hunt_large/gather/fish/steal/perform
+    → {base, trait, coef}                    # attack 必中、persuade 不擲骰（見《01-2》§3 註），
+                                              # 兩者都不走這張表；struggle 例外太多，同樣不套用
 }
 
 var _tasks: Array[Dictionary]                # 候選池，schedule 開場建立一次，llm 用 _push_llm_tasks() 加
@@ -328,7 +335,13 @@ _on_move_finished()：move_finished 是共用訊號（debug 主控台的 goto �
   靠 last_move_target 比對是不是自己 current_place 的錨點才算數（issue #91）
 spotted 且 !relationships.has_met() → say("！") + stop_moving() + 2s + 重算行程
   _noticed 表確保每個對象只觸發一次
-noise_heard 且 !is_in_conversation() → say("!?")，無去重，每次都會反應
+noise_heard 且 !is_in_conversation() → say("!?", false, false)，無去重，每次都會反應
+  （broadcast=false：fallback 泡泡不再觸發 speech_heard，PR #674，見下）
+speech_heard 且 !is_in_conversation()（issue #669）：
+  llm_decision_enabled 開著 → 事實句「你聽到附近的 X 說：『...』」排隊 + 立刻請求下一次決策，
+    問不到結果才退回 say("!?", false, false)；關著（排程模式）→ 不冒 !?（頻率遠高於 noise，見 [[聽覺感測]]）
+  fallback 泡泡一律 broadcast=false（不再觸發 speech_heard），避免鄰近 LLM 角色把 !? 當一句話
+    排進自己的事實句佇列、連環觸發決策（PR #674，見 character.gd::say()）
 ⚠ 抵達判定 = 距離 ≤ ARRIVE_DISTANCE(2px) OR 已在目標格內(16px)
   只比距離的話 2..11px 是死角：距離說沒到，find_path() 卻因同格只回一個點
   → move_to() false → 假的「走不到」。每次重算行程都會噴
@@ -437,7 +450,7 @@ satiety      飽足感   3.0    0       100    ✓        restaurant
 hydration    水分     2.0    0       80     ✓        restaurant
 stamina      體力     1.0    0       80     ✓        home_001
 wakefulness  清醒度   1.2    0       90     ✓        home_001
-hygiene      清潔     0.5    0       70     ✗        ""
+hygiene      清潔     0      0       70     ✗        ""
 alcohol      酒精濃度 3.0    0       0      ✗        ""
 health       生命值   0.0    100     100    ✗        ""
 injury       傷勢     0.5    0       0      ✗        ""
@@ -448,10 +461,14 @@ injury       傷勢     0.5    0       0      ✗        ""
   `_minute % GAME_MINUTES_PER_TICK == 0` 的分鐘邊界才真的套用一次（#361 修正，
   修正前錯誤地每現實秒套用一次，漂移速度快了 10 倍）
 † place 只回名稱不回座標 — Stats 不可依賴場景（存檔/測試要能無場景使用）
-† satiety/hydration/stamina/wakefulness/hygiene/health 是《01》§4-1「越高越好」的需求型欄位；
-  但 get_lowest_need()/needs_attention() 只掃 is_need=✓ 的 4 項（hygiene/health 沒有對應的
-  place 可去，不參與這兩個函式，見《99》P-32 追加決策）
-† alcohol/injury 是事件累積型（預設 0，靠外部事件推高），故意維持「越高越差」，不跟其他 6 項統一方向
+† satiety/hydration/stamina/wakefulness 才是真正的需求型欄位（`is_need=✓`），會被
+  get_lowest_need()/needs_attention() 掃描；hygiene/health 雖然也是「越高越好」，但
+  `is_need=✗`，不參與這兩個函式（沒有對應的 place 可去，見《99》P-32 追加決策）
+† hygiene 的 drift 2026-08-24 從 0.5 改成 0，拿掉被動漂移——不再是自然消耗；規劃改
+  由 hunt_small/hunt_large/gather/perform 等工作動作直接扣（`ACTION_DIRTY` 表），
+  但該表尚未接線、也還沒定義在任何規格文件裡，追蹤見《99》P-65
+† alcohol/injury 是事件累積型（預設 0，靠外部事件推高），故意維持「越高越差」，
+  跟 satiety 等需求型 4 項方向相反
 ⚠ stamina 的 place 寫死 home_001，每個角色的家其實不一樣
 ```
 
@@ -783,7 +800,7 @@ static func closing() -> String
 
 ```gdscript
 const POOL_SIZE := 3                         # HTTPRequest 節點數
-enum Policy { SCHEDULED, CONVERSATION }      # SCHEDULED 吃冷卻/配額；CONVERSATION 豁免但照樣計數
+enum Policy { SCHEDULED, CONVERSATION, CREATION }  # SCHEDULED 吃冷卻/配額；CONVERSATION/CREATION 豁免但照樣計數
 const RETRY_LIMIT := 1
 const MAX_ERROR_CHARS := 200
 
@@ -826,10 +843,41 @@ get_usage -> {game_day, calls_today, max_calls, dialogue_today, max_dialogue, to
 † CONVERSATION 豁免冷卻/配額但照樣計數（_dialogue_calls_today）——豁免的是限制不是帳
 † 豁免成立時另外吃 max_dialogue_calls_per_game_day（count >= max 就 ERROR_DAILY_QUOTA，0=不限，#434）——
   這個旋鈕只在 dialogue_exempt=true 時有意義，false 時對話走一般 max_calls_per_game_day 路徑
+† CREATION（建角一次性生成，#682）同樣豁免冷卻/配額但照樣計數（_creation_calls_today），
+  另吃 max_creation_calls_per_game_day（count >= max 就 ERROR_DAILY_QUOTA，0=不限）——
+  結構上每個角色一輩子只打一次，但失敗時每次開局/投放會重打，累積數要有兜底
 † is_retry=true 只跳過 min_interval_sec 冷卻，不跳過每日配額——同一次決策內容驗證
   失敗重試（agent.gd::_decide_with_retry()）用，SCHEDULED policy 沒有 CONVERSATION
   那種豁免，重試間隔只有幾秒，不加這個會被自己剛送出的呼叫冷卻擋死
 → 技術/LLM 串接與 AI 服務層
+```
+
+## EmbeddingService — scripts/ai/embedding_service.gd · autoload · Node
+
+```gdscript
+func reload_config() -> void
+func request_embedding(text: String) -> PackedFloat32Array   # 一律 await
+```
+
+```text
+request_embedding("<text>") -> PackedFloat32Array  # 失敗一律回空陣列（未設定/逾時/連不上/格式不對），不 push_error、不丟例外
+
+† 跟 AIService 分開是刻意的：AIService 打玩家自己選的聊天 provider（Local／Cloud
+  二選一），這裡永遠打本機的 embedding-only llama-server，跟玩家選了哪個聊天
+  provider 無關——NPC 記憶內容送去語意檢索不該因為玩家選了雲端聊天 provider
+  就跟著送去雲端
+† 只信任 loopback 位址（_is_loopback_url()）：embedding.base_url 設定非本機位址
+  一律拒絕、退回 DEFAULT_EMBEDDING_BASE_URL，避免不知情下對雲端端點產生費用
+† max_redirects=0：loopback 伺服器自己回 301/302/303 導去外部網址時直接判定失敗，
+  不追蹤過去，避免繞過上面那條 loopback 限制
+† 呼叫頻率遠低於 AIService，不用它那套節點池／佇列／速率限制——每次呼叫各自建
+  一個 HTTPRequest 節點，用完即丟
+† embedding.base_url 要含 API 路徑字首（例如 llama-server 是 /v1）：
+  request_embedding() 直接把 base_url 跟 "/embeddings" 接起來打，不會自動補這段——
+  填裸 host（例如只填 http://127.0.0.1:8081）會打到不存在的路徑，靜默 404、
+  回空陣列，沒有任何錯誤訊息，範例見 data/ai_config.example.json 的
+  "http://127.0.0.1:8081/v1"
+→ 技術/LLM 串接與 AI 服務層「Embedding」
 ```
 
 ## DecisionContext — scripts/ai/decision_context.gd · class_name · RefCounted
@@ -1315,6 +1363,7 @@ schedule 插槽現為 {time, place, state}，是計畫結構的子集
 Vision 圓形無朝向；lost 無呼叫端
 Agent 不對 Stats 反應（get_lowest_need_place() 可用但無呼叫端）
 noise_heard 對話中會被吞掉；睡覺中的 Agent 沒有排除，一樣會冒 !?
+speech_heard（issue #669）同樣問題：對話中會被吞掉、睡覺中的 Agent 沒有排除
 SaveService 兩條實作並存：JsonSaveService（MVP 採用中）與 SqliteSaveService/DatabaseManager
   （非阻塞平行開發，見《99》P-26）；CharacterStatePersistence 已把 npc/npc_state/
   npc_inventory/npc_wallet 同步進 DATABASE_PATH，但 character_id／GameClock.day 本身

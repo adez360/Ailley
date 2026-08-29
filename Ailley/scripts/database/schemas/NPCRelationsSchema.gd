@@ -13,15 +13,13 @@ static func create(db) -> bool:
 
 		target_id TEXT NOT NULL,
 
-		relations_trust INTEGER NOT NULL DEFAULT 20
-			CHECK (
-				relations_trust BETWEEN 0 AND 100
-			),
-
 		relations_appearance_cache TEXT NOT NULL DEFAULT ''
 			CHECK (
 				length(relations_appearance_cache) <= 20
 			),
+
+		relations_met_count INTEGER NOT NULL DEFAULT 0
+			CHECK (relations_met_count >= 0),
 
 		updated_at TEXT NOT NULL
 			DEFAULT CURRENT_TIMESTAMP,

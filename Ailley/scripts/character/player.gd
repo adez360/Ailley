@@ -90,7 +90,10 @@ func _on_interact_area_body_exited(body: Node2D) -> void:
 func _on_noise_heard(_source: Character) -> void:
 	if is_dead or is_in_conversation():
 		return
-	say(L10n.t("DLG_NOISE_ALERT"))
+	# broadcast=false：這是系統 fallback 泡泡，不是玩家真的說了什麼，不該被
+	# 3 格內的 NPC 當成「聽到的對話」去反應、問一次決策——同 agent.gd 的理由，
+	# 見 character.gd::say() 的說明（CodeRabbit review 抓到，PR #674）
+	say(L10n.t("DLG_NOISE_ALERT"), false, false)
 
 # 打字是「這一輪有結果了」的其中一種來源，另一種是對話結束（見 exit_conversation()）。
 # 兩者收斂成同一個訊號，next_line() 才只要等一個東西。
@@ -110,8 +113,8 @@ func _on_line_submitted(text: String) -> void:
 # 只有真的有 next_line() 在等待時才需要 emit 取消——沒在等待時 emit 只會是
 # 發進沒人接的訊號（跟上面 _on_line_submitted() 同一個理由），順便清掉任何
 # 殘留的緩衝，不讓上一場對話沒送出的半句話流進下一場對話
-func exit_conversation() -> void:
-	super()
+func exit_conversation(reason: String = "") -> void:
+	super(reason)
 	_pending_lines.clear()
 	if _turn_waiting:
 		turn_resolved.emit("", false)
@@ -143,6 +146,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	if vending_menu != null and vending_menu.is_open():
 		return
 
+	# tip_menu 開著時同理 vending_menu（CodeRabbit review 抓到）：漏了這道
+	# guard 的話，Player 這裡會搶先吃掉 interact／ui_cancel 事件、呼叫
+	# set_input_as_handled()，tip_menu.gd 自己的 _unhandled_input() 永遠輪
+	# 不到、選單關不掉
+	var tip_menu := get_tree().get_first_node_in_group("tip_menu")
+	if tip_menu != null and tip_menu.is_open():
+		return
+
 	get_viewport().set_input_as_handled()
 
 	if is_in_conversation():
@@ -157,34 +168,73 @@ func _unhandled_input(event: InputEvent) -> void:
 	var candidates := _get_interact_candidates()
 	var workstation: Workstation = candidates["workstation"]
 	var machine: VendingMachine = candidates["machine"]
+	var downed: Character = candidates["downed"]
 	var other: Character = candidates["other"]
 
 	# 失敗要往下掉到搭話，不是直接 return。工作站被別人佔用（WORK_OCCUPIED）
 	# 或自己正在工作（WORK_BUSY）時直接 return 的話，E 整個沒反應 ——
 	# 玩家連站在眼前那個正在工作的人都搭不了話
 	if workstation != null and candidates["to_work"] <= candidates["to_machine"] \
+			and candidates["to_work"] <= candidates["to_downed"] \
 			and candidates["to_work"] <= candidates["to_other"]:
 		var work_reason := work_at(workstation)
 		if work_reason == WORK_OK:
 			return
 		if other == null:
-			report_action_failure("work_at", work_reason)
+			_report_work_failure(workstation, work_reason)
 			return
-		# 工作失敗但旁邊還有人可以搭話——先試搭話，兩邊都失敗才回報，
-		# 不然「工作站被佔用」跟「搭話失敗」會疊成兩則訊息一起蹦出來
+		# 工作失敗但旁邊還有人可以互動——對方正在表演的話跟下面主路徑同一種
+		# 判斷，開打賞選單而不是搭話（CodeRabbit review 抓到：這條 return
+		# 分支原本會搶在下面的 tip_menu 判斷之前結束，讓表演中的人在這裡
+		# 只能被搭話，開不了打賞選單）
+		if other.is_performing() and tip_menu != null:
+			tip_menu.open(other, self)
+			return
+		# 否則先試搭話，兩邊都失敗才回報，不然「工作站被佔用」跟「搭話失敗」
+		# 會疊成兩則訊息一起蹦出來
 		if talk_to(other) != TALK_OK:
-			report_action_failure("work_at", work_reason)
+			_report_work_failure(workstation, work_reason)
 		return
 	# 販賣機不是立刻執行動作，是開商品選單——真正的購買發生在
 	# vending_menu.gd 裡點下某一項的時候。vending_menu 理論上一定找得到
 	# （場景裡固定掛著），這裡多防一手是避免場景漏掛的話直接炸掉
-	elif machine != null and candidates["to_machine"] <= candidates["to_other"] and vending_menu != null:
+	elif machine != null and candidates["to_machine"] <= candidates["to_downed"] \
+			and candidates["to_machine"] <= candidates["to_other"] and vending_menu != null:
 		vending_menu.open(machine, self)
+		return
+	# 昏迷角色跟可搭話對象互斥（見 _get_interact_candidates() 的說明），
+	# 這裡不是比大小決優先序，純粹是「範圍內有沒有昏迷者」決定 E 是搬運
+	# 還是搭話（issue #637）
+	elif downed != null and candidates["to_downed"] <= candidates["to_other"]:
+		var haul_reason := start_haul(downed)
+		if haul_reason != HAUL_OK:
+			report_action_failure("start_haul", haul_reason)
+		return
+
+	# 對方正在表演時，E 開的是打賞選單而不是搭話——玩家（天神）主動打賞是
+	# 全新的 UI 互動，直接呼叫 Inventory.add_money()，不走 AI 決策（#575 拍板）。
+	# tip_menu 理論上一定找得到（場景裡固定掛著），跟 vending_menu 同一種
+	# 「多防一手」寫法，避免場景漏掛時直接炸掉。變數在函式開頭已經宣告過
+	# 一次（給上面關閉選單那道 guard 用），這裡直接沿用，不重複宣告
+	if other != null and other.is_performing() and tip_menu != null:
+		tip_menu.open(other, self)
 		return
 
 	var talk_reason := talk_to(other)
 	if talk_reason != TALK_OK:
 		report_action_failure("talk_to", talk_reason)
+
+## work_at() 失敗的回報——WORK_OCCUPIED 額外算出還要等幾分鐘（issue #663），
+## 比通用的 FAIL_OCCUPIED 訊息更有用：玩家才知道該站在這裡等還是先去做別的
+## 事。其餘原因碼（TOO_FAR／BUSY／TARGET_NOT_FOUND）沒有額外資訊可加，照走
+## report_action_failure() 既有的通用路徑
+func _report_work_failure(workstation: Workstation, reason: String) -> void:
+	if reason != WORK_OCCUPIED:
+		report_action_failure("work_at", reason)
+		return
+	var minutes := workstation.get_wait_minutes()
+	push_warning("%s: work_at 失敗（%s，還要 %d 分鐘）" % [character_name, reason, minutes])
+	say(L10n.tf("FAIL_OCCUPIED_WITH_TIME", {"minutes": minutes}))
 
 # 面向判定的錐角容許值：跟面向方向的內積要 >= 這個值才算「面對著」。
 # 0.5 大約是 ±60 度的錐角——夠寬容得下斜向靠近的誤差，又不會寬到整個
@@ -199,7 +249,7 @@ func _is_facing(target: Vector2) -> bool:
 		return true
 	return get_facing_direction().dot(to_target.normalized()) >= FACING_DOT_THRESHOLD
 
-## 找出目前附近的三種互動候選（工作站／販賣機／可搭話的人）跟各自的距離。
+## 找出目前附近的四種互動候選（工作站／販賣機／昏迷角色／可搭話的人）跟各自的距離。
 ## `_unhandled_input()`（按 E 真的觸發）跟 `_process()`（每幀更新高亮）共用
 ## 這個函式——兩邊要看到同一個答案，不然會出現「亮的是這個，按下去卻打到
 ## 另一個」的狀況，比原本沒有高亮更誤導人。
@@ -208,7 +258,7 @@ func _is_facing(target: Vector2) -> bool:
 ## 落在某個地點錨點的互動半徑內（`square` 那張距錨點 21px < WORK_RANGE 32），
 ## agent 的行程又正好把 NPC 帶去那些錨點，NPC 幾乎必然比物件更近，物件因此
 ## 永遠打不到。改成先用 `_is_facing()` 把沒面向的候選直接排除，玩家沒面向
-## 任何東西時三個候選都是 null——這是刻意拍板的硬性門檻，不是「面向只影響
+## 任何東西時四個候選都是 null——這是刻意拍板的硬性門檻，不是「面向只影響
 ## 排序」：站在物件正上方但背對著，不該選得到它，玩家得自己轉身面對。
 ##
 ## 這套判斷沒有做成套用任何「可互動物件」共通分類的通用系統，是延續 #63
@@ -220,20 +270,31 @@ func _is_facing(target: Vector2) -> bool:
 ## 呼叫都掃過整個 group 的寫法。角色候選改用 vision.get_visible_characters()，
 ## 不另開一個 Area2D（issue #109 拍板，見 note/技術/talk 動作設計.md）——
 ## 反正 talk_to() 已經要做視線判定，搭話候選跟著視線走沒理由重複維護兩份
+##
+## 昏迷角色（`downed`）跟可搭話對象（`other`）從同一份 vision 清單分流、互斥——
+## 昏迷者不進 `other`：talk_to() 沒有擋昏迷目標（is_talk_interruptible() 只看
+## _working／is_dead），兩邊都收會讓同一個人同時是搭話候選又是搬運候選，
+## 距離又剛好一樣（HAUL_RANGE == TALK_RANGE），還得另外決哪個優先。分流後
+## 兩邊各自呼叫一次 _nearest_facing()，跟 workstation／machine 同一種寫法（issue #637）
 func _get_interact_candidates() -> Dictionary:
 	var workstation := _nearest_facing(_nearby_group("workstations"), WORK_RANGE, func(n): return n.global_position) as Workstation
 	var machine := _nearest_facing(_nearby_group("vending_machines"), BUY_RANGE, func(n): return n.global_position) as VendingMachine
 	var visible_characters: Array = vision.get_visible_characters() if vision != null else []
-	var other := _nearest_facing(visible_characters, TALK_RANGE, func(n): return (n as Character).get_body_position()) as Character
+	var downed_characters := visible_characters.filter(func(n): return (n as Character).has_condition(CONDITION_INCAPACITATED))
+	var talkable_characters := visible_characters.filter(func(n): return not (n as Character).has_condition(CONDITION_INCAPACITATED))
+	var downed := _nearest_facing(downed_characters, HAUL_RANGE, func(n): return (n as Character).get_body_position()) as Character
+	var other := _nearest_facing(talkable_characters, TALK_RANGE, func(n): return (n as Character).get_body_position()) as Character
 
 	# 不在範圍內／沒被面向的候選距離是 INF，直接輸掉比較，不用另外再寫一層
 	# null 判斷
 	return {
 		"workstation": workstation,
 		"machine": machine,
+		"downed": downed,
 		"other": other,
 		"to_work": get_body_position().distance_to(workstation.global_position) if workstation != null else INF,
 		"to_machine": get_body_position().distance_to(machine.global_position) if machine != null else INF,
+		"to_downed": get_body_position().distance_to(downed.get_body_position()) if downed != null else INF,
 		"to_other": get_body_position().distance_to(other.get_body_position()) if other != null else INF,
 	}
 
@@ -283,12 +344,16 @@ var _highlighted_other: Character = null
 
 func _process(_delta: float) -> void:
 	var vending_menu := get_tree().get_first_node_in_group("vending_menu")
+	var tip_menu := get_tree().get_first_node_in_group("tip_menu")
 
-	# 選單開著時 E 是關閉選單（見 vending_menu.gd 自己的 _unhandled_input），
-	# 不是這三個候選裡的任何一個——選單不擋移動，玩家開著選單照樣能走位/轉向，
-	# 這裡不擋的話高亮會跟著跳來跳去，暗示 E 現在會搭話/工作，實際上按下去
-	# 只會關掉選單，跟對話中不顯示互動高亮是同一個理由
-	if is_in_conversation() or (vending_menu != null and vending_menu.is_open()):
+	# 選單開著時 E 是關閉選單（見 vending_menu.gd／tip_menu.gd 自己的
+	# _unhandled_input），不是這三個候選裡的任何一個——選單不擋移動，玩家
+	# 開著選單照樣能走位/轉向，這裡不擋的話高亮會跟著跳來跳去，暗示 E 現在
+	# 會搭話/工作，實際上按下去只會關掉選單，跟對話中不顯示互動高亮是同一個
+	# 理由。tip_menu 漏了這道 guard 會讓表演者在選單開著時還被畫成「可以互動」
+	# （CodeRabbit review 抓到）
+	if is_in_conversation() or (vending_menu != null and vending_menu.is_open()) \
+			or (tip_menu != null and tip_menu.is_open()):
 		_set_highlighted_workstation(null)
 		_set_highlighted_machine(null)
 		_set_highlighted_other(null)
@@ -297,6 +362,7 @@ func _process(_delta: float) -> void:
 	var candidates := _get_interact_candidates()
 	var workstation: Workstation = candidates["workstation"]
 	var machine: VendingMachine = candidates["machine"]
+	var downed: Character = candidates["downed"]
 	var other: Character = candidates["other"]
 
 	var target_workstation: Workstation = null
@@ -307,12 +373,19 @@ func _process(_delta: float) -> void:
 	# 重試那段——重試只在真的按下 E、真的失敗時才有意義，高亮只回答
 	# 「等一下按下去會先試誰」。machine 分支的 vending_menu != null 防呆
 	# 也要跟 _unhandled_input() 對齊：場景漏掛選單節點時那邊會直接退回
-	# 搭話，這裡不跟著擋的話高亮會亮著販賣機、但按下去其實打到人
+	# 搭話，這裡不跟著擋的話高亮會亮著販賣機、但按下去其實打到人。
+	# downed 併進 target_other（沿用同一個高亮 setter）——玩家看到的只是
+	# 「這個人會被 E 打到」，會搬運還是搭話由 _unhandled_input() 決定，
+	# 高亮視覺不用另外分兩種（issue #637）
 	if workstation != null and candidates["to_work"] <= candidates["to_machine"] \
+			and candidates["to_work"] <= candidates["to_downed"] \
 			and candidates["to_work"] <= candidates["to_other"]:
 		target_workstation = workstation
-	elif machine != null and candidates["to_machine"] <= candidates["to_other"] and vending_menu != null:
+	elif machine != null and candidates["to_machine"] <= candidates["to_downed"] \
+			and candidates["to_machine"] <= candidates["to_other"] and vending_menu != null:
 		target_machine = machine
+	elif downed != null and candidates["to_downed"] <= candidates["to_other"]:
+		target_other = downed
 	elif other != null:
 		target_other = other
 
@@ -404,6 +477,11 @@ func _decide_velocity() -> Vector2:
 # leave_conversation()（_unhandled_input 的 interact 分支），所以這裡固定 false
 func next_line(listener: Character, _turns: Array[Dictionary], _max_turns: int) -> Dictionary:
 	if not _pending_lines.is_empty():
+		# 型別標註不能省：Array[String].pop_front() 的靜態分析器認不出元素型別，
+		# := 推論會得到 Variant，這台編輯器把「從 Variant 推論」警告當錯誤看，
+		# 導致這個檔案編譯失敗、連帶讓依賴它的腳本（同繼承 Character 的 Agent）
+		# 一起被判定「depended script 編譯失敗」——跟 #477 無關，是解除驗證阻塞
+		# 順手修的既有問題
 		var line: String = _pending_lines.pop_front()
 		return {"ok": true, "line": line, "end": false}
 
