@@ -186,11 +186,13 @@ schema 欄位名稱、是否要額外佔用一次 AI 呼叫頻率配額（見《
 
 候選角色偵測（原本 `character.gd` 裡找最近角色的方法，未曾被 `player.gd` 實際呼叫過、
 是死代碼，已移除）改成 `player.gd` 直接濾 `Vision.get_visible_characters()`——反正都要
-視線判定，沒理由重複維護兩份。工作站／販賣機的候選則改用 `player.gd` 新增的
+視線判定，沒理由重複維護兩份。工作站的候選則改用 `player.gd` 新增的
 `InteractArea`（`Area2D`，半徑 `maxf(WORK_RANGE, TALK_RANGE, BUY_RANGE)`，動態算不寫死），
-偵測 `project.godot` 新增的 `interactable` collision layer（`workstation.tscn`／
-`vending_machine.tscn` 的 `collision_layer` 從純 `terrain` 改成 `terrain | interactable`，
-NavGrid 的障礙判定只查 `terrain`，不受影響），取代原本每次呼叫都掃過整個 group 的寫法。
+偵測 `project.godot` 新增的 `interactable` collision layer（`workstation.tscn` 的
+`collision_layer` 從純 `terrain` 改成 `terrain | interactable`，NavGrid 的障礙判定
+只查 `terrain`，不受影響），取代原本每次呼叫都掃過整個 group 的寫法。商店（issue #572
+後不再是場上物件）不走這條 `InteractArea` 路徑，`_nearest_shop_place()` 直接對
+`SHOP_PLACES` 逐一比 `PlaceAnchors` 錨點距離，見 [[販賣機]]。
 
 ## 已定案的參數
 

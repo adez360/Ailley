@@ -550,7 +550,7 @@ static func _validate_appointment(data: Variant, now_minutes: int) -> Dictionary
 	})
 
 
-## 打賞金額夾制範圍（#575）。上界參考 vending_machine.gd 既有商品定價量級
+## 打賞金額夾制範圍（#575）。上界參考 world/shop.gd 既有商品定價量級
 ## （2～25），下界取 1（不接受 0 元的「假打賞」，那該用 give=false 表達）。
 ## 沒有跟 WORK_PAYMENT（50，一次工作的收入）同量級——打賞是路人隨興給的
 ## 小錢，不該比認真做一次工作賺得還多
