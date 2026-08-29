@@ -178,6 +178,7 @@ const FAILURE_MESSAGE_KEYS := {
 	"NO_SPACE": "FAIL_NO_SPACE",
 	"NO_SELECTION": "FAIL_NO_SELECTION",
 	"IS_DEAD": "FAIL_IS_DEAD",
+	"TARGET_NOT_DEAD": "FAIL_TARGET_NOT_DEAD",
 }
 
 ## 滑鼠指到時套在 sprite 上的描邊
@@ -975,6 +976,100 @@ func _erect_unmarked_grave() -> void:
 	print_debug("Character %s 腐壞見底，自動立無名碑" % character_name)
 
 
+# ---- 復活（issue #386，《規格書09》§8） ----
+
+## 免費復活窗口：死亡後 24 現實小時內，判斷依據是 death_at（真實 UTC 時間戳，
+## 不是遊戲內 tick／day）——世界關閉、暫停或調整時間流速都不影響這個判斷
+const REVIVE_FREE_WINDOW_HOURS := 24.0
+
+## 付費復活的固定金額（2026-08-27 拍板暫定值，待經濟數值實測後調整，見
+## note/規格書/09_死亡屍體與墓園.md §8）：不隨時間遞增、不隨角色地位浮動，
+## 依 is_buried 選一般或較高金額，兩者互斥二選一，不疊加
+const REVIVE_FEE_NORMAL := 50
+const REVIVE_FEE_BURIED := 100
+
+## 跟 BURY_RANGE／HUNT_RANGE 同一種「2 格內」距離門檻
+const REVIVE_RANGE := 32.0
+
+const REVIVE_OK := ""
+const REVIVE_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
+const REVIVE_TARGET_IS_SELF := "TARGET_IS_SELF"
+const REVIVE_TARGET_NOT_DEAD := "TARGET_NOT_DEAD"
+const REVIVE_TOO_FAR := "TOO_FAR"
+## 跟 Inventory.MONEY_NOT_ENOUGH 用同一個字串——這樣 FAILURE_MESSAGE_KEYS
+## 既有的 "NOT_ENOUGH" → FAIL_NOT_ENOUGH 對照可以直接沿用，不用另外註冊一筆
+const REVIVE_NOT_ENOUGH_MONEY := "NOT_ENOUGH"
+
+## 復活。self 是掏錢做這件事的天神（Player），corpse 是要復活的屍體——跟
+## bury() 同一種寫法：一路檢查，任何一關不過就回失敗碼，全過才真的寫入狀態。
+## 24 小時內免費，超過就從 self 的 inventory 扣款——付錢的是操作復活的玩家，
+## 不是屍體本人，死人沒有錢包可扣。未下葬與已下葬同一套流程判定，只有超過
+## 免費窗口時的金額不同（見《規格書09》§8）
+func revive(corpse: Character) -> String:
+	if corpse == null or not is_instance_valid(corpse):
+		return REVIVE_TARGET_NOT_FOUND
+	if corpse == self:
+		return REVIVE_TARGET_IS_SELF
+	if not corpse.is_dead:
+		return REVIVE_TARGET_NOT_DEAD
+	if get_body_position().distance_to(corpse.get_body_position()) > REVIVE_RANGE:
+		return REVIVE_TOO_FAR
+
+	if not corpse._is_within_free_revival_window():
+		var fee := REVIVE_FEE_BURIED if corpse.is_buried else REVIVE_FEE_NORMAL
+		if inventory == null or inventory.spend(fee) != Inventory.MONEY_OK:
+			return REVIVE_NOT_ENOUGH_MONEY
+
+	corpse._clear_death_state()
+	# 恢復到安全值，跟 _complete_treatment()（昏迷治療完成）同一套「安全水平」
+	# 數字，理由見那邊：避免復活完立刻又因為某項生理數值歸零重新觸發 condition
+	if corpse.stats != null:
+		corpse.stats.set_value("health", 50.0)
+		corpse.stats.set_value("injury", 0.0)
+		corpse.stats.set_value("alcohol", 0.0)
+		corpse.stats.set_value("satiety", 50.0)
+		corpse.stats.set_value("hydration", 50.0)
+		corpse.stats.set_value("stamina", EXHAUSTION_RECOVERY_THRESHOLD + 1.0)
+		corpse.stats.set_value("wakefulness", 50.0)
+		corpse.stats.set_value("hygiene", 50.0)
+
+	# 事實句只有 Agent 有 AI 決策迴圈可以注入——Player 沒有 _push_daily_event()，
+	# 跟 haul()／stop_haul() 通知搬運事件同一種 is_in_group("agents") 判斷寫法
+	if corpse.is_in_group("agents"):
+		(corpse as Agent)._push_daily_event("你被天神復活了，你知道是天神把你救回來的。")
+
+	print_debug("Character %s 被 %s 復活了" % [corpse.character_name, character_name])
+	return REVIVE_OK
+
+## death_at（真實 UTC 時間戳）距現在是否在 24 小時內。death_at 理論上一定
+## 有值（is_dead=true 時 _die()／load_save_data() 都會寫入），空字串防呆視為
+## 已逾期——沒有時間戳就沒辦法判斷「免費」，寧可保守收費也不要誤放行
+func _is_within_free_revival_window() -> bool:
+	if death_at.is_empty():
+		return false
+	var death_unix := Time.get_unix_time_from_datetime_string(death_at.trim_suffix("Z"))
+	var now_unix := Time.get_unix_time_from_system()
+	return now_unix - death_unix <= REVIVE_FREE_WINDOW_HOURS * 3600.0
+
+## 死亡欄位與外觀全部清空，回到「活人」狀態——load_save_data() 讀到 is_dead=false
+## 存檔、以及 revive() 復活成功時共用同一套清理，避免兩處各自維護一份一樣的
+## 欄位清單
+func _clear_death_state() -> void:
+	conditions = conditions.filter(func(c): return c["type"] != CONDITION_PETRIFIED)
+	_apply_death_tint(false)
+	is_dead = false
+	death_tick = -1
+	death_day = -1
+	death_at = ""
+	death_cause = ""
+	death_location_id = ""
+	last_words = null
+	corpse_decay = 0.0
+	is_buried = false
+	grave_id = null
+	buried_by = null
+	buried_tick = -1
+	is_anonymous = false
 # ---- 打獵 ----
 
 const HUNT_RANGE := 32.0		# 跟 ATTACK_RANGE／BURY_RANGE 同一種距離門檻，2 格
@@ -1965,21 +2060,10 @@ func load_save_data(data: Dictionary) -> void:
 		# 還原成活人存檔時清掉死亡殘留（CodeRabbit review 抓到）：同一個 Character
 		# 節點先前若死過（例如 debug 重新載入另一份存活存檔），petrified 與灰階
 		# 只在上面 is_dead 分支寫入，不會因為這次 is_dead=false 自動消失——不清的話
-		# 會出現 is_dead=false 但外觀／conditions 仍是死屍的矛盾狀態
-		conditions = conditions.filter(func(c): return c["type"] != CONDITION_PETRIFIED)
-		_apply_death_tint(false)
-		death_tick = -1
-		death_day = -1
-		death_at = ""
-		death_cause = ""
-		death_location_id = ""
-		last_words = null
-		corpse_decay = 0.0
-		is_buried = false
-		grave_id = null
-		buried_by = null
-		buried_tick = -1
-		is_anonymous = false
+		# 會出現 is_dead=false 但外觀／conditions 仍是死屍的矛盾狀態。跟 revive()
+		# 共用同一套清理（見該函式），存讀檔與真的復活是同一件事：把死亡欄位
+		# 與外觀恢復成活人狀態
+		_clear_death_state()
 
 	# 治療與昏迷互斥（見 _send_to_herb_shop_for_treatment()），治療中的存檔優先還原成治療狀態，
 	# 不重建 CONDITION_INCAPACITATED；只有「昏迷中但還沒送醫」才需要重建。死亡是終局，

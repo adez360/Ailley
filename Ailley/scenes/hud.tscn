@@ -1,4 +1,4 @@
-[gd_scene load_steps=27 format=3 uid="uid://wo0a0v2y4gj1"]
+[gd_scene load_steps=26 format=3 uid="uid://wo0a0v2y4gj1"]
 
 [ext_resource type="Theme" uid="uid://dktke2k785jv0" path="res://assets/ui/ailley_theme.tres" id="1_3swnk"]
 [ext_resource type="PackedScene" uid="uid://cyrnw30ddh16r" path="res://scenes/debug_console.tscn" id="1_mphia"]
@@ -12,13 +12,12 @@
 [ext_resource type="Script" uid="uid://hism2nudt3ss" path="res://scripts/ui/hotbar.gd" id="7_qkknv"]
 [ext_resource type="Script" uid="uid://c6630bjn71tla" path="res://scripts/ui/clock_hud.gd" id="8_5357l"]
 [ext_resource type="PackedScene" uid="uid://cefpexpl7arvm" path="res://scenes/character_create.tscn" id="8_uxdf7"]
-[ext_resource type="PackedScene" uid="uid://xqribn8mdubp" path="res://scenes/character_library.tscn" id="9_5357l"]
 [ext_resource type="Texture2D" uid="uid://cy4w176sb7s0o" path="res://assets/ui/HUD.png" id="9_iypfu"]
 [ext_resource type="Script" uid="uid://djdfer2luq3s5" path="res://scripts/ui/pause.gd" id="10_iypfu"]
 [ext_resource type="PackedScene" uid="uid://d3no1g5djdk2s" path="res://scenes/god_stone_input.tscn" id="11_0m4u7"]
 [ext_resource type="PackedScene" uid="uid://ccx0ctgkyuok1" path="res://scenes/persuade_dialog.tscn" id="13_5n1hp"]
 [ext_resource type="Script" uid="uid://lutrmlqpql7v" path="res://scripts/ui/epitaph_input.gd" id="14_eld54"]
-[ext_resource type="Script" uid="uid://dd0c5rk3hycom" path="res://scripts/ui/character_sidebar.gd" id="18_5357l"]
+[ext_resource type="PackedScene" uid="uid://byam6jwe3kml6" path="res://scenes/ui/side_bar.tscn" id="18_5357l"]
 [ext_resource type="PackedScene" uid="uid://c8x8h4qofhqg2" path="res://scenes/tip_menu.tscn" id="14_tipmn"]
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_iypfu"]
@@ -367,16 +366,13 @@ columns = 9
 
 [node name="CharacterCreate" parent="." instance=ExtResource("8_uxdf7")]
 
-[node name="CharacterLibrary" parent="." instance=ExtResource("9_5357l")]
-
 [node name="GodStoneInput" parent="." instance=ExtResource("11_0m4u7")]
 
 [node name="PersuadeDialog" parent="." instance=ExtResource("13_5n1hp")]
 
 [node name="TipMenu" parent="." instance=ExtResource("14_tipmn")]
 
-[node name="CharacterSidebar" type="CanvasLayer" parent="."]
-script = ExtResource("18_5357l")
+[node name="CharacterSidebar" parent="." instance=ExtResource("18_5357l")]
 
 [node name="EpitaphInput" type="CanvasLayer" parent="."]
 script = ExtResource("14_eld54")

@@ -482,7 +482,7 @@ injury       傷勢     0.5    0       0      ✗        ""
 ```gdscript
 const TRUST_MIN := 0.0 · TRUST_MAX := 100.0
 const APPEARANCE_MAX_CHARS := 20
-const DEFAULT_RECORD := {"trust": 20.0, "met_count": 0, "appearance_cache": ""}
+const DEFAULT_RECORD := {"trust": 20.0, "met_count": 0, "appearance_cache": "", "last_seen": -1}
 var records := {}                            # other_id -> record
 
 # 唯讀 — 不會建立紀錄
@@ -492,6 +492,7 @@ func get_record(other_id) -> Dictionary      # 副本，改它不會動到內部
 func get_trust(other_id) -> float            # 沒紀錄回 20.0（不是 0——初識不是完全不信任）
 func get_met_count(other_id) -> int
 func get_appearance_cache(other_id) -> String # 沒紀錄回 ""
+func get_last_seen(other_id) -> int          # 上次 note_meeting() 的 GameClock.day，-1=從沒見過（不可當合法天數算差值，先查 has_met()）
 func known_ids() -> Array
 
 # 寫入 — 走私有的 _ensure_record()

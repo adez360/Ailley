@@ -241,33 +241,45 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 
 # ---- 角色庫（#122，玩家自建角色）----
 
-# 把建角面板 collect() 出來的資料轉成角色庫的一筆紀錄並存進去。面板只負責
-# 蒐集資料（character_create.gd 的既有原則），存檔驗證→角色生成→角色庫這段
-# 管線接在這裡，由 character_create.gd 開場連的 character_saved 訊號觸發
+# 把建角面板 collect() 出來的資料存成角色庫一筆新模板。面板只負責蒐集資料
+# （character_create.gd 的既有原則），存檔驗證→角色生成→角色庫這段管線接在
+# 這裡，由 character_create.gd 開場連的 character_saved 訊號觸發。
+#
+# 角色庫現在是純模板概念：套用模板（character_create.gd::apply_template()）
+# 只是把資料帶回表單當起點，不是「打開來改」，所以這裡永遠新增一筆，
+# 不會有「這筆 data 其實是要覆蓋既有紀錄」的分支
 func receive_created_character(data: Dictionary) -> void:
-	# collect() 帶 "id" 代表面板走的是 edit()（規格書 05 §7-1「編輯」），
-	# 要原地覆蓋既有那筆，不是新增——不然編輯一次角色庫就多一筆同名孤兒紀錄，
-	# 而且會再打一次一次性的 words_to_creator（CodeRabbit review 抓到）
-	var editing_id := str(data.get("id", ""))
-	var existing := get_library_entry(editing_id) if not editing_id.is_empty() else {}
+	_append_library_entry(data)
 
-	# 已投放的不可編輯（《05》§7-1）。面板端 edit() 只讀不到已投放的？不，
-	# 面板本身不擋——角色庫首頁才擋（編輯按鈕對已投放者 disabled），這裡是
-	# 資料層最後一道防線，跟 remove_from_library() 對已投放者的擋法一致
-	if not existing.is_empty() and existing.get("deployed", false):
-		push_warning("GameManager: %s 已投放，不能編輯" % existing["character_name"])
-		return
 
-	if existing.is_empty() and character_library.size() >= CHARACTER_LIBRARY_CAP:
+# 建角面板「投放」：資料先變成一筆模板（deployed=false），立刻借用
+# deploy_from_library() 生場上實體——DEPLOY_CAP／identity_assignments／
+# provider 重建那些邏輯不重寫一份。投放失敗（世界人數已滿）要把剛 append
+# 的那筆退掉，不留一筆「deployed=false 但其實使用者要投放」的孤兒模板
+func create_and_deploy_character(data: Dictionary) -> Character:
+	var id := _append_library_entry(data)
+	if id.is_empty():
+		return null
+	var character := deploy_from_library(id)
+	if character == null:
+		remove_from_library(id)
+	return character
+
+
+# receive_created_character()／create_and_deploy_character() 共用的建立邏輯：
+# 把表單資料組成一筆角色庫紀錄、append、觸發一次性的 words_to_creator。
+# 回傳新紀錄的 id；角色庫已滿存不進去則回傳空字串
+func _append_library_entry(data: Dictionary) -> String:
+	if character_library.size() >= CHARACTER_LIBRARY_CAP:
 		push_warning("GameManager: 角色庫已滿（上限 %d），%s 沒有存進去" % [CHARACTER_LIBRARY_CAP, data.get("character_name", "")])
-		return
+		return ""
 
 	var hexaco := {}
 	for key in ["hex_honesty", "hex_emotionality", "hex_extraversion", "hex_agreeableness", "hex_conscientiousness", "hex_openness"]:
 		hexaco[key] = data.get(key, 50)
 	var description := str(data.get("character", ""))
 
-	var id: String = existing["id"] if not existing.is_empty() else Character.generate_id()
+	var id := Character.generate_id()
 	var persona := Personality.from_identity({"hexaco": hexaco, "character": description}, id)
 
 	var entry := {
@@ -286,17 +298,13 @@ func receive_created_character(data: Dictionary) -> void:
 		"appearance_style_index": int(data.get("appearance_style_index", -1)),
 		"personality": persona["personality"],
 		"system_prompt": persona["system_prompt"],
-		# 編輯時沿用既有的 words_to_creator——人格改了不代表要重打一次
-		# 只在建立當下才有意義的一次性 AI 呼叫
-		"words_to_creator": str(existing.get("words_to_creator", "")),
+		"words_to_creator": "",
 		"deployed": false,
 	}
 
-	if existing.is_empty():
-		character_library.append(entry)
-		_generate_words_to_creator(entry)
-	else:
-		character_library[character_library.find(existing)] = entry
+	character_library.append(entry)
+	_generate_words_to_creator(entry)
+	return id
 
 
 # 建角完成當下打一次的 AI 呼叫（規格書 05 流程圖 ⑤），跟 plan/dialogue/
@@ -371,19 +379,6 @@ func remove_from_library(id: String) -> bool:
 			return true
 	return false
 
-
-# 複製一份，新 id、名字加後綴、投放狀態重置（《05》§7-1「複製」）
-func duplicate_library_entry(id: String) -> Dictionary:
-	var source := get_library_entry(id)
-	if source.is_empty() or character_library.size() >= CHARACTER_LIBRARY_CAP:
-		return {}
-
-	var copy := source.duplicate(true)
-	copy["id"] = Character.generate_id()
-	copy["character_name"] = source["character_name"] + L10n.t("UI_CL_COPY_SUFFIX")
-	copy["deployed"] = false
-	character_library.append(copy)
-	return copy
 
 
 # 投放：把角色庫的靈魂生成這個世界的肉體副本（《05》§7-2、§7-3）。已投放的
