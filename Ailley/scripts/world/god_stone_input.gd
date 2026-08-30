@@ -136,6 +136,15 @@ func _set_open(open: bool) -> void:
 		input.grab_focus()
 	else:
 		input.release_focus()
+		# 面板開著時輸入法（常見於中文注音，WASD 剛好落在組字鍵位）合成/選字
+		# 期間，鍵盤放開事件可能沒有正常送達 Input 單例，導致對應 action 卡在
+		# 按著的狀態，關閉面板後角色會不受控地持續往該方向走（issue #756）。
+		# 強制歸零這四個 action：若玩家其實還按著，OS 按鍵重複很快會再送一次
+		# keydown 把狀態救回來，代價只是極短暫的停頓
+		Input.action_release("move_up")
+		Input.action_release("move_down")
+		Input.action_release("move_left")
+		Input.action_release("move_right")
 
 func _update_status() -> void:
 	if _cooldown_remaining > 0.0:
