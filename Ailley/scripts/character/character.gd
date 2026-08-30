@@ -135,11 +135,16 @@ const HAUL_TOO_FAR := "TOO_FAR"
 
 const ATTACK_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE／GIVE_RANGE 一樣的距離門檻，2 格
 
-## attack() 的失敗原因碼，形狀比照 GIVE_*
+## attack() 的失敗原因碼，形狀比照 GIVE_*。IS_DEAD 是「攻擊者是死屍」
+## （CodeRabbit review 抓到，PR #763）——死屍不能發起攻擊，跟 talk_to()／
+## use_selected_item() 擋自己這側同一種漏洞、同一種修法：is_dead 之後沒有
+## 任何地方會停用玩家的 _unhandled_input()，死屍照樣能右鍵開打。
+## 注意只擋攻擊者這一側：攻擊死屍（other.is_dead）的既有行為不變
 const ATTACK_OK := ""
 const ATTACK_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
 const ATTACK_TARGET_IS_SELF := "TARGET_IS_SELF"
 const ATTACK_TOO_FAR := "TOO_FAR"
+const ATTACK_IS_DEAD := "IS_DEAD"		# 失敗原因碼沿用共用詞彙表，FAILURE_MESSAGE_KEYS 已有 IS_DEAD 對應
 
 ## 命中的數值效果（《99》P-28 已定案）：必中，MVP 不做閃避／格擋，
 ## 不像 steal／persuade 等動作走 agent.gd 的 SUCCESS_PARAMS 擲骰
@@ -1805,12 +1810,12 @@ func give_to(other: Character, item_id: String, count: int = 1) -> String:
 	return GIVE_OK
 
 
-# ---- 攻擊 ----
-
-## 攻擊命中必中——跟 steal／persuade 等動作不同，不依《01-2》§2 通用成功率
-## 公式擲骰，P-28 已拍板 MVP 不做閃避／格擋。硬規則只檢查目標是否存在、
-## 距離夠不夠近；命中後直接套用數值、強制中斷對方目前行動
 func attack(other: Character) -> String:
+	# 死屍不能發起攻擊（跟 talk_to()／use_selected_item() 擋自己這側同一種
+	# 修法）：is_dead 之後沒有任何地方會停用玩家的 _unhandled_input()，死屍
+	# 照樣能右鍵開打。只擋攻擊者這一側，攻擊死屍（other.is_dead）的既有行為不變
+	if is_dead:
+		return ATTACK_IS_DEAD
 	if other == null:
 		return ATTACK_TARGET_NOT_FOUND
 	if other == self:
