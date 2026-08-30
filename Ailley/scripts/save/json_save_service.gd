@@ -1,7 +1,8 @@
 extends "res://scripts/save/save_service.gd"
 
-## SaveService 的 JSON 實作：一個角色／世界各自一個 JSON 檔，存在 user://saves/
-## 底下（跟 ai_config.json 同一層 user://，但分子目錄避免混在一起）。
+## SaveService 的 JSON 實作：一個角色／世界各自一個 JSON 檔，存在
+## user://saves_<hash>/ 底下（跟 ai_config.json 同一層 user://，但分子目錄
+## 避免混在一起；hash 依 checkout 隔離，見 CHARACTERS_DIR/WORLDS_DIR）。
 ##
 ## 只管檔案讀寫與 version 欄位遞增，不知道 character／world 的資料形狀——那是
 ## 呼叫端（Character.get_save_data() 等）的事，這裡收到什麼 Dictionary 就存什麼，
@@ -43,10 +44,19 @@ extends "res://scripts/save/save_service.gd"
 ## ——這個專案單機、最多兩個 process 會碰同一份存檔，用不到為了這個機率去接
 ## 原生擴充套件換真正的系統鎖。
 
-const CHARACTERS_DIR := "user://saves/characters"
-const WORLDS_DIR := "user://saves/worlds"
+## user:// 只依 project.godot 的 project name 解析，不分 worktree/checkout，
+## 跟 DatabaseManager.DATABASE_PATH（issue #334）同一個病根：用這個 checkout
+## 的 res:// 絕對路徑算完整 sha256 接在子目錄後，讓不同 checkout 落地成不同
+## 實體檔案，不會互相覆寫（issue #769）
+var CHARACTERS_DIR := _compute_saves_dir("characters")
+var WORLDS_DIR := _compute_saves_dir("worlds")
 const LOCK_SUFFIX := ".lock"
 const LOCK_INFO_FILENAME := "info.json"
+
+
+static func _compute_saves_dir(kind: String) -> String:
+	var checkout_hash := ProjectSettings.globalize_path("res://").sha256_text()
+	return "user://saves_%s/%s" % [checkout_hash, kind]
 
 var _held_locks: Dictionary = {} # lock_dir(String) -> true，這個 process 目前持有寫入權的存檔
 
