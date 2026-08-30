@@ -43,7 +43,7 @@ const STEP := 5.0
 const DESC_MAX := 250
 const AGE_DEFAULT := 30
 
-## 造型組數量（規格書 05 §5-0），_on_random_pressed() 用來擲亂數
+## 造型組數量（規格書 05 §5-0），_on_random_appearance_pressed() 用來擲亂數
 const STYLE_COUNT := 6
 
 const BARK := Color("2F2522")
@@ -120,11 +120,26 @@ const HONEY := Color("F0A94E")
 @onready var _save_template_button: Button = $Scrim/Center/Row/Panel/MarginContainer/Col/Footer/SaveTemplateButton
 @onready var _deploy_button: Button = $Scrim/Center/Row/Panel/MarginContainer/Col/Footer/DeployButton
 
+## 六維滑桿與強度計數兩個區塊（issue #372），化身者模式一起隱藏——強度計數
+## 純粹是滑桿極端項的統計，滑桿藏起來的話這個數字沒有意義可看
+@onready var _slider_block_container: Control = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/SliderBlock
+@onready var _strength_block_container: Control = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/StrengthBlock
+
+## 分頁 2 的隨機按鈕列（issue #676 拆出的場景節點）。化身者模式一併隱藏——
+## 滑桿藏起來後這顆按鈕只改六顆看不見的滑桿，按了沒有任何可見變化卻默默
+## 改寫 collect() 會存進角色庫的 hexaco 值（issue #372，#371 接上 UI 入口前的
+## 潛伏問題）。分頁 4 的隨機鈕不用藏：造型組在化身者模式下照常要選
+@onready var _personality_random_row: Control = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/RandomRow
+
 var _gender_selected := "other"
 var _decision_source := "human"
 var _model_name := ""
 
-## true 時面板走化身者模式：決策來源分頁對玩家沒有意義，見 _refresh_all()。
+## true 時面板走化身者模式：決策來源、六維人格滑桿對玩家都沒有意義，一併
+## 隱藏（issue #372，見 _refresh_all()）——玩家自己操控角色，不需要選 LLM
+## 決策來源，也不需要靠六維滑桿描述「這個角色的個性」，那是給 AI 讀的行為
+## 準則來源。隱藏的同時 _missing_items() 也要跳過極端項門檻（見那邊的說明），
+## 不然滑桿摸不到、門檻卻還在擋，會變成存不了檔。
 ## 目前唯一的入口是 open(as_player=true)，還沒有任何按鈕會傳這個值——
 ## UI 上「由我操控」的選項本身待後續視覺任務接上（issue #371）
 var _embodiment_mode := false
@@ -236,7 +251,8 @@ func _wire_signals() -> void:
 	_name_edit.text_changed.connect(_on_name_changed)
 	_age_slider.value_changed.connect(_on_age_changed)
 	_desc_edit.text_changed.connect(_on_description_changed)
-	$Scrim/Center/Row/Panel/MarginContainer/Col/Footer/RandomButton.pressed.connect(_on_random_pressed)
+	$Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/RandomRow/RandomButton.pressed.connect(_on_random_personality_pressed)
+	$Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/RandomRow/RandomButton.pressed.connect(_on_random_appearance_pressed)
 	_cancel_button.pressed.connect(_on_cancel_pressed)
 	_save_template_button.pressed.connect(_on_save_pressed)
 	_deploy_button.pressed.connect(_on_deploy_pressed)
@@ -331,16 +347,24 @@ func _on_style_pressed(index: int) -> void:
 	_refresh_style_buttons()
 	_refresh_strength()
 
-func _on_random_pressed() -> void:
-	# 隨機但保證落在可存檔區間：先全部置中，再挑 2 個推向兩端
+## 只隨機分頁 2 的六維滑桿（issue #676）：隨機按鈕拆成各分頁各自觸發，不再
+## 像舊版一次觸發全部分頁——玩家停在分頁 1 按下去畫面沒反應、切到別頁才
+## 發現剛剛其實兩頁都被隨機掉，是誤導。決策來源刻意不隨機——那是玩家的成本
+## 決定，不是角色設定（規格書 05 §3-1）。保證落在可存檔區間：先全部置中，再挑
+## EXTREME_MIN_WITH_DESC + 1（= 3，`character` 留空時的門檻）個推向兩端——
+## 挑 3 個讓有沒有寫描述都達標
+func _on_random_personality_pressed() -> void:
 	for slider in _sliders:
 		slider.value = DEFAULT_VALUE
 	var picks := range(_sliders.size())
 	picks.shuffle()
 	for i in picks.slice(0, EXTREME_MIN_WITH_DESC + 1):
 		_sliders[i].value = (randi_range(0, 4) * STEP) if randf() < 0.5 else (100.0 - randi_range(0, 4) * STEP)
-	# 「整個角色隨機」純組合既有邏輯（規格書 05 §6）：分頁 2 滑桿 + 分頁 4
-	# 隨機挑一套造型組。決策來源刻意不隨機——那是玩家的成本決定，不是角色設定
+	_refresh_all()
+
+## 只隨機分頁 4 的造型組選擇（issue #676）。化身者模式下這顆不用藏：造型組
+## 在化身者模式下照常要選（規格書 05 §5-0），按了有可見反應
+func _on_random_appearance_pressed() -> void:
 	_style_selected = randi_range(0, STYLE_COUNT - 1)
 	_refresh_all()
 
@@ -385,12 +409,16 @@ func _missing_items() -> Array[String]:
 	var items: Array[String] = []
 	if _name_edit.text.strip_edges().is_empty():
 		items.append(L10n.t("UI_CC_MISSING_NAME"))
-	var n := _extreme_count()
-	var required := _extreme_min()
-	if n < required:
-		items.append(L10n.tf("UI_CC_MISSING_EXTREME", {"n": required - n}))
-	elif n > EXTREME_MAX:
-		items.append(L10n.tf("UI_CC_MISSING_EXTREME_HIGH", {"n": n - EXTREME_MAX}))
+	# 化身者模式整段跳過極端項門檻（issue #372）：六維滑桿藏起來後玩家碰不到，
+	# 門檻卻還在擋的話會變成永遠存不了檔——這幾個滑桿本來就只給 AI 決策讀，
+	# 玩家自己操控時沒有意義，見 _embodiment_mode 的說明
+	if not _embodiment_mode:
+		var n := _extreme_count()
+		var required := _extreme_min()
+		if n < required:
+			items.append(L10n.tf("UI_CC_MISSING_EXTREME", {"n": required - n}))
+		elif n > EXTREME_MAX:
+			items.append(L10n.tf("UI_CC_MISSING_EXTREME_HIGH", {"n": n - EXTREME_MAX}))
 	if _style_selected < 0:
 		items.append(L10n.t("UI_CC_MISSING_STYLE"))
 	if _decision_source in ["local", "cloud"] and _model_name.is_empty():
@@ -415,6 +443,9 @@ func _refresh_all() -> void:
 	# 型號，先算的話提示會停在「還缺 AI 型號」
 	_refresh_strength()
 	_decision_source_container.visible = not _embodiment_mode
+	_slider_block_container.visible = not _embodiment_mode
+	_strength_block_container.visible = not _embodiment_mode
+	_personality_random_row.visible = not _embodiment_mode
 
 func _deployed_count() -> int:
 	var n := 0
