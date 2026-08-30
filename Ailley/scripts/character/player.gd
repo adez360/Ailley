@@ -154,6 +154,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	if tip_menu != null and tip_menu.is_open():
 		return
 
+	# corpse_menu 開著時同一個理由（issue #758）
+	var corpse_menu := get_tree().get_first_node_in_group("corpse_menu")
+	if corpse_menu != null and corpse_menu.is_open():
+		return
+
 	get_viewport().set_input_as_handled()
 
 	if is_in_conversation():
@@ -211,10 +216,17 @@ func _unhandled_input(event: InputEvent) -> void:
 			report_action_failure("start_haul", haul_reason)
 		return
 
-	# 死人不能搭話——對著石化的屍體按 E 是要復活他，不是要跟他聊天
-	# （issue #386，《規格書09》§8）。先擋 is_dead 再判表演，屍體不會
-	# 被拿去開打賞選單；其他人（活人）走原本路徑
+	# 死人不能搭話——對著石化的屍體按 E 開的是「復活／搬運」二選一選單
+	# （issue #758），不是直接跟他聊天。revive() 跟 start_haul() 對屍體都能
+	# 成功執行，同一個 interact 鍵沒辦法讓玩家表達要哪一種，所以跟 tip_menu
+	# 同一種「開小選單」寫法，不是直接呼叫。先擋 is_dead 再判表演，屍體不會
+	# 被拿去開打賞選單；其他人（活人）走原本路徑。corpse_menu 理論上一定找
+	# 得到（場景裡固定掛著），跟 vending_menu／tip_menu 同一種「多防一手」
+	# 寫法——場景漏掛時退回原本「直接復活」的舊行為，不讓 E 整個沒反應
 	if other != null and other.is_dead:
+		if corpse_menu != null:
+			corpse_menu.open(other, self)
+			return
 		var revive_reason := revive(other)
 		if revive_reason != REVIVE_OK:
 			report_action_failure("revive", revive_reason)
@@ -386,15 +398,17 @@ var _highlighted_other: Character = null
 func _process(_delta: float) -> void:
 	var vending_menu := get_tree().get_first_node_in_group("vending_menu")
 	var tip_menu := get_tree().get_first_node_in_group("tip_menu")
+	var corpse_menu := get_tree().get_first_node_in_group("corpse_menu")
 
-	# 選單開著時 E 是關閉選單（見 vending_menu.gd／tip_menu.gd 自己的
-	# _unhandled_input），不是這幾個候選裡的任何一個——選單不擋移動，玩家
+	# 選單開著時 E 是關閉選單（見 vending_menu.gd／tip_menu.gd／corpse_menu.gd
+	# 自己的 _unhandled_input），不是這幾個候選裡的任何一個——選單不擋移動，玩家
 	# 開著選單照樣能走位/轉向，這裡不擋的話高亮會跟著跳來跳去，暗示 E 現在
 	# 會搭話/工作，實際上按下去只會關掉選單，跟對話中不顯示互動高亮是同一個
 	# 理由。tip_menu 漏了這道 guard 會讓表演者在選單開著時還被畫成「可以互動」
 	# （CodeRabbit review 抓到）
 	if is_in_conversation() or (vending_menu != null and vending_menu.is_open()) \
-			or (tip_menu != null and tip_menu.is_open()):
+			or (tip_menu != null and tip_menu.is_open()) \
+			or (corpse_menu != null and corpse_menu.is_open()):
 		_set_highlighted_workstation(null)
 		_set_highlighted_other(null)
 		return
