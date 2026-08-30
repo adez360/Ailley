@@ -2448,10 +2448,11 @@ func stop_haul(notify_target: bool = true) -> void:
 			target.set_being_carried(false)		# #271: 通知昏迷機制
 			if is_in_group("agents"):
 				(self as Agent)._push_daily_event("你放開了%s。" % target.character_name, [target.character_id])
-			# notify_target=false：放手不是被搬運者自己掙脫時（revive()／bury()
-			# 的引擎側釋放），「你掙脫了搬運。」對當事人是假事實句，違反原則二
-			# （引擎只給事件，不給情緒／不編造當事人沒做的動作）——真正的遭遇
-			# （被復活／被安葬）由觸發動作的一方自行交代，這裡保持沉默。
+			# notify_target=false：放手不是被搬運者自己掙脫時（引擎側釋放，
+			# 被搬運者並未掙脫），應傳 false——「你掙脫了搬運。」對當事人是
+			# 假事實句，違反原則二（引擎只給事件，不給情緒／不編造當事人沒做
+			# 的動作），真正的遭遇由觸發動作的一方自行交代，這裡保持沉默。
+			# 其餘呼叫端是否也該統一傳 false，見 issue #779。
 			# 搬運者自己的「你放開了%s。」是事實句，維持照發
 			if notify_target and target.is_in_group("agents"):
 				(target as Agent)._push_daily_event("你掙脫了搬運。")
