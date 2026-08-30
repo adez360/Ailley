@@ -231,7 +231,13 @@ An empty "tasks" array means don't change anything."""
 ## 帶出來的英文詞彙（issue #656）。接在每種 rules 段最後面，不放最前面——
 ## 系統規則的 JSON 欄位名／enum 值本來就是英文，混在規則段開頭容易被誤讀成
 ## 「連 schema 都要中文」，接在最後面明確只管「自由文字要用中文」這一件事
-const OUTPUT_LANGUAGE_RULE := "\n\nWrite all free-text you generate — dialogue lines, spoken words, inner thoughts, remarks — in Traditional Chinese (繁體中文) only. Do not mix in English words. This does not apply to JSON field names or enum values, which stay as specified above."
+##
+## #740：光講「Traditional Chinese (繁體中文)」還不夠——訓練語料以簡體為主的
+## 本機小模型，即使聽懂「要中文」，字形還是常常預設寫成簡體（「說」「這」
+## 「時間」這種常見字）。原句沒有明講「繁體」跟「簡體」是兩種不同字形、
+## 也沒給模型任何錨點去分辨，補一句明確禁止簡體字形＋舉最常漏的幾個字當
+## 對照範例，比單純講一次「繁體中文」更難被模型當成「反正都是中文」帶過
+const OUTPUT_LANGUAGE_RULE := "\n\nWrite all free-text you generate — dialogue lines, spoken words, inner thoughts, remarks — in Traditional Chinese (繁體中文, Taiwan usage) only. Traditional and Simplified Chinese use different character forms for many common words even when the meaning is identical — always use the Traditional form (e.g. 說 not 说, 這 not 这, 時間 not 时间), never the Simplified form, for every character you write. Do not mix in English words. This does not apply to JSON field names or enum values, which stay as specified above."
 
 ## 角色的人格段 ＋ 遊戲規則，順序固定不可調換（#117，《01-3》§5「組裝順序」）。
 ##
