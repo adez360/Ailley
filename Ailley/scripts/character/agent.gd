@@ -1119,12 +1119,27 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 	var envelope := PromptBuilder.build_dialogue_envelope(
 		self, listener, turns, max_turns, current_place, _recalled_summary(), is_opening
 	)
-	var validator: Callable = (
+	# now_minutes 跟 _request_next_decision() 同一個理由：驗證選填的 task 欄位
+	# （見下方）要換算 expires_at，用組信封當下這一刻，不要等 await 回來之後
+	# 才算——同一輪重試（_decide_with_retry）全部沿用這個時間點
+	var now_minutes := _now_minutes()
+	var base_validator: Callable = (
 		AISchema.validate_dialogue_open if is_opening else AISchema.validate_dialogue
 	)
+	var validator := func(data: Dictionary) -> Dictionary:
+		return base_validator.call(data, now_minutes)
 	var result := await _decide_with_retry(envelope, AIService.Policy.CONVERSATION, validator)
 	if not result["ok"]:
 		return {"ok": false}
+
+	# task 是選填欄位（issue #658）：這句話是角色自己判斷「講了就要做」的
+	# 即時承諾，不是引擎事後比對台詞裡有沒有特定關鍵字——直接推進自己的
+	# 任務池，跟一般 LLM 決策的任務同一套仲裁，池滿的處理方式也相同
+	# （安靜丟棄，不像 persuade 的 proposed_task 那樣一定要騰位置：對話裡的
+	# 口頭承諾不是對另一個角色的正式應允，沒有「答應了卻沒兌現」的信任問題）
+	var task: Dictionary = result["data"].get("task", {})
+	if not task.is_empty():
+		_push_llm_tasks([task], {})
 
 	return {
 		"ok": true,

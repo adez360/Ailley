@@ -245,7 +245,13 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 ### 回應
 
 - `dialogue` → `{"line": "...", "end": false}` —— 一律逐輪；`end` 省略視為 `false`，
-  為真時說完這句就結束對話
+  為真時說完這句就結束對話。`task` 是選填欄位（issue #658）：講出的話若是
+  即時承諾，順帶回一筆 Task struct（跟下面 `plan` 的 `tasks[]` 同一個形狀），
+  直接推進講話者自己的任務池，讓內容層講的話跟決策層實際會做的事對得上——
+  是不是「真的算承諾」交給模型自己判斷，engine 不比對台詞裡的關鍵字。池滿時
+  跟一般 LLM 任務同一套處理（靜默丟棄，`_push_llm_tasks()` 只 `push_warning`），
+  不像 persuade 的 `proposed_task` 保證騰位塞入——對話裡的口頭承諾不是對
+  另一方的正式應允，沒有信任問題
 - `plan` → `{"tasks": [ <Task struct> ], "reasoning", "inner_monologue", "request_plan_update"}`；
   `tasks` 空陣列 ＝ 不更新。`request_plan_update` 是模型「下次能不能讓我改
   today_plan」的申請信號，任何時候都能回。`update_plan` 是條件式欄位，只在
