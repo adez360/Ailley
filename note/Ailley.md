@@ -2,7 +2,7 @@
 tags:
   - moc
 status: 現況
-updated: 2026-08-24
+updated: 2026-08-31
 ---
 
 # Ailley
@@ -65,6 +65,7 @@ Ailley 是由 LLM 驅動的 2D 像素村莊（Godot 4.5.1）。
 | [[場景組織]] | `main.tscn`（只放拍板定案內容）與 `sandbox.tscn`（新功能先做這裡）的分工 | 已實作 |
 | [[give attack shout 對玩家]] | give／attack 對玩家目標本來就相容（驗證用測試涵蓋）；shout／make_noise() 補上玩家的 !? 反應 | 已實作 |
 | [[自動化測試]] | `McpTestSuite` 寫法慣例、test_run 環境測不到 GameClock/場景相依函式的限制與涵蓋範圍 | 進行中 |
+| [[測試計畫]] | 模組化手動測試計畫：模組怎麼劃分、各模組 checklist、端到端流程通關、執行頻率與負責人 | 進行中 |
 
 ### ai
 
