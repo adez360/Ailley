@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/dialogue/conversation.gd
 status: 進行中
-updated: 2026-08-30
+updated: 2026-08-31
 ---
 
 # talk 動作設計
@@ -283,6 +283,21 @@ review 抓到：「髒兮兮」「乾淨多了」「傷已經好了」這幾種�
 > [!important] 箭嘴固定在右下角，所以氣泡往左上長，不是置中
 > `TAIL_INSET_FROM_RIGHT = 9` 把箭嘴尖端對到說話者頭上，框體再從那裡往左上展開。
 > 想要左向箭嘴得另外準備鏡像素材，或把 Box 的 `scale.x` 設 -1 再把文字翻回來。
+
+> [!important] 角色站在鏡頭可視範圍邊界附近時，氣泡會夾制回畫面內（issue #742）
+> 上面那條「往左上展開」的框體只認角色頭上的錨點，完全沒管鏡頭看不看得到——
+> 角色站在地圖邊緣、房屋邊界這類鏡頭視野受限的位置說話時，往左上長出去的
+> 那塊會直接被螢幕邊緣裁掉，看起來像是「AI 講到一半斷掉」（一開始真的被
+> 誤判成生成長度限制或模型品質問題，實測截圖比對才確認是顯示區域跑出畫面，
+> 文字本身沒有被截斷）。
+>
+> `_render()` 算完 `box.position` 之後多一步 `_clamp_to_camera_view()`：拿
+> `get_viewport().get_camera_2d()` 的 `get_screen_center_position()` 跟
+> `get_viewport().get_visible_rect().size / cam.zoom` 算出目前鏡頭的可視
+> 世界座標範圍，把 `box` 的全域矩形夾回這個範圍內——只平移 `box.position`，
+> 不動 `Bubble` 節點自己的 `global_position`（那是角色頭上的錨點）。代價是
+> 夾制生效的那幾幀，箭嘴（烤在 `box` 的九宮格材質裡，跟著整個框體一起
+> 平移）不會再精準指向角色頭上；沒有鏡頭時整段跳過，維持原本行為。
 
 素材是 `assets/ui/chatbox-1.png`（48x48），九宮格參數
 `region_rect = Rect2(6.07, 6.37, 39.01, 37.63)`、margin 10 / 9 / 11 / 12。

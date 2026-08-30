@@ -173,7 +173,45 @@ func _render(message: String) -> void:
 		-box.size.y
 	)
 
+	_clamp_to_camera_view()
+
 	visible = true
+
+## 角色站在鏡頭可視範圍邊界附近時，box 往左上長出去的部分會超出畫面、被
+## 螢幕邊緣硬生生裁切掉——不是文字被截斷，是氣泡的顯示區域本身跑出可視
+## 範圍（issue #742，一開始被誤判成「AI 回應句子本身不完整」）。這裡在算完
+## box 的預設位置之後，用目前鏡頭的可視世界座標範圍把 box 的全域矩形夾回
+## 畫面內。只平移 box.position，不動 Bubble 節點本身的 global_position——
+## 那是角色頭上的錨點，不該被這裡改到，`label` 是 box 的子節點會跟著一起
+## 平移，不用另外處理。
+##
+## 代價：箭嘴（烤在 box 的九宮格材質裡，跟著整個框體一起平移）在夾制生效
+## 的那幾幀不會再精準指向角色頭上——跟 issue 建議的「調整錨點方向或位移」
+## 二選一，這裡選位移，改動範圍最小；沒有鏡頭（找不到 Camera2D）時整段
+## 跳過，維持原本行為，不因為這個防呆擋掉氣泡顯示
+func _clamp_to_camera_view() -> void:
+	var cam := get_viewport().get_camera_2d()
+	if cam == null:
+		return
+
+	var visible_size := get_viewport().get_visible_rect().size / cam.zoom
+	var visible_center := cam.get_screen_center_position()
+	var visible_rect := Rect2(visible_center - visible_size * 0.5, visible_size)
+
+	var box_global_pos := global_position + box.position
+	var offset := Vector2.ZERO
+
+	if box_global_pos.x < visible_rect.position.x:
+		offset.x = visible_rect.position.x - box_global_pos.x
+	elif box_global_pos.x + box.size.x > visible_rect.end.x:
+		offset.x = visible_rect.end.x - (box_global_pos.x + box.size.x)
+
+	if box_global_pos.y < visible_rect.position.y:
+		offset.y = visible_rect.position.y - box_global_pos.y
+	elif box_global_pos.y + box.size.y > visible_rect.end.y:
+		offset.y = visible_rect.end.y - (box_global_pos.y + box.size.y)
+
+	box.position += offset
 
 # 直接用字型量文字尺寸。不能用 label.get_minimum_size() —— 開了 autowrap 之後
 # 它回傳的是「最窄可接受寬度」（中文會變成一行一個字），拿它當寬度會得到
