@@ -58,6 +58,12 @@ static func _compute_player_id_path() -> String:
 	var checkout_hash := ProjectSettings.globalize_path("res://").sha256_text()
 	return "user://saves_%s/player_id.txt" % checkout_hash
 
+## 搭話診斷用的逐筆 print()（issue #654：兩個角色重疊時搭話完全沒反應）。
+## 正常遊玩預設關閉；除錯時改成 true。與 Conversation.TALK_DEBUG（PR #723）
+## 各自獨立，輸出前綴用 [talk_debug_654] 區分調查主題。問題查清楚後這段
+## 要整段拿掉，不是永久留著的 log
+const TALK_DEBUG := false
+
 
 func _ready() -> void:
 	# Character._ready() 會用 facing 播 idle 動畫（預設 "front"），玩家出生要面向
@@ -159,10 +165,20 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not event.is_action_pressed("interact"):
 		return
 
+	# 兩個選單節點先在進入點 log 之前取得，log 才能把三道 guard 的判定
+	# 一起印出來（取得順序不影響行為，guard 檢查本身維持原位）
+	var vending_menu := get_tree().get_first_node_in_group("vending_menu")
+	var tip_menu := get_tree().get_first_node_in_group("tip_menu")
+	if TALK_DEBUG:
+		print("[talk_debug_654] E 鍵進入互動：vending_menu.is_open()=%s | tip_menu.is_open()=%s | is_in_conversation()=%s" % [
+			str(vending_menu != null and vending_menu.is_open()),
+			str(tip_menu != null and tip_menu.is_open()),
+			str(is_in_conversation()),
+		])
+
 	# 販賣機選單開著時，這個 E 是要給選單用來關閉／已經在選單裡點過商品了，
 	# 不該在這裡又被當成「開始一個新的互動」——不 set_input_as_handled()，
 	# 讓事件繼續往下傳給 vending_menu.gd 自己的 _unhandled_input 處理
-	var vending_menu := get_tree().get_first_node_in_group("vending_menu")
 	if vending_menu != null and vending_menu.is_open():
 		return
 
@@ -170,7 +186,6 @@ func _unhandled_input(event: InputEvent) -> void:
 	# guard 的話，Player 這裡會搶先吃掉 interact／ui_cancel 事件、呼叫
 	# set_input_as_handled()，tip_menu.gd 自己的 _unhandled_input() 永遠輪
 	# 不到、選單關不掉
-	var tip_menu := get_tree().get_first_node_in_group("tip_menu")
 	if tip_menu != null and tip_menu.is_open():
 		return
 
@@ -196,6 +211,27 @@ func _unhandled_input(event: InputEvent) -> void:
 	var downed: Character = candidates["downed"]
 	var other: Character = candidates["other"]
 
+	# 除錯用（issue #654：兩個角色重疊站在同一格時搭話完全沒反應，追不到
+	# 原因，程式碼審查沒看出漏洞）。列出這一刻視野裡的每個角色跟距離／
+	# 面向判定結果，重現時對照 Output/Debugger 面板看是卡在哪一步：
+	# visible_characters 裡有沒有兩個都在、_is_facing() 有沒有兩個都過、
+	# 最後選中的是哪一個（或 null）。問題查清楚、改完 talk_to() 之後這段
+	# 要記得拿掉，不是永久留著的 log
+	if TALK_DEBUG:
+		var visible_for_debug: Array = vision.get_visible_characters() if vision != null else []
+		print("[talk_debug_654] E 鍵按下，視野內角色數=%d" % visible_for_debug.size())
+		for c in visible_for_debug:
+			if not is_instance_valid(c):
+				continue
+			var pos: Vector2 = (c as Character).get_body_position()
+			print("[talk_debug_654]   候選 %s | pos=%s | facing=%s | dist=%.1f" % [
+				(c as Character).character_id,
+				pos,
+				_is_facing(pos),
+				get_body_position().distance_to(pos),
+			])
+		print("[talk_debug_654] _nearest_facing() 選中 other=%s" % (other.character_id if other != null else "null"))
+
 	# 失敗要往下掉到搭話，不是直接 return。工作站被別人佔用（WORK_OCCUPIED）
 	# 或自己正在工作（WORK_BUSY）時直接 return 的話，E 整個沒反應 ——
 	# 玩家連站在眼前那個正在工作的人都搭不了話
@@ -204,6 +240,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			and candidates["to_work"] <= candidates["to_other"]:
 		var work_reason := work_at(workstation)
 		if work_reason == WORK_OK:
+			if TALK_DEBUG:
+				print("[talk_debug_654] 走了 work_at 分支（成功），work_reason=%s" % work_reason)
 			return
 		if other == null:
 			_report_work_failure(workstation, work_reason)
@@ -213,11 +251,16 @@ func _unhandled_input(event: InputEvent) -> void:
 		# 分支原本會搶在下面的 tip_menu 判斷之前結束，讓表演中的人在這裡
 		# 只能被搭話，開不了打賞選單）
 		if other.is_performing() and tip_menu != null:
+			if TALK_DEBUG:
+				print("[talk_debug_654] 走了打賞選單分支（工作站 fallback 路徑）")
 			tip_menu.open(other, self)
 			return
 		# 否則先試搭話，兩邊都失敗才回報，不然「工作站被佔用」跟「搭話失敗」
 		# 會疊成兩則訊息一起蹦出來
-		if talk_to(other) != TALK_OK:
+		var fallback_talk_reason := talk_to(other)
+		if TALK_DEBUG:
+			print("[talk_debug_654] 走了工作站 fallback 搭話分支，reason=%s（顯示的是 work_reason=%s）" % [fallback_talk_reason, work_reason])
+		if fallback_talk_reason != TALK_OK:
 			_report_work_failure(workstation, work_reason)
 		return
 	# 商店不是立刻執行動作，是開商品選單——真正的購買發生在
@@ -225,12 +268,16 @@ func _unhandled_input(event: InputEvent) -> void:
 	# （場景裡固定掛著），這裡多防一手是避免場景漏掛的話直接炸掉
 	elif not shop_place.is_empty() and candidates["to_shop"] <= candidates["to_downed"] \
 			and candidates["to_shop"] <= candidates["to_other"] and vending_menu != null:
+		if TALK_DEBUG:
+			print("[talk_debug_654] 走了販賣機選單分支，shop_place=%s" % shop_place)
 		vending_menu.open(shop_place, self)
 		return
 	# 昏迷角色跟可搭話對象互斥（見 _get_interact_candidates() 的說明），
 	# 這裡不是比大小決優先序，純粹是「範圍內有沒有昏迷者」決定 E 是搬運
 	# 還是搭話（issue #637）
 	elif downed != null and candidates["to_downed"] <= candidates["to_other"]:
+		if TALK_DEBUG:
+			print("[talk_debug_654] 走了昏迷搬運分支（issue #637）")
 		var haul_reason := start_haul(downed)
 		if haul_reason != HAUL_OK:
 			report_action_failure("start_haul", haul_reason)
@@ -245,9 +292,13 @@ func _unhandled_input(event: InputEvent) -> void:
 	# 寫法——場景漏掛時退回原本「直接復活」的舊行為，不讓 E 整個沒反應
 	if other != null and other.is_dead:
 		if corpse_menu != null:
+			if TALK_DEBUG:
+				print("[talk_debug_654] 走了屍體復活／搬運選單分支（issue #758）")
 			corpse_menu.open(other, self)
 			return
 		var revive_reason := revive(other)
+		if TALK_DEBUG:
+			print("[talk_debug_654] 走了直接復活分支（corpse_menu 漏掛 fallback），reason=%s" % revive_reason)
 		if revive_reason != REVIVE_OK:
 			report_action_failure("revive", revive_reason)
 		return
@@ -258,10 +309,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	# 「多防一手」寫法，避免場景漏掛時直接炸掉。變數在函式開頭已經宣告過
 	# 一次（給上面關閉選單那道 guard 用），這裡直接沿用，不重複宣告
 	if other != null and other.is_performing() and tip_menu != null:
+		if TALK_DEBUG:
+			print("[talk_debug_654] 走了打賞選單分支（主路徑）")
 		tip_menu.open(other, self)
 		return
 
 	var talk_reason := talk_to(other)
+	if TALK_DEBUG:
+		print("[talk_debug_654] 走了主路徑 talk_to 分支，reason=%s" % ("(OK)" if talk_reason == TALK_OK else talk_reason))	# 除錯用，見上方 issue #654 說明
 	if talk_reason != TALK_OK:
 		report_action_failure("talk_to", talk_reason)
 
