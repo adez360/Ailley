@@ -1262,11 +1262,15 @@ func say(line: String, interrupt: bool = false, broadcast: bool = true) -> void:
 ## 識別字，也不要吞掉錯誤讓玩家完全看不到任何反應，跟在地化系統本身
 ## 「key 不存在就顯示 KEY 本身」同一種「看得出來哪裡漏了」的設計
 ## （見 note/技術/在地化.md）
+##
+## interrupt=true：同一句失敗訊息沒有「排隊播完」的價值，玩家只在意
+## 「剛剛那下有沒有反應」，連續觸發時最新一次的判定結果直接蓋掉舊的
+## 排隊訊息，不會像 bubble.gd::say() 預設那樣逐句累積（issue #773）
 func report_action_failure(action_label: String, reason: String) -> void:
 	push_warning("%s: %s 失敗（%s）" % [character_name, action_label, reason])
 
 	var key: String = FAILURE_MESSAGE_KEYS.get(reason, "")
-	say(L10n.t(key) if not key.is_empty() else reason)
+	say(L10n.t(key) if not key.is_empty() else reason, true)
 
 ## 這個角色對話中的下一句話由誰產生、內容是什麼。基底不知道答案——
 ## 本機玩家要等打字（見 player.gd），本機 Agent 要打 AIService（見 agent.gd），
