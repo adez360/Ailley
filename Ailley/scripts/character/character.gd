@@ -946,7 +946,15 @@ func bury(corpse: Character) -> String:
 	# 搬運者走，不主動放手的話墓碑會被拖出墓園
 	for hauler in corpse._hauled_by.duplicate():
 		if is_instance_valid(hauler):
-			hauler.stop_haul()
+			# notify_target=false（2026-08-31 拍板）：跟 revive() 同款決策——
+			# 被安葬的是屍體，不是自己掙脫的，「你掙脫了搬運。」對他是假事實句
+			# （原則二），且死者已無 AI 決策迴圈可消化這句，推了也沒意義；
+			# 搬運者端「你放開了%s。」是事實句，照常發
+			hauler.stop_haul(false)
+		else:
+			# 搬運者節點已被 queue_free()：沒有 stop_haul() 能幫忙清 _hauled_by，
+			# 直接把殘留參照抹掉，不然 is_being_hauled() 永遠 true、之後復活不能動
+			corpse._hauled_by.erase(hauler)
 
 	print_debug("Character %s 安葬了 %s" % [character_name, corpse.character_name])
 	return BURY_OK
@@ -1035,6 +1043,22 @@ func revive(corpse: Character) -> String:
 			return REVIVE_NOT_ENOUGH_MONEY
 
 	corpse._clear_death_state()
+
+	# 解除既有搬運關係——跟 bury() 同一個理由：is_dead 變 false 後移動鎖解除，
+	# 但 _decide_velocity() 的 is_being_hauled() 判斷排在最前面且不看 is_dead，
+	# 不主動放手的話復活的角色會一直卡在「跟著搬運者走」，AI 決策或玩家自己
+	# 的移動意圖完全進不去
+	for hauler in corpse._hauled_by.duplicate():
+		if is_instance_valid(hauler):
+			# notify_target=false：被復活者不是自己掙脫的，「你掙脫了搬運。」
+			# 對他是假事實句（原則二）；他實際遭遇的事實由下面的
+			# 「你被天神復活了」交代，這裡不再重複定性
+			hauler.stop_haul(false)
+		else:
+			# 搬運者節點已被 queue_free()：沒有 stop_haul() 能幫忙清 _hauled_by，
+			# 直接把殘留參照抹掉，不然 is_being_hauled() 永遠 true、復活後不能動
+			corpse._hauled_by.erase(hauler)
+
 	# 恢復到安全值，跟 _complete_treatment()（昏迷治療完成）同一套「安全水平」
 	# 數字，理由見那邊：避免復活完立刻又因為某項生理數值歸零重新觸發 condition
 	if corpse.stats != null:
@@ -2419,7 +2443,7 @@ func start_haul(target: Character) -> String:
 
 	return HAUL_OK
 
-func stop_haul() -> void:
+func stop_haul(notify_target: bool = true) -> void:
 	if _hauling_target != null:
 		var target := _hauling_target
 		target._detach_haul(self)
@@ -2428,7 +2452,12 @@ func stop_haul() -> void:
 			target.set_being_carried(false)		# #271: 通知昏迷機制
 			if is_in_group("agents"):
 				(self as Agent)._push_daily_event("你放開了%s。" % target.character_name, [target.character_id])
-			if target.is_in_group("agents"):
+			# notify_target=false：放手不是被搬運者自己掙脫時（revive()／bury()
+			# 的引擎側釋放），「你掙脫了搬運。」對當事人是假事實句，違反原則二
+			# （引擎只給事件，不給情緒／不編造當事人沒做的動作）——真正的遭遇
+			# （被復活／被安葬）由觸發動作的一方自行交代，這裡保持沉默。
+			# 搬運者自己的「你放開了%s。」是事實句，維持照發
+			if notify_target and target.is_in_group("agents"):
 				(target as Agent)._push_daily_event("你掙脫了搬運。")
 		_hauling_target = null
 	_speed_multiplier = 1.0
