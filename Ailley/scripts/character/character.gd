@@ -945,17 +945,7 @@ func bury(corpse: Character) -> String:
 	# 解除既有搬運關係——is_being_hauled() 在 _decide_velocity() 裡排在
 	# petrified 鎖定之前（見該函式註解），is_buried 本身不會讓身體停止跟著
 	# 搬運者走，不主動放手的話墓碑會被拖出墓園
-	for hauler in corpse._hauled_by.duplicate():
-		if is_instance_valid(hauler):
-			# notify_target=false（2026-08-31 拍板）：跟 revive() 同款決策——
-			# 被安葬的是屍體，不是自己掙脫的，「你掙脫了搬運。」對他是假事實句
-			# （原則二），且死者已無 AI 決策迴圈可消化這句，推了也沒意義；
-			# 搬運者端「你放開了%s。」是事實句，照常發
-			hauler.stop_haul(false)
-		else:
-			# 搬運者節點已被 queue_free()：沒有 stop_haul() 能幫忙清 _hauled_by，
-			# 直接把殘留參照抹掉，不然 is_being_hauled() 永遠 true、之後復活不能動
-			corpse._hauled_by.erase(hauler)
+	corpse._release_all_haulers()
 
 	print_debug("Character %s 安葬了 %s" % [character_name, corpse.character_name])
 	return BURY_OK
@@ -998,6 +988,28 @@ func _erect_unmarked_grave() -> void:
 	is_anonymous = true
 	print_debug("Character %s 腐壞見底，自動立無名碑" % character_name)
 
+
+## 解除自己（屍體）身上的全部搬運關係，bury() 與 revive() 共用——兩邊「為什麼
+## 要主動放手」的情境理由各自寫在呼叫端，這裡只管怎麼放。搬運者節點可能已被
+## queue_free()：沒有 stop_haul() 能幫忙清 _hauled_by，殘留參照只能自己抹掉。
+## 不能用 erase()——typed array（Array[Character]）的 erase() 會先跑
+## ContainerTypeValidate，DEBUG 下對已釋放實例直接 ERR_FAIL、元素原封不動，
+## 殘留參照清不掉（is_being_hauled() 恆 true，復活後角色卡住不能動）；
+## 用反向索引走訪＋remove_at() 才確定清得掉，而 stop_haul() 內部的
+## _detach_haul() 只移除當前索引，反向走訪安全
+func _release_all_haulers() -> void:
+	for i in range(_hauled_by.size() - 1, -1, -1):
+		# 刻意不標型別：標了 Character 會在指定已釋放實例時再撞一次型別檢查
+		var hauler = _hauled_by[i]
+		if is_instance_valid(hauler):
+			# notify_target=false（2026-08-31 拍板）：被安葬／復活者不是自己掙脫
+			# 的，「你掙脫了搬運。」對他是假事實句（原則二）——安葬情境死者已無
+			# AI 決策迴圈可消化這句，推了也沒意義；復活情境他實際遭遇的事實由
+			# 「你被天神復活了」交代，這裡不再重複定性。搬運者端「你放開了%s。」
+			# 是事實句，照常發
+			hauler.stop_haul(false)
+		else:
+			_hauled_by.remove_at(i)
 
 # ---- 復活（issue #386，《規格書09》§8） ----
 
@@ -1049,16 +1061,7 @@ func revive(corpse: Character) -> String:
 	# 但 _decide_velocity() 的 is_being_hauled() 判斷排在最前面且不看 is_dead，
 	# 不主動放手的話復活的角色會一直卡在「跟著搬運者走」，AI 決策或玩家自己
 	# 的移動意圖完全進不去
-	for hauler in corpse._hauled_by.duplicate():
-		if is_instance_valid(hauler):
-			# notify_target=false：被復活者不是自己掙脫的，「你掙脫了搬運。」
-			# 對他是假事實句（原則二）；他實際遭遇的事實由下面的
-			# 「你被天神復活了」交代，這裡不再重複定性
-			hauler.stop_haul(false)
-		else:
-			# 搬運者節點已被 queue_free()：沒有 stop_haul() 能幫忙清 _hauled_by，
-			# 直接把殘留參照抹掉，不然 is_being_hauled() 永遠 true、復活後不能動
-			corpse._hauled_by.erase(hauler)
+	corpse._release_all_haulers()
 
 	# 恢復到安全值，跟 _complete_treatment()（昏迷治療完成）同一套「安全水平」
 	# 數字，理由見那邊：避免復活完立刻又因為某項生理數值歸零重新觸發 condition
@@ -2457,10 +2460,11 @@ func stop_haul(notify_target: bool = true) -> void:
 			target.set_being_carried(false)		# #271: 通知昏迷機制
 			if is_in_group("agents"):
 				(self as Agent)._push_daily_event("你放開了%s。" % target.character_name, [target.character_id])
-			# notify_target=false：放手不是被搬運者自己掙脫時（revive()／bury()
-			# 的引擎側釋放），「你掙脫了搬運。」對當事人是假事實句，違反原則二
-			# （引擎只給事件，不給情緒／不編造當事人沒做的動作）——真正的遭遇
-			# （被復活／被安葬）由觸發動作的一方自行交代，這裡保持沉默。
+			# notify_target=false：放手不是被搬運者自己掙脫時（引擎側釋放，
+			# 被搬運者並未掙脫），應傳 false——「你掙脫了搬運。」對當事人是
+			# 假事實句，違反原則二（引擎只給事件，不給情緒／不編造當事人沒做
+			# 的動作），真正的遭遇由觸發動作的一方自行交代，這裡保持沉默。
+			# 其餘呼叫端是否也該統一傳 false，見 issue #779。
 			# 搬運者自己的「你放開了%s。」是事實句，維持照發
 			if notify_target and target.is_in_group("agents"):
 				(target as Agent)._push_daily_event("你掙脫了搬運。")
