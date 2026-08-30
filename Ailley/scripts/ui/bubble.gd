@@ -49,8 +49,12 @@ static var _visible_order: Array = []
 var _queue: Array[String] = []
 var _remaining := 0.0
 
-## true 時 _process() 不跑計時、不會自動消失——見 hold()（#207）
+## true 時 _process() 只重夾位置、不跑自動消失的計時——見 hold()（#207）
 var _holding := false
+
+## _render() 排版算出的未 clamp box 位置。_process() 每幀重夾時從這裡出發，
+## 偏移不會一幀疊一幀
+var _unclamped_box_position := Vector2.ZERO
 
 
 func _ready() -> void:
@@ -63,6 +67,14 @@ func _exit_tree() -> void:
 	_leave_visible_order()
 
 func _process(delta: float) -> void:
+	# 顯示期間每幀重夾一次：角色移動（鏡頭跟著動）之後，_render() 當下算好的
+	# clamp 會失效——hold() 的常駐提示最明顯，常駐期間角色照樣在動
+	if visible:
+		_clamp_to_camera_view()
+
+	if _holding:
+		return
+
 	_remaining -= delta
 	if _remaining > 0.0:
 		return
@@ -106,7 +118,9 @@ func hold(message: String) -> void:
 	_holding = true
 	_bring_to_front()
 	_render(message)
-	set_process(false)
+	# _process() 要開著，角色移動時才能持續重夾位置；自動消失的計時由
+	# _process() 開頭的 _holding guard 擋掉，行為等同原本的 set_process(false)
+	set_process(true)
 
 ## 解除常駐顯示。持有期間排進來的 say() 佇列（理論上不會發生，因為
 ## hold() 已經清空過，但 release 之後正常恢復排隊行為）接著播
@@ -173,7 +187,58 @@ func _render(message: String) -> void:
 		-box.size.y
 	)
 
+	# 記下未 clamp 的基準位置——_process() 每幀重夾時從這裡出發，偏移不會疊加
+	_unclamped_box_position = box.position
+
+	_clamp_to_camera_view()
+
 	visible = true
+
+## 角色站在鏡頭可視範圍邊界附近時，box 往左上長出去的部分會超出畫面、被
+## 螢幕邊緣硬生生裁切掉——不是文字被截斷，是氣泡的顯示區域本身跑出可視
+## 範圍（issue #742，一開始被誤判成「AI 回應句子本身不完整」）。這裡在算完
+## box 的預設位置之後，用目前鏡頭的可視世界座標範圍把 box 的全域矩形夾回
+## 畫面內。只平移 box.position，不動 Bubble 節點本身的 global_position——
+## 那是角色頭上的錨點，不該被這裡改到，`label` 是 box 的子節點會跟著一起
+## 平移，不用另外處理。
+##
+## 代價：箭嘴（烤在 box 的九宮格材質裡，跟著整個框體一起平移）在夾制生效
+## 的那幾幀不會再精準指向角色頭上——跟 issue 建議的「調整錨點方向或位移」
+## 二選一，這裡選位移，改動範圍最小；沒有鏡頭（找不到 Camera2D）時整段
+## 跳過，維持原本行為，不因為這個防呆擋掉氣泡顯示
+##
+## clamp 不是只在 _render() 算一次：角色（跟著鏡頭）移動後畫面範圍就變了，
+## _process() 顯示期間每幀重跑一次，起點固定用 _render() 記下的
+## _unclamped_box_position，不是 box.position 本身——不然每幀的偏移會疊加。
+## 測試裡有不進場景樹的 bubble（test_shout_reaches_player.gd），那時
+## get_viewport() 回 null，跟找不到鏡頭一樣整段跳過
+func _clamp_to_camera_view() -> void:
+	var vp := get_viewport()
+	if vp == null:
+		return
+
+	var cam := vp.get_camera_2d()
+	if cam == null:
+		return
+
+	var visible_size := vp.get_visible_rect().size / cam.zoom
+	var visible_center := cam.get_screen_center_position()
+	var visible_rect := Rect2(visible_center - visible_size * 0.5, visible_size)
+
+	var box_global_pos := global_position + _unclamped_box_position
+	var offset := Vector2.ZERO
+
+	if box_global_pos.x < visible_rect.position.x:
+		offset.x = visible_rect.position.x - box_global_pos.x
+	elif box_global_pos.x + box.size.x > visible_rect.end.x:
+		offset.x = visible_rect.end.x - (box_global_pos.x + box.size.x)
+
+	if box_global_pos.y < visible_rect.position.y:
+		offset.y = visible_rect.position.y - box_global_pos.y
+	elif box_global_pos.y + box.size.y > visible_rect.end.y:
+		offset.y = visible_rect.end.y - (box_global_pos.y + box.size.y)
+
+	box.position = _unclamped_box_position + offset
 
 # 直接用字型量文字尺寸。不能用 label.get_minimum_size() —— 開了 autowrap 之後
 # 它回傳的是「最窄可接受寬度」（中文會變成一行一個字），拿它當寬度會得到

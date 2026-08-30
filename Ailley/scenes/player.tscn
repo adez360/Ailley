@@ -15,10 +15,8 @@ script = ExtResource("1_mbysm")
 
 [node name="AnimatedSprite2D" parent="." index="0"]
 animation = &"idle_back"
-offset = Vector2(0, -7.954)
 
 [node name="CollisionShape2D" parent="." index="1"]
-position = Vector2(0, 2)
 shape = SubResource("CircleShape2D_qhqgy")
 
 [node name="InteractArea" type="Area2D" parent="Sensing" index="1"]

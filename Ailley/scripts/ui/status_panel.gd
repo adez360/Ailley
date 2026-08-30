@@ -103,6 +103,10 @@ func _make_item_slot() -> TextureRect:
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.clip_text = true
+	# theme 的 Label 預設字級是 12（ailley_theme.tres），跟 InventorySlotButton
+	# 借同一個 NAME_FONT_SIZE=11 override——slot_text() 的截斷算式（11px × 2 字）
+	# 是照這個字級推的，這裡沒跟著 override 的話算式對不上實際渲染字級
+	label.add_theme_font_size_override("font_size", InventorySlotButton.NAME_FONT_SIZE)
 	rect.add_child(label)
 
 	items_tab.add_child(rect)
@@ -295,10 +299,9 @@ func _refresh_items_tab() -> void:
 			rect.modulate = NORMAL_TINT
 			continue
 
-		var item_id: String = slot["item_id"]
-		var count: int = slot["count"]
-		var shown := item_id.substr(0, 3).to_upper()
-		label.text = "%s\n%d" % [shown, count] if count > 1 else shown
+		# 格子文字單一來源：InventorySlotButton.slot_text()（中文名稱最多 2 字，
+		# 數量 > 1 才多印一行）——《15》§2-6 的「沿用 inventory_slot_button.gd」
+		label.text = InventorySlotButton.slot_text(slot)
 
 		# 手持格（快捷欄第一列裡被選中的那格）疊 Amber，跟 InventoryPanel
 		# 同一種標記法（《15》§2-6）

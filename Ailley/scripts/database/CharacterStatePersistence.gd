@@ -50,6 +50,13 @@ extends Node
 ##
 ##   7. 「DELETE 0 筆」視為正常狀態。
 ##
+## Wallet 同步策略跟 Inventory 的第 1、2 點一樣（第一次遇到 Character 時
+## 從 npc_wallet 載入、沒有既有資料就沿用 runtime 初始值），但用自己一組
+## _wallet_loaded／_wallet_loading guard，不搭 Inventory.changed 訊號——
+## money 異動走 add_money()／spend()，不像 slots 有專門的「覆寫整包」入口，
+## 沒有對應的訊號可以掛；wallet 的持續同步交給既有的定期 state 同步
+## （_sync_all_characters_periodic()）覆蓋寫入。
+##
 ## =====================================================
 
 
@@ -87,6 +94,21 @@ var _inventory_sync_pending: Dictionary = {}
 
 # 是否已經排程 _flush_pending_inventory_sync()
 var _inventory_sync_deferred := false
+
+
+## -----------------------------------------------------
+## Wallet loading state
+## -----------------------------------------------------
+
+# npc_id -> true
+#
+# 跟 _inventory_loaded 分開追蹤：wallet 是獨立的表，
+# 不能沿用 inventory 那組 guard，否則其中一個先讀完
+# 會讓另一個誤判成「已經載入過」而跳過。
+var _wallet_loaded: Dictionary = {}
+
+# npc_id -> true
+var _wallet_loading: Dictionary = {}
 
 
 # =====================================================
@@ -480,10 +502,16 @@ func _save_character(
 
 	# -------------------------------------------------
 	# 第一次遇到 Character：
-	# 嘗試載入 DB inventory。
+	# 嘗試載入 DB inventory 與 wallet。
+	#
+	# 順序要在下面組 state_data／呼叫 _save_wallet() 之前——
+	# _save_wallet() 讀的是 character.inventory.get_money()，載入沒先做完
+	# 就存，存進去的會是 runtime 的初始值（DEFAULT_MONEY），把 DB 裡原本
+	# 累積的金額覆蓋掉，跟這個載入沒做時 inventory 會被清空是同一種問題。
 	# -------------------------------------------------
 
 	_load_inventory_once(character)
+	_load_wallet_once(character)
 
 
 	# -------------------------------------------------
@@ -910,6 +938,101 @@ func _load_inventory_once(
 
 
 # =====================================================
+# Wallet Load
+# =====================================================
+
+func _load_wallet_once(
+	character: Character
+) -> void:
+
+	if character == null:
+		return
+
+	if character.inventory == null:
+		return
+
+
+	var npc_id := character.character_id
+
+	if npc_id.is_empty():
+		return
+
+
+	# 已經正在 LOAD。
+	if _wallet_loading.has(npc_id):
+		return
+
+
+	# 已經完成 LOAD。
+	if _wallet_loaded.has(npc_id):
+		return
+
+
+	_wallet_loading[npc_id] = true
+
+
+	var rows := DatabaseManager.select_where(
+		WALLET_TABLE,
+		"npc_id = ?",
+		[
+			npc_id
+		],
+		[
+			"money"
+		]
+	)
+
+
+	if rows.is_empty():
+
+		print(
+			"[CharacterStatePersistence] "
+			+ "Wallet 無既有 DB 資料，沿用 runtime 初始值：%s"
+			% npc_id
+		)
+
+		_wallet_loaded[npc_id] = true
+
+		_wallet_loading.erase(
+			npc_id
+		)
+
+		return
+
+
+	# -------------------------------------------------
+	# 有 DB 資料：
+	# 用 DB snapshot 覆蓋 runtime。
+	# -------------------------------------------------
+
+	var money := int(
+		rows[0].get(
+			"money",
+			character.inventory.get_money()
+		)
+	)
+
+	character.inventory.set_money(money)
+
+	print(
+		"[CharacterStatePersistence] "
+		+ "Wallet LOAD %s：money=%d"
+		% [
+			npc_id,
+			money
+		]
+	)
+
+	_wallet_loaded[npc_id] = true
+
+	_wallet_loading.erase(
+		npc_id
+	)
+
+	character.inventory.notify_changed()
+
+
+# =====================================================
 # Inventory Signal Connection
 # =====================================================
 
@@ -1040,6 +1163,17 @@ func _on_character_tree_exited(
 	)
 
 	_inventory_loading.erase(
+		npc_id
+	)
+
+	# wallet 跟 inventory 用同一個 npc_id 生命週期：這個節點離開場景樹之後，
+	# 同 id 的角色若重新進場（例如換身），要重新從 npc_wallet 讀一次，
+	# 不能沿用舊節點留下的「已載入過」標記
+	_wallet_loaded.erase(
+		npc_id
+	)
+
+	_wallet_loading.erase(
 		npc_id
 	)
 
@@ -1776,12 +1910,40 @@ func _ensure_npc_record(
 			character_id
 		],
 		[
-			"npc_id"
+			"npc_id",
+			"home_location_id"
 		]
 	)
 
 
 	if not existing.is_empty():
+
+		var db_home_location_id := str(
+			existing[0].get(
+				"home_location_id",
+				""
+			)
+		)
+
+		# 舊 Character 節點重新進場（例如讀檔後重生）時，把 DB 裡已經
+		# 分配過的家同步回記憶體欄位——round-robin 只在建立新 npc 記錄
+		# 那一次跑，這裡不重新分配。但 DB 值本身也可能是 issue #391 之前
+		# 的舊 fallback（home_001 這類），直接信任會讓這個值繞過格式驗證
+		# 一路留到 has_for()/resolve_for() 才發現解不開——一樣要走
+		# _reconcile_home_location() 驗證（CodeRabbit review 抓到，PR #727）
+		if character.home_location_id.is_empty():
+			character.home_location_id = db_home_location_id
+			return _reconcile_home_location(character, db_home_location_id, character_id)
+
+		# 記憶體值（可能來自讀檔還原的存檔）跟 DB 現存值不一致：DB 才是
+		# _occupied_home_location_ids() 判斷占用的依據，兩邊沒同步會讓
+		# round-robin 的占用判斷跟實際分配脫鉤（例如兩人各自「以為」分到
+		# 同一間）。用 _resolve_home_location() 驗證／必要時重分配，
+		# 結果寫回 DB，不能只在記憶體端悄悄接受讀檔帶回來的值
+		# （code review 抓到，PR #727）
+		if character.home_location_id != db_home_location_id:
+			return _reconcile_home_location(character, db_home_location_id, character_id)
+
 		return true
 
 
@@ -1846,38 +2008,115 @@ func _ensure_npc_record(
 		return false
 
 
+	character.home_location_id = home_location_id
+
+
 	return true
 
 
 # =====================================================
-# Home Location
+# Home Location（issue #391，《規格書07_地點/家》round-robin 分配）
 # =====================================================
 
+## 地圖上固定的家數量。MVP／Phase 2 拍板固定 5 間（見 issue #370 決策），
+## 不支援依人數上限動態生成，見《99》P-58。綁 GameManager.DEPLOY_CAP
+##（《07_地點/家》L21-22 拍板的對應關係），不在這裡再寫死一份 5；同時這個數
+## 必須等於 level.tscn 的 PlaceAnchors 底下 loc_home_* 錨點數——錨點少於這個數，
+## 多出來的家 has_for()/resolve_for() 會解析不到（code review 抓到，PR #727）
+const HOME_LOCATION_COUNT := GameManager.DEPLOY_CAP
+const HOME_LOCATION_PREFIX := "loc_home_"
+
+## level.tscn PlaceAnchors 底下實際佈置的 loc_home_* 錨點數。跟 DEPLOY_CAP
+## 是兩個獨立事實：前者是地圖供給，後者是人數上限，兩者脫鉤時要吵出來
+const HOME_ANCHOR_COUNT := 5
+
+
+## _ensure_npc_record() 的共用收尾：用 _resolve_home_location() 驗證／必要時
+## 重新分配 character 目前的 home_location_id，寫回記憶體；若跟 DB 現存值不同
+## 才寫回 DB。回傳值就是「這次同步算不算成功」——DB 寫入失敗時要往上傳，不能
+## 悄悄吞掉：吞掉的話記憶體已經換成新值、DB 還停在舊值，
+## _occupied_home_location_ids()（讀 DB）跟實際分配會分歧，跟不寫回 DB 是
+## 同一種脫鉤（CodeRabbit review 抓到，PR #727）
+func _reconcile_home_location(
+	character: Character,
+	db_home_location_id: String,
+	character_id: String
+) -> bool:
+
+	var resolved_home_location_id := _resolve_home_location(character)
+	character.home_location_id = resolved_home_location_id
+
+	if resolved_home_location_id == db_home_location_id:
+		return true
+
+	var update_ok := DatabaseManager.update(
+		NPC_TABLE,
+		{"home_location_id": resolved_home_location_id},
+		"npc_id = '%s'"
+		% DatabaseManager.escape_sql_string(character_id)
+	)
+
+	if not update_ok:
+		push_error(
+			"[CharacterStatePersistence] %s home_location_id 同步失敗（%s → %s）"
+			% [character_id, db_home_location_id, resolved_home_location_id]
+		)
+
+	return update_ok
+
+
+## _ensure_npc_record() 兩條路徑（新建立／DB 既有值 reconcile）共用的入口：
+## 世界名冊在這裡取一次，沿用檢查跟重分配看同一份占用快照
 func _resolve_home_location(
 	character: Character
 ) -> String:
 
-	var value = character.get(
-		"home_location_id"
+	return _resolve_home_location_for(
+		character.home_location_id,
+		character.character_id,
+		_world_character_ids()
 	)
 
 
-	if (
-		value != null
-		and not str(value).is_empty()
-	):
+## _resolve_home_location() 的核心。世界名冊收成參數：名冊是場景狀態、不是
+## DB 狀態，收進來之後這條路徑就能在純 DatabaseManager 層測試
+## （tests/test_home_assignment.gd），不用為了測試造場景節點
+func _resolve_home_location_for(
+	current_value: String,
+	character_id: String,
+	world_character_ids: Dictionary
+) -> String:
 
-		var requested := str(
-			value
-		)
+	# seed 一定要排在沿用檢查之前：新 DB（例如剛建立、還沒跑過任何一次
+	# _ensure_npc_record()）讀舊存檔時 location 表是空的，沿用檢查若先跑
+	# 會查不到任何一列、誤判存檔帶回來的 loc_home_0N 無效，靜默重分配一個
+	# 新的——先 seed 好，沿用檢查才有東西可以比對（code review 抓到，PR #727）
+	_ensure_home_locations_seeded()
 
+
+	# 占用集合要排除自己：沿用檢查問的是「這間有沒有被『別人』佔走」，自己
+	# 既有 npc 列上的 home_location_id 不算占用，否則自己的舊值永遠過不了
+	# 檢查（code review 抓到，PR #727）
+	var occupied := _occupied_home_location_ids(
+		world_character_ids,
+		character_id
+	)
+
+
+	# 值本身也要驗證是這一批 loc_home_01～loc_home_05 命名，不能只驗證
+	# location 表裡「有沒有這一列」——舊 fallback（issue #391 之前）寫的
+	# home_001 那類值在 location 表裡也確實有一列，會通過純存在性檢查，
+	# 但場景裡沒有同名錨點，has_for()/resolve_for() 永遠解析不到、每次都
+	# push_error，而且沒有任何自我修復路徑。這裡驗證命名格式，格式不對的
+	# 舊值一律當無效值處理，落到下面重新分配（code review 抓到，PR #727）
+	if _is_valid_home_location_id(current_value):
 
 		var requested_rows := (
 			DatabaseManager.select_where(
 				"location",
 				"location_id = ?",
 				[
-					requested
+					current_value
 				],
 				[
 					"location_id"
@@ -1885,56 +2124,241 @@ func _resolve_home_location(
 			)
 		)
 
-
-		if not requested_rows.is_empty():
-			return requested
-
-
-	var rows := DatabaseManager.select(
-		"location",
-		"",
-		[
-			"location_id"
-		]
-	)
+		# 除了「格式合法＋location 表有這一列」，還要「沒有被別的還在世界的
+		# 角色佔走」——記憶體值可能來自讀檔還原的存檔，跟 DB 現況分歧（存檔
+		# 值與 DB 值打架、或 _ensure_unique_id() 換過 character_id 後照抄舊
+		# 存檔）時，只驗前兩個會讓兩個角色同時「以為」自己分到同一間，而且
+		# 完全靜默，連溢出安全閥的 warning 都沒有。被佔用就落到下面的
+		# round-robin 重分配（code review 抓到，PR #727）
+		if not requested_rows.is_empty() and not occupied.has(current_value):
+			return current_value
 
 
-	if not rows.is_empty():
+	return _assign_next_home_location(occupied)
 
-		return str(
-			rows[0].get(
-				"location_id",
-				""
-			)
+
+## value 是不是這一批 loc_home_01～loc_home_05 其中一個合法命名——只檢查
+## 格式，不查 DB（DB 存在性由呼叫端另外查）。用來擋掉 issue #391 之前的
+## 舊 fallback 值（例如 home_001）與其他任何不屬於這批命名的殘留值
+func _is_valid_home_location_id(value: String) -> bool:
+
+	if value.is_empty():
+		return false
+
+	if not value.begins_with(HOME_LOCATION_PREFIX):
+		return false
+
+	var suffix := value.substr(HOME_LOCATION_PREFIX.length())
+
+	if not suffix.is_valid_int():
+		return false
+
+	var index := int(suffix)
+
+	return index >= 1 and index <= HOME_LOCATION_COUNT
+
+
+## 5 間 loc_home_01~05 是這個 issue 新加的 location 列，只在缺的時候補——
+## 已存在（例如上次啟動已經建過）就不動它，避免覆寫掉未來可能加上的
+## 客製欄位（名稱／danger 等）
+func _ensure_home_locations_seeded() -> void:
+
+	if HOME_LOCATION_COUNT > HOME_ANCHOR_COUNT:
+		push_error(
+			(
+				"[CharacterStatePersistence] "
+				+ "DEPLOY_CAP=%d 超過地圖上的 loc_home_* 錨點數 %d，"
+				+ "多出來的家解析不到座標（《07_地點/家》：地圖動態擴張 Phase 3/4 才支援）"
+			) % [HOME_LOCATION_COUNT, HOME_ANCHOR_COUNT]
 		)
 
+	for i in range(1, HOME_LOCATION_COUNT + 1):
 
-	var inserted := DatabaseManager.insert(
-		"location",
-		{
-			"location_id": "home_001",
-			"name": "Default Home",
-			"description": "Default test home",
-			"location_type": "home",
-			"capacity": 10,
-			"danger": 0,
-			"is_active": 1
-		}
+		var location_id := (
+			"%s%02d" % [HOME_LOCATION_PREFIX, i]
+		)
+
+		var rows := DatabaseManager.select_where(
+			"location",
+			"location_id = ?",
+			[location_id],
+			["location_id"]
+		)
+
+		if rows.is_empty():
+
+			# seed 失敗不能靜默：這一列查不到會讓沿用檢查把存檔帶回來的合法
+			# 舊值當無效、靜默重分配，正好破壞 seed 排在沿用檢查之前想保住的
+			# 性質（code review 抓到，PR #727）
+			if not DatabaseManager.insert(
+				"location",
+				{
+					"location_id": location_id,
+					"name": "Home %d" % i,
+					"description": "",
+					"location_type": "home",
+					"capacity": 1,
+					"danger": 0,
+					"is_active": 1
+				}
+			):
+				push_error(
+					(
+						"[CharacterStatePersistence] "
+						+ "location %s seed 失敗，沿用檢查會把它當不存在、"
+						+ "該角色的家可能被靜默重分配 | DB=%s"
+					) % [location_id, DatabaseManager.db.error_message]
+				)
+
+
+## round-robin：從游標位置沿固定順序找第一間沒有被「目前還在世界上的角色」
+## 佔用的家，分配後游標移到它的下一個位置（mod N）。occupied 由呼叫端傳入
+## （_resolve_home_location_for() 已經算好一份排除自己的占用快照，沿用檢查
+## 跟重分配看同一份，中途世界人數變動也不會前後不一致）。占用＝還在世界上的
+## 角色的 npc 列（見 _occupied_home_location_ids()）：角色離開世界後那間家
+## 即視為空出，下一輪巡覽自然會排到它；游標本身不回退（《規格書07_地點/家》
+## 拍板細節「角色刪除：騰出的房屋標記為空」）
+func _assign_next_home_location(occupied: Dictionary) -> String:
+
+	var cursor := _get_home_cursor()
+
+	for offset in range(HOME_LOCATION_COUNT):
+
+		var index := (cursor + offset) % HOME_LOCATION_COUNT
+		var location_id := (
+			"%s%02d" % [HOME_LOCATION_PREFIX, index + 1]
+		)
+
+		if not occupied.has(location_id):
+			_set_home_cursor((index + 1) % HOME_LOCATION_COUNT)
+			return location_id
+
+	# 溢出安全閥，不是刻意設計的同居功能：5 間全滿在 DEPLOY_CAP=5 的
+	# 世界人數上限下「理論上」不會發生（見《規格書07_地點/家》），但玩家
+	# 本身也會走這條路徑要一間家（見 _ensure_npc_record()），main.tscn
+	# 目前仍留有一個沒走 deploy_from_library() 的設計期測試用 Player 節點
+	# （見 note/技術/村莊地圖.md），會把實際需求推到 6，讓這裡真的碰得到。
+	# home_location_id 在 NPCSchema 是 NOT NULL，回傳空字串會讓
+	# _ensure_npc_record() 整筆失敗、state/wallet/inventory 同步永久卡死
+	# ——寧可讓這個角色暫時跟游標當下那一間共用，也不要讓整套同步斷掉。
+	# 游標要先收斂上界再算共用那間：正常流程游標經 mod 永遠在 0～N-1，
+	# 但舊 DB 可能存過 >= N 的值（schema 的 CHECK 只保證 >= 0），直接
+	# cursor + 1 會算出 loc_home_06 撞 NPCSchema 的外鍵、npc insert 失敗、
+	# _ensure_npc_record() 整筆卡死——正是這個安全閥想避免的結果
+	# （code review 抓到，PR #727）
+	var overflow_index := cursor % HOME_LOCATION_COUNT
+	var overflow_location_id := (
+		"%s%02d" % [HOME_LOCATION_PREFIX, overflow_index + 1]
 	)
 
+	_set_home_cursor((overflow_index + 1) % HOME_LOCATION_COUNT)
 
-	if inserted:
-		return "home_001"
-
-
-	push_error(
+	push_warning(
 		"[CharacterStatePersistence] "
-		+ "無法建立預設 location：%s"
-		% DatabaseManager.db.error_message
+		+ "5 間家全滿，%s 溢出共用（容量安全閥，非刻意同居設計，見《99》P-58）。"
+		% overflow_location_id
 	)
 
+	return overflow_location_id
 
-	return ""
+
+## 占用集合＝「目前還在世界上的角色」的 character_id 對到的 npc 列所占的家。
+## 場上 characters 群組就是世界名冊（Player 的基底 Character._ready() 也會進
+## 這個群組，所以玩家的家一樣算占用）。不能拿 npc 表全部列當占用——npc 列
+## 沒有任何刪除路徑（remove_from_library() 只動記憶體角色庫、is_active 從沒
+## 有人改成 0），同一份 DB 只要曾經同步過 5 個以上不同 character_id（開第二輪
+## 新遊戲、debug console spawn、角色庫換一批），占用就永遠滿 5 間，之後每個
+## 新角色都掉進溢出安全閥共用同一間，per-character home 等於失效。
+## 不在世界名冊裡的列不算占用：那間家即釋出；角色重新進場時若它還沒被別人
+## 拿走，會經 _reconcile_home_location() 沿用回原本那間（code review 抓到，
+## PR #727）
+## 世界名冊與「排除自己」都收成參數：exclude_character_id 是查「自己能不能
+## 沿用」時把自己那列排除，否則自己的舊值會被自己擋下來；名冊收參數的理由
+## 見 _resolve_home_location_for()
+func _occupied_home_location_ids(
+	world_character_ids: Dictionary,
+	exclude_character_id: String = ""
+) -> Dictionary:
+
+	var rows := DatabaseManager.select(
+		NPC_TABLE,
+		"",
+		["npc_id", "home_location_id"]
+	)
+
+	var occupied := {}
+
+	for row in rows:
+
+		var npc_id := str(row.get("npc_id", ""))
+
+		if npc_id == exclude_character_id:
+			continue
+
+		if not world_character_ids.has(npc_id):
+			continue
+
+		var location_id := str(
+			row.get("home_location_id", "")
+		)
+
+		if not location_id.is_empty():
+			occupied[location_id] = true
+
+	return occupied
+
+
+## 目前還在世界上的角色 id 集合（characters 群組）。用 node.get() 而不是轉型
+## 成 Character 再索引：轉型失敗（null）跟缺欄位是同一種「拿不到 id」，一個
+## str() 加空字串檢查就涵蓋，不必在迴圈裡做兩層 null 判斷
+func _world_character_ids() -> Dictionary:
+
+	var ids := {}
+
+	for node in get_tree().get_nodes_in_group("characters"):
+
+		var id := str(node.get("character_id"))
+
+		if not id.is_empty():
+			ids[id] = true
+
+	return ids
+
+
+func _get_home_cursor() -> int:
+
+	var rows := DatabaseManager.select(
+		"home_assignment",
+		"id = 1",
+		["next_index"]
+	)
+
+	if rows.is_empty():
+		return 0
+
+	# 收斂上界：這裡 mod 過，呼叫端就算忘了取 % 也不會算出界外的家
+	# （code review 抓到，PR #727）
+	return int(rows[0].get("next_index", 0)) % HOME_LOCATION_COUNT
+
+
+func _set_home_cursor(value: int) -> void:
+
+	if DatabaseManager.select(
+		"home_assignment", "id = 1", ["id"]
+	).is_empty():
+
+		DatabaseManager.insert(
+			"home_assignment",
+			{"id": 1, "next_index": value}
+		)
+
+	else:
+
+		DatabaseManager.update(
+			"home_assignment",
+			{"next_index": value},
+			"id = 1"
+		)
 
 
 # =====================================================

@@ -3,13 +3,39 @@ tags: [技術, character]
 status: 已實作
 scene: scenes/player.tscn
 script: scripts/character/character.gd, scripts/character/agent.gd, scripts/character/player.gd
-updated: 2026-08-23
+updated: 2026-08-30
 ---
 
 # give／attack／shout 對玩家
 
 NPC 對玩家發起 `give`／`attack`／`shout` 時的相容性驗證與缺口補完（issue #376）。
 跟 [[persuade 對玩家]] 同一個「玩家化身接上世界」群組（#378 端到端驗收的一部分）。
+
+## 反方向：玩家主動攻擊（issue #760）
+
+玩家（化身時）可以主動對附近角色發起攻擊，拍板結果是「開放，比照 #637 haul
+的做法」——不是重新設計傷害機制，`Character.attack()` 從一開始就是
+target-agnostic 的（見上方），缺的只是玩家這端的輸入觸發點。
+
+- **按鍵**：滑鼠右鍵（`attack` action，`input_map_manage` 新增，project.godot），
+  跟 `interact`（E）分開，不跟搭話/工作/搬運搶
+- **目標**：直接沿用 `player.gd::_get_interact_candidates()` 算出來的 `other`——
+  跟 `talk_to()` 同一個「面向＋範圍內最近」候選，不另外算一組獨立清單。
+  `ATTACK_RANGE` 與 `TALK_RANGE` 剛好都是 32px（2 格），距離門檻天然對齊
+- **死屍例外**：`other` 候選集合本身不排除死屍（`talkable_characters` 只濾
+  `CONDITION_INCAPACITATED`，不濾 `is_dead`——跟 E 鍵那條 `revive()` 路徑
+  用的是同一份候選）。右鍵攻擊額外擋一手：目標 `is_dead` 就當沒找到目標，
+  屍體交給 E 鍵的 `revive()` 處理，右鍵攻擊死人沒有意義
+- **失敗訊息**：`ATTACK_TARGET_NOT_FOUND`／`ATTACK_TARGET_IS_SELF`／
+  `ATTACK_TOO_FAR` 這幾個 reason 字串跟其他動作共用同一份
+  `FAILURE_MESSAGE_KEYS` 對照表，`report_action_failure("attack", reason)`
+  不用新增任何 locale 字串
+
+`game_eval` 實測：近距離命中（health -15、injury +20、觸發 `bleeding`，跟
+`_pursue_attack_task()` 那條 NPC 路徑打出來的數值一致）、超出範圍不生效、
+對已死亡目標不生效（三種情境皆驗證）。`test_run` 120 項全套，114
+passed／5 failed，失敗項跟這次改動無關（既有的 embedding placeholder／
+GameClock 場景情境問題，跟改動前基準一致）。
 
 ## give／attack：本來就相容，不需要重新設計
 
@@ -62,11 +88,11 @@ func _on_noise_heard(_source: Character) -> void:
 玩家按 `F` 鍵發出的聲音不會反過來讓自己冒泡——不需要在 `_on_noise_heard()`
 裡再判斷一次來源是不是自己。
 
-`tests/test_shout_reaches_player.gd` 驗證這個反應：需要真的
-`instantiate scenes/player.tscn`（不是像 give/attack 測試那樣手動組
-`Player.new()`），因為 `Bubble` 子節點只有走過 `_ready()` 才會由 `@onready`
-解析出來——沒有掛進場景樹的話 `bubble` 是 null，`say()` 直接靜默 return，
-測不出東西。這組測試在編輯器沒開場景時會 `skip_suite()`。
+`tests/test_shout_reaches_player.gd` 驗證這個反應：跟 give/attack 測試一樣
+手動組 `Player.new()`，`bubble`（及其內部 `box`／`label`）手動塞值卡位，
+`noise_heard.connect(_on_noise_heard)` 也手動補上——不能用
+`player_scene.instantiate()`，`test_run` 的 `@tool` 環境對非 `@tool` 腳本
+一律回傳 placeholder instance（見 [[自動化測試]] 限制 3，issue #624）。
 
 ## 檔案
 

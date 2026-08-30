@@ -1,4 +1,4 @@
-[gd_resource type="Theme" load_steps=108 format=3 uid="uid://dktke2k785jv0"]
+[gd_resource type="Theme" load_steps=115 format=3 uid="uid://dktke2k785jv0"]
 
 [ext_resource type="Texture2D" uid="uid://bo16nnwfc1tma" path="res://assets/ui/buttons.png" id="1_5ivoa"]
 [ext_resource type="Texture2D" uid="uid://bayao7pw4ppnl" path="res://assets/ui/Sprite sheet for Basic Pack.png" id="1_tgcn8"]
@@ -18,21 +18,8 @@ texture_margin_top = 4.0
 texture_margin_right = 4.0
 texture_margin_bottom = 6.0
 
-[sub_resource type="AtlasTexture" id="AtlasTexture_h3elb"]
-atlas = ExtResource("1_tgcn8")
-region = Rect2(148, 148, 24, 25)
-
-[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_ge280"]
-texture = SubResource("AtlasTexture_h3elb")
-texture_margin_left = 10.0
-texture_margin_top = 10.0
-texture_margin_right = 10.0
-texture_margin_bottom = 10.0
-expand_margin_left = 1.0
-expand_margin_top = 1.0
-expand_margin_right = 1.0
-expand_margin_bottom = 1.0
-region_rect = Rect2(0, 0, 24, 25)
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ie1ck"]
+bg_color = Color(0, 0, 0, 0)
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_60kxs"]
 atlas = ExtResource("1_5ivoa")
@@ -279,18 +266,6 @@ texture_margin_top = 5.0
 texture_margin_right = 5.0
 texture_margin_bottom = 5.0
 
-[sub_resource type="AtlasTexture" id="AtlasTexture_i72qb"]
-atlas = ExtResource("1_tgcn8")
-region = Rect2(201, 105, 30, 30)
-
-[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_f4m0v"]
-texture = SubResource("AtlasTexture_i72qb")
-texture_margin_left = 7.0
-texture_margin_top = 7.0
-texture_margin_right = 7.0
-texture_margin_bottom = 7.0
-region_rect = Rect2(0, 0, 30, 30)
-
 [sub_resource type="AtlasTexture" id="AtlasTexture_vofe6"]
 atlas = ExtResource("1_tgcn8")
 region = Rect2(201, 105, 30, 30)
@@ -328,6 +303,52 @@ texture_margin_right = 2.0
 texture_margin_bottom = 3.0
 
 [sub_resource type="StyleBoxTexture" id="StyleBoxTexture_i72qb"]
+
+[sub_resource type="CompressedTexture2D" id="CompressedTexture2D_s6qld"]
+load_path = "res://.godot/imported/buttons.png-12fe8cd646fbf8701fc35ae7af4f992b.ctex"
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_6k5m6"]
+atlas = SubResource("CompressedTexture2D_s6qld")
+region = Rect2(233, 3, 16, 40)
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_fggab"]
+texture = SubResource("AtlasTexture_6k5m6")
+expand_margin_right = 2.0
+axis_stretch_horizontal = 1
+axis_stretch_vertical = 1
+
+[sub_resource type="CompressedTexture2D" id="CompressedTexture2D_f4m0v"]
+load_path = "res://.godot/imported/buttons.png-12fe8cd646fbf8701fc35ae7af4f992b.ctex"
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ygfrh"]
+atlas = SubResource("CompressedTexture2D_f4m0v")
+region = Rect2(251, 3, 16, 40)
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_krpf0"]
+texture = SubResource("AtlasTexture_ygfrh")
+expand_margin_right = 2.0
+axis_stretch_horizontal = 1
+axis_stretch_vertical = 1
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_i72qb"]
+atlas = ExtResource("1_5ivoa")
+region = Rect2(215, 3, 16, 40)
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_f4m0v"]
+texture = SubResource("AtlasTexture_i72qb")
+expand_margin_right = 2.0
+axis_stretch_horizontal = 1
+axis_stretch_vertical = 1
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_tk0nj"]
+atlas = ExtResource("1_5ivoa")
+region = Rect2(269, 3, 16, 40)
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_ygfrh"]
+texture = SubResource("AtlasTexture_tk0nj")
+expand_margin_right = 2.0
+axis_stretch_horizontal = 1
+axis_stretch_vertical = 1
 
 [sub_resource type="DPITexture" id="DPITexture_f4m0v"]
 _source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"32\"><path fill=\"#d3d3d3\" d=\"m5 1h6v30h-6z\"/></svg>
@@ -455,6 +476,7 @@ texture_margin_left = 4.0
 texture_margin_top = 4.0
 texture_margin_right = 4.0
 expand_margin_bottom = 3.0
+region_rect = Rect2(0, 0, 28, 30)
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_s35x1"]
 atlas = ExtResource("5_ie1ck")
@@ -476,6 +498,7 @@ texture = SubResource("AtlasTexture_ai1xu")
 texture_margin_left = 4.0
 texture_margin_top = 6.0
 texture_margin_right = 4.0
+texture_margin_bottom = 2.0
 expand_margin_bottom = 3.0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_i72qb"]
@@ -513,7 +536,7 @@ Button/colors/font_hover_pressed_color = Color(0.15294118, 0.15294118, 0.1529411
 Button/colors/font_pressed_color = Color(0, 0, 0, 1)
 Button/font_sizes/font_size = 12
 Button/styles/disabled = SubResource("StyleBoxTexture_id50s")
-Button/styles/focus = SubResource("StyleBoxTexture_ge280")
+Button/styles/focus = SubResource("StyleBoxFlat_ie1ck")
 Button/styles/hover = SubResource("StyleBoxTexture_h3elb")
 Button/styles/hover_pressed = SubResource("StyleBoxTexture_s6qld")
 Button/styles/normal = SubResource("StyleBoxTexture_60kxs")
@@ -553,7 +576,7 @@ HSlider/styles/slider = SubResource("StyleBoxTexture_1uaci")
 HUDLabel/base_type = &"Label"
 HUDLabel/colors/font_outline_color = Color(0, 0, 0, 1)
 HUDLabel/constants/outline_size = 4
-Label/font_sizes/font_size = 11
+Label/font_sizes/font_size = 12
 LineEdit/font_sizes/font_size = 11
 LineEdit/styles/focus = SubResource("StyleBoxTexture_ai1xu")
 LineEdit/styles/normal = SubResource("StyleBoxTexture_ar72y")
@@ -573,13 +596,18 @@ MenuMargin/constants/margin_right = 20
 MenuMargin/constants/margin_top = 20
 MenuVBoxContainer/base_type = &"VBoxContainer"
 MenuVBoxContainer/constants/separation = 8
-Panel/styles/panel = SubResource("StyleBoxTexture_f4m0v")
+Panel/styles/panel = ExtResource("6_s5seo")
 PanelContainer/styles/panel = SubResource("StyleBoxTexture_060gm")
 ProgressBar/font_sizes/font_size = 10
 ProgressBar/styles/background = SubResource("StyleBoxTexture_6k5m6")
 ProgressBar/styles/fill = SubResource("StyleBoxTexture_tk0nj")
 RichTextLabel/font_sizes/normal_font_size = 11
 RichTextLabel/styles/normal = SubResource("StyleBoxTexture_i72qb")
+SideBarButton/base_type = &"Button"
+SideBarButton/styles/hover = SubResource("StyleBoxTexture_fggab")
+SideBarButton/styles/hover_pressed = SubResource("StyleBoxTexture_krpf0")
+SideBarButton/styles/normal = SubResource("StyleBoxTexture_f4m0v")
+SideBarButton/styles/pressed = SubResource("StyleBoxTexture_ygfrh")
 TabBar/colors/drop_mark_color = Color(1, 1, 1, 1)
 TabBar/colors/font_disabled_color = Color(0.875, 0.875, 0.875, 0.5)
 TabBar/colors/font_hovered_color = Color(0.95, 0.95, 0.95, 1)
@@ -589,7 +617,7 @@ TabBar/colors/font_unselected_color = Color(0.7, 0.7, 0.7, 1)
 TabBar/constants/h_separation = 4
 TabBar/constants/icon_max_width = 0
 TabBar/constants/outline_size = 0
-TabBar/font_sizes/font_size = 16
+TabBar/font_sizes/font_size = 12
 TabBar/fonts/font = ExtResource("4_60kxs")
 TabBar/icons/close = null
 TabBar/icons/decrement = null
@@ -606,6 +634,7 @@ TabBar/styles/tab_selected = SubResource("StyleBoxFlat_2ar32")
 TabBar/styles/tab_unselected = SubResource("StyleBoxTexture_w2apa")
 TabContainer/constants/side_margin = 4
 TabContainer/constants/tab_separation = 0
+TabContainer/font_sizes/font_size = 12
 TabContainer/styles/panel = ExtResource("6_s5seo")
 TabContainer/styles/tab_disabled = SubResource("StyleBoxTexture_s5seo")
 TabContainer/styles/tab_focus = SubResource("StyleBoxFlat_60kxs")

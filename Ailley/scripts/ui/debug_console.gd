@@ -68,11 +68,9 @@ func _ready() -> void:
 		# debug 入口，之後有正式的建角面板/角色庫 UI（#122）接上之後再收進
 		# 正式指令表
 		"spawn": {"run": _cmd_spawn, "usage": "spawn <template_id>", "help": ""},
-		# 同上，help 留空：#122 玩家自建角色的入口。建角面板／角色庫首頁本身
-		# 沒有任何 HUD 按鈕可以點開（規格書 05 沒有定義掛點），比照 spawn 的
-		# 先例走 debug 指令打通管線，不等一個像素風的開場選單
+		# 同上，help 留空：#122 玩家自建角色的入口。角色庫已經併進建角面板左側
+		# 的模板長條，不再是獨立畫面，charlib 指令拿掉了
 		"charnew": {"run": _cmd_charnew, "usage": "charnew", "help": ""},
-		"charlib": {"run": _cmd_charlib, "usage": "charlib", "help": ""},
 		# 同上，help 留空：#371 化身者投放路由的唯一入口，正式的「由我操控」
 		# 按鈕還沒做（角色庫首頁的視覺任務），先靠指令打通管線驗證 #374
 		# 快捷欄/背包接線正確——見 note/技術/建角面板.md
@@ -711,7 +709,24 @@ func _cmd_spawn(args: PackedStringArray) -> void:
 		_error("找不到模板 %s" % args[0])
 		return
 
-	var identity := {"character_name": template.get("character_name", "")}
+	# 跟 deploy_from_library()／_respawn_character() 同一套：人格資料要先進
+	# identity_assignments，_ready() 才會用 Personality.from_identity() 現算
+	# personality／system_prompt。模板裡預先算好的那份 personality／system_prompt
+	# 只是給人看的預覽快照，不是拿來直接套用的（CodeRabbit review 抓到 spawn
+	# 只帶 character_name，模板裡的 hexaco_input／character／words_to_creator
+	# 全部悄悄消失）
+	var character_id := Character.generate_id()
+	GameManager.identity_assignments[character_id] = {
+		"character_id": character_id,
+		"character_name": template.get("character_name", ""),
+		"hexaco": template.get("hexaco_input", {}),
+		"character": template.get("character", ""),
+	}
+	var identity := {
+		"character_id": character_id,
+		"character_name": template.get("character_name", ""),
+		"words_to_creator": template.get("words_to_creator", ""),
+	}
 	var character := GameManager.spawn_character(AGENT_SCENE, identity)
 	# 跟投放／還原共用同一道 readiness 關卡，不然這裡生出來的角色一樣會是
 	# 不會決策的殭屍（issue #598），沒辦法拿來驗證投放流程是否正常
@@ -721,8 +736,9 @@ func _cmd_spawn(args: PackedStringArray) -> void:
 		character.character_name, character.character_id
 	])
 
-# charnew / charlib   開啟建角面板／角色庫首頁（#122）。兩個面板都用
-# group 找節點，本檔不持有直接參照——跟找角色用 get_tree() 找節點同一個理由
+# charnew   開啟建角面板（#122）。角色庫模板長條併在同一個面板左側，
+# 一起開，不用另外找。走 group 找節點，本檔不持有直接參照——跟找角色用
+# get_tree() 找節點同一個理由
 func _cmd_charnew(_args: PackedStringArray) -> void:
 	var panel := get_tree().get_first_node_in_group("character_create_panel")
 	if panel == null:
@@ -730,16 +746,9 @@ func _cmd_charnew(_args: PackedStringArray) -> void:
 		return
 	panel.open()
 
-func _cmd_charlib(_args: PackedStringArray) -> void:
-	var panel := get_tree().get_first_node_in_group("character_library_panel")
-	if panel == null:
-		_error("找不到角色庫面板")
-		return
-	panel.open()
-
 # embody <id>   投放角色庫裡的一筆為玩家操控的化身角色（deploy_from_library
 # 的 as_player=true 分支，#371）。角色庫 id 沒有其他地方會印出來，沒帶參數
-# 或 id 錯誤時列出目前未投放的清單，不用先開 charlib 面板肉眼找
+# 或 id 錯誤時列出目前未投放的清單，不用先開 charnew 面板肉眼找
 func _cmd_embody(args: PackedStringArray) -> void:
 	if args.size() == 1:
 		var character := GameManager.deploy_from_library(args[0], true)
@@ -996,7 +1005,7 @@ const AI_PROBE_TEXT := "hello from ailley"
 # dialogue／SCHEDULED 兩種都留著才測得出差別：連打兩次 ai 第二次應該被擋，
 # 連打兩次 ai dialogue 應該兩次都過
 #
-# 每次都先 reload_config()，玩家剛寫完 user://ai_config.json 不用重開遊戲
+# 每次都先 reload_config()，玩家剛寫完 user://ai_config_<hash>.json 不用重開遊戲
 # emotion <name> <type> [intensity]
 #
 # #116 AC 要求要有 debug 方式「手動設定/觀察」emotion；status 已經做了觀察，

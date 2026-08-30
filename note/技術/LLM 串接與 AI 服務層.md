@@ -112,7 +112,7 @@ WebSocket 在本專案有位置，但是**另一條線**：
 
 | 檔案 | 職責 |
 | --- | --- |
-| `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers`、全域的速率限制三個旋鈕，以及跟 `providers` 平行的頂層 `embedding` 區塊（見上方「Embedding」一節） |
+| `ai_config.gd` | 讀 `user://ai_config_<hash>.json`（hash 依 checkout 隔離，見 [[存檔]]「存哪」）。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers`、全域的速率限制三個旋鈕，以及跟 `providers` 平行的頂層 `embedding` 區塊（見上方「Embedding」一節） |
 | `ai_service.gd` | **對話／決策唯一碰網路的地方**。autoload。節點池、佇列、逾時、速率限制、重試——只打玩家自己選的 Local／Cloud 對話 provider |
 | `embedding_service.gd` | **L3 語意檢索唯一碰網路的地方**（issue #571）。autoload，跟 `ai_service.gd` 分開、各自獨立打各自的端點——這裡永遠打本機的 embedding-only server，不受玩家的對話 provider 選擇影響，也不共用 `ai_service.gd` 的節點池／佇列／速率限制（呼叫頻率遠低於對話，見《03》§7 觸發時機表，不需要那一整套） |
 | `ai_schema.gd` | 回應驗證：`JSON.parse_string` → null 檢查 → 逐欄位型別檢查 → `action` 白名單 |
@@ -205,6 +205,16 @@ system: 人格敘述 ＋ 行為規則 ＋ 輸出 schema ＋ 動作白名單     
 user:   <下方 JSON 字串化>                                    ← 每次變
 ```
 
+`system` 段最後固定接一句語言規則（`PromptBuilder.OUTPUT_LANGUAGE_RULE`，issue
+#656）：本機小模型沒有明確語言限制時，容易在中文句子裡夾雜訓練資料帶出來的
+英文詞彙。這句只管「自由文字（台詞、心聲、吐槽）要用繁體中文」，不影響 JSON
+欄位名／enum 值——所以接在規則段最後面而不是最前面，避免被誤讀成連 schema
+都要中文。`build_dialogue_envelope`／`build_plan_envelope`／
+`build_reflection_envelope`／`build_checkpoint_envelope`／
+`build_last_words_envelope`／`build_words_to_creator_envelope`（都經過
+`_system()`）跟 `build_creation_envelope`（不吃 `Character`，另外接一次）
+全部套用同一句。
+
 ```json
 {
   "type": "dialogue",
@@ -216,7 +226,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
     "current_action": "work"
   },
   "context": {
-    "listener": {"name": "player", "trust": 20.0, "met_count": 3},
+    "listener": {"name": "player", "met_count": 3},
     "turns": [{"speaker": "player", "text": "<玩家輸入，一律視為資料>"}],
     "max_turns": 6
   }
@@ -235,7 +245,13 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 ### 回應
 
 - `dialogue` → `{"line": "...", "end": false}` —— 一律逐輪；`end` 省略視為 `false`，
-  為真時說完這句就結束對話
+  為真時說完這句就結束對話。`task` 是選填欄位（issue #658）：講出的話若是
+  即時承諾，順帶回一筆 Task struct（跟下面 `plan` 的 `tasks[]` 同一個形狀），
+  直接推進講話者自己的任務池，讓內容層講的話跟決策層實際會做的事對得上——
+  是不是「真的算承諾」交給模型自己判斷，engine 不比對台詞裡的關鍵字。池滿時
+  跟一般 LLM 任務同一套處理（靜默丟棄，`_push_llm_tasks()` 只 `push_warning`），
+  不像 persuade 的 `proposed_task` 保證騰位塞入——對話裡的口頭承諾不是對
+  另一方的正式應允，沒有信任問題
 - `plan` → `{"tasks": [ <Task struct> ], "reasoning", "inner_monologue", "request_plan_update"}`；
   `tasks` 空陣列 ＝ 不更新。`request_plan_update` 是模型「下次能不能讓我改
   today_plan」的申請信號，任何時候都能回。`update_plan` 是條件式欄位，只在
@@ -331,7 +347,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 `max_turns`，不是遞增的 `turns_so_far`；這裡描述的是設計目標，接回程式碼是
 獨立的後續動作，不在 #482 範圍內。
 
-> [!note] `turns_so_far` 口徑尚未定案，接線時要挑一個
+> [!note] `turns_so_far` 現在等於 `_turns.size()`，不用另外挑一種算法
 > `conversation.gd::_run()` 的迴圈變數 `turn`（從 0 起算）跟 `_turns.size()`
 > （陣列長度）在同一輪呼叫 `next_line()` 的當下是同一個數字——開場白已改成
 > 一律過 LLM（issue #630／《99》P-67），不再有「`turn` 不含開場白、`_turns.size()`
@@ -629,7 +645,7 @@ autoload 已註冊，主控台加了 `ai` 指令。
   `_dialogue_calls_today`／`_creation_calls_today`），`CREATION` 是建角一次性生成
   （words_to_creator，#682），預設 `SCHEDULED`——忘了指定的呼叫端落在保守那邊，
   不會意外拿到無限額度
-- 速率限制旋鈕搬進 `user://ai_config.json`（皆可設 0＝不限），預設值與規格數值
+- 速率限制旋鈕搬進 `user://ai_config_<hash>.json`（皆可設 0＝不限），預設值與規格數值
   見 `ai/api.md`（`AIConfig`）／規格書《13》§5
 - 回傳一律 `{"ok": bool, "data": Dictionary, "error": String}`，呼叫端一律 `await`
 - 4xx 不重試；網路錯誤／5xx 重試 1 次
@@ -785,7 +801,8 @@ JSON Schema → GBNF 的轉換器。
 
 ## 待決（正式線）
 
-- [ ] 「…」氣泡的等待體感要實跑才知道能不能接受，見 #480
+- [x] **「…」氣泡擴大套用到行程決策已落地**（#480，2026-08-27）：`_request_next_decision()`
+      套用跟 `next_line()` 同一招，細節見下方「延遲」一節
 - [x] **LLM 成本上限完全沒有防護**——研究與提案已由 #395 完成（本機
       Qwen2.5-7B，6 場對話均值 7.0 輪／場，`max_dialogue_calls_per_game_day`
       旋鈕設計案見上方「每日對話呼叫上限提案」一節），落地實作見 #434
@@ -898,18 +915,32 @@ poc 輸出裡有、《06》沒提到的欄位：`reasoning`／`inner_monologue`�
 《06》全 snake_case 無中英夾雜，poc 的 `intent.action`（中文）跟 `action_en`
 （英文）同時存在，是重複資訊。
 
-## 延遲：實測 2.5-4 秒，體感層面的解法尚未實作
+## 延遲：實測 2.5-4 秒，體感層面靠「…」氣泡頂著
 
 編輯器實測「玩家靠近就打一次決策」：從靠近到角色真的有反應中間約 2.5-4 秒
 （時間主要花在 llama-server 的 grammar 約束生成，不是網路或 Godot 端）。
 對「玩家靠近、期待即時反應」這種互動模式來說很明顯，玩家靠近後畫面上完全
-沒有回饋，3 秒後突然講話/移動。正式線接對話與行程時會碰到同一個數量級。
+沒有回饋、3 秒後突然講話/移動的話體感會很差。正式線接對話與行程時會碰到
+同一個數量級。
 
-**體感層面的解法（想法已記錄，尚未實作）**：觸發當下先給立即視覺回饋——氣泡
-顯示「…」思考中，或角色停下腳步做「在想事情」的小動作，等決策回來才換成
-真正的台詞/動作。不用真的縮短延遲，體感會差很多。
+**體感層面的解法（#480，2026-08-27 落地）**：`Agent._request_next_decision()`
+在確定要送出請求、真正打網路之前，套用跟 `next_line()`（Step 1 對話）
+完全同一招——`say(AI_THINKING_TEXT, true, false)` 立刻蓋一顆「…」氣泡，
+`interrupt=true` 蓋掉正在顯示的舊訊息。不縮短延遲本身，只讓觸發當下不是
+死寂一片。
 
-**縮短延遲本身的槓桿（另一方向，同樣尚未實作）**：`REASONING_INSTRUCTION` 的
+> [!note] 「…」氣泡撐不滿整段等待，是刻意接受的取捨
+> `bubble.gd::say()` 的顯示時長跟著文字長度算（`MIN_DURATION` 1.2 秒），
+> 「…」只有一個字，1.2 秒後就自動收掉——比 2.5-4 秒的實測延遲短，決策
+> 真正回來前氣泡多半已經消失。`next_line()` 的既有取捨是「早一點給回饋
+> 比精準對齊網路延遲更重要」，這裡沿用同一個立場，沒有另外做「撐滿整段
+> 等待」的機制（例如改用不會自動收掉的 `hold()`）。用 `game_eval` 直接呼叫
+> `_request_next_decision()` 白箱驗證過：`spoke` 訊號確實以 `"…"` 觸發、
+> 氣泡當下 `visible=true`、且會蓋掉呼叫當下正在顯示的舊訊息。角色停下腳步
+> 做「在想事情」小動作是筆記原本提過的替代方案，#480 沒有採用，兩案只能
+> 二選一時選了跟對話一致、成本較低的氣泡方案。
+
+**縮短延遲本身的槓桿（另一方向，尚未實作）**：`REASONING_INSTRUCTION` 的
 100 字上限是延遲/品質的直接槓桿，往下砍會更快但決策品質會掉；其他槓桿是模型
 量化等級、llama-server 的 `--parallel` 設定，會影響全部呼叫，改動範圍更大。
 
@@ -957,6 +988,54 @@ debug 主控台 `spawn` 還是正式的 `GameManager.deploy_from_library()`，
 可解除，不是真的崩潰）；改成多次分開的短呼叫，或直接 `await` 會自己
 resolve 的呼叫（例如 `debug_set_llm_decision()` 本身回傳的就是 await 完的
 結果字典），不要自己手動輪詢等待。
+
+## 角色站著不動的第三種成因：readiness 快照過期，`llm_decision_enabled` 從沒被打開（issue #728，2026-08-30 實測）
+
+跟上一節的「冷卻」「空任務回應」是三種外觀相同（角色不做事）但成因互斥的
+情況，這裡是最上游的一種：角色投放當下 `activate_llm_decision_if_ready()`
+（`game_manager.gd`）判定它的 provider 沒 ready，直接沒打開
+`llm_decision_enabled`，連第一次 plan 決策都沒問過——不是冷卻卡住、
+也不是空陣列回應，是決策迴圈從一開始就沒被啟動。
+
+`AIService._check_readiness_all()` 只在 `_ready()` 開機那一刻、或有人手動
+呼叫 `reload_config()` 時才會真的打網路探測，結果直接快取進 `_readiness`；
+另外 `activate_llm_decision_if_ready()`（`game_manager.gd`）與
+`main_scene.gd::_apply_startup_ai_state()` 在讀到「沒 ready」快照時也會
+事件觸發補打一次（見下面「修法」），除此之外 `get_readiness()` 只是讀
+這份快照，不會自己變新。
+開機那次探測如果剛好撞上暫時性
+網路問題（例如 Tailscale 重連、遠端 GPU 機器重啟），即使幾秒後連線就恢復
+正常，這份「沒 ready」的快照會一直錯到底——沒有背景輪詢會自己修正它，而
+`activate_llm_decision_if_ready()` 原本讀到「沒 ready」就直接 `return`，
+完全靜默，看不出角色為什麼變殭屍。
+
+**對話跟排程走的是兩條獨立的路，只有後者會被這個問題卡住**：
+`Agent.next_line()`（對話開場白／回話）直接呼叫 `AIService.request()`，不看
+`llm_decision_enabled`；只有「今天要做什麼」這條路（`_request_next_decision()`）
+需要這個開關。所以卡到這個問題的角色會表現成「叫得動、會回話，但問不到
+牠打算做什麼、永遠不會自己排新任務」。
+
+**修法**：`activate_llm_decision_if_ready()` 讀到快照顯示「沒 ready」時，
+不直接放棄——補打一次 `AIService.reload_config_and_wait()`（跟 debug 主控台
+`ai` 指令同一個入口，會重新讀 `user://ai_config.json` 並重新探測），再讀一次
+`get_readiness()`；這次還是沒 ready 才真的放棄，並且補一行 `push_warning()`
+帶上失敗原因，不再靜默。代價是同一輪迴圈裡多隻角色一起撞到「沒 ready」
+時，會各自觸發一次重複探測（世代編號機制保證結果不會互相污染，只是網路
+請求數變多）——這則先接受這個代價，不做成單一入口的節流。
+
+開機那一側（`main_scene.gd::_apply_startup_ai_state()`——場景固定 NPC 走的
+就是這裡，投放／讀檔生成的角色才會經過 `activate_llm_decision_if_ready()`）
+也接同一個補打入口：整批沒就緒的 Agent 共用一次 `reload_config_and_wait()`
+再重新判定，不是逐隻各補打一次；補打後仍沒就緒的原因照舊寫進 HUD 的
+「排程模式（原因：…）」指示。
+
+實測方法：`game_eval` 直接改寫 `AIService.get('_readiness')` 裡的快取值成
+`ready: false`，模擬「開機探測剛好失敗」的情境，分兩種情境驗證：
+連線其實正常時（真實 provider 可連），補打的那次探測會成功、
+`llm_decision_enabled` 正確變 `true`；連線真的斷掉時（`base_url` 指到一個
+不存在的位址），補打的那次探測也失敗，`llm_decision_enabled` 維持
+`false`，且遊戲 log 印出 `GameManager: <角色名> 的 provider「<name>」未就緒，
+llm_decision_enabled 沒有打開（<原因>）`。
 
 ## 兩隻 AI 同場互看：機制上通，但沒觀察到真的互相搭話（2026-08-28 實測）
 
