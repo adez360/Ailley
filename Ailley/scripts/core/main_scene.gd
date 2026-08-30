@@ -34,9 +34,12 @@ func _ready() -> void:
 ## 的常駐指示——排程村莊跟真的在跑決策的村莊畫面上很像，沒有這個指示要盯
 ## 很久才會發現兩者其實不一樣。
 ##
-## 只在開場探測一次、套用一次，不做背景輪詢：provider 連線狀態中途改變
-## （例如玩到一半才把 llama-server 開起來）不在這裡的範圍，那種情況的
-## 既有救援手段是 debug 主控台的 `ai`（手動重測）／`ai_decision`（手動逐隻開）。
+## 只在開機探測、套用一次，不做背景輪詢：開機那批快照若有「沒 ready」的，
+## 這裡會像 game_manager.gd::activate_llm_decision_if_ready() 一樣事件觸發
+## 補打一次 reload_config_and_wait() 再判定（issue #728），除此之外不做
+## 第二次探測——provider 連線狀態玩到一半才改變（例如才把 llama-server
+## 開起來）不在這裡的範圍，那種情況的既有救援手段是 debug 主控台的
+## `ai`（手動重測）／`ai_decision`（手動逐隻開）。
 ##
 ## 逐隻查 agent.get_provider_name() 各自的 readiness，不是隨便查一個全域值——
 ## 不同 Agent 的 decision_source／model_name 可能解析到不同的 provider，
@@ -63,26 +66,51 @@ func _apply_startup_ai_state() -> void:
 	# 開發期指示器要能一次看出全部原因，不能只看到最後蓋掉前面的那個
 	# （CodeRabbit review 抓到，PR #467）
 	var fallback_reasons := {}
-	var ready_agents: Array[Agent] = []
+	var not_ready_agents: Array[Agent] = []
 	for node in agents:
 		var agent := node as Agent
 		if agent == null:
 			continue
 		var readiness := AIService.get_readiness(agent.get_provider_name())
-		var agent_ready := bool(readiness.get("ready", false))
-		if agent_ready:
+		if bool(readiness.get("ready", false)):
 			ready_count += 1
 			ready_agents.append(agent)
 		else:
 			fallback_reasons[str(readiness.get("reason", ""))] = true
 			agent.debug_set_llm_decision(false)
+			not_ready_agents.append(agent)
+
+	# 開機那批探測的「沒 ready」可能是過期快照（探測剛好撞上暫時性網路問題，
+	# 之後連線已恢復，快照卻不會自己變好）——跟
+	# game_manager.gd::activate_llm_decision_if_ready() 用同一個補打入口
+	# reload_config_and_wait() 再判定一次（issue #728），不讓場景固定 NPC
+	# 走另一道靜默關卡。整批沒就緒的 Agent 共用一次補打，不是逐隻各補打
+	# 一次（世代編號機制保證結果不會互相污染）；仍是事件觸發的一次性補打，
+	# 不是 tick 輪詢。
+	if not not_ready_agents.is_empty():
+		await AIService.reload_config_and_wait()
+		# await 期間場景可能已被換掉（同上面 await_readiness_settled() 的防呆，
+		# CodeRabbit review 抓到，PR #467）——這個節點連同場上 Agent 都不再
+		# 有效，繼續往下會直接噴 null 存取錯誤
+		if not is_inside_tree():
+			return
+		for agent in not_ready_agents:
+			if not is_instance_valid(agent):
+				continue
+			var readiness := AIService.get_readiness(agent.get_provider_name())
+			if bool(readiness.get("ready", false)):
+				ready_count += 1
+				ready_agents.append(agent)
+			else:
+				fallback_reasons[str(readiness.get("reason", ""))] = true
 
 	# 場景固定 NPC 若沒有預先生成好 words_to_creator，Agent._ready() 開場會
 	# fire-and-forget 補打一次（見 agent.gd::_generate_words_to_creator()）——
-	# 那通走 AIService.Policy.CREATION，跟這裡即將發起的首次 plan decision
-	# （Policy.SCHEDULED）是各自獨立的冷卻池，不會互相卡住，不用像
-	# issue #682 之前那樣等一輪冷卻才能開決策
+	# 上面補打的 await 期間場上角色可能被移除（debug 主控台 despawn 之類），
+	# 已收集的 ready_agents 要逐隻防呆，對已 freed 的節點呼叫方法會直接噴錯
 	for agent in ready_agents:
+		if not is_instance_valid(agent):
+			continue
 		agent.debug_set_llm_decision(true)
 
 	if agents.is_empty():

@@ -997,8 +997,12 @@ resolve 的呼叫（例如 `debug_set_llm_decision()` 本身回傳的就是 awai
 也不是空陣列回應，是決策迴圈從一開始就沒被啟動。
 
 `AIService._check_readiness_all()` 只在 `_ready()` 開機那一刻、或有人手動
-呼叫 `reload_config()` 時才會真的打網路探測，結果直接快取進 `_readiness`，
-其餘時間 `get_readiness()` 只是讀這份快照。開機那次探測如果剛好撞上暫時性
+呼叫 `reload_config()` 時才會真的打網路探測，結果直接快取進 `_readiness`；
+另外 `activate_llm_decision_if_ready()`（`game_manager.gd`）與
+`main_scene.gd::_apply_startup_ai_state()` 在讀到「沒 ready」快照時也會
+事件觸發補打一次（見下面「修法」），除此之外 `get_readiness()` 只是讀
+這份快照，不會自己變新。
+開機那次探測如果剛好撞上暫時性
 網路問題（例如 Tailscale 重連、遠端 GPU 機器重啟），即使幾秒後連線就恢復
 正常，這份「沒 ready」的快照會一直錯到底——沒有背景輪詢會自己修正它，而
 `activate_llm_decision_if_ready()` 原本讀到「沒 ready」就直接 `return`，
@@ -1017,6 +1021,12 @@ resolve 的呼叫（例如 `debug_set_llm_decision()` 本身回傳的就是 awai
 帶上失敗原因，不再靜默。代價是同一輪迴圈裡多隻角色一起撞到「沒 ready」
 時，會各自觸發一次重複探測（世代編號機制保證結果不會互相污染，只是網路
 請求數變多）——這則先接受這個代價，不做成單一入口的節流。
+
+開機那一側（`main_scene.gd::_apply_startup_ai_state()`——場景固定 NPC 走的
+就是這裡，投放／讀檔生成的角色才會經過 `activate_llm_decision_if_ready()`）
+也接同一個補打入口：整批沒就緒的 Agent 共用一次 `reload_config_and_wait()`
+再重新判定，不是逐隻各補打一次；補打後仍沒就緒的原因照舊寫進 HUD 的
+「排程模式（原因：…）」指示。
 
 實測方法：`game_eval` 直接改寫 `AIService.get('_readiness')` 裡的快取值成
 `ready: false`，模擬「開機探測剛好失敗」的情境，分兩種情境驗證：
