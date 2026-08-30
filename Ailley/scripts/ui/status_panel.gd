@@ -103,6 +103,10 @@ func _make_item_slot() -> TextureRect:
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	label.clip_text = true
+	# theme 的 Label 預設字級是 12（ailley_theme.tres），跟 InventorySlotButton
+	# 借同一個 NAME_FONT_SIZE=11 override——slot_text() 的截斷算式（11px × 2 字）
+	# 是照這個字級推的，這裡沒跟著 override 的話算式對不上實際渲染字級
+	label.add_theme_font_size_override("font_size", InventorySlotButton.NAME_FONT_SIZE)
 	rect.add_child(label)
 
 	items_tab.add_child(rect)
