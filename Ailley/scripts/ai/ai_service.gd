@@ -147,7 +147,7 @@ func _ready() -> void:
 	# 多打一次，開機時會送出兩批重複的 /models 請求
 
 
- # 玩家寫好 user://ai_config.json 之後不必重開遊戲，debug 主控台的 ai 指令會先叫這個。
+ # 玩家寫好 user://ai_config_<hash>.json 之後不必重開遊戲，debug 主控台的 ai 指令會先叫這個。
  # 就緒表也一併重算——這是唯一的手動重測入口。除此之外，
  # game_manager.gd::activate_llm_decision_if_ready() 與
  # main_scene.gd::_apply_startup_ai_state() 在讀到過期的「沒 ready」快照時，

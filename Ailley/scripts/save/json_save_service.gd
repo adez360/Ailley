@@ -1,7 +1,7 @@
 extends "res://scripts/save/save_service.gd"
 
 ## SaveService 的 JSON 實作：一個角色／世界各自一個 JSON 檔，存在
-## user://saves_<hash>/ 底下（跟 ai_config.json 同一層 user://，但分子目錄
+## user://saves_<hash>/ 底下（跟 ai_config_<hash>.json 同一層 user://，但分子目錄
 ## 避免混在一起；hash 依 checkout 隔離，見 CHARACTERS_DIR/WORLDS_DIR）。
 ##
 ## 只管檔案讀寫與 version 欄位遞增，不知道 character／world 的資料形狀——那是

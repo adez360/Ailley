@@ -105,8 +105,8 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 
 做法是讓 `_ready()` 走到第三層時，改呼叫一個可被子類別覆寫的 hook
 （`_resolve_generated_id()`，預設就是 `generate_id()`）。`player.gd` 覆寫它：
-第一次生成後，把這組 UUID 額外寫進 `user://saves/player_id.txt`——
-跟 `user://saves/characters/`／`user://saves/worlds/`（見 [[存檔]]）分開放，
+第一次生成後，把這組 UUID 額外寫進 `user://saves_<hash>/player_id.txt`——
+跟 `user://saves_<hash>/characters/`／`user://saves_<hash>/worlds/`（見 [[存檔]]）分開放，
 因為它不屬於 `SaveService` 那套整包讀寫／版本／鎖的機制，從頭到尾只有一個值，
 寫一次之後只會被讀取。下次 `_ready()` 先讀這個檔案，讀得到就沿用，不必再過一次
 存檔那套重量級流程。

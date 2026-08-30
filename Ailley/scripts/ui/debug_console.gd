@@ -1005,7 +1005,7 @@ const AI_PROBE_TEXT := "hello from ailley"
 # dialogue／SCHEDULED 兩種都留著才測得出差別：連打兩次 ai 第二次應該被擋，
 # 連打兩次 ai dialogue 應該兩次都過
 #
-# 每次都先 reload_config()，玩家剛寫完 user://ai_config.json 不用重開遊戲
+# 每次都先 reload_config()，玩家剛寫完 user://ai_config_<hash>.json 不用重開遊戲
 # emotion <name> <type> [intensity]
 #
 # #116 AC 要求要有 debug 方式「手動設定/觀察」emotion；status 已經做了觀察，
