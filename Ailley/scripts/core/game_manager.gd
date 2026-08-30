@@ -490,9 +490,34 @@ func activate_llm_decision_if_ready(character: Character) -> void:
 	await AIService.await_readiness_settled()
 	if not is_instance_valid(agent):
 		return
-	var readiness := AIService.get_readiness(agent.get_provider_name())
+	var provider_name := agent.get_provider_name()
+	var readiness := AIService.get_readiness(provider_name)
+
+	# 第一次判定沒 ready 時不直接放棄——那份快照可能是更早一批探測留下的
+	# 過期結果（例如開機那次探測剛好撞到暫時性網路問題，之後連線其實已經
+	# 恢復），永遠沿用不會自己變好（issue #728）。這裡補打一次即時的
+	# reload_config_and_wait()：跟 debug 主控台 `ai` 指令用同一個入口，
+	# 重新讀一次 user://ai_config.json 並重新探測全部 provider，不是只留在
+	# 「等現有那批探測做完」。跟 _check_provider_readiness() 對單一 provider
+	# 的重試是同一種「值得再打一次」的精神，差別是那裡是背景自動重試一次，
+	# 這裡是事件觸發（真的要用到這個判斷結果的當下）才補打，不是持續輪詢，
+	# 沒有違背 reload_config() 開頭註解「不做背景輪詢」的既有原則。
+	#
+	# 代價：多個角色在同一輪迴圈裡（例如 _respawn_character() 還原整批存檔）
+	# 都撞到「沒 ready」時，會各自觸發一次重複的 reload_config_and_wait()、
+	# 對同一批 provider 重複探測——世代編號機制保證結果不會互相污染，只是
+	# 網路請求數變多，這裡先接受這個代價，不在這則 issue 順便做成單一入口
+	# 的節流（範圍見 PR 說明）
 	if not readiness.get("ready", false):
-		return
+		await AIService.reload_config_and_wait()
+		if not is_instance_valid(agent):
+			return
+		readiness = AIService.get_readiness(provider_name)
+		if not readiness.get("ready", false):
+			push_warning("GameManager: %s 的 provider「%s」未就緒，llm_decision_enabled 沒有打開（%s）" % [
+				character.character_name, provider_name, readiness.get("reason", "")
+			])
+			return
 
 	# agent.gd::_ready() 剛剛可能已經 fire-and-forget 打過一次
 	# _generate_words_to_creator()（words_to_creator 沒預填才會真的送）——
