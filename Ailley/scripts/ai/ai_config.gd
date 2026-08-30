@@ -49,11 +49,10 @@ const DEFAULT_MAX_CALLS_PER_GAME_DAY := 20
 ## 對話輪次自己的每日呼叫上限，只在 dialogue_exempt=true 時才有意義——
 ## dialogue_exempt=true 讓 CONVERSATION 完全豁免上面兩條限制，沒有這個旋鈕
 ## 的話一場對話可以無限輪講下去，成本無上限。0＝不限，跟前兩者同一套慣例。
-## 150 是使用者調高後的值（原本 30 是 #395 研究的建議起點：本機 Qwen2.5-7B，
-## 6 場對話樣本，換算單一角色約可撐 10 場均值對話，見《LLM 串接與 AI 服務層》
-## 「每日對話呼叫上限提案」一節），30 太容易在單一角色多場對話的一天內撞到
-## 上限提早收尾。dialogue_exempt=false 時這個旋鈕形同虛設——那種設定下
-## 對話呼叫已經走一般 max_calls_per_game_day 路徑，不需要疊加第二層限制
+## 目前預設值是 150；起始值 30 的推算方法論與「8～9 場」的換算更正見
+## 《LLM 串接與 AI 服務層》「每日對話呼叫上限提案」一節。dialogue_exempt=false
+## 時這個旋鈕形同虛設——那種設定下對話呼叫已經走一般 max_calls_per_game_day
+## 路徑，不需要疊加第二層限制
 const DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY := 150
 
 ## 建角一次性生成（words_to_creator）的每日呼叫上限。CREATION policy 無條件

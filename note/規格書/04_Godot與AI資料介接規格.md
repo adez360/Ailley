@@ -1,7 +1,7 @@
 ---
 tags: [規格書, 架構]
 status: 大致定案
-updated: 2026-08-28
+updated: 2026-08-31
 ---
 
 # 04_Godot與AI資料介接規格
@@ -426,7 +426,7 @@ Godot 操控層                房主機                    llama-server
 | `no_requester_id` | 呼叫端沒給 `requester_id` |
 | `no_provider` | 指定的 provider 不存在或設定不完整（`has_valid_provider()` 不成立） |
 | `rate_limited` | 撞到 `min_interval_sec`（同角色冷卻，30 秒）——`_check_rate_limit()` 唯一回這個 identifier 的分支 |
-| `daily_quota` | 撞到每日額度：一般呼叫撞 `max_calls_per_game_day`（每日 20 次），`dialogue` 呼叫豁免冷卻與這條、改撞自己專用的 `max_dialogue_calls_per_game_day`（每日 30 次）——兩種額度都回 `daily_quota`，不是 `rate_limited`（`ai_service.gd::_check_rate_limit()`） |
+| `daily_quota` | 撞到每日額度：一般呼叫撞 `max_calls_per_game_day`（每日 20 次），`dialogue` 呼叫豁免冷卻與這條、改撞自己專用的 `max_dialogue_calls_per_game_day`（每日 150 次）——兩種額度都回 `daily_quota`，不是 `rate_limited`（`ai_service.gd::_check_rate_limit()`） |
 | `timeout` | `HTTPRequest` 逾時——`ai_config.gd::DEFAULT_TIMEOUT`（10 秒）是沒設定或設定非正值時的預設／後備值，provider 設定檔給的正值 `timeout` 會覆蓋它（`_parse_provider()`／`ai_service.gd::_send()`）；不是《99》P-11 舊決定寫的 LocalLLM 5 秒／RemoteLLM 15 秒／event 8 秒各自寫死，那組數字已被現況取代，見《99》P-11 |
 | `network` | `HTTPRequest` 本身失敗（DNS／連線層錯誤） |
 | `http` | HTTP 狀態碼非 2xx（格式 `http_<code> <回應內容前 200 字>`） |

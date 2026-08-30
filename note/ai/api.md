@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-28
+updated: 2026-08-31
 ---
 
 # api
@@ -950,7 +950,8 @@ const DEFAULT_TIMEOUT := 10.0
 const DEFAULT_MIN_INTERVAL_SEC := 30.0
 const DEFAULT_MAX_CALLS_PER_GAME_DAY := 20
 const DEFAULT_DIALOGUE_EXEMPT := true
-const DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY := 30    # 只在 dialogue_exempt=true 時有意義，#434
+const DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY := 150   # 只在 dialogue_exempt=true 時有意義，#434
+const DEFAULT_MAX_CREATION_CALLS_PER_GAME_DAY := 0     # 建角一次性生成（#682），0＝不限
 const MASK_KEEP := 4
 
 class Provider extends RefCounted:
