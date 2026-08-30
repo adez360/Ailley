@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-29
+updated: 2026-08-31
 ---
 
 # api
@@ -981,7 +981,7 @@ func max_validation_retries() -> int          # 回 2（《12》§3.4，P-22 #3�
 ## AIConfig — scripts/ai/ai_config.gd · class_name · RefCounted
 
 ```gdscript
-const CONFIG_PATH := "user://ai_config.json"
+static var CONFIG_PATH := _compute_config_path()   # → "user://ai_config_<hash>.json"，checkout hash 隔離，見 [[存檔]]「存哪」
 const EXAMPLE_PATH := "res://data/ai_config.example.json"
 const DEFAULT_BASE_URL := "https://openrouter.ai/api/v1"
 const DEFAULT_MODEL := "openai/gpt-4o-mini"
@@ -989,7 +989,8 @@ const DEFAULT_TIMEOUT := 10.0
 const DEFAULT_MIN_INTERVAL_SEC := 30.0
 const DEFAULT_MAX_CALLS_PER_GAME_DAY := 20
 const DEFAULT_DIALOGUE_EXEMPT := true
-const DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY := 30    # 只在 dialogue_exempt=true 時有意義，#434
+const DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY := 150   # 只在 dialogue_exempt=true 時有意義，#434
+const DEFAULT_MAX_CREATION_CALLS_PER_GAME_DAY := 0     # 建角一次性生成（#682），0＝不限
 const MASK_KEEP := 4
 
 class Provider extends RefCounted:
@@ -1182,7 +1183,7 @@ help | clear
   → 報錯列全部。id 一律只顯示前 8 碼：整串 UUID 沒人打得完，且每次開遊戲都不一樣
 † ai 指令用固定 requester_id="debug_console" ⇒ 吃得到 30s 冷卻
   手動測試不受限就測不出正式呼叫端的行為
-† ai 每次先 reload_config()，改完 user://ai_config.json 不用重開遊戲
+† ai 每次先 reload_config()，改完 user://ai_config_<hash>.json 不用重開遊戲
 ⚠ _cmd_help 的疊圖清單是寫死字串，加圖層要手動同步（其餘會自動跟上）
 ```
 

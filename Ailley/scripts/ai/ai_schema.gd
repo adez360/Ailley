@@ -53,6 +53,15 @@ const ALLOWED_ACTIONS := [
 	# G 邀約同行類（#576）：邀請另一個角色一起去某處，目標是會動的角色，
 	# 跟 talk／attack／bury 同一種「單純一個 target 字串」形狀
 	"follow",
+	# H 天神之石手勢類（issue #752）：吐口水／膜拜／讚美，沒有 target／place
+	# 可言（永遠是天神之石這個固定地標），跟 murmur 同一種「沒有目標、不用
+	# 額外欄位」形狀。攻擊天神之石沿用既有的 "attack"，target 給 "god_stone"
+	# 這個保留字即可，不另開新動詞——見 agent.gd::_pursue_attack_task()
+	"spit_at_stone", "worship_stone", "praise_stone",
+	# I 閒晃（issue #753）：沒有目標、沒有 place，隨機挑一個附近走得到的點
+	# 走過去，純機械執行——引擎不判斷「為什麼」想閒晃，AI 自己要不要選
+	# 這個選項完全憑它自己判斷
+	"wander",
 ]
 
 # 本輪真正有實作的動作。其餘動作驗證會過，但執行層要回 NOT_IMPLEMENTED，
@@ -122,7 +131,7 @@ const ALLOWED_ACTIONS := [
 # 這次只是把它跟 buy／gather 一樣開放給 LLM 選。跟 gather 同一套「先走到地點
 # 才執行」模式，差別是地點錯了（沒有工作站）時失敗原因是 WORK_TARGET_NOT_FOUND
 # 而不是專屬的地點名檢查——見 agent.gd::_pursue_work_task() 的說明
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "hunt_small", "hunt_large", "gather", "follow", "perform", "work"]
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "hunt_small", "hunt_large", "gather", "follow", "perform", "work", "spit_at_stone", "worship_stone", "praise_stone", "wander"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、

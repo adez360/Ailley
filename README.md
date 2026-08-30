@@ -34,11 +34,13 @@ godot --headless --path Ailley --quit-after 300   # 只確認開得起來
 
 ### 接 LLM（選用，不設定也能玩）
 
-複製範本到 Godot 的 user 目錄，填入自己的金鑰：
+設定檔在 Godot 的 user 目錄，檔名帶 checkout hash：`ai_config_<hash>.json`
+（hash 依 checkout 隔離，路徑規則見 `note/技術/存檔.md`「存哪」）。首次啟動會
+自動產生一份，之後填入自己的金鑰——直接編輯該檔，或從範本複製過去蓋掉：
 
 ```bash
 cp Ailley/data/ai_config.example.json \
-   ~/.local/share/godot/app_userdata/ailley4.3/ai_config.json
+   ~/.local/share/godot/app_userdata/ailley4.3/ai_config_*.json
 ```
 
 金鑰放 `user://` 而不是 repo 裡，所以**天然不會被 commit**。

@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/dialogue/conversation.gd
 status: 進行中
-updated: 2026-08-30
+updated: 2026-08-31
 ---
 
 # talk 動作設計
@@ -284,6 +284,21 @@ review 抓到：「髒兮兮」「乾淨多了」「傷已經好了」這幾種�
 > `TAIL_INSET_FROM_RIGHT = 9` 把箭嘴尖端對到說話者頭上，框體再從那裡往左上展開。
 > 想要左向箭嘴得另外準備鏡像素材，或把 Box 的 `scale.x` 設 -1 再把文字翻回來。
 
+> [!important] 角色站在鏡頭可視範圍邊界附近時，氣泡會夾制回畫面內（issue #742）
+> 上面那條「往左上展開」的框體只認角色頭上的錨點，完全沒管鏡頭看不看得到——
+> 角色站在地圖邊緣、房屋邊界這類鏡頭視野受限的位置說話時，往左上長出去的
+> 那塊會直接被螢幕邊緣裁掉，看起來像是「AI 講到一半斷掉」（一開始真的被
+> 誤判成生成長度限制或模型品質問題，實測截圖比對才確認是顯示區域跑出畫面，
+> 文字本身沒有被截斷）。
+>
+> `_render()` 算完 `box.position` 之後多一步 `_clamp_to_camera_view()`：拿
+> `get_viewport().get_camera_2d()` 的 `get_screen_center_position()` 跟
+> `get_viewport().get_visible_rect().size / cam.zoom` 算出目前鏡頭的可視
+> 世界座標範圍，把 `box` 的全域矩形夾回這個範圍內——只平移 `box.position`，
+> 不動 `Bubble` 節點自己的 `global_position`（那是角色頭上的錨點）。代價是
+> 夾制生效的那幾幀，箭嘴（烤在 `box` 的九宮格材質裡，跟著整個框體一起
+> 平移）不會再精準指向角色頭上；沒有鏡頭時整段跳過，維持原本行為。
+
 素材是 `assets/ui/chatbox-1.png`（48x48），九宮格參數
 `region_rect = Rect2(6.07, 6.37, 39.01, 37.63)`、margin 10 / 9 / 11 / 12。
 
@@ -328,8 +343,9 @@ Enter 開啟／送出，Esc 取消。不在對話中就是單純冒一句氣泡�
 > `agent.gd::AI_THINKING_TEXT`（"…"）那個「思考中」提示用的是同一套——但
 > 「輪到你了」這個提示要「一直掛著直到玩家真的送出」，套用自動消失邏輯的話
 > 玩家慢慢想的時候提示會自己不見。`bubble.gd` 加了 `hold(message)` /
-> `release_hold()`：`hold()` 清空佇列、顯示訊息但不啟動計時器
-> （`set_process(false)`），`release_hold()` 解除後才恢復正常排隊行為。
+> `release_hold()`：`hold()` 清空佇列、顯示訊息但不跑自動消失的計時
+> （`_process()` 裡用 `_holding` 擋掉計時，處理本身開著是為了 #742 的
+> 每幀重夾位置），`release_hold()` 解除後才恢復正常排隊行為。
 > `next_line()` 只在真的要 `await`（緩衝區沒內容）時才對 `listener` 呼叫
 > `hold(WAITING_FOR_PLAYER_TEXT)`，`await` 結束（不管是真的送出還是被取消）
 > 呼叫 `release_hold()`，`is_instance_valid(listener)` 包一層——跟

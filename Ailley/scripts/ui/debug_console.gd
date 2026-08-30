@@ -709,7 +709,24 @@ func _cmd_spawn(args: PackedStringArray) -> void:
 		_error("找不到模板 %s" % args[0])
 		return
 
-	var identity := {"character_name": template.get("character_name", "")}
+	# 跟 deploy_from_library()／_respawn_character() 同一套：人格資料要先進
+	# identity_assignments，_ready() 才會用 Personality.from_identity() 現算
+	# personality／system_prompt。模板裡預先算好的那份 personality／system_prompt
+	# 只是給人看的預覽快照，不是拿來直接套用的（CodeRabbit review 抓到 spawn
+	# 只帶 character_name，模板裡的 hexaco_input／character／words_to_creator
+	# 全部悄悄消失）
+	var character_id := Character.generate_id()
+	GameManager.identity_assignments[character_id] = {
+		"character_id": character_id,
+		"character_name": template.get("character_name", ""),
+		"hexaco": template.get("hexaco_input", {}),
+		"character": template.get("character", ""),
+	}
+	var identity := {
+		"character_id": character_id,
+		"character_name": template.get("character_name", ""),
+		"words_to_creator": template.get("words_to_creator", ""),
+	}
 	var character := GameManager.spawn_character(AGENT_SCENE, identity)
 	# 跟投放／還原共用同一道 readiness 關卡，不然這裡生出來的角色一樣會是
 	# 不會決策的殭屍（issue #598），沒辦法拿來驗證投放流程是否正常
@@ -988,7 +1005,7 @@ const AI_PROBE_TEXT := "hello from ailley"
 # dialogue／SCHEDULED 兩種都留著才測得出差別：連打兩次 ai 第二次應該被擋，
 # 連打兩次 ai dialogue 應該兩次都過
 #
-# 每次都先 reload_config()，玩家剛寫完 user://ai_config.json 不用重開遊戲
+# 每次都先 reload_config()，玩家剛寫完 user://ai_config_<hash>.json 不用重開遊戲
 # emotion <name> <type> [intensity]
 #
 # #116 AC 要求要有 debug 方式「手動設定/觀察」emotion；status 已經做了觀察，

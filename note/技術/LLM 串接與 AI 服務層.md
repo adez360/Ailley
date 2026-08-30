@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-29
+updated: 2026-08-31
 ---
 
 # LLM 串接與 AI 服務層
@@ -112,7 +112,7 @@ WebSocket 在本專案有位置，但是**另一條線**：
 
 | 檔案 | 職責 |
 | --- | --- |
-| `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers`、全域的速率限制三個旋鈕，以及跟 `providers` 平行的頂層 `embedding` 區塊（見上方「Embedding」一節） |
+| `ai_config.gd` | 讀 `user://ai_config_<hash>.json`（hash 依 checkout 隔離，見 [[存檔]]「存哪」）。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers`、全域的速率限制三個旋鈕，以及跟 `providers` 平行的頂層 `embedding` 區塊（見上方「Embedding」一節） |
 | `ai_service.gd` | **對話／決策唯一碰網路的地方**。autoload。節點池、佇列、逾時、速率限制、重試——只打玩家自己選的 Local／Cloud 對話 provider |
 | `embedding_service.gd` | **L3 語意檢索唯一碰網路的地方**（issue #571）。autoload，跟 `ai_service.gd` 分開、各自獨立打各自的端點——這裡永遠打本機的 embedding-only server，不受玩家的對話 provider 選擇影響，也不共用 `ai_service.gd` 的節點池／佇列／速率限制（呼叫頻率遠低於對話，見《03》§7 觸發時機表，不需要那一整套） |
 | `ai_schema.gd` | 回應驗證：`JSON.parse_string` → null 檢查 → 逐欄位型別檢查 → `action` 白名單 |
@@ -438,7 +438,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 
 **實作**：比照既有 `min_interval_sec`／`max_calls_per_game_day` 這兩個數值型
 旋鈕的模式，`ai_config.json` 有第三個數值型全域旋鈕
-`max_dialogue_calls_per_game_day`（可設 0＝不限，跟前兩者一致，預設 30）。
+`max_dialogue_calls_per_game_day`（可設 0＝不限，跟前兩者一致，預設 150）。
 `dialogue_exempt` 是布林豁免開關，不是數值上限，不適用「0＝不限」——
 它只控制 `CONVERSATION` policy 是否豁免既有的 `min_interval_sec`／
 `max_calls_per_game_day` 檢查，跟這個旋鈕各自獨立、互不影響。
@@ -463,11 +463,12 @@ max_dialogue_calls_per_game_day`，不是 `>`——跟既有
 > 缺口只存在於 `dialogue_exempt=true`（對話完全豁免既有限制）的情境，範圍要
 > 這樣講清楚，不是無條件對兩種設定都生效
 
-**預設值 30 的依據**：這次記的樣本是 `_turns.size()`（對話輪數），不是真正的
-`AIService.request()` 呼叫次數。這次樣本測的是舊版行為——開場白當時還是
-`DialogueLines.opening()` 寫死的模板句，不打 LLM，7.0 輪／場扣掉這句開場白，
-換算成雙方合計約 6.0 次呼叫／場。開場白改成一律過 LLM 之後（issue #630／
-《99》P-67），這個扣減不再成立，同一份 7.0 輪／場的樣本换算下來會更接近
+**起始值 30 的推算方法論（#395）**：目前預設值是 150。這次記的樣本是
+`_turns.size()`（對話輪數），不是真正的 `AIService.request()` 呼叫次數。這次樣本測的是
+舊版行為——開場白當時還是 `DialogueLines.opening()` 寫死的模板句，不打 LLM，
+7.0 輪／場扣掉這句開場白，換算成雙方合計約 6.0 次呼叫／場。開場白改成一律過
+LLM 之後（issue #630／《99》P-67），這個扣減不再成立，同一份 7.0 輪／場的樣本
+换算下來會更接近
 **7.0 次呼叫／場**（每一輪都打 LLM）；這個數字本身也是舊樣本套新規則的
 粗算，不是重新量測的結果。
 >
@@ -490,7 +491,7 @@ max_dialogue_calls_per_game_day`，不是 `>`——跟既有
 
 正式上線前建議搭配大規模驗證一併校準，逐場記錄真正的 `AIService.request()`
 次數（依 per-角色 scope 分開記）、payload 隨對話輪次成長的實際大小、以及
-驗證失敗重試的發生率，這三項都還沒有數據支持目前「30」這個預設值。
+驗證失敗重試的發生率，這三項都還沒有數據支持目前 150 這個預設值。
 
 > [!important] 但 fallback 一定要能終止
 > LLM 失敗／逾時時走 `DialogueLines`，而它**沒有 `end` 訊號**——不特別處理就會
@@ -644,7 +645,7 @@ autoload 已註冊，主控台加了 `ai` 指令。
   `_dialogue_calls_today`／`_creation_calls_today`），`CREATION` 是建角一次性生成
   （words_to_creator，#682），預設 `SCHEDULED`——忘了指定的呼叫端落在保守那邊，
   不會意外拿到無限額度
-- 速率限制旋鈕搬進 `user://ai_config.json`（皆可設 0＝不限），預設值與規格數值
+- 速率限制旋鈕搬進 `user://ai_config_<hash>.json`（皆可設 0＝不限），預設值與規格數值
   見 `ai/api.md`（`AIConfig`）／規格書《13》§5
 - 回傳一律 `{"ok": bool, "data": Dictionary, "error": String}`，呼叫端一律 `await`
 - 4xx 不重試；網路錯誤／5xx 重試 1 次
@@ -987,6 +988,54 @@ debug 主控台 `spawn` 還是正式的 `GameManager.deploy_from_library()`，
 可解除，不是真的崩潰）；改成多次分開的短呼叫，或直接 `await` 會自己
 resolve 的呼叫（例如 `debug_set_llm_decision()` 本身回傳的就是 await 完的
 結果字典），不要自己手動輪詢等待。
+
+## 角色站著不動的第三種成因：readiness 快照過期，`llm_decision_enabled` 從沒被打開（issue #728，2026-08-30 實測）
+
+跟上一節的「冷卻」「空任務回應」是三種外觀相同（角色不做事）但成因互斥的
+情況，這裡是最上游的一種：角色投放當下 `activate_llm_decision_if_ready()`
+（`game_manager.gd`）判定它的 provider 沒 ready，直接沒打開
+`llm_decision_enabled`，連第一次 plan 決策都沒問過——不是冷卻卡住、
+也不是空陣列回應，是決策迴圈從一開始就沒被啟動。
+
+`AIService._check_readiness_all()` 只在 `_ready()` 開機那一刻、或有人手動
+呼叫 `reload_config()` 時才會真的打網路探測，結果直接快取進 `_readiness`；
+另外 `activate_llm_decision_if_ready()`（`game_manager.gd`）與
+`main_scene.gd::_apply_startup_ai_state()` 在讀到「沒 ready」快照時也會
+事件觸發補打一次（見下面「修法」），除此之外 `get_readiness()` 只是讀
+這份快照，不會自己變新。
+開機那次探測如果剛好撞上暫時性
+網路問題（例如 Tailscale 重連、遠端 GPU 機器重啟），即使幾秒後連線就恢復
+正常，這份「沒 ready」的快照會一直錯到底——沒有背景輪詢會自己修正它，而
+`activate_llm_decision_if_ready()` 原本讀到「沒 ready」就直接 `return`，
+完全靜默，看不出角色為什麼變殭屍。
+
+**對話跟排程走的是兩條獨立的路，只有後者會被這個問題卡住**：
+`Agent.next_line()`（對話開場白／回話）直接呼叫 `AIService.request()`，不看
+`llm_decision_enabled`；只有「今天要做什麼」這條路（`_request_next_decision()`）
+需要這個開關。所以卡到這個問題的角色會表現成「叫得動、會回話，但問不到
+牠打算做什麼、永遠不會自己排新任務」。
+
+**修法**：`activate_llm_decision_if_ready()` 讀到快照顯示「沒 ready」時，
+不直接放棄——補打一次 `AIService.reload_config_and_wait()`（跟 debug 主控台
+`ai` 指令同一個入口，會重新讀 `user://ai_config.json` 並重新探測），再讀一次
+`get_readiness()`；這次還是沒 ready 才真的放棄，並且補一行 `push_warning()`
+帶上失敗原因，不再靜默。代價是同一輪迴圈裡多隻角色一起撞到「沒 ready」
+時，會各自觸發一次重複探測（世代編號機制保證結果不會互相污染，只是網路
+請求數變多）——這則先接受這個代價，不做成單一入口的節流。
+
+開機那一側（`main_scene.gd::_apply_startup_ai_state()`——場景固定 NPC 走的
+就是這裡，投放／讀檔生成的角色才會經過 `activate_llm_decision_if_ready()`）
+也接同一個補打入口：整批沒就緒的 Agent 共用一次 `reload_config_and_wait()`
+再重新判定，不是逐隻各補打一次；補打後仍沒就緒的原因照舊寫進 HUD 的
+「排程模式（原因：…）」指示。
+
+實測方法：`game_eval` 直接改寫 `AIService.get('_readiness')` 裡的快取值成
+`ready: false`，模擬「開機探測剛好失敗」的情境，分兩種情境驗證：
+連線其實正常時（真實 provider 可連），補打的那次探測會成功、
+`llm_decision_enabled` 正確變 `true`；連線真的斷掉時（`base_url` 指到一個
+不存在的位址），補打的那次探測也失敗，`llm_decision_enabled` 維持
+`false`，且遊戲 log 印出 `GameManager: <角色名> 的 provider「<name>」未就緒，
+llm_decision_enabled 沒有打開（<原因>）`。
 
 ## 兩隻 AI 同場互看：機制上通，但沒觀察到真的互相搭話（2026-08-28 實測）
 

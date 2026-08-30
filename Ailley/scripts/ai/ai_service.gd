@@ -147,9 +147,13 @@ func _ready() -> void:
 	# 多打一次，開機時會送出兩批重複的 /models 請求
 
 
-# 玩家寫好 user://ai_config.json 之後不必重開遊戲，debug 主控台的 ai 指令會先叫這個。
-# 就緒表也一併重算——這是唯一的手動重測入口，開場瞬斷之外的網路狀態變化
-# （例如玩到一半才把 llama-server 開起來）都靠這裡救回來，不做背景輪詢。
+ # 玩家寫好 user://ai_config_<hash>.json 之後不必重開遊戲，debug 主控台的 ai 指令會先叫這個。
+ # 就緒表也一併重算——這是唯一的手動重測入口。除此之外，
+ # game_manager.gd::activate_llm_decision_if_ready() 與
+ # main_scene.gd::_apply_startup_ai_state() 在讀到過期的「沒 ready」快照時，
+ # 也會事件觸發補打一次 reload_config_and_wait()（issue #728，見各自註解），
+ # 同樣不是持續輪詢——「開場瞬斷之外」玩到一半的網路狀態變化（例如玩到
+ # 一半才把 llama-server 開起來）仍要靠 debug 主控台 `ai` 指令救回來。
 #
 # 刻意不 await 這批探測——_ready() 開機時呼叫這個，遊戲啟動不該被網路
 # 探測卡住。想等探測全部做完才拿結果的呼叫端（debug 主控台 ai 指令）

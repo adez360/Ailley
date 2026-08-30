@@ -241,6 +241,13 @@ var _give_pursuit_last_distance := INF
 var _attack_pursuit_stuck_ticks := 0
 var _attack_pursuit_last_distance := INF
 
+# 閒晃（issue #753）鎖定的目的地——隨機選出來的座標，不像 gather／talk 那樣
+# 有名字可以查 current_place 是否換了，靠比對任務 id 判斷是不是同一趟閒晃。
+# schedule 任務的 id 跨日重用，_select() 換上任務時會重置（見 _buy_pursuit_task_id
+# 同款處理），讓每次被選中都重新挑一趟的目的地
+var _wander_task_id := ""
+var _wander_target := Vector2.ZERO
+
 # persuade 任務用的卡住偵測（#227），跟 _give_pursuit_* 同一套理由與收尾方式
 # （卡住就真的放棄，不是只警告）——共用邏輯見 _pursuit_stuck_progress()（#266）
 var _persuade_pursuit_stuck_ticks := 0
@@ -646,6 +653,14 @@ func hear_god_stone(line: String) -> void:
 	# 機率骰與 AI 詢問流程
 	_queue_recalled(line)
 	maybe_speak_to_creator(line)
+
+## 附近角色目擊到別人對天神之石做了什麼手勢（issue #752：吐口水／攻擊／
+## 膜拜／讚美），純記一句事實。跟 hear_god_stone() 不同——這不是「有人在
+## 跟創造者說話」，不觸發 words_to_creator 判定
+func witness_god_stone_gesture(line: String) -> void:
+	if is_dead:
+		return
+	_push_daily_event(line)
 
 ## #164 + 《99》P-10：25% 機率觸發（情緒強度 ≥70 時 40%），中了才問 AI 要不要
 ## 真的說出口——中了但 AI 選擇不說一樣不消耗機會，下次再被叫到還能再骰
@@ -1130,6 +1145,12 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 		return base_validator.call(data, now_minutes)
 	var result := await _decide_with_retry(envelope, AIService.Policy.CONVERSATION, validator)
 	if not result["ok"]:
+		# 除錯用（issue #655）：_decide_with_retry() 失敗的真正原因（逾時／
+		# 驗證失敗／daily quota／rate limited……）到這裡之後就被丟掉，
+		# conversation.gd 只看得到 ok=false，查不出成因。先在這裡印出來，
+		# 查清楚後這行要記得拿掉
+		if Conversation.TALK_DEBUG:
+			print("[talk_debug] %s next_line() 失敗，error=%s" % [character_id, result.get("error", "?")])
 		return {"ok": false}
 
 	# task 是選填欄位（issue #658）：這句話是角色自己判斷「講了就要做」的
@@ -3117,6 +3138,11 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			# 必中（《99》P-28），不落進下面的 _roll_success()——那張表刻意沒收
 			# attack，這裡硬規則過了就直接放行，不擲骰
 			var target_name: String = str(params.get("target", ""))
+			# 天神之石是保留字，不查角色名單（issue #752）：石頭是固定地標，
+			# 永遠「存在」，硬規則直接放行，真正走不走得到交給
+			# _pursue_attack_task() 的距離判定
+			if target_name == "god_stone":
+				return {"success": true, "reason": ""}
 			var matches := _find_all_characters_by_name(target_name)
 			if matches.is_empty():
 				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
@@ -3285,6 +3311,13 @@ func _select(task: Dictionary, now_minutes: int, outgoing_ok: bool = true) -> vo
 	# 整個跳過 move_to()（CodeRabbit review 抓到）
 	_buy_pursuit_task_id = ""
 	_buy_pursuit_target = Vector2.ZERO
+	# wander（issue #753）跟 _buy_pursuit_task_id 同一個理由：_pursue_wander_task()
+	# 靠任務 id 比對判斷「同一趟閒晃、不重選目的地」，而 schedule 任務的 id 恆為
+	# schedule_%d、跨日重用——第二天同一筆 wander 再被選中時比對會失效，角色會
+	# 直接走去前一趟的舊座標。llm 來源不受這個重置影響：llm 任務 id（llm_時_序號）
+	# 每次決策都是新值，本來就不會等於上一趟留下的 _wander_task_id
+	_wander_task_id = ""
+	_wander_target = Vector2.ZERO
 
 # 記一筆 llm 來源的動作切換（#428）。append-only，失敗不影響遊戲進行——
 # 這是給之後分析用的資料，不是遊戲狀態，寫不進去只印警告，不擋仲裁器
@@ -3402,6 +3435,17 @@ func _pursue_current_task() -> void:
 	# gather 跟 buy 同理：要先走到藥草叢，抵達後呼叫一次就完成（#574）
 	if current_state == "gather":
 		_pursue_gather_task()
+		return
+
+	# 天神之石手勢類（issue #752）：跟 gather 同理，走到天神之石旁、抵達後
+	# 呼叫一次就完成，三個動作共用同一個執行函式，差別只在記錄的用詞
+	if current_state == "spit_at_stone" or current_state == "worship_stone" or current_state == "praise_stone":
+		_pursue_god_stone_gesture(current_state)
+
+	# 閒晃（issue #753）：目標是隨機挑出來的座標，不是固定地點，要另外分流——
+	# 不能落進下面的地點判斷，那條路徑只認 PlaceAnchors 有名字的地點
+	if current_state == "wander":
+		_pursue_wander_task()
 		return
 
 	# work 是長動作，執行協程會自己跑 5 分鐘，只能呼叫一次（#358）
@@ -4090,6 +4134,146 @@ func _pursue_gather_task() -> void:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
 
+## 天神之石手勢類任務的執行（issue #752：吐口水／膜拜／讚美，攻擊天神之石
+## 走 _pursue_attack_task() 另一條分支，不共用這裡）。直接解析成固定座標、
+## 不透過 current_place 那套「named place」記帳（跟 _pursue_attack_task()
+## 同一種理由：目標永遠是同一個固定地標，不像 gather 需要在多個候選地點
+## 之間判斷「有沒有換地方」），沒有 gather 那套 _pursued_place／_pursuit_done
+## 節流也沒關係——石頭不會自己移動，重複呼叫 move_to() 頂多是重算一次同樣
+## 的路徑，不會像追著會動的目標那樣需要卡住偵測
+func _pursue_god_stone_gesture(action_name: String) -> void:
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(action_name, _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		if not result["success"]:
+			_track_action_result_for_facts(action_name, false)
+			_finish_task_and_request_next()
+			return
+
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null:
+		last_action_result = "找不到天神之石"
+		_track_action_result_for_facts(action_name, false)
+		_finish_task_and_request_next()
+		return
+
+	var target: Vector2 = anchors.resolve("god_stone")
+	if get_body_position().distance_to(target) > GOD_STONE_GESTURE_RANGE:
+		if not move_to(target):
+			push_warning("Agent %s: 走不到天神之石" % character_name)
+			last_action_result = "走不到天神之石"
+			_track_action_result_for_facts(action_name, false)
+			_finish_task_and_request_next()
+		return
+
+	stop_moving()
+	_apply_god_stone_gesture_effect(action_name)
+	last_action_result = ""
+	_track_action_result_for_facts(action_name, true)
+	_finish_task_and_request_next()
+
+## 三個動作的用詞表，供 _apply_god_stone_gesture_effect() 查——事實句只描述
+## 客觀發生了什麼，不判斷這代表虔誠還是不敬，交給讀到這句話的 AI 自己判斷
+## （issue #752，《00》原則二）
+const GOD_STONE_GESTURE_VERBS := {
+	"spit_at_stone": "對天神之石吐了口水",
+	"worship_stone": "在天神之石前膜拜",
+	"praise_stone": "讚美了天神之石",
+	"attack": "攻擊了天神之石",
+}
+
+## 實際效果：自己的記憶多一句事實句、附近角色目擊到的話也各記一句、寫進
+## 地點事件記錄面板（issue #377／PR #732 已合併的那個）。不影響任何既有
+## 數值——石頭是無生命地標，這幾個動作純粹是留下一筆「發生過」的紀錄
+func _apply_god_stone_gesture_effect(action_name: String) -> void:
+	var verb: String = GOD_STONE_GESTURE_VERBS.get(action_name, action_name)
+	_push_daily_event("你%s。" % verb)
+
+	var record_line := "%s %s。" % [character_name, verb]
+
+	var stone_input := get_tree().get_first_node_in_group("god_stone_input")
+	if stone_input != null:
+		stone_input.record_gesture(record_line)
+
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null or stone_input == null:
+		return
+	var stone_pos: Vector2 = anchors.resolve("god_stone")
+	var hear_radius: float = stone_input.HEAR_RADIUS
+	for node in get_tree().get_nodes_in_group("characters"):
+		var other := node as Agent
+		if other == null or other == self:
+			continue
+		if other.get_body_position().distance_to(stone_pos) <= hear_radius:
+			other.witness_god_stone_gesture("你看到 %s" % record_line)
+
+## 閒晃取樣範圍的半邊長，格數——在目前所在格的 X／Y 兩軸各偏移
+## -WANDER_RANGE_CELLS～+WANDER_RANGE_CELLS 格的**方形**範圍內挑格子
+## （邊長 13 格），不是圓形半徑。這是「四處走走」，不是精準抵達某個點，
+## 方形取樣省掉距離計算；範圍仍是本地隨意走動，不是跨地圖遠征（issue #753）
+const WANDER_RANGE_CELLS := 6
+
+## 閒晃任務的執行（issue #753）：純機械執行，隨機挑一個附近走得到的點走
+## 過去，抵達就結束——引擎不判斷「為什麼」想閒晃、不主動觸發，AI 自己要不要
+## 選這個選項完全憑它自己判斷（《00》原則二）。目的地只在任務剛開始時選一次
+## （用任務 id 比對是不是同一趟），不是每次重算都重選，否則角色會在原地
+## 對著一連串新亂數目標反覆折返，永遠走不到任何一個
+func _pursue_wander_task() -> void:
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		if not result["success"]:
+			_track_action_result_for_facts("wander", false)
+			_finish_task_and_request_next()
+			return
+
+	var task_id: String = str(_current_task.get("id", ""))
+	if task_id != _wander_task_id:
+		var picked: Variant = _pick_wander_target()
+		if picked == null:
+			last_action_result = "附近沒有地方可以走"
+			_track_action_result_for_facts("wander", false)
+			_finish_task_and_request_next()
+			return
+		_wander_task_id = task_id
+		_wander_target = picked
+
+	if not _has_arrived_at(_wander_target):
+		if is_moving():
+			return
+		if not move_to(_wander_target):
+			push_warning("Agent %s: 走不到閒晃目的地" % character_name)
+			last_action_result = "走不到附近的地方"
+			_track_action_result_for_facts("wander", false)
+			_finish_task_and_request_next()
+		return
+
+	stop_moving()
+	last_action_result = ""
+	_track_action_result_for_facts("wander", true)
+	_finish_task_and_request_next()
+
+## 在 NavGrid 目前所在格附近隨機挑一個可走的格子，回傳世界座標；試了幾次
+## 都挑到障礙格（或場景沒有 NavGrid）就回傳 null，呼叫端判定這次閒晃失敗——
+## 跟其他動作「附近沒有可用目標」的處理方式一致，不強求非走到不可
+func _pick_wander_target() -> Variant:
+	var nav = get_tree().get_first_node_in_group("nav_grid")
+	if nav == null:
+		return null
+	var origin_cell: Vector2i = nav.world_to_cell(get_body_position())
+	for attempt in 10:
+		var offset := Vector2i(
+			randi_range(-WANDER_RANGE_CELLS, WANDER_RANGE_CELLS),
+			randi_range(-WANDER_RANGE_CELLS, WANDER_RANGE_CELLS)
+		)
+		# 挑到自己現在這格（offset 全 0）等於沒走，不算閒晃，重抽
+		if offset == Vector2i.ZERO:
+			continue
+		var cell := origin_cell + offset
+		if nav.is_cell_free(cell):
+			return nav.cell_to_world(cell)
+	return null
+
 # murmur 任務的執行（#162）：沒有目標、不用移動，講給自己聽當下就結束——不像
 # talk 要追著會動的目標走，也不像 nap／rest 那類要佔滿整段 duration。resolve()
 # 一過（murmur 沒有硬規則、不擲骰，恆成功）就講一句、立刻退出任務池
@@ -4300,6 +4484,33 @@ func _pursue_attack_task() -> void:
 
 	var params: Dictionary = _current_task.get("params", {})
 	var target_name: String = str(params.get("target", ""))
+
+	# 攻擊天神之石（issue #752）：保留字，不查角色名單。石頭是固定地標，
+	# 走法跟 _pursue_god_stone_gesture() 一致，但終點呼叫的是這個獨立分支——
+	# 攻擊本身還是攻擊（用詞跟吐口水／膜拜／讚美不同），只是目標換成物件，
+	# 不共用那個函式
+	if target_name == "god_stone":
+		var anchors := get_tree().get_first_node_in_group("place_anchors")
+		if anchors == null:
+			last_action_result = "找不到天神之石"
+			_track_action_result_for_facts("attack", false)
+			_finish_task_and_request_next()
+			return
+		var stone_pos: Vector2 = anchors.resolve("god_stone")
+		if get_body_position().distance_to(stone_pos) > ATTACK_RANGE:
+			if not move_to(stone_pos):
+				push_warning("Agent %s: 走不到天神之石" % character_name)
+				last_action_result = "走不到天神之石"
+				_track_action_result_for_facts("attack", false)
+				_finish_task_and_request_next()
+			return
+		stop_moving()
+		_apply_god_stone_gesture_effect("attack")
+		last_action_result = ""
+		_track_action_result_for_facts("attack", true)
+		_finish_task_and_request_next()
+		return
+
 	var target := _find_character_by_name(target_name)
 
 	if target == null:
