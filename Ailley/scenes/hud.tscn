@@ -1,4 +1,4 @@
-[gd_scene load_steps=26 format=3 uid="uid://wo0a0v2y4gj1"]
+[gd_scene load_steps=27 format=3 uid="uid://wo0a0v2y4gj1"]
 
 [ext_resource type="Theme" uid="uid://dktke2k785jv0" path="res://assets/ui/ailley_theme.tres" id="1_3swnk"]
 [ext_resource type="PackedScene" uid="uid://cyrnw30ddh16r" path="res://scenes/debug_console.tscn" id="1_mphia"]
@@ -17,8 +17,9 @@
 [ext_resource type="PackedScene" uid="uid://d3no1g5djdk2s" path="res://scenes/god_stone_input.tscn" id="11_0m4u7"]
 [ext_resource type="PackedScene" uid="uid://ccx0ctgkyuok1" path="res://scenes/persuade_dialog.tscn" id="13_5n1hp"]
 [ext_resource type="Script" uid="uid://lutrmlqpql7v" path="res://scripts/ui/epitaph_input.gd" id="14_eld54"]
-[ext_resource type="PackedScene" uid="uid://byam6jwe3kml6" path="res://scenes/ui/side_bar.tscn" id="18_5357l"]
 [ext_resource type="PackedScene" uid="uid://c8x8h4qofhqg2" path="res://scenes/tip_menu.tscn" id="14_tipmn"]
+[ext_resource type="PackedScene" uid="uid://byam6jwe3kml6" path="res://scenes/ui/side_bar.tscn" id="18_5357l"]
+[ext_resource type="PackedScene" uid="uid://d2iacpm60lirk" path="res://scenes/corpse_menu.tscn" id="20_qpprf"]
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_iypfu"]
 atlas = ExtResource("9_iypfu")
@@ -434,3 +435,5 @@ offset_bottom = 270.0
 [node name="ContentVBox" type="VBoxContainer" parent="EpitaphInput/Panel/ContentScroll"]
 layout_mode = 2
 size_flags_horizontal = 3
+
+[node name="CorpseMenu" parent="." instance=ExtResource("20_qpprf")]
