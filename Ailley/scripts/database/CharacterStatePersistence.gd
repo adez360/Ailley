@@ -2058,8 +2058,26 @@ func _reconcile_home_location(
 	return update_ok
 
 
+## _ensure_npc_record() 兩條路徑（新建立／DB 既有值 reconcile）共用的入口：
+## 世界名冊在這裡取一次，沿用檢查跟重分配看同一份占用快照
 func _resolve_home_location(
 	character: Character
+) -> String:
+
+	return _resolve_home_location_for(
+		character.home_location_id,
+		character.character_id,
+		_world_character_ids()
+	)
+
+
+## _resolve_home_location() 的核心。世界名冊收成參數：名冊是場景狀態、不是
+## DB 狀態，收進來之後這條路徑就能在純 DatabaseManager 層測試
+## （tests/test_home_assignment.gd），不用為了測試造場景節點
+func _resolve_home_location_for(
+	current_value: String,
+	character_id: String,
+	world_character_ids: Dictionary
 ) -> String:
 
 	# seed 一定要排在沿用檢查之前：新 DB（例如剛建立、還沒跑過任何一次
@@ -2069,7 +2087,13 @@ func _resolve_home_location(
 	_ensure_home_locations_seeded()
 
 
-	var value := character.home_location_id
+	# 占用集合要排除自己：沿用檢查問的是「這間有沒有被『別人』佔走」，自己
+	# 既有 npc 列上的 home_location_id 不算占用，否則自己的舊值永遠過不了
+	# 檢查（code review 抓到，PR #727）
+	var occupied := _occupied_home_location_ids(
+		world_character_ids,
+		character_id
+	)
 
 
 	# 值本身也要驗證是這一批 loc_home_01～loc_home_05 命名，不能只驗證
@@ -2078,14 +2102,14 @@ func _resolve_home_location(
 	# 但場景裡沒有同名錨點，has_for()/resolve_for() 永遠解析不到、每次都
 	# push_error，而且沒有任何自我修復路徑。這裡驗證命名格式，格式不對的
 	# 舊值一律當無效值處理，落到下面重新分配（code review 抓到，PR #727）
-	if _is_valid_home_location_id(value):
+	if _is_valid_home_location_id(current_value):
 
 		var requested_rows := (
 			DatabaseManager.select_where(
 				"location",
 				"location_id = ?",
 				[
-					value
+					current_value
 				],
 				[
 					"location_id"
@@ -2093,12 +2117,17 @@ func _resolve_home_location(
 			)
 		)
 
+		# 除了「格式合法＋location 表有這一列」，還要「沒有被別的還在世界的
+		# 角色佔走」——記憶體值可能來自讀檔還原的存檔，跟 DB 現況分歧（存檔
+		# 值與 DB 值打架、或 _ensure_unique_id() 換過 character_id 後照抄舊
+		# 存檔）時，只驗前兩個會讓兩個角色同時「以為」自己分到同一間，而且
+		# 完全靜默，連溢出安全閥的 warning 都沒有。被佔用就落到下面的
+		# round-robin 重分配（code review 抓到，PR #727）
+		if not requested_rows.is_empty() and not occupied.has(current_value):
+			return current_value
 
-		if not requested_rows.is_empty():
-			return value
 
-
-	return _assign_next_home_location()
+	return _assign_next_home_location(occupied)
 
 
 ## value 是不是這一批 loc_home_01～loc_home_05 其中一個合法命名——只檢查
@@ -2213,9 +2242,13 @@ func _assign_next_home_location() -> String:
 ## 不在世界名冊裡的列不算占用：那間家即釋出；角色重新進場時若它還沒被別人
 ## 拿走，會經 _reconcile_home_location() 沿用回原本那間（code review 抓到，
 ## PR #727）
-func _occupied_home_location_ids() -> Dictionary:
-
-	var world_character_ids := _world_character_ids()
+## 世界名冊與「排除自己」都收成參數：exclude_character_id 是查「自己能不能
+## 沿用」時把自己那列排除，否則自己的舊值會被自己擋下來；名冊收參數的理由
+## 見 _resolve_home_location_for()
+func _occupied_home_location_ids(
+	world_character_ids: Dictionary,
+	exclude_character_id: String = ""
+) -> Dictionary:
 
 	var rows := DatabaseManager.select(
 		NPC_TABLE,
@@ -2227,7 +2260,12 @@ func _occupied_home_location_ids() -> Dictionary:
 
 	for row in rows:
 
-		if not world_character_ids.has(str(row.get("npc_id", ""))):
+		var npc_id := str(row.get("npc_id", ""))
+
+		if npc_id == exclude_character_id:
+			continue
+
+		if not world_character_ids.has(npc_id):
 			continue
 
 		var location_id := str(
