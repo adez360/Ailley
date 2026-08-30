@@ -148,9 +148,6 @@ script = ExtResource("4_t1rx8")
 [node name="PlaceAnchors" type="Node2D" parent="." groups=["place_anchors"]]
 script = ExtResource("5_8iemx")
 
-[node name="home" type="Marker2D" parent="PlaceAnchors"]
-position = Vector2(-120, -60)
-
 [node name="herb_shop" type="Marker2D" parent="PlaceAnchors"]
 position = Vector2(-110, 90)
 
@@ -184,6 +181,21 @@ position = Vector2(176, -112)
 
 [node name="herb_field" type="Marker2D" parent="PlaceAnchors"]
 position = Vector2(240, -112)
+
+[node name="loc_home_01" type="Marker2D" parent="PlaceAnchors"]
+position = Vector2(-184, -120)
+
+[node name="loc_home_02" type="Marker2D" parent="PlaceAnchors"]
+position = Vector2(-136, -24)
+
+[node name="loc_home_03" type="Marker2D" parent="PlaceAnchors"]
+position = Vector2(-104, -120)
+
+[node name="loc_home_04" type="Marker2D" parent="PlaceAnchors"]
+position = Vector2(-184, -40)
+
+[node name="loc_home_05" type="Marker2D" parent="PlaceAnchors"]
+position = Vector2(-136, -72)
 
 [node name="forest" type="Marker2D" parent="PlaceAnchors"]
 position = Vector2(250, -90)
