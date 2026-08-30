@@ -2513,6 +2513,22 @@ const ACTION_RECOVERY := {
 	],
 }
 
+## sleep 合併（#771，源自 #767：實測 33 次決策 sleep／nap 從未被選中，LLM
+## 幾乎只選 rest，而 rest 完全不恢復 wakefulness）。LLM 現在只能選 "sleep"
+## 這一個動作，不用再猜 sleep/nap/rest 三個同義詞各自對應哪組回復量——直接
+## 用 duration 表達想休息多久，跟其他動作填 duration 是同一種填法。門檻
+## 抓量級，是實測前的估計值，之後可依實際測試結果調整；三個回傳值都是
+## ACTION_RECOVERY 既有的 key，分級完直接查表就有正確回復量
+const SLEEP_TIER_NAP_MIN_MINUTES := 30
+const SLEEP_TIER_SLEEP_MIN_MINUTES := 180
+
+static func _classify_sleep_tier(duration_minutes: float) -> String:
+	if duration_minutes >= SLEEP_TIER_SLEEP_MIN_MINUTES:
+		return "sleep"
+	if duration_minutes >= SLEEP_TIER_NAP_MIN_MINUTES:
+		return "nap"
+	return "rest"
+
 # 到了定點才開始回復——還在走去床邊的路上不算在睡覺。沒有指定地點的任務
 # （LLM 完全可以只回 {"action": "rest"}）本來就原地做，is_moving() 一樣是 false，
 # 不用另外分流
@@ -3254,7 +3270,22 @@ func _select(task: Dictionary, now_minutes: int, outgoing_ok: bool = true) -> vo
 	_current_task.erase("_logged")
 	_current_task_started_at = now_minutes
 	current_place = str(task.get("params", {}).get("place", ""))
-	current_state = str(task.get("action", ""))
+
+	# sleep 合併（#771）：LLM 只填 duration，這裡依時長分級決定真正的
+	# current_state（rest／nap／sleep），讓 ACTION_RECOVERY 查到正確的回復量。
+	# task["action"] 保持 "sleep" 不變——_llm_task_count()／dedup／select()
+	# 開頭的 is_implemented_action() 檢查都還在讀這個欄位，改掉會讓它們誤判。
+	# 只有分級到最深的 "sleep" 才不可被打斷，比照 schedule 睡眠任務
+	# （_tasks_from_schedule_json()）原本的保護；rest／nap 維持預設可打斷，
+	# 跟合併前的行為一致。schedule／debug／reflex 來源的任務不經過這裡的
+	# 分級——它們的 action 本來就是明確寫死的 "sleep"／"nap"／"rest" 字面值，
+	# current_state 直接沿用即可
+	if task.get("source", "") == "llm" and task.get("action", "") == "sleep":
+		var sleep_tier := _classify_sleep_tier(float(task.get("duration", 0.0)))
+		current_state = sleep_tier
+		task["interruptible"] = sleep_tier == "sleep"
+	else:
+		current_state = str(task.get("action", ""))
 
 	# following_id 的生命週期跟著這裡收斂（issue #576）：新任務不是 follow
 	# 就清掉——「要不要停止跟隨」交給跟隨者自己的下一次決策，只要那次決策

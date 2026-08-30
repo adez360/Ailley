@@ -141,7 +141,8 @@ For "persuade", params must be {"target": "<exact name from context.visible>", "
 For "follow", params must be {"target": "<exact name from context.visible>"} — invite yourself along with that character, keeping pace with wherever they currently are. There's no fixed duration or distance limit: you'll keep following until your own next decision picks something else instead, so if you want to stop, just choose a different action next time.
 For "work", params must be {"place": "<one of context.workplaces>"} — a place with a workstation, not just anywhere. If "context.workplaces" is empty, there is nowhere to work right now, so don't pick this action.
 For "attack", params must be {"target": "<exact name from context.visible>"} as usual, or {"target": "god_stone"} to attack the divine stone landmark instead of a person — it's an inanimate object, so this doesn't hurt anyone or affect any stats，天神之石上不會留下任何痕跡，這一下只會留下一筆事件紀錄；進入廣播半徑的附近角色會各記一句目擊到的旁觀事實句。
-"spit_at_stone", "worship_stone", and "praise_stone" take no params — they're gestures aimed at the divine stone landmark, wherever it currently is."""
+"spit_at_stone", "worship_stone", and "praise_stone" take no params — they're gestures aimed at the divine stone landmark, wherever it currently is.
+For "sleep", how deep it is depends entirely on "duration" (in game minutes): under %d minutes only lightly restores stamina, %d–%d minutes (a nap) restores stamina and some of how awake you feel, and beyond %d minutes (a real night's sleep) restores both far more. If you're seriously sleepy, don't just rest for a few minutes — commit enough duration for a real sleep."""
 
 ## update_plan 是條件式欄位（#89，《10》§5.4／《12》§2.4）：只有呼叫端判斷
 ## 現在是四個開放時機之一時才加進 schema、才寫進這段提示——其餘時候完全不
@@ -289,11 +290,20 @@ static func _plan_system_tail() -> String:
 ## 給模型選，選中後 agent.gd::_select() 會判定 NOT_IMPLEMENTED、整筆任務丟掉——
 ## 一次完全空轉的決策輪次。不在這裡另外抄一份字串，兩份清單各自維護遲早會漂移，
 ## 常數改了這裡忘記跟著改，模型看到的清單就會跟引擎實際做得到的不一樣
+##
+## sleep 的分級門檻（#771）跟 priority／duration 同一套「上下限用常數格式化
+## 帶入，不寫死」——直接讀 Agent.SLEEP_TIER_NAP_MIN_MINUTES／
+## SLEEP_TIER_SLEEP_MIN_MINUTES，門檻改了這裡不用跟著改，模型講的量級
+## 永遠跟 agent.gd::_classify_sleep_tier() 實際的分級一致
 static func _plan_system(
 	character: Character, allow_update_plan: bool, has_pending_persuade: bool = false,
 	allow_appointment: bool = false, allow_perform_tip: bool = false
 ) -> String:
-	var body := PLAN_SYSTEM_BASE % ", ".join(AISchema.IMPLEMENTED_ACTIONS)
+	var body := PLAN_SYSTEM_BASE % [
+		", ".join(AISchema.IMPLEMENTED_ACTIONS),
+		Agent.SLEEP_TIER_NAP_MIN_MINUTES, Agent.SLEEP_TIER_NAP_MIN_MINUTES,
+		Agent.SLEEP_TIER_SLEEP_MIN_MINUTES, Agent.SLEEP_TIER_SLEEP_MIN_MINUTES,
+	]
 	body += PLAN_SYSTEM_UPDATE_PLAN_ALLOWED if allow_update_plan else PLAN_SYSTEM_UPDATE_PLAN_LOCKED
 	if has_pending_persuade:
 		body += PLAN_SYSTEM_PERSUADE
