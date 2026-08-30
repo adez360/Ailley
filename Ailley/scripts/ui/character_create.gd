@@ -124,6 +124,12 @@ var _decision_source_container: Control
 var _slider_block_container: Control
 var _strength_block_container: Control
 
+## 分頁 2 的隨機按鈕列。化身者模式一併隱藏——滑桿藏起來後這顆按鈕只改六顆
+## 看不見的滑桿，按了沒有任何可見變化卻默默改寫 collect() 會存進角色庫的
+## hexaco 值（issue #372，#371 接上 UI 入口前的潛伏問題）。分頁 3 的隨機鈕
+## 不用藏：造型組在化身者模式下照常要選
+var _personality_random_row: Control
+
 ## true 時面板走化身者模式：決策來源、六維人格滑桿對玩家都沒有意義，一併
 ## 隱藏（issue #372，見 _refresh_all()）——玩家自己操控角色，不需要選
 ## LLM 決策來源，也不需要靠六維滑桿描述「這個角色的個性」，那是給 AI
@@ -421,7 +427,8 @@ func _build_tab_personality() -> Control:
 	_strength_block_container = _strength_block()
 	block.add_child(_strength_block_container)
 	block.add_child(_description_block())
-	block.add_child(_random_button_row(_on_random_personality_pressed))
+	_personality_random_row = _random_button_row(_on_random_personality_pressed)
+	block.add_child(_personality_random_row)
 	return block
 
 func _slider_block() -> Control:
@@ -632,7 +639,8 @@ func _on_style_pressed(index: int) -> void:
 ## 只隨機分頁 2 的六維滑桿（issue #676）：隨機按鈕拆成各分頁各自觸發，
 ## 不再像舊版一次觸發全部分頁——玩家停在分頁 1 按下去畫面沒反應、切到
 ## 別頁才發現剛剛其實兩頁都被隨機掉，是誤導。保證落在可存檔區間：
-## 先全部置中，再挑 2 個推向兩端
+## 先全部置中，再挑 EXTREME_MIN_WITH_DESC + 1（= 3，`character` 留空時的門檻）
+## 個推向兩端——挑 3 個讓有沒有寫描述都達標
 func _on_random_personality_pressed() -> void:
 	for slider in _sliders:
 		slider.value = DEFAULT_VALUE
@@ -705,6 +713,7 @@ func _refresh_all() -> void:
 	_decision_source_container.visible = not _embodiment_mode
 	_slider_block_container.visible = not _embodiment_mode
 	_strength_block_container.visible = not _embodiment_mode
+	_personality_random_row.visible = not _embodiment_mode
 
 func _deployed_count() -> int:
 	var n := 0
