@@ -176,3 +176,22 @@ func test_revive_clears_death_fields_and_restores_stats() -> void:
 	)
 	assert_eq(target.stats.get_value("health"), 50.0, "health 應恢復到安全值")
 	assert_eq(target.stats.get_value("injury"), 0.0, "injury 應歸零")
+
+
+## 復活前若屍體正被搬運，_hauled_by 得一併釋放，否則 is_dead 變 false、
+## 移動鎖解除後角色仍會被 is_being_hauled() 卡住跟著搬運者走（issue #733）
+func test_revive_releases_existing_haulers() -> void:
+	var reviver := _make_character(Player)
+	var target := _make_character(Agent)
+	var hauler := _make_character(Player)
+	target.position = reviver.position
+	target.is_dead = true
+	target.death_at = _death_at_hours_ago(1.0)
+	hauler.start_haul(target)
+	assert_true(target.is_being_hauled(), "前置：搬運關係應先建立成功")
+
+	var result := reviver.revive(target)
+
+	assert_eq(result, Character.REVIVE_OK, "應復活成功")
+	assert_false(target.is_being_hauled(), "復活後應釋放既有搬運關係，不然角色會卡在跟著搬運者走")
+	assert_false(hauler.is_hauling(), "搬運者也應一併解除搬運狀態")

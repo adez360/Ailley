@@ -1031,6 +1031,15 @@ func revive(corpse: Character) -> String:
 			return REVIVE_NOT_ENOUGH_MONEY
 
 	corpse._clear_death_state()
+
+	# 解除既有搬運關係——跟 bury() 同一個理由：is_dead 變 false 後移動鎖解除，
+	# 但 _decide_velocity() 的 is_being_hauled() 判斷排在最前面且不看 is_dead，
+	# 不主動放手的話復活的角色會一直卡在「跟著搬運者走」，AI 決策或玩家自己
+	# 的移動意圖完全進不去
+	for hauler in corpse._hauled_by.duplicate():
+		if is_instance_valid(hauler):
+			hauler.stop_haul()
+
 	# 恢復到安全值，跟 _complete_treatment()（昏迷治療完成）同一套「安全水平」
 	# 數字，理由見那邊：避免復活完立刻又因為某項生理數值歸零重新觸發 condition
 	if corpse.stats != null:
