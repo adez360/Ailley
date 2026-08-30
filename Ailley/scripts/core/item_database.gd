@@ -8,8 +8,8 @@ extends RefCounted
 ## `icon` 目前全部是 `null`——專案還沒有任何物品圖示素材（現有的
 ## `Sprite sheet for Basic Pack.png` 是通用 UI 圖示如星星／獎盃，不是物品圖），
 ## 先把欄位定好形狀，等美術素材到位再填 `{"source": "res://...", "region": [x, y, w, h]}`。
-## `inventory_slot_button.gd` 還沒有改讀這個定義檔（見 #84 剩下的工作），
-## 目前仍是文字佔位。
+## `inventory_slot_button.gd` 已改讀這個定義檔（#743）查顯示名稱——顯示端
+## 仍是文字佔位，等物品圖示素材。
 ##
 ## Inventory 本身不查這份定義檔——`item_id` 那階段收任意字串（見
 ## note/技術/物品欄.md），這裡只服務顯示端。

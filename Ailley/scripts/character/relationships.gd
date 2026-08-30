@@ -1,8 +1,9 @@
 class_name Relationships
 extends Node
 
-## 這個角色對其他角色的關係。對每個認識的人只有 met_count（真的互動過幾次）
-## 與 appearance_cache（初次相遇注入過的對方外觀描述，≤20 字）兩個引擎欄位。
+## 這個角色對其他角色的關係。對每個認識的人只有 met_count（真的互動過幾次）、
+## appearance_cache（初次相遇注入過的對方外觀描述，≤20 字）與 last_seen
+## （issue #497，上次好好講完一場話當下的 GameClock.day）三個引擎欄位。
 ##
 ## 規格《01_角色數值規格書》3-1：好感／熟悉／虧欠／信任(trust) 都不留成引擎
 ## 欄位——它們從沒被任何公式讀過，只被寫入再餵給 AI 看，不符合《00》原則三
@@ -33,6 +34,7 @@ const APPEARANCE_MAX_CHARS := 20
 const DEFAULT_RECORD := {
 	"met_count": 0,			# 真的互動過幾次（只有 note_meeting() 會加）
 	"appearance_cache": "",	# 初次相遇注入過的對方外觀，之後隨關係一起帶出，不重注
+	"last_seen": -1,		# 上次 note_meeting() 當下的 GameClock.day，-1 = 從沒見過（issue #497）
 }
 
 var records := {}
@@ -67,6 +69,14 @@ func get_appearance_cache(other_id: String) -> String:
 		return String(DEFAULT_RECORD["appearance_cache"])
 	return String(records[other_id]["appearance_cache"])
 
+## 上次 note_meeting() 當下的 GameClock.day。-1 = 從沒好好講完一場話——
+## 跟 has_met() 同一個判斷依據（met_count > 0），呼叫端要判斷「有沒有
+## 上次見面」該查 has_met()，不要拿 -1 當合法天數去算差值
+func get_last_seen(other_id: String) -> int:
+	if not records.has(other_id):
+		return int(DEFAULT_RECORD["last_seen"])
+	return int(records[other_id]["last_seen"])
+
 func known_ids() -> Array:
 	return records.keys()
 
@@ -82,6 +92,7 @@ func set_appearance_cache(other_id: String, text: String) -> void:
 func note_meeting(other_id: String) -> void:
 	var record := _ensure_record(other_id)
 	record["met_count"] += 1
+	record["last_seen"] = GameClock.day
 
 # 唯一會建立紀錄的地方，所以是私有的。回傳的是本體不是副本
 func _ensure_record(other_id: String) -> Dictionary:
@@ -126,4 +137,9 @@ func load_save_data(data: Dictionary) -> void:
 		# 存檔繞過 set_appearance_cache()，20 字上限要在這裡再夾一次，
 		# 否則手改過的存檔可以把任意長度的描述帶進 payload
 		record["appearance_cache"] = String(record["appearance_cache"]).substr(0, APPEARANCE_MAX_CHARS)
+		# 缺席（舊存檔沒有這個欄位）沿用 DEFAULT_RECORD 的 -1，跟其餘欄位
+		# 「型別不對就沿用預設值」同一套規則——-1 本身就是合法的「從沒見過」
+		var saved_last_seen: Variant = saved.get("last_seen")
+		if saved_last_seen is int:
+			record["last_seen"] = maxi(-1, saved_last_seen)
 		records[other_id] = record

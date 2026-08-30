@@ -5,9 +5,7 @@ extends Node
 ##
 ## 這一輪只驗證：
 ##
-##   VendingMachine
-##       ↓
-##   Character.buy_from()
+##   Character.buy_from()（商店綁地點，見 world/shop.gd，issue #572）
 ##       ↓
 ##   Inventory.add_item()
 ##       ↓
@@ -30,9 +28,9 @@ extends Node
 ##   add_item("bread", 1)
 ##   add_item("water", 1)
 ##
-## 再嘗試透過附近販賣機：
-##   buy_from(machine, "bread")
-##   buy_from(machine, "water")
+## 再嘗試透過附近商店（bread／water 都在 tavern 目錄）：
+##   buy_from("tavern", "bread")
+##   buy_from("tavern", "water")
 ##
 ## 最後讀 SQLite npc_inventory。
 ## =====================================================
@@ -239,22 +237,22 @@ func _run() -> void:
 		)
 
 	# -------------------------------------------------
-	# 5. 測試實際販賣機
+	# 5. 測試實際商店（issue #572：商店綁地點，不是機台節點）
 	# -------------------------------------------------
 
-	var machine := _find_nearest_vending_machine(
+	var shop_place := _find_nearby_shop_place(
 		character
 	)
 
-	if machine == null:
+	if shop_place.is_empty():
 		_skip(
 			"Character.buy_from",
-			"找不到範圍內販賣機，跳過 buy_from() 測試。"
+			"不在任何商店地點的 BUY_RANGE 內，跳過 buy_from() 測試。"
 		)
 	else:
 		print(
-			"[TEST] 找到販賣機：%s"
-			% machine.name
+			"[TEST] 找到商店地點：%s"
+			% shop_place
 		)
 
 		var machine_money_before := (
@@ -262,7 +260,7 @@ func _run() -> void:
 		)
 
 		var result_bread := character.buy_from(
-			machine,
+			shop_place,
 			"bread"
 		)
 
@@ -283,7 +281,7 @@ func _run() -> void:
 			)
 
 		var result_water := character.buy_from(
-			machine,
+			shop_place,
 			"water"
 		)
 
@@ -395,29 +393,32 @@ func _find_player() -> Character:
 	return null
 
 
-func _find_nearest_vending_machine(
+## 商店不再是場景物件（issue #572），直接對 Shop.CATALOGS 的每個地點各查一次
+## 距離，跟 player.gd::_nearest_shop_place() 同一套判斷，只是這裡不檢查面向——
+## 這支腳本是手動掛上去跑的診斷工具，不是玩家操作路徑
+func _find_nearby_shop_place(
 	character: Character
-) -> VendingMachine:
+) -> String:
 
-	var nearest: VendingMachine = null
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null:
+		return ""
+
+	var nearest := ""
 	var shortest := Character.BUY_RANGE
 
-	for node in get_tree().get_nodes_in_group(
-		"vending_machines"
-	):
-		var machine := node as VendingMachine
-
-		if machine == null:
+	for place in Shop.CATALOGS:
+		if not anchors.has(place):
 			continue
 
 		var distance := (
 			character.get_body_position()
-			.distance_to(machine.global_position)
+			.distance_to(anchors.resolve(place))
 		)
 
 		if distance <= shortest:
 			shortest = distance
-			nearest = machine
+			nearest = place
 
 	return nearest
 
