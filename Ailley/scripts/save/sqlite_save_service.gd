@@ -73,7 +73,7 @@ func has_character(id: String) -> bool:
 ## 讀一個角色的完整資料，找不到回傳空 Dictionary
 ##
 ## 回傳形狀跟 Character.get_save_data() 一致：
-##     { character_id, character_name, stats{8 項}, relationships{ <target_id>: {appearance_cache} },
+##     { character_id, character_name, stats{8 項}, relationships{ <target_id>: {met_count, appearance_cache} },
 ##       personality?{ 10 項 }, today_plan?[ {text, is_done} ] }
 ##
 ## personality／today_plan 是選填欄位（跟 get_save_data() 只在有資料時才給
@@ -102,6 +102,7 @@ func get_character(id: String) -> Dictionary:
 	var relationships := {}
 	for row in DatabaseManager.select("npc_relations", "character_id = '%s'" % _esc(id)):
 		relationships[row["target_id"]] = {
+			"met_count": int(row["relations_met_count"]),
 			"appearance_cache": row["relations_appearance_cache"],
 		}
 	data["relationships"] = relationships
@@ -311,6 +312,7 @@ func _replace_relationships(id: String, relationships: Dictionary) -> bool:
 			"character_id": id,
 			"target_id": target_id,
 			"relations_appearance_cache": String(record.get("appearance_cache", "")),
+			"relations_met_count": int(record.get("met_count", 0)),
 		}
 
 		if not DatabaseManager.insert("npc_relations", row):
@@ -459,8 +461,9 @@ func _esc(value: String) -> String:
 ##
 ## npc 沒有 version     《14》§2 講的並行寫入保護欄位沒有掛靠——SQLite 這邊
 ##                      實際靠 transaction 保護，不是 version CAS，見檔頭
-## npc_relations        少了 met_count（Relationships.DEFAULT_RECORD 有，
-##                      round-trip 之後這個數字會遺失，重開後從 0 起算）
+## npc_relations        少了 last_seen（#497 之後 Relationships.DEFAULT_RECORD
+##                      新增的欄位，SQLite 後端 round-trip 之後會變回 -1「從沒
+##                      見過」，見 #497；met_count 已由 #704 補上）
 ## npc_state            少了 mood/social/fun 三項（Stats.SPEC 有這三項，
 ##                      npc_state 只對到《01》§4-1 的 8 項生理狀態）
 ## memory                Character.get_save_data() 現在會產生 memory 欄位

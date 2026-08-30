@@ -63,7 +63,8 @@ Only pick actions from this exact list: %s.
 For "talk", params must be {"target": "<exact name from context.visible>"}.
 For "buy", params must be {"item_id": "<an item_id listed in context.shop>", "place": "<the place key in context.shop that sells it>"} — "context.shop" maps every place with a vending machine to its catalog of {item_id: price}. If you're hungry or thirsty and can afford it, buying food or drink there is a real option.
 For "persuade", params must be {"target": "<exact name from context.visible>", "reason": "<why you're trying to persuade them, in your own words>"}, plus an optional "proposed_task": {"action": ..., "params": {...}, "priority": ..., "duration": ...} — a full task (same shape as an entry in your own "tasks") describing the specific thing you want them to do if they're persuaded. Omit "proposed_task" if you're only trying to change what they believe, not get them to do something specific.
-For "follow", params must be {"target": "<exact name from context.visible>"} — invite yourself along with that character, keeping pace with wherever they currently are. There's no fixed duration or distance limit: you'll keep following until your own next decision picks something else instead, so if you want to stop, just choose a different action next time."""
+For "follow", params must be {"target": "<exact name from context.visible>"} — invite yourself along with that character, keeping pace with wherever they currently are. There's no fixed duration or distance limit: you'll keep following until your own next decision picks something else instead, so if you want to stop, just choose a different action next time.
+For "work", params must be {"place": "<one of context.workplaces>"} — a place with a workstation, not just anywhere. If "context.workplaces" is empty, there is nowhere to work right now, so don't pick this action."""
 
 ## update_plan 是條件式欄位（#89，《10》§5.4／《12》§2.4）：只有呼叫端判斷
 ## 現在是四個開放時機之一時才加進 schema、才寫進這段提示——其餘時候完全不
@@ -165,6 +166,12 @@ Reply with JSON only, no prose, no code fence:
  "tasks": [{"action": "<one of the allowed actions>", "params": {}, "priority": 10, "duration": 15}]}
 An empty "tasks" array means don't change anything."""
 
+## 本機小模型（Qwen2.5 等）在沒有明確語言限制時，容易在中文句子裡夾雜訓練資料
+## 帶出來的英文詞彙（issue #656）。接在每種 rules 段最後面，不放最前面——
+## 系統規則的 JSON 欄位名／enum 值本來就是英文，混在規則段開頭容易被誤讀成
+## 「連 schema 都要中文」，接在最後面明確只管「自由文字要用中文」這一件事
+const OUTPUT_LANGUAGE_RULE := "\n\nWrite all free-text you generate — dialogue lines, spoken words, inner thoughts, remarks — in Traditional Chinese (繁體中文) only. Do not mix in English words. This does not apply to JSON field names or enum values, which stay as specified above."
+
 ## 角色的人格段 ＋ 遊戲規則，順序固定不可調換（#117，《01-3》§5「組裝順序」）。
 ##
 ## 人格段一定排最前面：規格要求 System 段排在 prompt 最前面且逐字元一致，那是
@@ -174,7 +181,7 @@ An empty "tasks" array means don't change anything."""
 ## 角色沒有人格資料時 system_prompt 只有開場白跟結尾句（Personality 保證不是
 ## 空字串），所以這裡不需要處理「空段落」——一律接得起來
 static func _system(character: Character, rules: String) -> String:
-	return character.system_prompt + "\n\n" + rules
+	return character.system_prompt + "\n\n" + rules + OUTPUT_LANGUAGE_RULE
 
 ## #267：緊急門檻 = 仲裁器真正用來比較的那個數字（進時間窗的 schedule 任務
 ## 分數 SCHEDULE_BASE_PRIORITY+TIME_BONUS，加上要贏過它所需的 HYSTERESIS），
@@ -276,7 +283,7 @@ Write one short, first-person line — a wry, self-aware remark this character m
 
 static func build_creation_envelope(system_prompt: String) -> Dictionary:
 	return {
-		"system": system_prompt + "\n\n" + CREATION_SYSTEM,
+		"system": system_prompt + "\n\n" + CREATION_SYSTEM + OUTPUT_LANGUAGE_RULE,
 		"payload": {"type": "creation"},
 		"response_format": AISchema.creation_response_schema(),
 	}
@@ -432,12 +439,16 @@ static func turn_entry(speaker_name: String, text: String) -> Dictionary:
 ## 有人在表演」，跟 allow_appointment 同一種做法
 ## recalled_memories（issue #571）同 build_dialogue_envelope() 的說明，由
 ## 呼叫端 await Memory.search_l3() 拿到後傳進來
+## workplaces（issue #700）是有工作站的地點清單，跟 pool／today_plan／
+## fact_lines 同一種「呼叫端整理好再傳進來」做法——這個檔案不伸進 agent.gd
+## 內部去查場上有哪些 Workstation 節點，見 agent.gd::_workplaces_summary()
 static func build_plan_envelope(
 	character: Character, visible: Array[Character], pool: Array[Dictionary],
 	today_plan: Array[Dictionary], allow_update_plan: bool,
 	fact_lines: Array[String] = [], has_pending_persuade: bool = false,
 	location_id: String = "", allow_appointment: bool = false,
-	allow_perform_tip: bool = false, recalled_memories: Array[String] = []
+	allow_perform_tip: bool = false, recalled_memories: Array[String] = [],
+	workplaces: Array[String] = []
 ) -> Dictionary:
 	var visible_block: Array[Dictionary] = []
 	var present_npc_ids: Array[String] = []
@@ -458,6 +469,7 @@ static func build_plan_envelope(
 				"today_plan": _today_plan_sentence(today_plan),
 				"fact_lines": fact_lines,
 				"memory": _memory_block(character, present_npc_ids, location_id, recalled_memories),
+				"workplaces": workplaces,
 				# 販賣機目錄（#605）只掛在 plan 信封的 context，不進
 				# _self_block()——理由見 _shop_summary() 開頭的說明
 				"shop": _shop_summary(character),
@@ -535,33 +547,18 @@ static func _inventory_summary(character: Character) -> Dictionary:
 		totals[item_id] = int(totals.get(item_id, 0)) + int(slot["count"])
 	return totals
 
-## 販賣機清單摘要：{place: {item_id: price}}（issue #605）。只掛在
+## 商店清單摘要：{place: {item_id: price}}（issue #605）。只掛在
 ## build_plan_envelope() 的 context，不進 _self_block()——_self_block() 是
 ## 五種信封共用，dialogue（每句對話一次）／checkpoint／last_words／reflection
 ## 都用不到商品目錄，白付一份 token，也跟 CHECKPOINT_SYSTEM「只需要 self
 ## 區塊就夠」的註解相斥（複審抓到）。原本 buy 動作的 schema 要求填
-## item_id／place，但 prompt 完全沒告訴模型有哪些販賣機、賣什麼、多少錢，
+## item_id／place，但 prompt 完全沒告訴模型有哪些商店、賣什麼、多少錢，
 ## 模型只能瞎猜，buy 幾乎不會被選中，NPC 明明有錢卻活活餓死。全村目前
-## 只有 2 台（酒館／藥草鋪），先列全部，不特別篩「附近」——之後村莊擴大
-## 到會撞到 token 成本或選擇混亂時再收斂。place 值刻意跟
-## _find_vending_machine_at_place() 的判斷邏輯同一套（節點名含 "herb" 才是
-## 藥草鋪，其餘算酒館），維持全庫唯一一份「地點名怎麼定」的判斷依據
-static func _shop_summary(character: Character) -> Dictionary:
-	var shops := {}
-	for machine in character.get_tree().get_nodes_in_group("vending_machines"):
-		if not machine is VendingMachine:
-			continue
-		var place: String = "herb_shop" if str(machine.name).to_lower().contains("herb") else "tavern"
-		# 同地點多台販賣機只收錄第一台——跟 _find_vending_machine_at_place()
-		# 回傳第一台的取樣方向一致，不然「目錄看得到、buy 卻買不到」（複審
-		# 抓到：原本後到的機器直接覆蓋整份目錄，兩邊取樣順序還相反）
-		if shops.has(place):
-			continue
-		var catalog := {}
-		for item_id in machine.list_items():
-			catalog[item_id] = machine.get_price(item_id)
-		shops[place] = catalog
-	return shops
+## 只有 2 間（酒館／藥草鋪），先列全部，不特別篩「附近」——之後村莊擴大
+## 到會撞到 token 成本或選擇混亂時再收斂。商店不再是場景物件（issue #572），
+## 直接讀 world/shop.gd 的靜態表，不用掃場景樹
+static func _shop_summary(_character: Character) -> Dictionary:
+	return Shop.CATALOGS.duplicate(true)
 
 ## conditions 只帶 type，不帶 turns_left——跟 _memory_block() 不帶 decay_value
 ## 同一個理由：模型只需要知道自己現在有哪些異常狀態，不需要知道引擎內部的
@@ -671,10 +668,36 @@ static func _memory_block(
 ## 「我對這個人什麼觀感」不再由引擎給一個數字，交給模型自己從對話與記憶判斷
 static func _listener_block(speaker: Character, listener: Character) -> Dictionary:
 	var met_count := 0
+	var has_met := false
+	var last_seen_day := int(Relationships.DEFAULT_RECORD["last_seen"])
 	if speaker.relationships != null:
 		met_count = speaker.relationships.get_met_count(listener.character_id)
+		has_met = speaker.relationships.has_met(listener.character_id)
+		last_seen_day = speaker.relationships.get_last_seen(listener.character_id)
 
 	return {
 		"name": listener.character_name,
 		"met_count": met_count,
+		"last_seen": _last_seen_sentence(listener.character_name, has_met, last_seen_day),
 	}
+
+## 上次見面距今幾天前，壓成事實句（issue #497 拍板，比照 today_plan 的做法：
+## 壓成自然語言而不是丟原始時間戳讓模型自己算）。跟 _push_daily_event() 那組
+## 事實句同一種語言（世界內容給模型看的是中文，跟系統指令模板本身的英文分開，
+## 見 DIALOGUE_SYSTEM／_today_plan_sentence() 的既有慣例）。只陳述天數差，
+## 不加「好久不見」這類情緒推測（《00》原則二）
+##
+## has_met 為真但 last_seen_day 仍是 -1（`get_last_seen()` 的「從沒見過」預設值）
+## 是舊存檔的過渡態：#497 之前的存檔只有 met_count、沒有 last_seen 欄位，
+## `load_save_data()` 缺欄位一律退回 -1（見 relationships.gd 該函式的說明）。
+## 這裡若不特判會算出 `GameClock.day - (-1)` 這種假天數，往後每次決策都送出
+## 錯誤事實句，直到下次真的 note_meeting() 才自癒——寧可先退回「還沒見過」
+## 這句同樣不精確但不會塞一個編造出來的數字給模型
+static func _last_seen_sentence(listener_name: String, has_met: bool, last_seen_day: int) -> String:
+	if not has_met or last_seen_day < 0:
+		return "你還沒見過%s。" % listener_name
+
+	var days_ago := GameClock.day - last_seen_day
+	if days_ago <= 0:
+		return "你今天已經見過%s了。" % listener_name
+	return "你上次見到%s是%d天前。" % [listener_name, days_ago]
