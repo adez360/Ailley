@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/dialogue/conversation.gd
 status: 進行中
-updated: 2026-08-22
+updated: 2026-08-31
 ---
 
 # talk 動作設計
@@ -32,6 +32,18 @@ updated: 2026-08-22
 > [!important] 這個分層是整個設計的重點
 > 內容層以外的四層跟「誰產生台詞」無關。切乾淨的話，接 LLM 那天只換內容層一個檔。
 > 反過來說，把「產生台詞」寫進狀態機裡的話，之後就得整段重寫。
+
+> [!note] 內容層可以順帶推進決策層（issue #658）
+> 角色講出的話若是「講了就要做」的即時承諾（不是玩笑、不是還要對方答應的
+> 提議），對話回應可以附帶選填的 `task` 欄位，直接推進講話者自己的任務池
+> （`PromptBuilder.DIALOGUE_TASK_HINT`／`AISchema.validate_dialogue()`，
+> 跟 `agent.gd::next_line()` 串起來）。判斷「這句話算不算承諾」交給模型
+> 自己讀懂語意決定，**不是引擎事後比對台詞裡有沒有特定關鍵字**——語言表達
+> 方式千變萬化，固定詞彙比對遲早漏接或誤判。欄位形狀跟驗證方式沿用
+> persuade 的 `proposed_task`（#227）那套 `_validate_task_shape()`，同理
+> 擋掉巢狀 `persuade`。池滿時跟一般 LLM 任務同一套處理（靜默丟棄），不像
+> persuade 的 `proposed_task` 保證塞入——對話裡的口頭承諾不是對另一方的
+> 正式應允，沒有信任問題。
 
 ## 會話做成獨立物件
 
@@ -88,10 +100,56 @@ updated: 2026-08-22
 
 關係是「對某個人」而不是「角色自己的數值」，所以獨立成 `Relationships`，
 key 用對方的 `character_id` 而不是 name —— name 會改，用它當 key 等於改名即失憶。
-每筆存成 Dictionary 而不是單一浮點數：欄位是 `trust`／`met_count`／
+每筆存成 Dictionary 而不是單一浮點數：欄位是 `met_count`／
 `appearance_cache`（規格《01》3-1、《99》P-08）／`appearance_state`（#498，
-見下方外觀異動偵測），之後要加最後見面時間（見 #497）、印象標籤也一樣不用
-改結構。
+見下方外觀異動偵測）／`last_seen`（#497，見下方），印象標籤之後要加也一樣
+不用改結構。
+
+## 上次見面時間（#497）
+
+`last_seen`：上次 `note_meeting()`（好好講完一場話）當下的 `GameClock.day`，
+-1 表示從沒見過。只有 `note_meeting()` 會寫入，跟 `met_count` 同一次更新，
+判斷「有沒有上次見面」要查 `Relationships.has_met()`，不要拿 -1 當合法天數
+去算差值。
+
+送進 `context.listener` 時壓成中文事實句（`prompt_builder.gd::_last_seen_sentence()`），
+不送原始時間戳讓模型自己算——跟 `_today_plan_sentence()` 同一種「輸入端一律
+注入、但壓成自然語言句子」做法（2026-08-27 issue #497 拍板）。只陳述天數差
+（「你上次見到 TAMMY 是 3 天前」／「你今天已經見過 TAMMY 了」／「你還沒見過
+TAMMY」），不加「好久不見」這類情緒推測，符合《00》原則二。
+
+只落地 JSON 存檔路徑（`Character.get_save_data()`／`load_save_data()` 通用
+機制自動涵蓋，不用改）。SQLite 路徑（`npc_relations` 表）目前連既有的
+`met_count` 都存不進去（見 `sqlite_save_service.gd` 檔尾「schema 缺口」清單），
+`last_seen` 一併登記在同一個缺口清單，不單獨補 schema——要不要幫 SQLite 補
+這兩個欄位是《99》待規劃項目，不是這則 issue 的範圍。
+
+### 驗證
+
+`test_run(suite="relationships")`：6/6 通過（`get_last_seen()`／
+`load_save_data()` 型別驗證與退回預設值邏輯，不依賴 GameClock）。全套件
+31/33 通過，唯二失敗是既有的 `test_shout_reaches_player.gd`（issue #624
+追蹤），與本次改動無關。
+
+`project_run` + `game_eval` 對主 checkout 動態 spawn 一隻 Agent，直接呼叫
+`player.relationships.note_meeting()` 與 `PromptBuilder._listener_block()`
+驗證三種情境的實際字串：從沒見過（「你還沒見過 TestLastSeen。」）、剛見過面
+（`note_meeting()` 當下同一天，「你今天已經見過 TestLastSeen 了。」）、倒回
+3 天前（手動改 `last_seen` 欄位模擬，「你上次見到 TestLastSeen 是 3 天前。」）。
+另外驗證 `get_save_data()`／`load_save_data()` round-trip 保留 `last_seen`。
+
+> [!important] 舊存檔過渡態（`has_met=true`、`last_seen=-1`）不能算天數差（PR #641 review 抓到）
+> `_last_seen_sentence()` 原本只查 `has_met`，沒有另外擋 `last_seen_day < 0`——
+> #497 之前的存檔只有 `met_count`、沒有 `last_seen` 欄位，讀回來時
+> `has_met()` 為真（`met_count > 0`）但 `last_seen` 退回預設值 `-1`，
+> 會算出 `GameClock.day - (-1)` 這種編造出來的天數，往後每次決策都送出
+> 錯誤事實句，直到下次真的 `note_meeting()` 才自癒。已補上
+> `last_seen_day < 0` 判斷，這種過渡態一律退回「你還沒見過」。
+> `game_eval` 對 `PromptBuilder._last_seen_sentence()` 四種情境實測：
+> `(has_met=false, -1)` → 「你還沒見過阿吉。」；
+> `(has_met=true, last_seen_day=-1)`（過渡態）→ 「你還沒見過阿吉。」（修復前會算成假天數）；
+> `(has_met=true, last_seen_day=GameClock.day)` → 「你今天已經見過阿吉了。」；
+> `(has_met=true, last_seen_day=GameClock.day-3)` → 「你上次見到阿吉是 3 天前。」。
 
 外觀異動偵測（#498 拍板）：`appearance_cache`（自由文字、初次相遇的外觀描述，
 P-08 已拍板但從沒有任何呼叫端寫入過）繼續維持原樣不動，這次新增一個獨立欄位
@@ -126,8 +184,8 @@ review 抓到：「髒兮兮」「乾淨多了」「傷已經好了」這幾種�
 > 型別不對、舊格式存檔——通通算「沒有 baseline」，一律只建立新 baseline、
 > 不比對、不發事實句，不能退回 `{injured: false, filthy: false}` 這種看似
 > 合法的預設值再拿去比對（那樣等於偷偷假造了一個「上次見到時沒受傷也不髒」
-> 的假歷史）。這點刻意不跟 `Relationships` 其餘欄位（`trust`／`met_count`
-> 型別不對時退回 `DEFAULT_RECORD` 的預設數字）同一套處理——那些欄位的預設
+> 的假歷史）。這點刻意不跟 `Relationships` 其餘欄位（`met_count`／`appearance_cache`
+> 型別不對時退回 `DEFAULT_RECORD` 的預設值）同一套處理——那些欄位的預設
 > 值本身就是合法的初始狀態，`appearance_state` 的「不存在」跟「存在且是
 > false」語意不同，不能共用退回預設值那條路。具體的讀檔/型別驗證程式碼留給
 > 實作 issue 寫，這裡只定住這條語意規則，避免照抄其他欄位的驗證模式時
@@ -149,31 +207,33 @@ review 抓到：「髒兮兮」「乾淨多了」「傷已經好了」這幾種�
 > 因為讀不到欄位而報錯或誤判成異動。具體的 schema migration 寫法留給實作
 > issue。
 
-好感、熟悉、虧欠不是引擎欄位：沒有任何公式讀過它們（《00》原則三），
-那三件事交給《03》記憶系統自己記、自己判斷、自己演。
+好感、熟悉、虧欠、信任都不是引擎欄位：沒有任何公式讀過它們（《00》原則三），
+這幾件事交給《03》記憶系統自己記、自己判斷、自己演（信任／`trust` 是最後
+拿掉的一個，見 issue #601）。
 
 > [!important] 查詢不可以建立紀錄
-> `Relationships` 的讀寫是分開的：`get_trust()` / `get_record()` / `has_met()`
-> 全部唯讀，`get_record()` 甚至回的是副本；只有 `add_trust()`、`set_appearance_cache()`
-> 與 `note_meeting()` 會走私有的 `_ensure_record()` 建立紀錄。
+> `Relationships` 的讀寫是分開的：`get_record()` / `has_met()` 全部唯讀，
+> `get_record()` 甚至回的是副本；只有 `set_appearance_cache()` 與
+> `note_meeting()` 會走私有的 `_ensure_record()` 建立紀錄。
 >
 > 這條是踩出來的：原本查詢走「沒有就當場建一筆」的 `get_record()`，
 > 而 `conversation.gd` 開場就會問一次關係 ——
 > 於是**只要對話開始過，`has_met()` 就永遠為真，而 `met_count` 還是 0**。
 > 症狀是 [[視覺感測]] 那個「第一次看到陌生人才愣一下」再也不會發生
-> （搭話後立刻走開就足以觸發），而主控台會印出「player 信任 20.0（0 次）」這種自相矛盾的東西。
+> （搭話後立刻走開就足以觸發），而主控台會印出「player（0 次）」卻同時判定
+> `has_met()` 為真，這種見過面次數是 0 但「已認識」的自相矛盾狀態。
 >
 > 「認識」的唯一來源是 `note_meeting()`，也就是**好好講完一場話**。
 > 這件事接 LLM 之後更要緊：`met_count` 與「認不認識」是要送進 payload 的事實，
 > 不能被自己的讀取行為改寫。
 
-## 聽者的對稱退出點（2026-08-16 拍板）
+## 聽者的對稱退出點（issue #691，《99》P-31，已實作）
 
 原設計只有**正在講話那一方**能用 `end` 欄位收尾，沒輪到自己講話的聽者只能等，或用移動觸發 `TOO_FAR` 這個側門離開——實質上把「要不要繼續聊」的決策權只給了說話方。
 
-已拍板：**聽者也要有對話機制本身的退出點**，不再只能靠側門。做法是每輪除了讓正在講話那方決定 `speech`/`end`，也對聽者發起一次決策，讓 TA 回傳要不要繼續聽；聽者選擇不繼續，本輪即以聽者中止收尾，跟 `Conversation.REASON_*` 用同一套結束原因體系，不可跟上方「失敗原因碼」混用。
+現況：`conversation.gd::_run()` 每輪（turn 0 除外——turn 0 的「listener」是發起對話的一方，且已經有 `engage` 欄位在管要不要理會這次搭話）先呼叫 `listener.wants_to_continue(speaker, _turns)`，聽者回 `false` 就以 `REASON_ENDED_BY_LISTENER` 立即結束，不等 `speaker.next_line()` 的 provider 逾時（`ai_config.gd` 預設 10 秒；退出優先於逾時）。`Character` 基底預設一律回 `true`（Player 沒有 LLM 可問，退出交給玩家自己走遠或站著不理）；`Agent.wants_to_continue()` 才是真正的 LLM 決策，`PromptBuilder.build_listener_continue_envelope()` 組信封，沿用 `AISchema.validate_checkpoint()`（`{"continue": bool}`，跟長動作中止檢查點同一種「純布林是非題」形狀，不另開一組只差一個字的 schema）。失敗/逾時一律視為「想繼續」，不能讓一次網路抖動就把整場對話腰斬。
 
-schema 欄位名稱、是否要額外佔用一次 AI 呼叫頻率配額（見《13》§5 呼叫頻率上限）、跟現有「等待對方回話逾時 8 秒」怎麼互動，待 LLM 版動工時一併設計，見《99》P-31。
+新增 `AIService.Policy.LISTENER`：完全豁免每日對話配額（`max_dialogue_calls_per_game_day`）且不計帳——這是對話機制本身的一部分，不是額外多打一通電話；佇列出隊順序也跟 `CONVERSATION` 同等優先（`_next_job_index()`），因為它一樣卡在同一條對話輪次迴圈裡等結果。
 
 ## 視線判定（issue #109，已實作）
 
@@ -186,11 +246,13 @@ schema 欄位名稱、是否要額外佔用一次 AI 呼叫頻率配額（見《
 
 候選角色偵測（原本 `character.gd` 裡找最近角色的方法，未曾被 `player.gd` 實際呼叫過、
 是死代碼，已移除）改成 `player.gd` 直接濾 `Vision.get_visible_characters()`——反正都要
-視線判定，沒理由重複維護兩份。工作站／販賣機的候選則改用 `player.gd` 新增的
+視線判定，沒理由重複維護兩份。工作站的候選則改用 `player.gd` 新增的
 `InteractArea`（`Area2D`，半徑 `maxf(WORK_RANGE, TALK_RANGE, BUY_RANGE)`，動態算不寫死），
-偵測 `project.godot` 新增的 `interactable` collision layer（`workstation.tscn`／
-`vending_machine.tscn` 的 `collision_layer` 從純 `terrain` 改成 `terrain | interactable`，
-NavGrid 的障礙判定只查 `terrain`，不受影響），取代原本每次呼叫都掃過整個 group 的寫法。
+偵測 `project.godot` 新增的 `interactable` collision layer（`workstation.tscn` 的
+`collision_layer` 從純 `terrain` 改成 `terrain | interactable`，NavGrid 的障礙判定
+只查 `terrain`，不受影響），取代原本每次呼叫都掃過整個 group 的寫法。商店（issue #572
+後不再是場上物件）不走這條 `InteractArea` 路徑，`_nearest_shop_place()` 直接對
+`SHOP_PLACES` 逐一比 `PlaceAnchors` 錨點距離，見 [[販賣機]]。
 
 ## 已定案的參數
 
@@ -201,8 +263,8 @@ NavGrid 的障礙判定只查 `terrain`，不受影響），取代原本每次�
 | 面對面 | `talk_to()` 本身不要求（debug 主控台、`agent.gd` 的 LLM 決策直接指名對象呼叫） | 操作上太苛；但玩家按 `E` 走 `player.gd::_nearest_facing()` 候選篩選時仍會排除沒面向的目標（`FACING_DOT_THRESHOLD`，見 #102） |
 | 互動鍵 | `E` | |
 | 被搭話者的行程 | 暫停後重算 | 不是接續原路 |
-| 回補 | social +25、mood +5 | 只有正常講完才發；關係只記 `note_meeting()`，不動 `trust` |
-| 等待對方回話逾時 | **暫定 8 秒**（AI 對 AI） | 沒有既有數值可參照，比照《04》`/event` 逾時（8秒建議值）抓同一量級，比一般 `/decide`（5秒）寬鬆，對話生成通常較長。逾時走 fallback（`DialogueLines.closing()`）。真人玩家的回話等待秒數留到 MVP-2 玩家加入後再定——現在真人不參與 `talk`，不急 |
+| 回補 | social +25、mood +5 | 只有正常講完才發；關係只記 `note_meeting()`，不寫入任何評價數值 |
+| 等待對方回話逾時 | provider 逾時（`ai_config.gd` 預設 10 秒） | 沒有對話專屬的獨立逾時常數——`next_line()` 走 `AIService` 的 provider timeout，provider 設定檔可覆蓋、缺值退回 `ai_config.gd::DEFAULT_TIMEOUT`（10 秒），見《04》§6。逾時走 fallback（`DialogueLines.closing()`）。真人玩家的回話等待秒數留到 MVP-2 玩家加入後再定——現在真人不參與 `talk`，不急 |
 
 ## 呈現層的坑
 
@@ -221,6 +283,21 @@ NavGrid 的障礙判定只查 `terrain`，不受影響），取代原本每次�
 > [!important] 箭嘴固定在右下角，所以氣泡往左上長，不是置中
 > `TAIL_INSET_FROM_RIGHT = 9` 把箭嘴尖端對到說話者頭上，框體再從那裡往左上展開。
 > 想要左向箭嘴得另外準備鏡像素材，或把 Box 的 `scale.x` 設 -1 再把文字翻回來。
+
+> [!important] 角色站在鏡頭可視範圍邊界附近時，氣泡會夾制回畫面內（issue #742）
+> 上面那條「往左上展開」的框體只認角色頭上的錨點，完全沒管鏡頭看不看得到——
+> 角色站在地圖邊緣、房屋邊界這類鏡頭視野受限的位置說話時，往左上長出去的
+> 那塊會直接被螢幕邊緣裁掉，看起來像是「AI 講到一半斷掉」（一開始真的被
+> 誤判成生成長度限制或模型品質問題，實測截圖比對才確認是顯示區域跑出畫面，
+> 文字本身沒有被截斷）。
+>
+> `_render()` 算完 `box.position` 之後多一步 `_clamp_to_camera_view()`：拿
+> `get_viewport().get_camera_2d()` 的 `get_screen_center_position()` 跟
+> `get_viewport().get_visible_rect().size / cam.zoom` 算出目前鏡頭的可視
+> 世界座標範圍，把 `box` 的全域矩形夾回這個範圍內——只平移 `box.position`，
+> 不動 `Bubble` 節點自己的 `global_position`（那是角色頭上的錨點）。代價是
+> 夾制生效的那幾幀，箭嘴（烤在 `box` 的九宮格材質裡，跟著整個框體一起
+> 平移）不會再精準指向角色頭上；沒有鏡頭時整段跳過，維持原本行為。
 
 素材是 `assets/ui/chatbox-1.png`（48x48），九宮格參數
 `region_rect = Rect2(6.07, 6.37, 39.01, 37.63)`、margin 10 / 9 / 11 / 12。
@@ -266,8 +343,9 @@ Enter 開啟／送出，Esc 取消。不在對話中就是單純冒一句氣泡�
 > `agent.gd::AI_THINKING_TEXT`（"…"）那個「思考中」提示用的是同一套——但
 > 「輪到你了」這個提示要「一直掛著直到玩家真的送出」，套用自動消失邏輯的話
 > 玩家慢慢想的時候提示會自己不見。`bubble.gd` 加了 `hold(message)` /
-> `release_hold()`：`hold()` 清空佇列、顯示訊息但不啟動計時器
-> （`set_process(false)`），`release_hold()` 解除後才恢復正常排隊行為。
+> `release_hold()`：`hold()` 清空佇列、顯示訊息但不跑自動消失的計時
+> （`_process()` 裡用 `_holding` 擋掉計時，處理本身開著是為了 #742 的
+> 每幀重夾位置），`release_hold()` 解除後才恢復正常排隊行為。
 > `next_line()` 只在真的要 `await`（緩衝區沒內容）時才對 `listener` 呼叫
 > `hold(WAITING_FOR_PLAYER_TEXT)`，`await` 結束（不管是真的送出還是被取消）
 > 呼叫 `release_hold()`，`is_instance_valid(listener)` 包一層——跟

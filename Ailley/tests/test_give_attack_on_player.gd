@@ -62,3 +62,30 @@ func test_attack_player_target_too_far_fails() -> void:
 
 	assert_eq(failure, Character.ATTACK_TOO_FAR, "超出 ATTACK_RANGE 應回 ATTACK_TOO_FAR")
 	assert_eq(player.stats.get_value("health"), 100.0, "失敗時不該套用任何傷害")
+
+
+func test_dead_attacker_cannot_attack() -> void:
+	var attacker := _make_character(Agent)
+	var player := _make_character(Player)
+	player.position = attacker.position  # 同一個位置，一定在 ATTACK_RANGE 內
+	attacker.is_dead = true
+
+	var failure := attacker.attack(player)
+
+	assert_eq(failure, Character.ATTACK_IS_DEAD, "死屍不能發起攻擊（PR #763）")
+	assert_eq(player.stats.get_value("health"), 100.0, "死屍攻擊不該套用任何傷害")
+
+
+func test_attack_dead_target_still_applies_damage() -> void:
+	# 只擋攻擊者這一側：攻擊死屍（other.is_dead）的既有行為不變——數值照套，
+	# 只跳過 bleeding 疊加（#379 死屍 conditions 只留 petrified）
+	var attacker := _make_character(Agent)
+	var corpse := _make_character(Player)
+	corpse.position = attacker.position  # 同一個位置，一定在 ATTACK_RANGE 內
+	corpse.is_dead = true
+
+	var failure := attacker.attack(corpse)
+
+	assert_eq(failure, Character.ATTACK_OK, "活人攻擊死屍應照舊成功")
+	assert_eq(corpse.stats.get_value("health"), 100.0 + Character.ATTACK_HEALTH_DELTA, "攻擊死屍仍應套用傷害")
+	assert_true(corpse.has_condition(Character.CONDITION_BLEEDING) == false, "死屍不該被疊加 bleeding（#379）")

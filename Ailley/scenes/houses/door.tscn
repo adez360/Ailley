@@ -86,24 +86,28 @@ animations = [{
 }]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_ey00f"]
-size = Vector2(16, 6)
+size = Vector2(16, 5)
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_apwb7"]
 size = Vector2(12, 40)
 
-[node name="Node2D" type="StaticBody2D"]
+[node name="Door" type="StaticBody2D"]
+y_sort_enabled = true
 script = ExtResource("1_lwpok")
 
 [node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="."]
+y_sort_enabled = true
+position = Vector2(0, -4)
 sprite_frames = SubResource("SpriteFrames_pg2b6")
 animation = &"door-close"
 autoplay = "default"
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
-position = Vector2(0, 5)
+position = Vector2(0, 1.5)
 shape = SubResource("RectangleShape2D_ey00f")
 
 [node name="InteractableComponent" parent="." instance=ExtResource("3_vw3wg")]
+position = Vector2(0, -4)
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="InteractableComponent"]
 shape = SubResource("RectangleShape2D_apwb7")

@@ -5,7 +5,7 @@ tags:
 scene: scenes/character.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-28
+updated: 2026-08-29
 ---
 
 # Character 基底與 Agent
@@ -105,8 +105,8 @@ Player 與 Agent 共用同一個基底，移動與動畫是同一份實作 —�
 
 做法是讓 `_ready()` 走到第三層時，改呼叫一個可被子類別覆寫的 hook
 （`_resolve_generated_id()`，預設就是 `generate_id()`）。`player.gd` 覆寫它：
-第一次生成後，把這組 UUID 額外寫進 `user://saves/player_id.txt`——
-跟 `user://saves/characters/`／`user://saves/worlds/`（見 [[存檔]]）分開放，
+第一次生成後，把這組 UUID 額外寫進 `user://saves_<hash>/player_id.txt`——
+跟 `user://saves_<hash>/characters/`／`user://saves_<hash>/worlds/`（見 [[存檔]]）分開放，
 因為它不屬於 `SaveService` 那套整包讀寫／版本／鎖的機制，從頭到尾只有一個值，
 寫一次之後只會被讀取。下次 `_ready()` 先讀這個檔案，讀得到就沿用，不必再過一次
 存檔那套重量級流程。
@@ -217,11 +217,10 @@ override `get_state_snapshot()`、`super()` 之後補上去，**不是**基底�
 `get("current_place")` 動態讀，group 成員資格跟「有沒有這個欄位」是兩件事，
 不吻合時會拿到 `null`（或在 `as Array` 那步直接崩）。
 
-`relations` 每筆是 `{trust, met_count}`，欄名跟 `relationships.gd` 的 record
+`relations` 每筆是 `{met_count}`，欄名跟 `relationships.gd` 的 record
 一致，不要在快照裡改名 —— 同一個數值兩個名字，讀過 `relationships.gd` 的人
-會在快照上找不到它。取值走 `get_trust()` / `get_met_count()` 這兩個純量
-accessor，不用 `get_record()`：後者每筆都 `duplicate(true)` 深拷一份，
-只為了讀兩個數字。
+會在快照上找不到它。取值走 `get_met_count()` 這個純量 accessor，不用
+`get_record()`：後者每筆都 `duplicate(true)` 深拷一份，只為了讀一個數字。
 
 ## 碰撞分層
 

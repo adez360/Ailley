@@ -3,7 +3,7 @@ tags:
   - 技術
   - workflow
 status: 現況
-updated: 2026-08-17
+updated: 2026-08-27
 ---
 
 # 平行 Worktree 與 Godot MCP
@@ -17,13 +17,44 @@ worktree 剛好重疊做同一件事」這兩塊也要注意。
 
 `godot-ai` MCP server 是本機共用的單一 process，每個**連進來的 Godot editor**
 各自登記成一個 `session_id`（例如 `ailley@45f9`），帶著自己的 `project_path`。
-只要每個 worktree 各自開一個專屬的 Godot editor 視窗（指向該 worktree 自己的
-`project.godot`），不同 worktree 的操作就會落在不同的 `session_id` 上，
+只要每個 worktree 真的各自開了一個專屬的 Godot editor 視窗（指向該 worktree
+自己的 `project.godot`），不同 worktree 的操作就會落在不同的 `session_id` 上，
 彼此的 `create_script`／`node_create`／`run_project` 不會互相打到對方的
 live editor —— 實測過 2 個平行 worktree 同時操作，log 乾淨分離。
 
 - 每個 worktree 是完整 checkout，`.godot/` 快取天生分開，不會有檔案鎖定衝突
 - 純文件/設計類 issue 不需要開 Godot editor，省一份 300MB\~1GB 的 RAM
+
+> [!warning] 「各自開一個專屬 Godot editor 視窗」這一步本身有兩個坑（issue #455 踩過）
+> **坑一：Godot Project Manager 清單裡兩個 worktree 的專案名稱顯示相同**
+> （都取自 `project.godot` 的 `application/config/name`），只有路徑不同，
+> 很容易點錯、切到既有那個視窗而不是真的另開一個。用 OS 層級直接確認在跑的
+> process 最準：
+> ```powershell
+> Get-CimInstance Win32_Process -Filter "Name LIKE 'Godot%'" |
+>   Select-Object ProcessId, CommandLine
+> ```
+> `--path` 參數就是那個 process 實際綁定的專案路徑，比 `session_manage(op="list")`
+> 回報的 `project_path` 更可信——後者在切換過程中觀察到會回傳上一個 session
+> 的舊快取值，不會即時更新。
+>
+> **坑二：`godot_ai` 外掛自己的伺服器 port 設定與 PID 檔都不是 worktree 隔離的**
+> ——port 讀寫走 `EditorSettings`（`client_configurator.gd::ws_port()`／
+> `http_port()`），這是整個 Godot 安裝共用的全域設定，不分專案；伺服器的
+> `--pid-file` 是 `user://godot_ai_server.pid`（`plugin.gd::SERVER_PID_FILE`），
+> 而 `user://` 只認 `project.godot` 的專案名稱，兩個 worktree 名稱相同時
+> 一樣共用同一份，跟 JSON 存檔在多 worktree 下互相覆寫是同一個病根
+> （見 [[存檔]]「`user://` 只認 project name，不分 worktree」）。第二個編輯器
+> 啟動時會看到第一個編輯器留下的 PID 記錄還活著，嘗試「adopt」而不是另開一個
+> 獨立的伺服器，實際觀察到的症狀是兩個編輯器互搶同一個 port、`session_manage`
+> 只會看到其中一個（通常是最後寫入設定的那個）。
+>
+> **目前唯一可靠的解法是啟動順序**：兩個編輯器都完全關閉（整個 process，不是
+> 切場景）→ 只開目標 worktree 的編輯器，等它完全啟動、用上面的 PowerShell
+> 指令或 `session_manage(op="list")` 確認 `project_path` 正確 → 再開回另一個。
+> 手動在外掛設定面板裡改 port 不能解決根本問題（EditorSettings 是全域的，
+> 兩邊改的其實是同一份），只會讓症狀變得更難預測。這不是「理論上會撞」，
+> 是實測撞到、追蹤原始碼確認後才排除的。
 
 ## 真正的風險：「active session」是全域的，不是每個 Claude session 專屬的
 

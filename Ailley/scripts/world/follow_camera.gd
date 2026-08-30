@@ -19,6 +19,12 @@ func _ready() -> void:
 	add_to_group("follow_camera")
 	_apply_limits()
 
+	# 延到整棵場景樹 _ready() 跑完才抓目標：main.tscn 裡 Level（含這顆鏡頭）排在
+	# Player 前面，Godot 逐一跑完子樹的 _ready() 才輪到下一個兄弟節點，這裡若直接呼叫
+	# follow_player()，Player 的 add_to_group("player") 還沒執行，會抓到空群組（#686）
+	call_deferred("_acquire_initial_target")
+
+func _acquire_initial_target() -> void:
 	follow_player()
 	if _target != null:
 		# 開場直接就位，否則第一幀會從地圖原點滑過來

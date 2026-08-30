@@ -26,9 +26,13 @@ var continue_requested := false
 var continue_load_failed := false
 
 ## 目前被玩家操控的 character_id，跟 allow_player_join 同一層世界存檔資料
-## （見 note/技術/存檔.md、issue #373）。存檔時從場景 "player" 分組即時算出來
-## （見 get_world_save_data()），不是這裡手動維護的即時狀態——這個變數只在
-## 讀檔時被寫入，放在這裡讓其他系統之後有地方可以查。
+## （見 note/技術/存檔.md、issue #373）。這裡是「玩家化過身沒」的唯一即時來源：
+## deploy_from_library() 以 as_player=true 投放時寫入，讀檔時由
+## apply_world_save_data() 從存檔還原，get_world_save_data() 原樣寫出。
+##
+## 刻意不從場景 "player" 分組反推：main.tscn 從頭就擺著設計時期的測試用 Player
+## 節點（見 deploy_from_library() 註解），分組在「從未化身」的場上也不是空的，
+## 「分組有沒有人」答不了「玩家化過身沒」——化身與否只有 deploy 路徑會改變。
 ##
 ## 目前沒有任何呼叫端會依這個值重新指派化身：真正的「換身」需要 #371（化身者
 ## 投放路由）先把「投放時選擇由玩家操控」這個機制做出來，這裡只先接上存讀路徑，
@@ -214,7 +218,17 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 	if character.get("schedule_template") != null:
 		character.set("schedule_template", "")
 
-	get_tree().current_scene.add_child(character, true)
+	# 掛在 current_scene 底下會落在 World（y_sort_enabled）外面，跟 Player／
+	# Level 的裝飾物完全脫鉤——動態生成的角色彼此之間、跟其他角色之間都不會
+	# 按 Y 座標決定前後，只會照 add_child() 順序疊圖（使用者實測發現的現象）。
+	# World 沒有腳本，用場景檔的 groups=["world"]（main.tscn）取代
+	# add_to_group()，找不到就代表場景設定壞了，退回 current_scene 讓遊戲
+	# 至少能跑，但留下錯誤方便查
+	var spawn_parent := get_tree().get_first_node_in_group("world")
+	if spawn_parent == null:
+		push_error("GameManager.spawn_character: 場景裡沒有 world 群組節點，角色將無法正確 y-sort")
+		spawn_parent = get_tree().current_scene
+	spawn_parent.add_child(character, true)
 	character.name = character.character_id
 
 	# _ready() 期間 character_name 的 fallback 撿到的是上面那個臨時節點名，
@@ -230,40 +244,52 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 	# 原點，不讓投放整個失敗
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
 	if anchors != null and anchors.has("pavilion"):
-		character.global_position = anchors.resolve("pavilion")
+		character.global_position = anchors.resolve_for(character, "pavilion")
 
 	return character
 
 
 # ---- 角色庫（#122，玩家自建角色）----
 
-# 把建角面板 collect() 出來的資料轉成角色庫的一筆紀錄並存進去。面板只負責
-# 蒐集資料（character_create.gd 的既有原則），存檔驗證→角色生成→角色庫這段
-# 管線接在這裡，由 character_create.gd 開場連的 character_saved 訊號觸發
+# 把建角面板 collect() 出來的資料存成角色庫一筆新模板。面板只負責蒐集資料
+# （character_create.gd 的既有原則），存檔驗證→角色生成→角色庫這段管線接在
+# 這裡，由 character_create.gd 開場連的 character_saved 訊號觸發。
+#
+# 角色庫現在是純模板概念：套用模板（character_create.gd::apply_template()）
+# 只是把資料帶回表單當起點，不是「打開來改」，所以這裡永遠新增一筆，
+# 不會有「這筆 data 其實是要覆蓋既有紀錄」的分支
 func receive_created_character(data: Dictionary) -> void:
-	# collect() 帶 "id" 代表面板走的是 edit()（規格書 05 §7-1「編輯」），
-	# 要原地覆蓋既有那筆，不是新增——不然編輯一次角色庫就多一筆同名孤兒紀錄，
-	# 而且會再打一次一次性的 words_to_creator（CodeRabbit review 抓到）
-	var editing_id := str(data.get("id", ""))
-	var existing := get_library_entry(editing_id) if not editing_id.is_empty() else {}
+	_append_library_entry(data)
 
-	# 已投放的不可編輯（《05》§7-1）。面板端 edit() 只讀不到已投放的？不，
-	# 面板本身不擋——角色庫首頁才擋（編輯按鈕對已投放者 disabled），這裡是
-	# 資料層最後一道防線，跟 remove_from_library() 對已投放者的擋法一致
-	if not existing.is_empty() and existing.get("deployed", false):
-		push_warning("GameManager: %s 已投放，不能編輯" % existing["character_name"])
-		return
 
-	if existing.is_empty() and character_library.size() >= CHARACTER_LIBRARY_CAP:
+# 建角面板「投放」：資料先變成一筆模板（deployed=false），立刻借用
+# deploy_from_library() 生場上實體——DEPLOY_CAP／identity_assignments／
+# provider 重建那些邏輯不重寫一份。投放失敗（世界人數已滿）要把剛 append
+# 的那筆退掉，不留一筆「deployed=false 但其實使用者要投放」的孤兒模板
+func create_and_deploy_character(data: Dictionary) -> Character:
+	var id := _append_library_entry(data)
+	if id.is_empty():
+		return null
+	var character := deploy_from_library(id)
+	if character == null:
+		remove_from_library(id)
+	return character
+
+
+# receive_created_character()／create_and_deploy_character() 共用的建立邏輯：
+# 把表單資料組成一筆角色庫紀錄、append、觸發一次性的 words_to_creator。
+# 回傳新紀錄的 id；角色庫已滿存不進去則回傳空字串
+func _append_library_entry(data: Dictionary) -> String:
+	if character_library.size() >= CHARACTER_LIBRARY_CAP:
 		push_warning("GameManager: 角色庫已滿（上限 %d），%s 沒有存進去" % [CHARACTER_LIBRARY_CAP, data.get("character_name", "")])
-		return
+		return ""
 
 	var hexaco := {}
 	for key in ["hex_honesty", "hex_emotionality", "hex_extraversion", "hex_agreeableness", "hex_conscientiousness", "hex_openness"]:
 		hexaco[key] = data.get(key, 50)
 	var description := str(data.get("character", ""))
 
-	var id: String = existing["id"] if not existing.is_empty() else Character.generate_id()
+	var id := Character.generate_id()
 	var persona := Personality.from_identity({"hexaco": hexaco, "character": description}, id)
 
 	var entry := {
@@ -276,19 +302,19 @@ func receive_created_character(data: Dictionary) -> void:
 		"hexaco": hexaco,
 		"character": description,
 		"appearance": data.get("appearance", []),
+		# 選中哪一格造型組的索引（appearance[] 內容本身待《99》P-38 填）。
+		# 編輯既有角色時要能還原這個選擇，不然 character_create.gd::_load_entry()
+		# 每次都被迫重置成 -1、鎖住存檔鈕直到重新手動選一次（issue #683）
+		"appearance_style_index": int(data.get("appearance_style_index", -1)),
 		"personality": persona["personality"],
 		"system_prompt": persona["system_prompt"],
-		# 編輯時沿用既有的 words_to_creator——人格改了不代表要重打一次
-		# 只在建立當下才有意義的一次性 AI 呼叫
-		"words_to_creator": str(existing.get("words_to_creator", "")),
+		"words_to_creator": "",
 		"deployed": false,
 	}
 
-	if existing.is_empty():
-		character_library.append(entry)
-		_generate_words_to_creator(entry)
-	else:
-		character_library[character_library.find(existing)] = entry
+	character_library.append(entry)
+	_generate_words_to_creator(entry)
+	return id
 
 
 # 建角完成當下打一次的 AI 呼叫（規格書 05 流程圖 ⑤），跟 plan/dialogue/
@@ -364,19 +390,6 @@ func remove_from_library(id: String) -> bool:
 	return false
 
 
-# 複製一份，新 id、名字加後綴、投放狀態重置（《05》§7-1「複製」）
-func duplicate_library_entry(id: String) -> Dictionary:
-	var source := get_library_entry(id)
-	if source.is_empty() or character_library.size() >= CHARACTER_LIBRARY_CAP:
-		return {}
-
-	var copy := source.duplicate(true)
-	copy["id"] = Character.generate_id()
-	copy["character_name"] = source["character_name"] + L10n.t("UI_CL_COPY_SUFFIX")
-	copy["deployed"] = false
-	character_library.append(copy)
-	return copy
-
 
 # 投放：把角色庫的靈魂生成這個世界的肉體副本（《05》§7-2、§7-3）。已投放的
 # 不能重複投放——一份靈魂同時只該有一具肉體，是《05》§7-1「已投放的角色
@@ -420,6 +433,10 @@ func deploy_from_library(id: String, as_player: bool = false) -> Character:
 					old_entry["deployed"] = false
 			node.remove_from_group("player")
 			node.queue_free()
+
+		# 化身與否的唯一寫入點（見 embodied_character_id 的 var 註解）：
+		# 投放即化身，記下被操控的是誰
+		embodied_character_id = entry["id"]
 
 	var scene := preload("res://scenes/player.tscn") if as_player else preload("res://scenes/agent.tscn")
 	var character := spawn_character(scene, {
@@ -473,9 +490,34 @@ func activate_llm_decision_if_ready(character: Character) -> void:
 	await AIService.await_readiness_settled()
 	if not is_instance_valid(agent):
 		return
-	var readiness := AIService.get_readiness(agent.get_provider_name())
+	var provider_name := agent.get_provider_name()
+	var readiness := AIService.get_readiness(provider_name)
+
+	# 第一次判定沒 ready 時不直接放棄——那份快照可能是更早一批探測留下的
+	# 過期結果（例如開機那次探測剛好撞到暫時性網路問題，之後連線其實已經
+	# 恢復），永遠沿用不會自己變好（issue #728）。這裡補打一次即時的
+	# reload_config_and_wait()：跟 debug 主控台 `ai` 指令用同一個入口，
+	# 重新讀一次 user://ai_config.json 並重新探測全部 provider，不是只留在
+	# 「等現有那批探測做完」。跟 _check_provider_readiness() 對單一 provider
+	# 的重試是同一種「值得再打一次」的精神，差別是那裡是背景自動重試一次，
+	# 這裡是事件觸發（真的要用到這個判斷結果的當下）才補打，不是持續輪詢，
+	# 沒有違背 reload_config() 開頭註解「不做背景輪詢」的既有原則。
+	#
+	# 代價：多個角色在同一輪迴圈裡（例如 _respawn_character() 還原整批存檔）
+	# 都撞到「沒 ready」時，會各自觸發一次重複的 reload_config_and_wait()、
+	# 對同一批 provider 重複探測——世代編號機制保證結果不會互相污染，只是
+	# 網路請求數變多，這裡先接受這個代價，不在這則 issue 順便做成單一入口
+	# 的節流（範圍見 PR 說明）
 	if not readiness.get("ready", false):
-		return
+		await AIService.reload_config_and_wait()
+		if not is_instance_valid(agent):
+			return
+		readiness = AIService.get_readiness(provider_name)
+		if not readiness.get("ready", false):
+			push_warning("GameManager: %s 的 provider「%s」未就緒，llm_decision_enabled 沒有打開（%s）" % [
+				character.character_name, provider_name, readiness.get("reason", "")
+			])
+			return
 
 	# agent.gd::_ready() 剛剛可能已經 fire-and-forget 打過一次
 	# _generate_words_to_creator()（words_to_creator 沒預填才會真的送）——
@@ -522,17 +564,15 @@ func get_world_save_data() -> Dictionary:
 				entry["following_id"] = following_id
 		characters[character.character_id] = entry
 
-	# "player" 分組只會有玩家目前操控的那一個節點（player.gd::_ready() 裡
-	# add_to_group("player")），沒有玩家在場（觀察者模式）就是空的——跟
-	# characters 一樣即時從場景算，不吃快取的 embodied_character_id
-	var player_node := get_tree().get_first_node_in_group("player") as Character
-
+	# 化身與否不在這裡從場景反推——"player" 分組在從未化身的場上也不是空的
+	# （main.tscn 內建的測試用 Player），反推會把測試節點誤判成化身。直接寫出
+	# deploy／讀檔維護的即時值，見 embodied_character_id 的 var 註解
 	return {
 		"day": GameClock.day,
 		"hour": GameClock.hour,
 		"minute": GameClock.minute,
 		"allow_player_join": allow_player_join,
-		"embodied_character_id": player_node.character_id if player_node != null else "",
+		"embodied_character_id": embodied_character_id,
 		"characters": characters,
 		# deep duplicate：character_library 裡的巢狀 hexaco/personality 字典
 		# 不能跟目前記憶體裡那份共用參照，否則存檔之後繼續玩，字典被原地改到
@@ -694,17 +734,6 @@ func apply_world_save_data(data: Dictionary) -> void:
 	# 判定跟其他之後讀這個欄位的系統看到錯誤的化身角色
 	embodied_character_id = str(data.get("embodied_character_id", ""))
 
-	# 場景裡目前的 player 節點如果不是存檔記錄的那一個，代表需要換身——但
-	# 換身機制（#371）還沒做，這裡只能示警，不能真的動。不視為錯誤：MVP
-	# 現在場景裡固定只有一個 player 節點，兩者本來就該一致，只有先前手動
-	# 換過場景或存檔跨場次挪用時才會觸發。「沒有 player 節點」正規化成空字串
-	# 再比較，涵蓋「存檔記錄空但場景有 player」與「存檔記錄有 id 但場景沒
-	# player」兩種原本會被漏掉的不一致
-	var player_node := get_tree().get_first_node_in_group("player") as Character
-	var current_embodied_character_id := player_node.character_id if player_node != null else ""
-	if current_embodied_character_id != embodied_character_id:
-		push_warning("apply_world_save_data: 存檔記錄的化身角色 %s 跟場景目前的 player 節點 %s 不同，尚無自動換身機制（見 #371），需要手動處理" % [embodied_character_id, current_embodied_character_id])
-
 	var library_data = data.get("character_library", [])
 	# clear() 在型別檢查之前——存檔壞掉、library_data 不是 Array 時，也不該
 	# 讓上一個世界殘留的 character_library 繼續留在記憶體裡（CodeRabbit review 抓到）
@@ -726,6 +755,47 @@ func apply_world_save_data(data: Dictionary) -> void:
 	else:
 		push_error("apply_world_save_data: character_library 不是 Array，跳過角色庫載入")
 
+	# 場景裡目前的 player 節點如果不是存檔記錄的那一個，自動從角色庫重新投放
+	# 正確的化身角色（#455）。要放在 character_library 載入完成「之後」——
+	# deploy_from_library() 靠 get_library_entry() 查表，載入前查不到任何
+	# 角色庫紀錄。「沒有 player 節點」正規化成空字串再比較，涵蓋「存檔記錄空但
+	# 場景有 player」與「存檔記錄有 id 但場景沒 player」兩種原本會被漏掉的不一致
+	var player_node := get_tree().get_first_node_in_group("player") as Character
+	var current_embodied_character_id := player_node.character_id if player_node != null else ""
+	if current_embodied_character_id != embodied_character_id:
+		if embodied_character_id.is_empty():
+			push_warning("apply_world_save_data: 場景目前的 player 節點 %s 在存檔裡沒有對應紀錄，維持現狀" % current_embodied_character_id)
+		else:
+			# 這筆紀錄剛從存檔載入，deployed 沿用存檔當下的狀態——存檔當時
+			# 這隻角色就是化身角色，幾乎一定是 true。deploy_from_library()
+			# 對「已經 deployed」的紀錄會直接早退不投放，這裡先歸零，讓它能
+			# 真的重新投放（get_library_entry() 回傳的是陣列元素本身的參照，
+			# 這裡改了 character_library 裡對應的那筆也會跟著變）
+			var target_entry := get_library_entry(embodied_character_id)
+			if not target_entry.is_empty():
+				target_entry["deployed"] = false
+				# 化身角色可能先前已用 agent 身分被投放在場上（不在 player 分組）。
+				# 只歸零 deployed 就重新投放的話，會投出同 character_id 的第二個
+				# 節點：節點名互撞、違反 deploy_from_library() 自己寫的「一份靈魂
+				# 同時只該有一具肉體」，而且歸零把舊肉體排除在 deployed_count 之外，
+				# 等於用歸零繞過 DEPLOY_CAP 檢查。先收回那具舊肉體再投放；被收的
+				# 節點走 queue_free()，下面的 found_ids 迴圈會用 is_queued_for_deletion()
+				# 跳過它，不會妨礙存檔資料的還原。不把「同 id 換肉體」收進
+				# deploy_from_library() 統一處理的原因：那裡「已 deployed 就早退」的
+				# 契約被 debug console 等其他呼叫端依賴，先掃先收只影響讀檔這條路徑。
+				for node in get_tree().get_nodes_in_group("characters"):
+					var existing_body := node as Character
+					if existing_body != null and existing_body.character_id == embodied_character_id and not existing_body.is_in_group("player"):
+						existing_body.queue_free()
+			if deploy_from_library(embodied_character_id, true) == null:
+				# 說明場上現況：embodied_character_id 已指向存檔的化身角色，但場上
+				# player 仍是原本那個節點（或沒有 player）——兩者不一致，讓手動
+				# 處理的人知道變數現在指向誰、場上實際是誰
+				var field_status := "場上沒有 player 節點" if current_embodied_character_id.is_empty() else "場上 player 仍是原本的 %s" % current_embodied_character_id
+				push_warning(
+					"apply_world_save_data: 無法從角色庫重新投放化身角色 %s（不在角色庫，或世界投放上限已滿）。%s，embodied_character_id 已指向 %s，需要手動處理" % [embodied_character_id, field_status, embodied_character_id]
+				)
+
 	var characters = data.get("characters", {})
 	# 驗證 characters 必須是 Dictionary，不是就跳過整個角色載入流程
 	if not characters is Dictionary:
@@ -735,6 +805,13 @@ func apply_world_save_data(data: Dictionary) -> void:
 	var found_ids := {}
 	for node in get_tree().get_nodes_in_group("characters"):
 		var character := node as Character
+		# 換身時舊 player 被 deploy_from_library() 用 queue_free() 判了延遲刪除，
+		# 這一幀還留在 characters 群組裡。不能把它記成「場上有節點」（否則下面
+		# 重生迴圈會跳過它，幀末刪除生效後這個角色就從世界永久消失，存檔也會
+		# 一致地記成「沒有這個人」），也不能把存檔 entry 套到即將被刪的節點上。
+		# 跳過它，讓被換下場的舊 player 走下面的 _respawn_character() 正常重生。
+		if character.is_queued_for_deletion():
+			continue
 		found_ids[character.character_id] = true
 		var entry = characters.get(character.character_id, {})
 		# 驗證每個 entry 必須是 Dictionary
@@ -809,6 +886,13 @@ func _respawn_character(character_id: String, entry: Dictionary) -> void:
 		var player_character := spawn_character(scene, {"character_id": character_id})
 		_apply_character_entry(player_character, entry)
 		activate_llm_decision_if_ready(player_character)
+		# 重生成功後把角色庫的 deployed 記回 true（#344 缺口）：存檔當下這隻
+		# 角色有肉體在場上，讀檔重生後也是——漏了這步，之後存檔會把「場上有
+		# 這個人」記成「未部署」，deploy_from_library() 就能對同一份靈魂再投
+		# 出第二具肉體
+		var player_entry := get_library_entry(character_id)
+		if not player_entry.is_empty():
+			player_entry["deployed"] = true
 		return
 
 	var library_entry := get_library_entry(character_id)
@@ -844,5 +928,10 @@ func _respawn_character(character_id: String, entry: Dictionary) -> void:
 		if character.has_method("rebuild_provider"):
 			character.rebuild_provider()
 
+	# 重新生成成功後把角色庫的 deployed 記回 true（#344 缺口，同上面的
+	# player 路徑）：本 PR 的換身路徑讓這條更容易被踩到——換身歸零舊 player
+	# 的 entry 後，舊 player 就是從這裡重生成 agent 的，deployed 得記回 true，
+	# 世界狀態（場上有肉體）才會跟角色庫一致
+	library_entry["deployed"] = true
 	_apply_character_entry(character, entry)
 	activate_llm_decision_if_ready(character)

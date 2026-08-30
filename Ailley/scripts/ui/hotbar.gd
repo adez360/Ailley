@@ -10,8 +10,9 @@ extends CanvasLayer
 ## 那邊點擊只是面板自己的視覺高亮，因為主背包沒有對應的 Inventory 欄位；
 ## 快捷欄這 9 格全部都對得到 Inventory.set_selected_index()。
 ##
-## 格子上的文字（見 inventory_slot_button.gd）是暫時的示意畫法：專案還沒有
-## item 定義檔可以查真正的圖示，先印 item_id 前三碼＋數量。
+## 格子上的文字（見 inventory_slot_button.gd）是暫時的示意畫法：印
+## `ItemDatabase.get_display_name()` 查到的中文名稱（最多 2 字），數量 > 1
+## 才多印一行，等物品圖示素材到位再換。
 ##
 ## 場景結構：
 ##   CanvasLayer（本腳本）

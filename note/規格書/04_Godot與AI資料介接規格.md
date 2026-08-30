@@ -1,7 +1,7 @@
 ---
 tags: [規格書, 架構]
 status: 大致定案
-updated: 2026-08-28
+updated: 2026-08-29
 ---
 
 # 04_Godot與AI資料介接規格
@@ -142,7 +142,7 @@ updated: 2026-08-28
     "current_goal": "把藥草賣掉，換錢買一把好一點的刀"
   },
   "context": {
-    "visible": [ { "name": "TAMMY", "trust": 15, "met_count": 3 } ],
+    "visible": [ { "name": "TAMMY", "met_count": 3 } ],
     "pool": [ "…Agent._task_pool_summary() 摘要" ],
     "today_plan": "You intended to do today: 採藥草 (done), 找 TAMMY 聊天.",
     "fact_lines": [ "你已經大半天沒和任何人說過話了。" ],
@@ -161,9 +161,9 @@ updated: 2026-08-28
 | `self.money`／`self.inventory` | ✔ | `inventory` 是 `{item_id: 總數量}` 摘要，不是逐格陣列，不帶 decay／durability（#339） |
 | `self.conditions` | ✔ | 只帶 `type` 字串陣列，不帶倒數細節，無則傳 `[]` |
 | `context.fact_lines` | ✔ | 引擎產生的事實句陣列，無則傳 `[]` |
-| `context.visible` | ✔ | **只放在場的人**，無則傳 `[]`，形狀是 `{name, trust, met_count}`——只送 `trust`，好感／熟悉／虧欠三維已拿掉（《01》3-1） |
+| `context.visible` | ✔ | **只放在場的人**，無則傳 `[]`，形狀是 `{name, met_count}`——好感／熟悉／虧欠／信任(`trust`) 四維全部拿掉（《01》3-1、issue #601） |
 | `context.memory` | ✔ | L2（近期）依連結展開篩選、L4（核心）固定全量帶入（#360），只帶 `content` 字串 |
-| `context.shop` | ✔ | 全村販賣機目錄 `{place: {item_id: price}}`（#605）。**只掛在 plan 信封**：dialogue／checkpoint／last_words／reflection 共用的 self 區塊不帶，那些情境用不到商品目錄，白付 token。`place` 是裸節點名（`herb_shop`／`tavern`，跟 `_find_vending_machine_at_place()` 同一套判斷），同地點多台機器只收錄第一台——跟 `_find_vending_machine_at_place()` 回傳第一台的取樣方向一致 |
+| `context.shop` | ✔ | 全村商店目錄 `{place: {item_id: price}}`（#605），issue #572 後直接是 `Shop.CATALOGS` 的副本。**只掛在 plan 信封**：dialogue／checkpoint／last_words／reflection 共用的 self 區塊不帶，那些情境用不到商品目錄，白付 token。`place` 是裸地點名（`herb_shop`／`tavern`，跟 `Shop.has_shop()` 同一套判斷），商店綁在地點本身，不會有「同地點多台機器」這回事 |
 
 沒有本文件先前設想的 `available_actions` 陣列、`present_npcs` 的 `appearance_text`、`location.desc`——可選動作清單是寫死在 system prompt 文字裡的 `AISchema.IMPLEMENTED_ACTIONS`（`Ailley/scripts/ai/ai_schema.gd`，由 `PromptBuilder._plan_system()` 動態組進提示詞），不是每次動態依前提條件過濾出來的陣列。
 
@@ -222,7 +222,7 @@ updated: 2026-08-28
   "type": "dialogue",
   "self": { "…同 4-2 的 self 區塊" },
   "context": {
-    "listener": { "name": "TAMMY", "trust": 42, "met_count": 5 },
+    "listener": { "name": "TAMMY", "met_count": 5 },
     "turns": [ { "speaker": "NEON", "text": "最近好嗎？" } ],
     "max_turns": 10,
     "memory": { "recent": [ "…" ], "core": [ "…" ] }
@@ -242,6 +242,8 @@ updated: 2026-08-28
 | --- | --- | --- |
 | `line` | ✔ | 非空字串，超過 200 字截斷不拒絕 |
 | `end` | 選填 | 布林，省略視為 `false`（沒說要收尾就當作還沒講完） |
+| `task` | 選填 | Task struct（issue #658）：台詞是即時承諾時附帶，讓講出的話跟實際會做的事對得上。走 `_validate_task_shape()`（跟 persuade 的 `proposed_task` 同一套驗證），並擋掉巢狀 `persuade`；詳見《技術/LLM 串接與 AI 服務層》§回應 |
+| `engage` | 選填 | 布林，**僅對話第一輪**（被搭話方走 `validate_dialogue_open()`）：`false` 表示不理會這次搭話、不回 `line`／`end`，省略視為 `true` |
 
 對話輪數沒有設計上的硬上限，改用軟壓力＋`SAFETY_MAX_TURNS`（工程安全閥，值 10）兜底，見《技術/LLM 串接與 AI 服務層》§界線。
 

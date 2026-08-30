@@ -1,8 +1,8 @@
 class_name AIConfig
 extends RefCounted
 
-## LLM provider 的連線設定。真檔放 `user://ai_config.json`，範本在
-## `res://data/ai_config.example.json`。
+## LLM provider 的連線設定。真檔放 `user://ai_config_<hash>.json`（hash 依
+## checkout 隔離，見 CONFIG_PATH），範本在 `res://data/ai_config.example.json`。
 ##
 ## 支援多個具名 provider 同時存在（例如 `"local"` 打本機 `llama-server`、
 ## `"openrouter"` 打雲端），可以同時併用。這個檔案只回答「provider 叫這個
@@ -22,8 +22,18 @@ extends RefCounted
 ## api_key 只准出現在送出的 Authorization header 裡。任何 log、錯誤訊息、
 ## 主控台輸出一律走 Provider.masked_key()，不要直接碰 api_key。
 
-const CONFIG_PATH := "user://ai_config.json"
+## user:// 只依 project.godot 的 project name 解析，不分 worktree/checkout，
+## 跟 DatabaseManager.DATABASE_PATH（issue #334）同一個病根：用這個 checkout
+## 的 res:// 絕對路徑算完整 sha256 接在檔名後，讓不同 checkout 落地成不同
+## 實體檔案，不會互相覆寫（issue #769）。被 static func（load_from_user()／
+## _write_default_config()）讀取，只能用 static var，不能用 const 呼叫函式
+static var CONFIG_PATH := _compute_config_path()
 const EXAMPLE_PATH := "res://data/ai_config.example.json"
+
+
+static func _compute_config_path() -> String:
+	var checkout_hash := ProjectSettings.globalize_path("res://").sha256_text()
+	return "user://ai_config_%s.json" % checkout_hash
 
 # 開發期預設 OpenRouter；換本機 llama-server 只要在設定檔另開一個 provider，
 # 不用改這裡的預設值——這兩個常數只在 provider 沒填某欄位時當退回值
