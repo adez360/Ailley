@@ -57,9 +57,10 @@ const LOAM := Color("5D4A38")
 var _cooldown_remaining := 0.0
 var _stone: Node2D = null
 
-## {day, hour, minute, text}，由新到舊；只記透過天神之石說過的話，不記角色反應
-## （《15》§3-5）。不隨存檔持久化——跟專案裡其他角色執行期狀態（today_log／
-## emotion 等）現況一致，整個角色存讀檔管線都還沒接這層，不是這裡漏做
+## {day, hour, minute, text}，由新到舊；原本只記透過天神之石說過的話（《15》
+## §3-5），issue #752 起也收吐口水／攻擊／膜拜／讚美這幾種手勢事件。不隨
+## 存檔持久化——這份記錄掛在場景節點（GodStoneInput）上，不是角色狀態，
+## 角色存讀檔管線本來就不會、也不該碰它
 var _location_records: Array[Dictionary] = []
 
 var _record_panel: Panel
@@ -71,6 +72,11 @@ func _ready() -> void:
 	input.text_submitted.connect(_on_submitted)
 	record_button.pressed.connect(_open_record_view)
 	panel.hide()
+
+	# 讓 agent.gd 找得到這個節點來呼叫 record_gesture()（issue #752：吐口水／
+	# 攻擊／膜拜／讚美事件也要寫進同一份地點事件記錄），跟這個節點本身怎麼
+	# 找 _stone（god_stone 群組）是同一種做法，只是反過來給別人找自己
+	add_to_group("god_stone_input")
 
 	_stone = get_tree().get_first_node_in_group("god_stone")
 	if _stone == null:
@@ -181,8 +187,15 @@ func _speak(line: String) -> void:
 	_record_location_event(line)
 
 
-## 地點事件記錄：只記透過天神之石說過的話（《15》§3-5），由新到舊、
-## 超過保留筆數就丟最舊的一筆
+## 供其他動作呼叫，把非「透過天神之石說話」的事件也記進同一份地點事件記錄
+## （issue #752：吐口水／攻擊／膜拜／讚美）——面板不分來源，一律照時間新到
+## 舊顯示，_refresh_record_list() 不用跟著改
+func record_gesture(text: String) -> void:
+	_record_location_event(text)
+
+## 地點事件記錄：原本只記透過天神之石說過的話（《15》§3-5），issue #752
+## 起也收吐口水／攻擊／膜拜／讚美這幾種手勢事件，由新到舊、超過保留筆數
+## 就丟最舊的一筆——面板顯示不分事件種類，全部照 text 欄位原樣印出
 func _record_location_event(line: String) -> void:
 	_location_records.push_front({
 		"day": GameClock.day,

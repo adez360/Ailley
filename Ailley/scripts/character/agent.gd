@@ -647,6 +647,14 @@ func hear_god_stone(line: String) -> void:
 	_queue_recalled(line)
 	maybe_speak_to_creator(line)
 
+## 附近角色目擊到別人對天神之石做了什麼手勢（issue #752：吐口水／攻擊／
+## 膜拜／讚美），純記一句事實。跟 hear_god_stone() 不同——這不是「有人在
+## 跟創造者說話」，不觸發 words_to_creator 判定
+func witness_god_stone_gesture(line: String) -> void:
+	if is_dead:
+		return
+	_push_daily_event(line)
+
 ## #164 + 《99》P-10：25% 機率觸發（情緒強度 ≥70 時 40%），中了才問 AI 要不要
 ## 真的說出口——中了但 AI 選擇不說一樣不消耗機會，下次再被叫到還能再骰
 ## （P-10 #3：「是否消耗機會？否」）。只有骰中且 AI 決定說，才會真的說一次、
@@ -3117,6 +3125,11 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			# 必中（《99》P-28），不落進下面的 _roll_success()——那張表刻意沒收
 			# attack，這裡硬規則過了就直接放行，不擲骰
 			var target_name: String = str(params.get("target", ""))
+			# 天神之石是保留字，不查角色名單（issue #752）：石頭是固定地標，
+			# 永遠「存在」，硬規則直接放行，真正走不走得到交給
+			# _pursue_attack_task() 的距離判定
+			if target_name == "god_stone":
+				return {"success": true, "reason": ""}
 			var matches := _find_all_characters_by_name(target_name)
 			if matches.is_empty():
 				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
@@ -3402,6 +3415,12 @@ func _pursue_current_task() -> void:
 	# gather 跟 buy 同理：要先走到藥草叢，抵達後呼叫一次就完成（#574）
 	if current_state == "gather":
 		_pursue_gather_task()
+		return
+
+	# 天神之石手勢類（issue #752）：跟 gather 同理，走到天神之石旁、抵達後
+	# 呼叫一次就完成，三個動作共用同一個執行函式，差別只在記錄的用詞
+	if current_state == "spit_at_stone" or current_state == "worship_stone" or current_state == "praise_stone":
+		_pursue_god_stone_gesture(current_state)
 		return
 
 	# work 是長動作，執行協程會自己跑 5 分鐘，只能呼叫一次（#358）
@@ -4090,6 +4109,79 @@ func _pursue_gather_task() -> void:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
 
+## 天神之石手勢類任務的執行（issue #752：吐口水／膜拜／讚美，攻擊天神之石
+## 走 _pursue_attack_task() 另一條分支，不共用這裡）。直接解析成固定座標、
+## 不透過 current_place 那套「named place」記帳（跟 _pursue_attack_task()
+## 同一種理由：目標永遠是同一個固定地標，不像 gather 需要在多個候選地點
+## 之間判斷「有沒有換地方」），沒有 gather 那套 _pursued_place／_pursuit_done
+## 節流也沒關係——石頭不會自己移動，重複呼叫 move_to() 頂多是重算一次同樣
+## 的路徑，不會像追著會動的目標那樣需要卡住偵測
+func _pursue_god_stone_gesture(action_name: String) -> void:
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(action_name, _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		if not result["success"]:
+			_track_action_result_for_facts(action_name, false)
+			_finish_task_and_request_next()
+			return
+
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null:
+		last_action_result = "找不到天神之石"
+		_track_action_result_for_facts(action_name, false)
+		_finish_task_and_request_next()
+		return
+
+	var target: Vector2 = anchors.resolve("god_stone")
+	if get_body_position().distance_to(target) > GOD_STONE_GESTURE_RANGE:
+		if not move_to(target):
+			push_warning("Agent %s: 走不到天神之石" % character_name)
+			last_action_result = "走不到天神之石"
+			_track_action_result_for_facts(action_name, false)
+			_finish_task_and_request_next()
+		return
+
+	stop_moving()
+	_apply_god_stone_gesture_effect(action_name)
+	last_action_result = ""
+	_track_action_result_for_facts(action_name, true)
+	_finish_task_and_request_next()
+
+## 三個動作的用詞表，供 _apply_god_stone_gesture_effect() 查——事實句只描述
+## 客觀發生了什麼，不判斷這代表虔誠還是不敬，交給讀到這句話的 AI 自己判斷
+## （issue #752，《00》原則二）
+const GOD_STONE_GESTURE_VERBS := {
+	"spit_at_stone": "對天神之石吐了口水",
+	"worship_stone": "在天神之石前膜拜",
+	"praise_stone": "讚美了天神之石",
+	"attack": "攻擊了天神之石",
+}
+
+## 實際效果：自己的記憶多一句事實句、附近角色目擊到的話也各記一句、寫進
+## 地點事件記錄面板（issue #377／PR #732 已合併的那個）。不影響任何既有
+## 數值——石頭是無生命地標，這幾個動作純粹是留下一筆「發生過」的紀錄
+func _apply_god_stone_gesture_effect(action_name: String) -> void:
+	var verb: String = GOD_STONE_GESTURE_VERBS.get(action_name, action_name)
+	_push_daily_event("你%s。" % verb)
+
+	var record_line := "%s %s。" % [character_name, verb]
+
+	var stone_input := get_tree().get_first_node_in_group("god_stone_input")
+	if stone_input != null:
+		stone_input.record_gesture(record_line)
+
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null or stone_input == null:
+		return
+	var stone_pos: Vector2 = anchors.resolve("god_stone")
+	var hear_radius: float = stone_input.HEAR_RADIUS
+	for node in get_tree().get_nodes_in_group("characters"):
+		var other := node as Agent
+		if other == null or other == self:
+			continue
+		if other.get_body_position().distance_to(stone_pos) <= hear_radius:
+			other.witness_god_stone_gesture("你看到 %s" % record_line)
+
 # murmur 任務的執行（#162）：沒有目標、不用移動，講給自己聽當下就結束——不像
 # talk 要追著會動的目標走，也不像 nap／rest 那類要佔滿整段 duration。resolve()
 # 一過（murmur 沒有硬規則、不擲骰，恆成功）就講一句、立刻退出任務池
@@ -4300,6 +4392,33 @@ func _pursue_attack_task() -> void:
 
 	var params: Dictionary = _current_task.get("params", {})
 	var target_name: String = str(params.get("target", ""))
+
+	# 攻擊天神之石（issue #752）：保留字，不查角色名單。石頭是固定地標，
+	# 走法跟 _pursue_god_stone_gesture() 一致，但終點呼叫的是這個獨立分支——
+	# 攻擊本身還是攻擊（用詞跟吐口水／膜拜／讚美不同），只是目標換成物件，
+	# 不共用那個函式
+	if target_name == "god_stone":
+		var anchors := get_tree().get_first_node_in_group("place_anchors")
+		if anchors == null:
+			last_action_result = "找不到天神之石"
+			_track_action_result_for_facts("attack", false)
+			_finish_task_and_request_next()
+			return
+		var stone_pos: Vector2 = anchors.resolve("god_stone")
+		if get_body_position().distance_to(stone_pos) > ATTACK_RANGE:
+			if not move_to(stone_pos):
+				push_warning("Agent %s: 走不到天神之石" % character_name)
+				last_action_result = "走不到天神之石"
+				_track_action_result_for_facts("attack", false)
+				_finish_task_and_request_next()
+			return
+		stop_moving()
+		_apply_god_stone_gesture_effect("attack")
+		last_action_result = ""
+		_track_action_result_for_facts("attack", true)
+		_finish_task_and_request_next()
+		return
+
 	var target := _find_character_by_name(target_name)
 
 	if target == null:
