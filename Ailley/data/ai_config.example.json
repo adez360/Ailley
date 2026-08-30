@@ -21,7 +21,7 @@
 	"min_interval_sec": 30.0,
 	"max_calls_per_game_day": 20,
 	"dialogue_exempt": true,
-	"max_dialogue_calls_per_game_day": 30,
+	"max_dialogue_calls_per_game_day": 150,
 	"max_creation_calls_per_game_day": 0,
 	"embedding": {
 		"base_url": "http://127.0.0.1:8081/v1",

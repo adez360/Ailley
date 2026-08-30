@@ -23,6 +23,10 @@ const SAFETY_MAX_TURNS := 10
 const TURN_GAP := 0.5			# 一句講完到下一句之間的空檔（秒）
 const MAX_DISTANCE := 48.0		# 講到一半離這麼遠就散場，比搭話門檻寬鬆
 
+# 對話管線診斷用的逐筆 print()（issue #655）。正常遊玩預設關閉；
+# 重現問題時改成 true。錯誤路徑照常走 fallback／push_error，不受這個開關影響
+const TALK_DEBUG := false
+
 ## 結束原因。這些是「正常結束」，不是失敗 ——
 ## 失敗原因碼在 Character.TALK_*，兩者不可混用，
 ## 否則 AI 會把正常結束的對話當成錯誤而反覆重試
@@ -103,6 +107,19 @@ func _run() -> void:
 		var result: Dictionary = await speaker.next_line(listener, _turns, SAFETY_MAX_TURNS)
 		if _bail_if_finished():
 			return
+
+		# 除錯用（issue #655：對話講到第 5 句左右就不再回應，追不到原因）。
+		# 每一輪印一次 speaker／ok／engage／end，重現時對照 Output/Debugger
+		# 面板看是哪一輪、哪個欄位開始不對勁——尤其要分清楚「result.ok=false
+		# （LLM 逾時/驗證失敗/配額用完，next_line() 本身失敗）」跟「result.end=true
+		# （LLM 自己決定收尾，是正常運作，不是 bug）」這兩種都會讓對話結束，
+		# 但成因完全不同。查清楚後這行要記得拿掉
+		if TALK_DEBUG:
+			print("[talk_debug] turn=%d speaker=%s ok=%s engage=%s end=%s line=%s" % [
+				turn, speaker.character_id, result.get("ok", false),
+				result.get("engage", true), result.get("end", false),
+				str(result.get("line", "")).left(20),
+			])
 
 		if not result.get("ok", false):
 			_finish_with_fallback(speaker, listener, turn == 0)
@@ -188,6 +205,8 @@ func interrupt() -> void:
 # self 會讓 _run() 之後恢復執行時操作一個已釋放的節點而炸掉），
 # 也可能是 _run() 自己（此時它自己緊接著呼叫 queue_free() 是安全的）
 func _finish(reason: String) -> void:
+	if TALK_DEBUG:
+		print("[talk_debug] _finish reason=%s turns=%d" % [reason, _turns.size()])
 	if _finished:
 		return
 	_finished = true

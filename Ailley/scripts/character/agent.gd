@@ -1145,6 +1145,12 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 		return base_validator.call(data, now_minutes)
 	var result := await _decide_with_retry(envelope, AIService.Policy.CONVERSATION, validator)
 	if not result["ok"]:
+		# 除錯用（issue #655）：_decide_with_retry() 失敗的真正原因（逾時／
+		# 驗證失敗／daily quota／rate limited……）到這裡之後就被丟掉，
+		# conversation.gd 只看得到 ok=false，查不出成因。先在這裡印出來，
+		# 查清楚後這行要記得拿掉
+		if Conversation.TALK_DEBUG:
+			print("[talk_debug] %s next_line() 失敗，error=%s" % [character_id, result.get("error", "?")])
 		return {"ok": false}
 
 	# task 是選填欄位（issue #658）：這句話是角色自己判斷「講了就要做」的

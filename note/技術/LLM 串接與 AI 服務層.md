@@ -4,7 +4,7 @@ tags:
   - llm
   - 計畫
 status: 進行中
-updated: 2026-08-29
+updated: 2026-08-31
 ---
 
 # LLM 串接與 AI 服務層
@@ -438,7 +438,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 
 **實作**：比照既有 `min_interval_sec`／`max_calls_per_game_day` 這兩個數值型
 旋鈕的模式，`ai_config.json` 有第三個數值型全域旋鈕
-`max_dialogue_calls_per_game_day`（可設 0＝不限，跟前兩者一致，預設 30）。
+`max_dialogue_calls_per_game_day`（可設 0＝不限，跟前兩者一致，預設 150）。
 `dialogue_exempt` 是布林豁免開關，不是數值上限，不適用「0＝不限」——
 它只控制 `CONVERSATION` policy 是否豁免既有的 `min_interval_sec`／
 `max_calls_per_game_day` 檢查，跟這個旋鈕各自獨立、互不影響。
@@ -463,11 +463,12 @@ max_dialogue_calls_per_game_day`，不是 `>`——跟既有
 > 缺口只存在於 `dialogue_exempt=true`（對話完全豁免既有限制）的情境，範圍要
 > 這樣講清楚，不是無條件對兩種設定都生效
 
-**預設值 30 的依據**：這次記的樣本是 `_turns.size()`（對話輪數），不是真正的
-`AIService.request()` 呼叫次數。這次樣本測的是舊版行為——開場白當時還是
-`DialogueLines.opening()` 寫死的模板句，不打 LLM，7.0 輪／場扣掉這句開場白，
-換算成雙方合計約 6.0 次呼叫／場。開場白改成一律過 LLM 之後（issue #630／
-《99》P-67），這個扣減不再成立，同一份 7.0 輪／場的樣本换算下來會更接近
+**起始值 30 的推算方法論（#395）**：目前預設值是 150。這次記的樣本是
+`_turns.size()`（對話輪數），不是真正的 `AIService.request()` 呼叫次數。這次樣本測的是
+舊版行為——開場白當時還是 `DialogueLines.opening()` 寫死的模板句，不打 LLM，
+7.0 輪／場扣掉這句開場白，換算成雙方合計約 6.0 次呼叫／場。開場白改成一律過
+LLM 之後（issue #630／《99》P-67），這個扣減不再成立，同一份 7.0 輪／場的樣本
+换算下來會更接近
 **7.0 次呼叫／場**（每一輪都打 LLM）；這個數字本身也是舊樣本套新規則的
 粗算，不是重新量測的結果。
 >
@@ -490,7 +491,7 @@ max_dialogue_calls_per_game_day`，不是 `>`——跟既有
 
 正式上線前建議搭配大規模驗證一併校準，逐場記錄真正的 `AIService.request()`
 次數（依 per-角色 scope 分開記）、payload 隨對話輪次成長的實際大小、以及
-驗證失敗重試的發生率，這三項都還沒有數據支持目前「30」這個預設值。
+驗證失敗重試的發生率，這三項都還沒有數據支持目前 150 這個預設值。
 
 > [!important] 但 fallback 一定要能終止
 > LLM 失敗／逾時時走 `DialogueLines`，而它**沒有 `end` 訊號**——不特別處理就會
