@@ -199,3 +199,24 @@ func test_revive_releases_existing_haulers() -> void:
 	assert_false(target.is_being_hauled(), "is_being_hauled 應一併為 false")
 	assert_false(hauler_a.is_hauling(), "第一位搬運者也應一併解除搬運狀態")
 	assert_false(hauler_b.is_hauling(), "第二位搬運者也應一併解除搬運狀態")
+
+
+## 變體：搬運者已被 free()（節點消失但沒人替他呼叫 stop_haul()）時，
+## revive() 也要把 _hauled_by 裡的已釋放殘留參照擦掉，活著的那位照常解除
+func test_revive_releases_haulers_with_freed_hauler() -> void:
+	var reviver := _make_character(Player)
+	var target := _make_character(Agent)
+	var hauler_a := _make_character(Player)
+	var hauler_b := _make_character(Player)
+	target.position = reviver.position
+	target.is_dead = true
+	target.death_at = _death_at_hours_ago(1.0)
+	assert_eq(hauler_a.start_haul(target), Character.HAUL_OK, "前置：第一位搬運者應建立成功")
+	assert_eq(hauler_b.start_haul(target), Character.HAUL_OK, "前置：第二位搬運者應建立成功")
+	hauler_a.free()
+	assert_eq(target.hauler_count(), 2, "前置：free() 不會自動清 _hauled_by，殘留參照應還在")
+
+	var result := reviver.revive(target)
+
+	assert_eq(result, Character.REVIVE_OK, "應復活成功")
+	assert_eq(target.hauler_count(), 0, "復活後殘留參照與活著的搬運者都應清空，不然 is_being_hauled 卡住")
