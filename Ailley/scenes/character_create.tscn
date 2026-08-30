@@ -574,6 +574,19 @@ auto_translate_mode = 2
 layout_mode = 2
 autowrap_mode = 3
 
+[node name="RandomRow" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Spacer" type="Control" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/RandomRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="RandomButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/RandomRow"]
+layout_mode = 2
+focus_mode = 0
+text = "UI_CC_BTN_RANDOM"
+
 [node name="TabDescription" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer"]
 visible = false
 layout_mode = 2
@@ -729,6 +742,19 @@ theme_override_colors/font_color = Color(0.45882353, 0.34901962, 0.23529412, 1)
 text = "UI_CC_STYLE_HINT"
 autowrap_mode = 3
 
+[node name="RandomRow" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Spacer" type="Control" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/RandomRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="RandomButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabAppearance/RandomRow"]
+layout_mode = 2
+focus_mode = 0
+text = "UI_CC_BTN_RANDOM"
+
 [node name="Footer" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col"]
 layout_mode = 2
 theme_override_constants/separation = 8
@@ -741,11 +767,6 @@ size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.54509807, 0.12156863, 0.078431375, 1)
 theme_override_font_sizes/font_size = 12
 autowrap_mode = 3
-
-[node name="RandomButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/Footer"]
-layout_mode = 2
-focus_mode = 0
-text = "UI_CC_BTN_RANDOM"
 
 [node name="CancelButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/Footer"]
 layout_mode = 2
