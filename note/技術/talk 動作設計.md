@@ -343,8 +343,9 @@ Enter 開啟／送出，Esc 取消。不在對話中就是單純冒一句氣泡�
 > `agent.gd::AI_THINKING_TEXT`（"…"）那個「思考中」提示用的是同一套——但
 > 「輪到你了」這個提示要「一直掛著直到玩家真的送出」，套用自動消失邏輯的話
 > 玩家慢慢想的時候提示會自己不見。`bubble.gd` 加了 `hold(message)` /
-> `release_hold()`：`hold()` 清空佇列、顯示訊息但不啟動計時器
-> （`set_process(false)`），`release_hold()` 解除後才恢復正常排隊行為。
+> `release_hold()`：`hold()` 清空佇列、顯示訊息但不跑自動消失的計時
+> （`_process()` 裡用 `_holding` 擋掉計時，處理本身開著是為了 #742 的
+> 每幀重夾位置），`release_hold()` 解除後才恢復正常排隊行為。
 > `next_line()` 只在真的要 `await`（緩衝區沒內容）時才對 `listener` 呼叫
 > `hold(WAITING_FOR_PLAYER_TEXT)`，`await` 結束（不管是真的送出還是被取消）
 > 呼叫 `release_hold()`，`is_instance_valid(listener)` 包一層——跟
