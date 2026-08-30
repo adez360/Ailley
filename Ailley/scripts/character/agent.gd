@@ -241,6 +241,11 @@ var _give_pursuit_last_distance := INF
 var _attack_pursuit_stuck_ticks := 0
 var _attack_pursuit_last_distance := INF
 
+# 閒晃（issue #753）鎖定的目的地——隨機選出來的座標，不像 gather／talk 那樣
+# 有名字可以查 current_place 是否換了，靠比對任務 id 判斷是不是同一趟閒晃
+var _wander_task_id := ""
+var _wander_target := Vector2.ZERO
+
 # persuade 任務用的卡住偵測（#227），跟 _give_pursuit_* 同一套理由與收尾方式
 # （卡住就真的放棄，不是只警告）——共用邏輯見 _pursuit_stuck_progress()（#266）
 var _persuade_pursuit_stuck_ticks := 0
@@ -3421,6 +3426,11 @@ func _pursue_current_task() -> void:
 	# 呼叫一次就完成，三個動作共用同一個執行函式，差別只在記錄的用詞
 	if current_state == "spit_at_stone" or current_state == "worship_stone" or current_state == "praise_stone":
 		_pursue_god_stone_gesture(current_state)
+
+	# 閒晃（issue #753）：目標是隨機挑出來的座標，不是固定地點，要另外分流——
+	# 不能落進下面的地點判斷，那條路徑只認 PlaceAnchors 有名字的地點
+	if current_state == "wander":
+		_pursue_wander_task()
 		return
 
 	# work 是長動作，執行協程會自己跑 5 分鐘，只能呼叫一次（#358）
@@ -4181,6 +4191,69 @@ func _apply_god_stone_gesture_effect(action_name: String) -> void:
 			continue
 		if other.get_body_position().distance_to(stone_pos) <= hear_radius:
 			other.witness_god_stone_gesture("你看到 %s" % record_line)
+
+## 閒晃可以走到的範圍，格數——這是「四處走走」，不是精準抵達某個點，
+## 所以半徑比其他小互動（2 格）大得多，但仍是本地範圍的隨意走動，不是
+## 跨地圖遠征（issue #753）
+const WANDER_RADIUS_CELLS := 6
+
+## 閒晃任務的執行（issue #753）：純機械執行，隨機挑一個附近走得到的點走
+## 過去，抵達就結束——引擎不判斷「為什麼」想閒晃、不主動觸發，AI 自己要不要
+## 選這個選項完全憑它自己判斷（《00》原則二）。目的地只在任務剛開始時選一次
+## （用任務 id 比對是不是同一趟），不是每次重算都重選，否則角色會在原地
+## 對著一連串新亂數目標反覆折返，永遠走不到任何一個
+func _pursue_wander_task() -> void:
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		if not result["success"]:
+			_track_action_result_for_facts("wander", false)
+			_finish_task_and_request_next()
+			return
+
+	var task_id: String = str(_current_task.get("id", ""))
+	if task_id != _wander_task_id:
+		var picked: Variant = _pick_wander_target()
+		if picked == null:
+			last_action_result = "附近沒有地方可以走"
+			_track_action_result_for_facts("wander", false)
+			_finish_task_and_request_next()
+			return
+		_wander_task_id = task_id
+		_wander_target = picked
+
+	if not _has_arrived_at(_wander_target):
+		if is_moving():
+			return
+		if not move_to(_wander_target):
+			push_warning("Agent %s: 走不到閒晃目的地" % character_name)
+			last_action_result = "走不到附近的地方"
+			_track_action_result_for_facts("wander", false)
+			_finish_task_and_request_next()
+		return
+
+	stop_moving()
+	last_action_result = ""
+	_track_action_result_for_facts("wander", true)
+	_finish_task_and_request_next()
+
+## 在 NavGrid 目前所在格附近隨機挑一個可走的格子，回傳世界座標；試了幾次
+## 都挑到障礙格（或場景沒有 NavGrid）就回傳 null，呼叫端判定這次閒晃失敗——
+## 跟其他動作「附近沒有可用目標」的處理方式一致，不強求非走到不可
+func _pick_wander_target() -> Variant:
+	var nav = get_tree().get_first_node_in_group("nav_grid")
+	if nav == null:
+		return null
+	var origin_cell: Vector2i = nav.world_to_cell(get_body_position())
+	for attempt in 10:
+		var offset := Vector2i(
+			randi_range(-WANDER_RADIUS_CELLS, WANDER_RADIUS_CELLS),
+			randi_range(-WANDER_RADIUS_CELLS, WANDER_RADIUS_CELLS)
+		)
+		var cell := origin_cell + offset
+		if nav.is_cell_free(cell):
+			return nav.cell_to_world(cell)
+	return null
 
 # murmur 任務的執行（#162）：沒有目標、不用移動，講給自己聽當下就結束——不像
 # talk 要追著會動的目標走，也不像 nap／rest 那類要佔滿整段 duration。resolve()
