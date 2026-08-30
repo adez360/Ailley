@@ -66,6 +66,7 @@ func _apply_startup_ai_state() -> void:
 	# 開發期指示器要能一次看出全部原因，不能只看到最後蓋掉前面的那個
 	# （CodeRabbit review 抓到，PR #467）
 	var fallback_reasons := {}
+	var ready_agents: Array[Agent] = []
 	var not_ready_agents: Array[Agent] = []
 	for node in agents:
 		var agent := node as Agent
