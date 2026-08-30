@@ -358,6 +358,16 @@ static func validate_dialogue_open(data: Dictionary, now_minutes: int) -> Dictio
 		validated["data"]["engage"] = true
 	return validated
 
+# talk/attack/bury/follow/give/persuade 的 target 措辭都要求「context.visible
+# 裡的真實名字」，模型偶爾照抄措辭本身當成值（例如 "context.visible[0]"、
+# "<exact name from context.visible>"）而不是代入真正的名字（#766）。這種
+# 字串語法上合法、非空，舊版驗證會直接放行，一路帶到 resolve() 才因為
+# 找不到這個角色而失敗——保證失敗的任務卻要浪費一整輪決策才會被發現。
+# 真人名字不會包含 "context." 這個字面片段，這裡直接擋掉逼模型重試，
+# 六個 target 欄位共用同一個判斷，不逐一各寫一份
+static func _is_literal_context_reference(value: String) -> bool:
+	return value.contains("context.")
+
 # 單筆任務的通用邊界檢查：action 白名單、params 型別、talk/attack/give 的
 # 逐欄位檢查、expires_in_minutes 換算、priority／duration 範圍。從
 # validate_tasks() 的逐筆迴圈裡抽出來，讓 persuade 的 proposed_task
@@ -394,10 +404,13 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 		var target: Variant = talk_params.get("target")
 		if not target is String or (target as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
+		var target_name: String = (target as String).strip_edges()
+		if _is_literal_context_reference(target_name):
+			return _fail(ERROR_BAD_SHAPE)
 		# 存回去的是修剪過的值——_find_character_by_name() 用精確比對，
 		# LLM 輸出偶爾帶前後空白的話，不修剪會讓合法目標在執行層被誤判成
 		# 「找不到這個人」（CodeRabbit review 抓到）
-		talk_params["target"] = (target as String).strip_edges()
+		talk_params["target"] = target_name
 
 	# give 動作的 params 驗證（#264）：target 比照 talk，缺失／非字串／
 	# 空字串在這一層就擋掉，不要等到 _pursue_give_task() 才被動吸收成
@@ -408,6 +421,8 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 		var give_params: Dictionary = task.get("params", {})
 		var give_target: Variant = give_params.get("target")
 		if not give_target is String or (give_target as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+		if _is_literal_context_reference((give_target as String).strip_edges()):
 			return _fail(ERROR_BAD_SHAPE)
 
 		if give_params.has("count"):
@@ -661,6 +676,8 @@ static func _validate_persuade_params(params: Variant, now_minutes: int) -> Dict
 	if not target is String or (target as String).strip_edges().is_empty():
 		return _fail(ERROR_BAD_SHAPE)
 	var target_name: String = (target as String).strip_edges()
+	if _is_literal_context_reference(target_name):
+		return _fail(ERROR_BAD_SHAPE)
 
 	var reason: Variant = persuade_params.get("reason")
 	if not reason is String or (reason as String).strip_edges().is_empty():
