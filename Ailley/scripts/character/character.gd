@@ -1287,6 +1287,12 @@ func next_line(_listener: Character, _turns: Array[Dictionary], _max_turns: int)
 	push_error("%s: next_line() 沒有被子類別覆寫" % character_name)
 	return {"ok": false}
 
+## 聽者的對稱退出點（issue #691，《99》P-31）。基底預設一律想繼續聽——
+## Player 沒有 LLM 可問，要不要退出交給玩家自己走遠（Conversation.MAX_DISTANCE）
+## 或站著不理，不需要引擎額外問一次。只有 Agent 覆寫成真正的 LLM 決策
+func wants_to_continue(_speaker: Character, _turns: Array[Dictionary]) -> bool:
+	return true
+
 # 這句話大概會佔多久，讓對話狀態機知道什麼時候換人講
 func speech_duration(line: String) -> float:
 	if bubble == null:

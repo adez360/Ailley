@@ -1148,6 +1148,20 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 		"end": result["data"].get("end", false),
 	}
 
+## 聽者的對稱退出點（issue #691，《99》P-31，2026-08-30 拍板）：每輪除了讓
+## 正在講話那方決定 end，也問沒輪到自己講話的一方要不要繼續聽——不再只能
+## 靠移動觸發 TOO_FAR 這個側門離開。LISTENER policy 完全豁免每日對話配額
+## （見 ai_service.gd::_is_exempt()）：這是對話機制本身的一部分，不是額外
+## 多打一通電話。失敗/逾時一律視為「想繼續」，不能讓一次網路抖動就把整場
+## 對話腰斬——沿用 validate_checkpoint()，跟長動作中止檢查點是同一種
+## 「純布林是非題」形狀，不另外開一組 schema
+func wants_to_continue(speaker: Character, turns: Array[Dictionary]) -> bool:
+	var envelope := PromptBuilder.build_listener_continue_envelope(self, speaker, turns, current_place)
+	var result := await _decide_with_retry(envelope, AIService.Policy.LISTENER, AISchema.validate_checkpoint)
+	if not result["ok"]:
+		return true
+	return result["data"].get("continue", true)
+
 ## 睡眠反思（#168，《03》§5）：把今天的事實句丟給 LLM，換回摘要跟逐筆評分，
 ## 交給 memory 分級寫入。importance/valence 完全由 LLM 決定（見 validate_reflection()
 ## 的註解），這裡不重算或覆寫這兩個值。

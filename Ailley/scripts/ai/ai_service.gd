@@ -56,7 +56,7 @@ const POOL_SIZE := 3
 ##                 冷卻池，是因為這通會在行程重排之前搶先打一次，佔掉冷卻
 ##                 會讓緊接著的第一次行程決策被 ERROR_RATE_LIMITED 同步擋下
 ##                 （issue #682）
-enum Policy { SCHEDULED, CONVERSATION, CREATION }
+enum Policy { SCHEDULED, CONVERSATION, CREATION, LISTENER }
 
 # 速率限制的數字（同 requester_id 的最短真實間隔、每遊戲日上限，加上對話／
 # 建角豁免後各自的每日上限）住在 AIConfig，不在這裡：它們是「花多少錢」的
@@ -422,13 +422,16 @@ func get_usage(requester_id: String) -> Dictionary:
 	}
 
 
-# 豁免的實作點。豁免的是這裡的檢查，不是 _note_call() 的計數。CREATION
-# 無條件豁免（見 Policy 的說明），CONVERSATION 依設定檔的 dialogue_exempt 開關
+# 豁免的實作點。豁免的是這裡的檢查，不是 _note_call() 的計數（LISTENER 例外，
+# 見 _note_call() 說明）。CREATION 無條件豁免（見 Policy 的說明），CONVERSATION
+# 依設定檔的 dialogue_exempt 開關。LISTENER（issue #691，聽者的繼續/退出判斷）
+# 無條件豁免且完全不計帳——這是對話輪次本身的一部分，不是額外多打一次電話，
+# 2026-08-30 拍板「不佔用配額」
 func _is_exempt(policy: Policy) -> bool:
 	match policy:
 		Policy.CONVERSATION:
 			return config.dialogue_exempt
-		Policy.CREATION:
+		Policy.CREATION, Policy.LISTENER:
 			return true
 		_:
 			return false
@@ -469,12 +472,13 @@ func _check_rate_limit(requester_id: String, policy: Policy, skip_cooldown: bool
 # 豁免的呼叫只計數，不動 _last_call_msec 也不動 _calls_today ——
 # 動了的話一輪對話就會把行程重排的冷卻往後推 30 秒或把它的每日配額吃光，
 # 建角生成也一樣不該佔用行程重排的冷卻池（issue #682）。「豁免」要是雙向的：
-# 不受限，也不佔別人的額度
+# 不受限，也不佔別人的額度。LISTENER 連計帳都不用——它豁免的不是「限制」，
+# 是整個配額概念本身（見 _is_exempt() 說明），沒有對應的每日上限可計
 func _note_call(requester_id: String, policy: Policy) -> void:
 	if _is_exempt(policy):
 		if policy == Policy.CONVERSATION:
 			_dialogue_calls_today[requester_id] = int(_dialogue_calls_today.get(requester_id, 0)) + 1
-		else:
+		elif policy == Policy.CREATION:
 			_creation_calls_today[requester_id] = int(_creation_calls_today.get(requester_id, 0)) + 1
 		return
 
@@ -500,18 +504,21 @@ func _pump() -> void:
 		_send(http, job)
 
 
-# 佇列是優先序的不是先進先出：CONVERSATION 先出隊，其餘照進來的順序（#492）。
+# 佇列是優先序的不是先進先出：CONVERSATION／LISTENER 先出隊，其餘照進來的
+# 順序（#492；LISTENER 見 issue #691）。
 #
 # 排序只看呼叫端自己標的 Policy，引擎不另外判斷「誰的處境比較急」——那會變成
 # 引擎替 AI 認定一個情境算不算一回事（《00》原則二），排序依據也會從「誰在等」
 # 悄悄變成「誰重要」。這裡只有前者：CONVERSATION 是玩家停在對話框前面等字出來，
-# SCHEDULED 是背景角色重排行程，晚幾秒沒有人看得出來
+# LISTENER 卡在同一條對話輪次迴圈裡（conversation.gd::_run() 要它的結果才會
+# 往下叫 speaker.next_line()），跟 CONVERSATION 同等急迫；SCHEDULED 是背景
+# 角色重排行程，晚幾秒沒有人看得出來
 #
 # 線性掃描不換成優先佇列：長度等於同時在等的角色數，掃一遍比維護一個堆便宜，
 # 而且「同優先權內維持進場順序」直接由掃描順序保證，不必另外記進場序號
 func _next_job_index() -> int:
 	for i in _queue.size():
-		if _queue[i].policy == Policy.CONVERSATION:
+		if _queue[i].policy == Policy.CONVERSATION or _queue[i].policy == Policy.LISTENER:
 			return i
 	return 0
 
