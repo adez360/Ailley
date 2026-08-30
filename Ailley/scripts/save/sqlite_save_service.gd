@@ -466,6 +466,11 @@ func _esc(value: String) -> String:
 ##                      見過」，見 #497；met_count 已由 #704 補上）
 ## npc_state            少了 mood/social/fun 三項（Stats.SPEC 有這三項，
 ##                      npc_state 只對到《01》§4-1 的 8 項生理狀態）
+## npc_emotion          NPCEmotionSchema.gd 已建表，但 get_character()/
+##                      save_character() 沒有讀寫它——Character.get_save_data()
+##                      現在會產生 emotion 欄位（issue #688），round-trip 之後
+##                      SQLite 這條路徑會遺失情緒殘留，退回中性。
+##                      JsonSaveService（目前使用中）不受影響
 ## memory                Character.get_save_data() 現在會產生 memory 欄位
 ##                      （#170，只有 L2/L4），但 get_character()/save_character()
 ##                      沒有讀寫它——round-trip 之後整段記憶遺失。schema 已有
@@ -483,5 +488,6 @@ func _esc(value: String) -> String:
 ## 不是這裡的 schema 缺口，是上游還沒做，SqliteSaveService 目前故意不接：
 ## identity 的 age/gender/village_id/home_location_id/decision_source/
 ## model_name、hexaco_input、economy、
-## state.emotion/conditions/current_goal/appointment
+## state.conditions/current_goal/appointment（emotion 已於 issue #688 接上
+## Character.get_save_data()，移到上面的 schema 缺口清單）
 ## ===================================================================

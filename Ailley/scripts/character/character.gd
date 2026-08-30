@@ -1944,6 +1944,11 @@ func get_save_data() -> Dictionary:
 		# 性格漂移不該因為重開就被重置回建角當下的原始值——跟 today_plan「跨天
 		# 承諾不該憑空消失」同一個道理（見 note/技術/存檔.md）
 		"personality": personality.duplicate(true),
+		# 讀檔後保留角色存檔當下的情緒殘留，不要每次重開都歸零成 neutral
+		# （issue #688，2026-08-30 拍板）：長期記憶（L2/L4）本來就會存，角色
+		# 讀檔後記得起因事件，卻沒有對應的情緒表現，比 current_goal 消失更
+		# 容易讓人覺得「斷片」——見 note/技術/存檔.md「決策情境欄位」
+		"emotion": emotion.duplicate(true),
 		"is_exhausted": has_condition(CONDITION_EXHAUSTED),
 		"is_dead": is_dead,
 		"death_tick": death_tick,
@@ -2118,6 +2123,19 @@ func load_save_data(data: Dictionary) -> void:
 		else:
 			push_error("Character %s: 存檔的 personality 資料結構不合法，保留目前人格" % character_name)
 
+	# 情緒殘留還原（issue #688，2026-08-30 拍板）：直接套用存檔當下的
+	# duration_left，不透過 set_emotion() 重算——那會用「現在」的
+	# stability／grudge 重新推算一個全新的滿額 duration，蓋掉存檔當下
+	# 其實已經倒數剩沒多少的真實殘留值。缺欄位（#688 之前的舊存檔）沿用
+	# 目前值，不強制歸零——跟 personality 同一個理由，不是每次讀檔都該
+	# 清空的東西
+	if data.has("emotion") and data["emotion"] is Dictionary:
+		var loaded_emotion: Dictionary = data["emotion"]
+		if _is_valid_emotion_data(loaded_emotion):
+			emotion = loaded_emotion.duplicate(true)
+		else:
+			push_error("Character %s: 存檔的 emotion 資料結構不合法，保留目前情緒" % character_name)
+
 	# memory 一定呼叫，跟 stats／relationships 特意不同：這個角色可能是已經在
 	# 場上跑過、累積了新記憶的既有節點（debug console `load` 就是這樣用），
 	# 讀進來的存檔沒有 memory 欄位時要把記憶重設成空，而不是保留讀檔前的
@@ -2145,6 +2163,27 @@ func _is_valid_personality_data(loaded: Dictionary) -> bool:
 		var value: Variant = loaded[key]
 		if not (value is int or value is float) or not is_finite(float(value)):
 			return false
+	return true
+
+# 存檔的 emotion 必須恰好是這 4 項欄位、型別與值域都合法才准覆寫目前情緒——
+# 跟 _is_valid_personality_data() 同一種「寧可整包不套用，也不要讓半殘資料
+# 靜默生效」的態度（issue #688）
+const _EMOTION_FIELDS := ["type", "intensity", "cause_event_id", "duration_left"]
+
+func _is_valid_emotion_data(loaded: Dictionary) -> bool:
+	if loaded.size() != _EMOTION_FIELDS.size():
+		return false
+	for key in _EMOTION_FIELDS:
+		if not loaded.has(key):
+			return false
+	if not (loaded["type"] is String) or not EMOTION_TYPES.has(loaded["type"]):
+		return false
+	if not (loaded["intensity"] is int) or loaded["intensity"] < 0 or loaded["intensity"] > 100:
+		return false
+	if not (loaded["cause_event_id"] is String):
+		return false
+	if not (loaded["duration_left"] is int) or loaded["duration_left"] < 0 or loaded["duration_left"] > EMOTION_DURATION_MAX:
+		return false
 	return true
 
 # ---- 滑鼠選取 ----
