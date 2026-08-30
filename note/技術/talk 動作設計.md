@@ -5,7 +5,7 @@ tags:
 scene: scenes/main.tscn
 script: scripts/dialogue/conversation.gd
 status: 進行中
-updated: 2026-08-29
+updated: 2026-08-30
 ---
 
 # talk 動作設計
@@ -227,13 +227,13 @@ review 抓到：「髒兮兮」「乾淨多了」「傷已經好了」這幾種�
 > 這件事接 LLM 之後更要緊：`met_count` 與「認不認識」是要送進 payload 的事實，
 > 不能被自己的讀取行為改寫。
 
-## 聽者的對稱退出點（2026-08-16 拍板）
+## 聽者的對稱退出點（issue #691，《99》P-31，已實作）
 
 原設計只有**正在講話那一方**能用 `end` 欄位收尾，沒輪到自己講話的聽者只能等，或用移動觸發 `TOO_FAR` 這個側門離開——實質上把「要不要繼續聊」的決策權只給了說話方。
 
-已拍板：**聽者也要有對話機制本身的退出點**，不再只能靠側門。做法是每輪除了讓正在講話那方決定 `speech`/`end`，也對聽者發起一次決策，讓 TA 回傳要不要繼續聽；聽者選擇不繼續，本輪即以聽者中止收尾，跟 `Conversation.REASON_*` 用同一套結束原因體系，不可跟上方「失敗原因碼」混用。
+現況：`conversation.gd::_run()` 每輪（turn 0 除外——turn 0 的「listener」是發起對話的一方，且已經有 `engage` 欄位在管要不要理會這次搭話）先呼叫 `listener.wants_to_continue(speaker, _turns)`，聽者回 `false` 就以 `REASON_ENDED_BY_LISTENER` 立即結束，不等 `speaker.next_line()` 那最長 8 秒的逾時（退出優先於逾時）。`Character` 基底預設一律回 `true`（Player 沒有 LLM 可問，退出交給玩家自己走遠或站著不理）；`Agent.wants_to_continue()` 才是真正的 LLM 決策，`PromptBuilder.build_listener_continue_envelope()` 組信封，沿用 `AISchema.validate_checkpoint()`（`{"continue": bool}`，跟長動作中止檢查點同一種「純布林是非題」形狀，不另開一組只差一個字的 schema）。失敗/逾時一律視為「想繼續」，不能讓一次網路抖動就把整場對話腰斬。
 
-schema 欄位名稱、是否要額外佔用一次 AI 呼叫頻率配額（見《13》§5 呼叫頻率上限）、跟現有「等待對方回話逾時 8 秒」怎麼互動，待 LLM 版動工時一併設計，見《99》P-31。
+新增 `AIService.Policy.LISTENER`：完全豁免每日對話配額（`max_dialogue_calls_per_game_day`）且不計帳——這是對話機制本身的一部分，不是額外多打一通電話；佇列出隊順序也跟 `CONVERSATION` 同等優先（`_next_job_index()`），因為它一樣卡在同一條對話輪次迴圈裡等結果。
 
 ## 視線判定（issue #109，已實作）
 

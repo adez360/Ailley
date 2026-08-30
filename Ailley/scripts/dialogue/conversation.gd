@@ -39,6 +39,10 @@ const REASON_INTERRUPTED := "INTERRUPTED"
 ## （複審 PR #667 抓到：原本兩者共用同一個 reason，誤觸發 note_meeting()）
 const REASON_IGNORED := "IGNORED"
 
+## 聽者主動決定不再繼續聽（issue #691，《99》P-31）：跟 REASON_ENDED_BY_SPEAKER
+## 分開，因為結束的決定權在聽者，不是講話那一方
+const REASON_ENDED_BY_LISTENER := "ENDED_BY_LISTENER"
+
 var initiator: Character
 var target: Character
 
@@ -80,6 +84,21 @@ func _run() -> void:
 	while turn < SAFETY_MAX_TURNS:
 		var speaker := target if turn % 2 == 0 else initiator
 		var listener := initiator if turn % 2 == 0 else target
+
+		# 聽者的對稱退出點（issue #691）：turn 0 跳過——turn 0 的「listener」
+		# 是發起對話的那一方，他都主動按下 talk 了，問他「還想不想聽」沒有
+		# 意義；turn 0 的「要不要理會」已經是 next_line() 的 engage 欄位在管
+		# （見下方）。放在 speaker.next_line() 之前問，退出決定優先於等待
+		# 對方回話的逾時——聽者不想聽了就不用等 next_line() 那最長 8 秒的
+		# 逾時（2026-08-30 拍板，見《99》P-31）
+		if turn > 0:
+			var wants_to_continue: bool = await listener.wants_to_continue(speaker, _turns)
+			if _bail_if_finished():
+				return
+			if not wants_to_continue:
+				_finish(REASON_ENDED_BY_LISTENER)
+				queue_free()
+				return
 
 		var result: Dictionary = await speaker.next_line(listener, _turns, SAFETY_MAX_TURNS)
 		if _bail_if_finished():
@@ -173,7 +192,7 @@ func _finish(reason: String) -> void:
 		return
 	_finished = true
 
-	if reason == REASON_ENDED_BY_SPEAKER:
+	if reason == REASON_ENDED_BY_SPEAKER or reason == REASON_ENDED_BY_LISTENER:
 		_apply_rewards()
 
 	for character in [initiator, target]:
