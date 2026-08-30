@@ -19,12 +19,17 @@ const L3_RECALL_FALLBACK := "你想不起相關的事。"
 ## 回傳一個 task 讓決策層真的去做，跟一句只是說說的客套話分開。刻意不由引擎
 ## 事後比對台詞裡有沒有特定詞彙（例如「走吧」）——語言表達方式千變萬化，
 ## 固定關鍵字比對遲早漏接或誤判，判斷「這句話算不算承諾」本來就該是模型
-## 讀懂語意之後的決定，不是字串匹配。%s 是動作白名單，跟 PLAN_SYSTEM_BASE
-## 動態帶入同一份 IMPLEMENTED_ACTIONS，不在這裡另外抄一份；params 形狀也
-## 沿用 PLAN_SYSTEM_BASE 已經講過的規則，這裡只精簡點出最常見的兩種
-## （move_to／talk／follow 這類單一 target 或 place 的動作），完整規則見
-## PLAN_SYSTEM_BASE——兩者驗證都走 AISchema._validate_task_shape()，同一套
-## 邊界，不需要在這裡重複整份說明
+## 讀懂語意之後的決定，不是字串匹配。%s 是動作白名單，從 IMPLEMENTED_ACTIONS
+## 動態帶入但刻意濾掉 persuade（PR #718 review 抓到：原版直接帶整份清單，
+## 跟驗證器自相矛盾）——對話承諾不支援巢狀 persuade：validate_dialogue() 對
+## task.action == "persuade" 一律拒收（見 ai_schema.gd），因為 task 是單層
+## 結構，沒有 persuade 靠 proposed_task 攜帶子任務的那個位置，口頭承諾
+## 「我要去說服誰」語意混亂，不是這個機制要支援的情境。白名單若照搬整份
+## IMPLEMENTED_ACTIONS，等於提示詞主動邀請模型產出驗證必拒的任務，整句台詞
+## 會跟著報廢。params 形狀比照 plan 決策的 Task struct，這裡只精簡點出最常見
+## 的兩種（move_to／talk／follow 這類單一 target 或 place 的動作）——對話
+## 信封的 system prompt 不含 PLAN_SYSTEM_BASE，模型看不到完整 params 規則，
+## 但兩者驗證都走 AISchema._validate_task_shape()，同一套邊界
 const DIALOGUE_TASK_HINT := """
 If what you just said is a real commitment you're acting on right now — not a
 hypothetical, a joke, or an offer that still needs the other person to agree
@@ -69,7 +74,9 @@ with JSON only, no prose, no code fence:
 ## 參數，接動作清單的組裝挪到這個函式，build_dialogue_envelope() 改呼叫
 ## 這裡而不是直接用常數
 static func _dialogue_system(is_opening: bool) -> String:
-	var task_hint := DIALOGUE_TASK_HINT % ", ".join(AISchema.IMPLEMENTED_ACTIONS)
+	var task_hint := DIALOGUE_TASK_HINT % ", ".join(
+		AISchema.IMPLEMENTED_ACTIONS.filter(func(a: String) -> bool: return a != "persuade")
+	)
 	return (DIALOGUE_OPEN_SYSTEM if is_opening else DIALOGUE_SYSTEM) % task_hint
 
 ## "context.visible"／"context.pool"／"context.today_plan"／"context.fact_lines"
