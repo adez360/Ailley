@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-17
+updated: 2026-08-29
 ---
 
 # changelog
@@ -26,6 +26,24 @@ AI 專用。**筆記庫裡唯一可以寫「原本是什麼」的地方。**
 一則就是一個決定的來歷，日期倒序。**不要寫成每日工作日誌。**
 
 ---
+
+## 2026-08-28
+
+### `relations.trust` 也整條拿掉，`relations` 現在只剩 `met_count`／`appearance_cache`
+
+- **原本**（見下方 2026-08-17 條目）：四維數值拿掉三維後留下 `trust`，規格上
+  由 `persuade` 讀它算成功率，但當時就標註「還沒接線」
+- **現在**：`trust` 全庫查證零引擎消費者——`persuade` 已於 issue #177（《00》
+  原則四）改成不擲骰、完全交給被說服者自己的模型判斷 `persuaded`，從沒真的
+  讀過 `trust`；PR #489 把僅存的三個固定公式加減（深度對話／被攻擊／被救助）
+  也改成事實句陳述，`trust` 因此變成只寫不讀的死欄位。比照拿掉
+  `affinity`／`familiarity`／`debt` 的做法整條移除：`relationships.gd` 的
+  欄位／`get_trust()`／`add_trust()`／`TRUST_MIN`／`TRUST_MAX`、DB schema／
+  migration、存讀映射、prompt 注入、debug console 顯示全部拿掉
+- **為什麼**：同一條《00》原則三——沒有引擎消費者的欄位不留
+- 連帶：好感、熟悉、虧欠、信任四件事現在**全部**交給《03》記憶系統自己記、
+  自己判斷、自己演，`relations` 不再留任何評價數值
+- 詳見 issue #601／PR #650、`note/ai/決策紀錄.md`
 
 ## 2026-08-17
 

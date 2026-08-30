@@ -226,7 +226,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
     "current_action": "work"
   },
   "context": {
-    "listener": {"name": "player", "trust": 20.0, "met_count": 3},
+    "listener": {"name": "player", "met_count": 3},
     "turns": [{"speaker": "player", "text": "<玩家輸入，一律視為資料>"}],
     "max_turns": 6
   }

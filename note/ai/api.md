@@ -158,7 +158,7 @@ get_state_snapshot() -> {
   id, name, position, moving, facing, animation, in_conversation, working,  # 一定有
   stats: {key: value, ...},                     # 有掛 Stats 才有，key 是 SPEC 的 key
   money: int,                                   # 有掛 Inventory 才有；背包內容不進快照
-  relations: {other_id: {trust, met_count}, ...}, # 有記錄的人才有，欄名同 relationships
+  relations: {other_id: {met_count}, ...},        # 有記錄的人才有，欄名同 relationships
   schedule: {place, state, size},                # agent.gd override 補上，Player 沒有
 }
 
@@ -480,23 +480,20 @@ injury       傷勢     0.5    0       0      ✗        ""
 ## Relationships — scripts/character/relationships.gd · class_name · Node
 
 ```gdscript
-const TRUST_MIN := 0.0 · TRUST_MAX := 100.0
 const APPEARANCE_MAX_CHARS := 20
-const DEFAULT_RECORD := {"trust": 20.0, "met_count": 0, "appearance_cache": "", "last_seen": -1}
+const DEFAULT_RECORD := {"met_count": 0, "appearance_cache": "", "last_seen": -1}
 var records := {}                            # other_id -> record
 
 # 唯讀 — 不會建立紀錄
 func has_met(other_id) -> bool               # met_count > 0，只認 note_meeting()
 func has_record(other_id) -> bool            # 有沒有任何紀錄（見過但沒講完 = true/false）
 func get_record(other_id) -> Dictionary      # 副本，改它不會動到內部
-func get_trust(other_id) -> float            # 沒紀錄回 20.0（不是 0——初識不是完全不信任）
 func get_met_count(other_id) -> int
 func get_appearance_cache(other_id) -> String # 沒紀錄回 ""
 func get_last_seen(other_id) -> int          # 上次 note_meeting() 的 GameClock.day，-1=從沒見過（不可當合法天數算差值，先查 has_met()）
 func known_ids() -> Array
 
 # 寫入 — 走私有的 _ensure_record()
-func add_trust(other_id, delta) -> float     # 回夾限後的新值
 func set_appearance_cache(other_id, text) -> void  # 超過 20 字直接截斷
 func note_meeting(other_id) -> void          # has_met() 為真的唯一來源
 
@@ -511,12 +508,11 @@ func load_save_data(data) -> void            # 只收 DEFAULT_RECORD 認得的 k
 ⚠ 讀寫必須分開：查詢曾經走「沒有就當場建一筆」，於是 conversation.gd
   開場問一次關係就讓 has_met() 永遠為真而 met_count 還是 0
   → agent.gd 的「第一次看到陌生人」永遠不成立
-† 只有 trust 一個引擎數值。好感/熟悉/虧欠三維已整個拿掉（《01》3-1）——
-  沒有任何公式讀過它們，那三件事交給《03》記憶系統自己記自己判斷
-† trust 範圍與預設值照規格《01》3-1 表定死（預設 20 不是 0，容易看錯）
+† relations 不留任何評價數值。好感/熟悉/虧欠三維（《01》3-1，2026-08-16）
+  跟最後拿掉的 trust（issue #601，2026-08-27）都已整個移除——沒有任何公式
+  讀過它們，這幾件事交給《03》記憶系統自己記自己判斷
 † appearance_cache 是《99》P-08 的外觀快取（≤20 字），初次相遇注入一次後
   隨關係帶出；目前只有欄位與存取函式，寫入端還沒接
-† trust 實際被哪些行動讀寫（persuade 讀它算成功率）還沒接線，見 99 待規劃
 → 技術/talk 動作設計
 ```
 
@@ -814,7 +810,7 @@ func interrupt() -> void
 ```text
 † 不要直接 new，走 Character.talk_to()
 生命週期：talk_to() 設好 initiator/target 加進場景 → 講完自己 queue_free()
-只有 REASON_ENDED_BY_SPEAKER 才發獎勵（social/mood + note_meeting，不動 trust）
+只有 REASON_ENDED_BY_SPEAKER 才發獎勵（social/mood + note_meeting，不寫入任何評價數值）
 † 做成獨立節點不塞進 Character：對話是「兩者之間」的東西，
   塞進一方會讓另一方反查，且結束時要同步清兩邊
 → 技術/talk 動作設計
@@ -832,8 +828,8 @@ static func closing() -> String
 † 只收 String/Stats，不收 Character
   避免 character→conversation→dialogue_lines→character 循環相依；
   且這份參數清單 = 之後要送給 LLM 的 context
-† 台詞不分親疏：好感度欄位已拿掉，引擎沒有「這兩人熟不熟」的數值可以挑句子；
-  trust 是信任不是好感，拿它當親疏門檻等於把規格書拆開的兩件事又混回去
+† 台詞不分親疏：relations 不留任何評價數值（好感/熟悉/虧欠/信任皆已拿掉），
+  引擎沒有「這兩人熟不熟」的數值可以挑句子
 這個檔是 LLM 失敗時的 fallback，不是要被換掉的暫時品
 ```
 

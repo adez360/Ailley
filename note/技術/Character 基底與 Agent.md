@@ -5,7 +5,7 @@ tags:
 scene: scenes/character.tscn
 script: scripts/character/character.gd
 status: 已實作
-updated: 2026-08-28
+updated: 2026-08-29
 ---
 
 # Character 基底與 Agent
@@ -217,11 +217,10 @@ override `get_state_snapshot()`、`super()` 之後補上去，**不是**基底�
 `get("current_place")` 動態讀，group 成員資格跟「有沒有這個欄位」是兩件事，
 不吻合時會拿到 `null`（或在 `as Array` 那步直接崩）。
 
-`relations` 每筆是 `{trust, met_count}`，欄名跟 `relationships.gd` 的 record
+`relations` 每筆是 `{met_count}`，欄名跟 `relationships.gd` 的 record
 一致，不要在快照裡改名 —— 同一個數值兩個名字，讀過 `relationships.gd` 的人
-會在快照上找不到它。取值走 `get_trust()` / `get_met_count()` 這兩個純量
-accessor，不用 `get_record()`：後者每筆都 `duplicate(true)` 深拷一份，
-只為了讀兩個數字。
+會在快照上找不到它。取值走 `get_met_count()` 這個純量 accessor，不用
+`get_record()`：後者每筆都 `duplicate(true)` 深拷一份，只為了讀一個數字。
 
 ## 碰撞分層
 
