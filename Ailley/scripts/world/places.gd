@@ -63,7 +63,13 @@ func resolve_for(character: Character, place_name: String) -> Vector2:
 ## 同地點（例如約定機制判斷「人到了沒」、L3 記憶用地點篩選相關記憶）的
 ## 呼叫端，一律用這個把物理名稱收斂回抽象值，不要直接用 resolve_from_position()
 ## 的原始回傳值——不收斂的話 AI 會看到一串內部 DB id，記憶篩選也會因為
-## 「當下抽象地點」跟「記憶存的物理地點」字串對不起來而永遠比對失敗
+## 「當下抽象地點」跟「記憶存的物理地點」字串對不起來而永遠比對失敗。
+##
+## 唯一例外：character.gd::_resolve_death_location() 刻意保留原始回傳值。
+## death_location_id 是《規格書09》§2 的存檔記錄欄位（範例值 loc_forest 就是
+## 物理 location_id），只進存檔／屍體記錄、不進 AI 視野，也不拿來跟抽象地點
+## 做字串比對——死在家裡存 loc_home_03（物理名）跟死在森林存 loc_forest 是
+## 同一套語意，這裡是對的，不要「修」成收斂值（code review 抓到，PR #727）
 func to_ai_place_name(place_name: String) -> String:
 	if place_name.begins_with(HOME_LOCATION_PREFIX):
 		return HOME_PLACE_NAME

@@ -2019,8 +2019,11 @@ func _ensure_npc_record(
 # =====================================================
 
 ## 地圖上固定的家數量。MVP／Phase 2 拍板固定 5 間（見 issue #370 決策），
-## 不支援依人數上限動態生成，見《99》P-58
-const HOME_LOCATION_COUNT := 5
+## 不支援依人數上限動態生成，見《99》P-58。綁 GameManager.DEPLOY_CAP
+##（《07_地點/家》L21-22 拍板的對應關係），不在這裡再寫死一份 5；同時這個數
+## 必須等於 level.tscn 的 PlaceAnchors 底下 loc_home_* 錨點數——錨點少於這個數，
+## 多出來的家 has_for()/resolve_for() 會解析不到（code review 抓到，PR #727）
+const HOME_LOCATION_COUNT := GameManager.DEPLOY_CAP
 const HOME_LOCATION_PREFIX := "loc_home_"
 
 
@@ -2171,7 +2174,10 @@ func _ensure_home_locations_seeded() -> void:
 
 		if rows.is_empty():
 
-			DatabaseManager.insert(
+			# seed 失敗不能靜默：這一列查不到會讓沿用檢查把存檔帶回來的合法
+			# 舊值當無效、靜默重分配，正好破壞 seed 排在沿用檢查之前想保住的
+			# 性質（code review 抓到，PR #727）
+			if not DatabaseManager.insert(
 				"location",
 				{
 					"location_id": location_id,
@@ -2182,18 +2188,25 @@ func _ensure_home_locations_seeded() -> void:
 					"danger": 0,
 					"is_active": 1
 				}
-			)
+			):
+				push_error(
+					"[CharacterStatePersistence] "
+					+ "location %s seed 失敗，沿用檢查會把它當不存在、"
+					+ "該角色的家可能被靜默重分配 | DB=%s"
+					% [location_id, DatabaseManager.db.error_message]
+				)
 
 
 ## round-robin：從游標位置沿固定順序找第一間沒有被「目前還在世界上的角色」
-## 佔用的家，分配後游標移到它的下一個位置（mod N）。占用＝還在世界上的角色的
-## npc 列（見 _occupied_home_location_ids()）：角色離開世界（節點移出場景、
-## 離開 characters 群組）後那間家即視為空出，下一輪巡覽自然會排到它；游標
-## 本身不回退（《規格書07_地點/家》拍板細節「角色刪除：騰出的房屋標記為空」）
-func _assign_next_home_location() -> String:
+## 佔用的家，分配後游標移到它的下一個位置（mod N）。occupied 由呼叫端傳入
+## （_resolve_home_location_for() 已經算好一份排除自己的占用快照，沿用檢查
+## 跟重分配看同一份，中途世界人數變動也不會前後不一致）。占用＝還在世界上的
+## 角色的 npc 列（見 _occupied_home_location_ids()）：角色離開世界後那間家
+## 即視為空出，下一輪巡覽自然會排到它；游標本身不回退（《規格書07_地點/家》
+## 拍板細節「角色刪除：騰出的房屋標記為空」）
+func _assign_next_home_location(occupied: Dictionary) -> String:
 
 	var cursor := _get_home_cursor()
-	var occupied := _occupied_home_location_ids()
 
 	for offset in range(HOME_LOCATION_COUNT):
 
@@ -2214,14 +2227,17 @@ func _assign_next_home_location() -> String:
 	# home_location_id 在 NPCSchema 是 NOT NULL，回傳空字串會讓
 	# _ensure_npc_record() 整筆失敗、state/wallet/inventory 同步永久卡死
 	# ——寧可讓這個角色暫時跟游標當下那一間共用，也不要讓整套同步斷掉。
-	# 同居本身不是這則拍板的功能（留待《99》P-58 Phase 3/4），這裡只是
-	# 容量耗盡時的防呆，push_warning 不是 push_error（code review 抓到，
-	# PR #727）
+	# 游標要先收斂上界再算共用那間：正常流程游標經 mod 永遠在 0～N-1，
+	# 但舊 DB 可能存過 >= N 的值（schema 的 CHECK 只保證 >= 0），直接
+	# cursor + 1 會算出 loc_home_06 撞 NPCSchema 的外鍵、npc insert 失敗、
+	# _ensure_npc_record() 整筆卡死——正是這個安全閥想避免的結果
+	# （code review 抓到，PR #727）
+	var overflow_index := cursor % HOME_LOCATION_COUNT
 	var overflow_location_id := (
-		"%s%02d" % [HOME_LOCATION_PREFIX, cursor + 1]
+		"%s%02d" % [HOME_LOCATION_PREFIX, overflow_index + 1]
 	)
 
-	_set_home_cursor((cursor + 1) % HOME_LOCATION_COUNT)
+	_set_home_cursor((overflow_index + 1) % HOME_LOCATION_COUNT)
 
 	push_warning(
 		"[CharacterStatePersistence] "
@@ -2306,7 +2322,9 @@ func _get_home_cursor() -> int:
 	if rows.is_empty():
 		return 0
 
-	return int(rows[0].get("next_index", 0))
+	# 收斂上界：這裡 mod 過，呼叫端就算忘了取 % 也不會算出界外的家
+	# （code review 抓到，PR #727）
+	return int(rows[0].get("next_index", 0)) % HOME_LOCATION_COUNT
 
 
 func _set_home_cursor(value: int) -> void:
