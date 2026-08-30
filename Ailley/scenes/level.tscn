@@ -1,4 +1,4 @@
-[gd_scene load_steps=16 format=4 uid="uid://b2e0tw4w7vsnc"]
+[gd_scene load_steps=20 format=4 uid="uid://b2e0tw4w7vsnc"]
 
 [ext_resource type="Material" uid="uid://cmbcfxlkxxnwq" path="res://addons/TileMapDual/ghost_material.tres" id="1_b121j"]
 [ext_resource type="Texture2D" uid="uid://ctijta7lomsfg" path="res://assets/tiles/Sprite-0001.png" id="2_8c41q"]
@@ -124,6 +124,18 @@ terrain_set_0/terrain_1/name = "FG -Sprite-0001.png"
 terrain_set_0/terrain_1/color = Color(0.5, 0.4375, 0.25, 1)
 sources/0 = SubResource("TileSetAtlasSource_pl1ev")
 
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_64w2a"]
+size = Vector2(704, 32)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_fpun6"]
+size = Vector2(704, 32)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_wc255"]
+size = Vector2(32, 528)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_arp2o"]
+size = Vector2(32, 528)
+
 [node name="Level" type="Node2D"]
 y_sort_enabled = true
 
@@ -230,3 +242,22 @@ position = Vector2(275, -80)
 [node name="LargeGame1" parent="Animals" instance=ExtResource("12_anml")]
 position = Vector2(250, -55)
 game_type = "large_game"
+
+[node name="MapBoundary" type="StaticBody2D" parent="."]
+collision_mask = 0
+
+[node name="Top" type="CollisionShape2D" parent="MapBoundary"]
+position = Vector2(80, -256)
+shape = SubResource("RectangleShape2D_64w2a")
+
+[node name="Bottom" type="CollisionShape2D" parent="MapBoundary"]
+position = Vector2(80, 240)
+shape = SubResource("RectangleShape2D_fpun6")
+
+[node name="Left" type="CollisionShape2D" parent="MapBoundary"]
+position = Vector2(-256, -8)
+shape = SubResource("RectangleShape2D_wc255")
+
+[node name="Right" type="CollisionShape2D" parent="MapBoundary"]
+position = Vector2(416, -8)
+shape = SubResource("RectangleShape2D_arp2o")
