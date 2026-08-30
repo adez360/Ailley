@@ -2190,10 +2190,11 @@ func _ensure_home_locations_seeded() -> void:
 				}
 			):
 				push_error(
-					"[CharacterStatePersistence] "
-					+ "location %s seed 失敗，沿用檢查會把它當不存在、"
-					+ "該角色的家可能被靜默重分配 | DB=%s"
-					% [location_id, DatabaseManager.db.error_message]
+					(
+						"[CharacterStatePersistence] "
+						+ "location %s seed 失敗，沿用檢查會把它當不存在、"
+						+ "該角色的家可能被靜默重分配 | DB=%s"
+					) % [location_id, DatabaseManager.db.error_message]
 				)
 
 
