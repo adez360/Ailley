@@ -2156,9 +2156,11 @@ func _ensure_home_locations_seeded() -> void:
 			)
 
 
-## round-robin：從游標位置沿固定順序找第一間沒有任何現存 npc 記錄佔用的家，
-## 分配後游標移到它的下一個位置（mod N）。刪除角色騰出的家會在下一輪
-## 巡覽時自然被撿回來，游標本身不回退（《規格書07_地點/家》拍板細節）
+## round-robin：從游標位置沿固定順序找第一間沒有被「目前還在世界上的角色」
+## 佔用的家，分配後游標移到它的下一個位置（mod N）。占用＝還在世界上的角色的
+## npc 列（見 _occupied_home_location_ids()）：角色離開世界（節點移出場景、
+## 離開 characters 群組）後那間家即視為空出，下一輪巡覽自然會排到它；游標
+## 本身不回退（《規格書07_地點/家》拍板細節「角色刪除：騰出的房屋標記為空」）
 func _assign_next_home_location() -> String:
 
 	var cursor := _get_home_cursor()
@@ -2201,17 +2203,32 @@ func _assign_next_home_location() -> String:
 	return overflow_location_id
 
 
+## 占用集合＝「目前還在世界上的角色」的 character_id 對到的 npc 列所占的家。
+## 場上 characters 群組就是世界名冊（Player 的基底 Character._ready() 也會進
+## 這個群組，所以玩家的家一樣算占用）。不能拿 npc 表全部列當占用——npc 列
+## 沒有任何刪除路徑（remove_from_library() 只動記憶體角色庫、is_active 從沒
+## 有人改成 0），同一份 DB 只要曾經同步過 5 個以上不同 character_id（開第二輪
+## 新遊戲、debug console spawn、角色庫換一批），占用就永遠滿 5 間，之後每個
+## 新角色都掉進溢出安全閥共用同一間，per-character home 等於失效。
+## 不在世界名冊裡的列不算占用：那間家即釋出；角色重新進場時若它還沒被別人
+## 拿走，會經 _reconcile_home_location() 沿用回原本那間（code review 抓到，
+## PR #727）
 func _occupied_home_location_ids() -> Dictionary:
+
+	var world_character_ids := _world_character_ids()
 
 	var rows := DatabaseManager.select(
 		NPC_TABLE,
 		"",
-		["home_location_id"]
+		["npc_id", "home_location_id"]
 	)
 
 	var occupied := {}
 
 	for row in rows:
+
+		if not world_character_ids.has(str(row.get("npc_id", ""))):
+			continue
 
 		var location_id := str(
 			row.get("home_location_id", "")
@@ -2221,6 +2238,23 @@ func _occupied_home_location_ids() -> Dictionary:
 			occupied[location_id] = true
 
 	return occupied
+
+
+## 目前還在世界上的角色 id 集合（characters 群組）。用 node.get() 而不是轉型
+## 成 Character 再索引：轉型失敗（null）跟缺欄位是同一種「拿不到 id」，一個
+## str() 加空字串檢查就涵蓋，不必在迴圈裡做兩層 null 判斷
+func _world_character_ids() -> Dictionary:
+
+	var ids := {}
+
+	for node in get_tree().get_nodes_in_group("characters"):
+
+		var id := str(node.get("character_id"))
+
+		if not id.is_empty():
+			ids[id] = true
+
+	return ids
 
 
 func _get_home_cursor() -> int:
