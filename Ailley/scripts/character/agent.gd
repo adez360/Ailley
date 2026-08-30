@@ -1095,7 +1095,8 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 		# 驗證失敗／daily quota／rate limited……）到這裡之後就被丟掉，
 		# conversation.gd 只看得到 ok=false，查不出成因。先在這裡印出來，
 		# 查清楚後這行要記得拿掉
-		print("[talk_debug] %s next_line() 失敗，error=%s" % [character_id, result.get("error", "?")])
+		if Conversation.TALK_DEBUG:
+			print("[talk_debug] %s next_line() 失敗，error=%s" % [character_id, result.get("error", "?")])
 		return {"ok": false}
 
 	return {
