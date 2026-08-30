@@ -1,4 +1,4 @@
-[gd_scene load_steps=15 format=4 uid="uid://b2e0tw4w7vsnc"]
+[gd_scene load_steps=16 format=4 uid="uid://b2e0tw4w7vsnc"]
 
 [ext_resource type="Material" uid="uid://cmbcfxlkxxnwq" path="res://addons/TileMapDual/ghost_material.tres" id="1_b121j"]
 [ext_resource type="Texture2D" uid="uid://ctijta7lomsfg" path="res://assets/tiles/Sprite-0001.png" id="2_8c41q"]
@@ -12,6 +12,7 @@
 [ext_resource type="PackedScene" uid="uid://bcq3dot2tpwv" path="res://scenes/houses/house_002.tscn" id="10_8iemx"]
 [ext_resource type="PackedScene" uid="uid://da6s5nc2lvunj" path="res://scenes/houses/house_001.tscn" id="10_olg7q"]
 [ext_resource type="TileSet" uid="uid://e8v6djrm0yrt" path="res://assets/tileset/terra.tres" id="11_t1rx8"]
+[ext_resource type="PackedScene" uid="uid://qldhpqap03c8" path="res://scenes/animal.tscn" id="12_anml"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_pl1ev"]
 texture = ExtResource("2_8c41q")
@@ -142,9 +143,6 @@ script = ExtResource("4_t1rx8")
 [node name="PlaceAnchors" type="Node2D" parent="." groups=["place_anchors"]]
 script = ExtResource("5_8iemx")
 
-[node name="home" type="Marker2D" parent="PlaceAnchors"]
-position = Vector2(-120, -60)
-
 [node name="herb_shop" type="Marker2D" parent="PlaceAnchors"]
 position = Vector2(-110, 90)
 
@@ -179,6 +177,24 @@ position = Vector2(176, -112)
 [node name="herb_field" type="Marker2D" parent="PlaceAnchors"]
 position = Vector2(240, -112)
 
+[node name="loc_home_01" type="Marker2D" parent="PlaceAnchors"]
+position = Vector2(-184, -120)
+
+[node name="loc_home_02" type="Marker2D" parent="PlaceAnchors"]
+position = Vector2(-136, -24)
+
+[node name="loc_home_03" type="Marker2D" parent="PlaceAnchors"]
+position = Vector2(-104, -120)
+
+[node name="loc_home_04" type="Marker2D" parent="PlaceAnchors"]
+position = Vector2(-184, -40)
+
+[node name="loc_home_05" type="Marker2D" parent="PlaceAnchors"]
+position = Vector2(-136, -72)
+
+[node name="forest" type="Marker2D" parent="PlaceAnchors"]
+position = Vector2(250, -90)
+
 [node name="DebugOverlay" type="Node2D" parent="."]
 z_index = 50
 script = ExtResource("6_64w2a")
@@ -202,3 +218,14 @@ position = Vector2(-128, 0)
 y_sort_enabled = true
 tile_map_data = PackedByteArray("AAD+/woAAAAAAAAAAgD0/wAAAAAAAAAAAgDx//X/AAAAAAAAAQDx//7/AAAAAAAAAQDx/wwAAAAAAAAAAQDy/wIAAAAAAAAAAQDy/wUAAAAAAAAAAQDy/wsAAAAAAAAAAQDz//z/AAAAAAAAAQDz//7/AAAAAAAAAQDz/wQAAAAAAAAAAQDz/w0AAAAAAAAAAQD0//v/AAAAAAAAAQD0//z/AAAAAAAAAQD1////AAAAAAAAAQD1/wEAAAAAAAAAAQD4//P/AAAAAAAAAQD4/w0AAAAAAAAAAQD5//L/AAAAAAAAAQD5/wwAAAAAAAAAAQD6//L/AAAAAAAAAQD6/wwAAAAAAAAAAQD8//P/AAAAAAAAAQD9//H/AAAAAAAAAQD+/wsAAAAAAAAAAQABAPL/AAAAAAAAAQADAAsAAAAAAAAAAQAEAA0AAAAAAAAAAQAHAPP/AAAAAAAAAQAJAPP/AAAAAAAAAQAKAA0AAAAAAAAAAQALAPP/AAAAAAAAAQAPAAwAAAAAAAAAAQASAAwAAAAAAAAAAQATAPP/AAAAAAAAAQATAAoAAAAAAAAAAQAWAPH/AAAAAAAAAQAWAPT/AAAAAAAAAQAXAAUAAAAAAAAAAQAYAPv/AAAAAAAAAQA=")
 tile_set = ExtResource("11_t1rx8")
+[node name="Animals" type="Node2D" parent="."]
+
+[node name="SmallGame1" parent="Animals" instance=ExtResource("12_anml")]
+position = Vector2(225, -100)
+
+[node name="SmallGame2" parent="Animals" instance=ExtResource("12_anml")]
+position = Vector2(275, -80)
+
+[node name="LargeGame1" parent="Animals" instance=ExtResource("12_anml")]
+position = Vector2(250, -55)
+game_type = "large_game"
