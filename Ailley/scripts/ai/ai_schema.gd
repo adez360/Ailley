@@ -42,8 +42,10 @@ const ALLOWED_ACTIONS := [
 	"talk", "persuade", "give", "report", "shout", "perform", "murmur",
 	# B 工作與消費類
 	"hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink", "work",
-	# C 動作與移動類
-	"move_to", "sleep", "nap", "rest", "wash", "idle",
+	# C 動作與移動類。nap／rest 已併入 sleep（#771），LLM 只填 duration，
+	# 引擎依時長分級決定套用哪組回復量——見 agent.gd 的
+	# ACTION_RECOVERY／_classify_sleep_tier()
+	"move_to", "sleep", "wash", "idle",
 	# D 敵對類
 	"steal", "attack",
 	# E 搬運類（#161，《99》P-27）
@@ -71,12 +73,19 @@ const ALLOWED_ACTIONS := [
 # 由 LLM 決策提供（見《07》販賣機規格）。player.gd 的候選偵測不涉及它們
 # （玩家用 UI 選單，NPC 用決策任務）。talk 的動作執行留給 #90，其餘留給各自的 issue
 #
-# nap／rest／wash／idle 是 #112 接上的：四個都只動 Stats 跟角色 state，不需要新
+# sleep／wash／idle 是 #112 接上的：都只動 Stats 跟角色 state，不需要新
 # 場景物件或新資源，所以走的是仲裁器既有的「移動到 params.place（沒給就原地）、
-# 佔用 duration」路徑，沒有各自的執行函式。回復量見 agent.gd 的 ACTION_RECOVERY
+# 佔用 duration」路徑，沒有各自的執行函式。回復量見 agent.gd 的 ACTION_RECOVERY。
+# sleep 原本是 sleep／nap／rest 三個獨立動作，實測（#767）LLM 幾乎只選
+# rest（而 rest 完全不恢復 wakefulness），三個同義詞讓模型要猜哪個對應哪組
+# 恢復量，認知負擔換不到任何好處。#771 合併成一個 sleep，模型只填 duration
+# （跟其他動作同一種填法），引擎依時長分級決定套用 rest／nap／sleep 哪組
+# ACTION_RECOVERY——見 agent.gd 的 _classify_sleep_tier()。schedule 資料檔
+# （npc_schedule.json）沒有這個限制，仍可以直接寫 "nap"／"rest" 明確指定，
+# 那條路徑不經過這裡的白名單，不受這次合併影響
 #
 # eat 是 #114 接上的：跟 talk 一樣是「呼叫一次就完成」的動作，不是靠 duration
-# 逐分鐘回復，所以沒有走 nap/rest 那條通用路徑——agent.gd 特化了一個
+# 逐分鐘回復，所以沒有走 sleep 那條通用路徑——agent.gd 特化了一個
 # _pursue_eat_task()（寫法照抄 _pursue_talk_task()），resolve() 也加了
 # 「背包裡有沒有食物」的硬規則檢查，避免 LLM 宣稱吃了背包裡沒有的東西
 #
@@ -131,7 +140,7 @@ const ALLOWED_ACTIONS := [
 # 這次只是把它跟 buy／gather 一樣開放給 LLM 選。跟 gather 同一套「先走到地點
 # 才執行」模式，差別是地點錯了（沒有工作站）時失敗原因是 WORK_TARGET_NOT_FOUND
 # 而不是專屬的地點名檢查——見 agent.gd::_pursue_work_task() 的說明
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "hunt_small", "hunt_large", "gather", "follow", "perform", "work", "spit_at_stone", "worship_stone", "praise_stone", "wander"]
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "hunt_small", "hunt_large", "gather", "follow", "perform", "work", "spit_at_stone", "worship_stone", "praise_stone", "wander"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、

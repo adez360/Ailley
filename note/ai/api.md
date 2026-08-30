@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-08-29
+updated: 2026-08-31
 ---
 
 # api
@@ -249,7 +249,10 @@ const MIN_COMMIT := 2.0                      # 遊戲分鐘；做不滿就不讓
 const LLM_WAIT_MIN_COMMIT := 5.0             # 等待決策回覆期間蓋掉 MIN_COMMIT
 const MIN_ACTION_DURATION := 10.0            # llm 任務 duration 引擎端下限（遊戲分鐘）
 const LLM_TASK_POOL_CAP := 20                # 只算 source=="llm" 的筆數
-const ACTION_RECOVERY := {sleep: {stat: stamina, amount: 6.0}, nap: {stat: stamina, amount: 4.0}, rest: {stat: stamina, amount: 2.0}}   # 動作->{stat,amount}（#112／#214），暫定值
+const ACTION_RECOVERY := {sleep: [{stamina, 0.6}, {wakefulness, 50}], nap: [{stamina, 0.4}, {wakefulness, 20}], rest: [{stamina, 0.2}], wash: [{hygiene, 0.3}]}   # 動作->[{stat,amount}]（#112／#214／#362），key 是內部三級，非 LLM 可選動作（見下方 #771）
+const SLEEP_TIER_NAP_MIN_MINUTES := 30       # duration < 這個值 → rest 級
+const SLEEP_TIER_SLEEP_MIN_MINUTES := 180    # duration >= 這個值 → sleep 級，中間是 nap 級
+func _classify_sleep_tier(duration_minutes: float) -> String   # 依上面兩個門檻分級，回傳 ACTION_RECOVERY 的 key
 const DEBUG_TASK_PRIORITY := 999.0           # act 指令推進來的任務分數，壓過任何 schedule 任務
 const SUCCESS_PARAMS := {                    # 《01-2》§3 成功率表照抄，含尚未接執行邏輯的動作（#120）
     hunt_small/hunt_large/gather/fish/steal/perform
@@ -276,13 +279,25 @@ func debug_push_task(action, params, duration) -> void     # act 指令用；走
 
 ```text
 回復類動作（#112）
-† nap/rest/wash/idle 沒有各自的執行函式——四個都走仲裁器既有的
+† sleep/wash/idle 沒有各自的執行函式——都走仲裁器既有的
   「移動到 params.place（沒給就原地）、佔用 duration」路徑
 † 回復在 _on_time_changed() 每遊戲分鐘結算一次（_apply_action_recovery()），
   先結算再 _reevaluate()：反過來的話最後一分鐘會用新任務的 current_state 算
 † is_moving() 為真時不回復——還在走去床邊的路上不算在睡覺
 † wash 不在 ACTION_RECOVERY 表上：它該回復 hygiene，接上是另一則任務（#241）；
   idle 也不在，發呆本來就不回復任何東西
+† sleep/nap/rest 合併（#771，源自 #767：實測 33 次決策 LLM 幾乎只選
+  rest，rest 不恢復 wakefulness）：LLM 只能選 "sleep"，填 duration 表達
+  想休息多久。_select() 對 source=="llm" 且 action=="sleep" 的任務用
+  _classify_sleep_tier(duration) 決定真正的 current_state（rest/nap/sleep
+  三選一），task["action"] 本身保持 "sleep" 不動（is_implemented_action()
+  等檢查還在讀這個欄位）。分級到 sleep 級才設 interruptible=false，
+  比照 schedule 睡眠任務原本的保護；rest/nap 級維持預設可打斷
+† schedule 資料（npc_schedule.json）不受這次合併影響：entry["state"] 仍可
+  直接寫 "nap"／"rest"／"sleep" 明確指定，_tasks_from_schedule_json()
+  不經過 AISchema 白名單也不經過 _classify_sleep_tier()
+† AISchema.ALLOWED_ACTIONS／IMPLEMENTED_ACTIONS 已移除 "nap"／"rest"——
+  LLM 選不到，選了也通不過白名單；只有 "sleep" 留著
 † 主場景沒有湖泊／深井錨點（只有 home_001/farm/restaurant/square），
   《07》§2-3 要求的 wash 地點限制等地點補齊後才有得檢查
 
@@ -1065,13 +1080,13 @@ memory 區塊          {recent: Array[String], core: Array[String]}   # L2/L4 �
 const ALLOWED_ACTIONS := [                   # 《07》《11》拍板的動作，不含 spec 沒有的 "work"
     "talk", "persuade", "give", "report", "shout", "perform", "murmur",
     "hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink",
-    "move_to", "sleep", "nap", "rest", "wash", "idle",
+    "move_to", "sleep", "wash", "idle",        # nap／rest 已併入 sleep（#771），LLM 選不到了
     "steal", "attack",
     "haul", "struggle",
 ]                                             # murmur 是 #162 補上的，#88 population 時漏列；
                                               # haul/struggle 是 #161 補上的（《99》P-27）
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade"]
-# 後四個（nap/rest/wash/idle）是 #112 接上的，murmur 是 #162 接上的；eat 是 #114、
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "wash", "idle", "eat", "drink", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade"]
+# 後三個（sleep/wash/idle）是 #112 接上的，murmur 是 #162 接上的；eat 是 #114、
 # drink 是 #163、give/shout 是 #158、haul/struggle 是 #161、attack 是 #159、
 # persuade 是 #227 接上的。ALLOWED_ACTIONS 其餘 9 個未接執行層，見 #216／#340／#141
 const MAX_TASKS_PER_RESPONSE := 5            # 單次決策回應最多幾筆任務
