@@ -183,15 +183,19 @@ func test_revive_clears_death_fields_and_restores_stats() -> void:
 func test_revive_releases_existing_haulers() -> void:
 	var reviver := _make_character(Player)
 	var target := _make_character(Agent)
-	var hauler := _make_character(Player)
+	var hauler_a := _make_character(Player)
+	var hauler_b := _make_character(Player)
 	target.position = reviver.position
 	target.is_dead = true
 	target.death_at = _death_at_hours_ago(1.0)
-	hauler.start_haul(target)
-	assert_true(target.is_being_hauled(), "前置：搬運關係應先建立成功")
+	assert_eq(hauler_a.start_haul(target), Character.HAUL_OK, "前置：第一位搬運者應建立成功")
+	assert_eq(hauler_b.start_haul(target), Character.HAUL_OK, "前置：第二位搬運者應建立成功")
+	assert_eq(target.hauler_count(), 2, "前置：雙人搬運關係應先建立成功")
 
 	var result := reviver.revive(target)
 
 	assert_eq(result, Character.REVIVE_OK, "應復活成功")
-	assert_false(target.is_being_hauled(), "復活後應釋放既有搬運關係，不然角色會卡在跟著搬運者走")
-	assert_false(hauler.is_hauling(), "搬運者也應一併解除搬運狀態")
+	assert_eq(target.hauler_count(), 0, "復活後應釋放全部既有搬運關係，不然角色會卡在跟著搬運者走")
+	assert_false(target.is_being_hauled(), "is_being_hauled 應一併為 false")
+	assert_false(hauler_a.is_hauling(), "第一位搬運者也應一併解除搬運狀態")
+	assert_false(hauler_b.is_hauling(), "第二位搬運者也應一併解除搬運狀態")
