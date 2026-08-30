@@ -2026,6 +2026,10 @@ func _ensure_npc_record(
 const HOME_LOCATION_COUNT := GameManager.DEPLOY_CAP
 const HOME_LOCATION_PREFIX := "loc_home_"
 
+## level.tscn PlaceAnchors 底下實際佈置的 loc_home_* 錨點數。跟 DEPLOY_CAP
+## 是兩個獨立事實：前者是地圖供給，後者是人數上限，兩者脫鉤時要吵出來
+const HOME_ANCHOR_COUNT := 5
+
 
 ## _ensure_npc_record() 的共用收尾：用 _resolve_home_location() 驗證／必要時
 ## 重新分配 character 目前的 home_location_id，寫回記憶體；若跟 DB 現存值不同
@@ -2158,6 +2162,15 @@ func _is_valid_home_location_id(value: String) -> bool:
 ## 已存在（例如上次啟動已經建過）就不動它，避免覆寫掉未來可能加上的
 ## 客製欄位（名稱／danger 等）
 func _ensure_home_locations_seeded() -> void:
+
+	if HOME_LOCATION_COUNT > HOME_ANCHOR_COUNT:
+		push_error(
+			(
+				"[CharacterStatePersistence] "
+				+ "DEPLOY_CAP=%d 超過地圖上的 loc_home_* 錨點數 %d，"
+				+ "多出來的家解析不到座標（《07_地點/家》：地圖動態擴張 Phase 3/4 才支援）"
+			) % [HOME_LOCATION_COUNT, HOME_ANCHOR_COUNT]
+		)
 
 	for i in range(1, HOME_LOCATION_COUNT + 1):
 

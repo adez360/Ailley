@@ -108,13 +108,14 @@ func test_five_consecutive_assignments_cover_all_homes_without_duplicates() -> v
 
 
 ## review 要求的場景二：5 間全滿時溢出安全閥要回傳「界內」的 loc_home_0N，
-## 不能算出 loc_home_06 撞 NPCSchema 外鍵；游標也要收斂
+## 不能算出 loc_home_06 撞 NPCSchema 外鍵；游標也要收斂。游標直接設成界外值
+## N（模擬舊 DB 存過 next_index >= N；DEPLOY_CAP 綁定後調小人數就會真的發生）
 func test_overflow_returns_in_range_home_and_converges_cursor() -> void:
 	var all_occupied := {}
 	for i in range(1, _persistence.HOME_LOCATION_COUNT + 1):
 		all_occupied[_home_id(i)] = true
 
-	_persistence._set_home_cursor(_persistence.HOME_LOCATION_COUNT - 1)
+	_persistence._set_home_cursor(_persistence.HOME_LOCATION_COUNT)
 
 	var overflow: String = _persistence._assign_next_home_location(all_occupied)
 
