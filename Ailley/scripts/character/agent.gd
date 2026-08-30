@@ -242,7 +242,9 @@ var _attack_pursuit_stuck_ticks := 0
 var _attack_pursuit_last_distance := INF
 
 # 閒晃（issue #753）鎖定的目的地——隨機選出來的座標，不像 gather／talk 那樣
-# 有名字可以查 current_place 是否換了，靠比對任務 id 判斷是不是同一趟閒晃
+# 有名字可以查 current_place 是否換了，靠比對任務 id 判斷是不是同一趟閒晃。
+# schedule 任務的 id 跨日重用，_select() 換上任務時會重置（見 _buy_pursuit_task_id
+# 同款處理），讓每次被選中都重新挑一趟的目的地
 var _wander_task_id := ""
 var _wander_target := Vector2.ZERO
 
@@ -3303,6 +3305,13 @@ func _select(task: Dictionary, now_minutes: int, outgoing_ok: bool = true) -> vo
 	# 整個跳過 move_to()（CodeRabbit review 抓到）
 	_buy_pursuit_task_id = ""
 	_buy_pursuit_target = Vector2.ZERO
+	# wander（issue #753）跟 _buy_pursuit_task_id 同一個理由：_pursue_wander_task()
+	# 靠任務 id 比對判斷「同一趟閒晃、不重選目的地」，而 schedule 任務的 id 恆為
+	# schedule_%d、跨日重用——第二天同一筆 wander 再被選中時比對會失效，角色會
+	# 直接走去前一趟的舊座標。llm 來源不受這個重置影響：llm 任務 id（llm_時_序號）
+	# 每次決策都是新值，本來就不會等於上一趟留下的 _wander_task_id
+	_wander_task_id = ""
+	_wander_target = Vector2.ZERO
 
 # 記一筆 llm 來源的動作切換（#428）。append-only，失敗不影響遊戲進行——
 # 這是給之後分析用的資料，不是遊戲狀態，寫不進去只印警告，不擋仲裁器
@@ -4192,10 +4201,11 @@ func _apply_god_stone_gesture_effect(action_name: String) -> void:
 		if other.get_body_position().distance_to(stone_pos) <= hear_radius:
 			other.witness_god_stone_gesture("你看到 %s" % record_line)
 
-## 閒晃可以走到的範圍，格數——這是「四處走走」，不是精準抵達某個點，
-## 所以半徑比其他小互動（2 格）大得多，但仍是本地範圍的隨意走動，不是
-## 跨地圖遠征（issue #753）
-const WANDER_RADIUS_CELLS := 6
+## 閒晃取樣範圍的半邊長，格數——在目前所在格的 X／Y 兩軸各偏移
+## -WANDER_RANGE_CELLS～+WANDER_RANGE_CELLS 格的**方形**範圍內挑格子
+## （邊長 13 格），不是圓形半徑。這是「四處走走」，不是精準抵達某個點，
+## 方形取樣省掉距離計算；範圍仍是本地隨意走動，不是跨地圖遠征（issue #753）
+const WANDER_RANGE_CELLS := 6
 
 ## 閒晃任務的執行（issue #753）：純機械執行，隨機挑一個附近走得到的點走
 ## 過去，抵達就結束——引擎不判斷「為什麼」想閒晃、不主動觸發，AI 自己要不要
@@ -4247,9 +4257,12 @@ func _pick_wander_target() -> Variant:
 	var origin_cell: Vector2i = nav.world_to_cell(get_body_position())
 	for attempt in 10:
 		var offset := Vector2i(
-			randi_range(-WANDER_RADIUS_CELLS, WANDER_RADIUS_CELLS),
-			randi_range(-WANDER_RADIUS_CELLS, WANDER_RADIUS_CELLS)
+			randi_range(-WANDER_RANGE_CELLS, WANDER_RANGE_CELLS),
+			randi_range(-WANDER_RANGE_CELLS, WANDER_RANGE_CELLS)
 		)
+		# 挑到自己現在這格（offset 全 0）等於沒走，不算閒晃，重抽
+		if offset == Vector2i.ZERO:
+			continue
 		var cell := origin_cell + offset
 		if nav.is_cell_free(cell):
 			return nav.cell_to_world(cell)
