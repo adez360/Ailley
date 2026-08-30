@@ -135,6 +135,10 @@ const HAUL_TOO_FAR := "TOO_FAR"
 
 const ATTACK_RANGE := 32.0		# 跟 TALK_RANGE／WORK_RANGE／BUY_RANGE／GIVE_RANGE 一樣的距離門檻，2 格
 
+## 天神之石互動手勢（吐口水／攻擊／膜拜／讚美，issue #752）共用的距離門檻，
+## 跟其他小互動同一種「2 格內」標準，沒理由對這裡另訂一套
+const GOD_STONE_GESTURE_RANGE := 32.0
+
 ## attack() 的失敗原因碼，形狀比照 GIVE_*。IS_DEAD 是「攻擊者是死屍」
 ## （CodeRabbit review 抓到，PR #763）——死屍不能發起攻擊，跟 talk_to()／
 ## use_selected_item() 擋自己這側同一種漏洞、同一種修法：is_dead 之後沒有
