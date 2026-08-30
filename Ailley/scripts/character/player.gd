@@ -136,6 +136,16 @@ func _unhandled_input(event: InputEvent) -> void:
 			report_action_failure("use_item", use_reason)
 		return
 
+	if event.is_action_pressed("attack"):
+		get_viewport().set_input_as_handled()
+		var attack_target: Character = _get_interact_candidates()["other"]
+		if attack_target != null and attack_target.is_dead:
+			attack_target = null
+		var attack_reason := attack(attack_target)
+		if attack_reason != ATTACK_OK:
+			report_action_failure("attack", attack_reason)
+		return
+
 	if not event.is_action_pressed("interact"):
 		return
 
