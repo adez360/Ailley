@@ -242,6 +242,8 @@ updated: 2026-08-28
 | --- | --- | --- |
 | `line` | ✔ | 非空字串，超過 200 字截斷不拒絕 |
 | `end` | 選填 | 布林，省略視為 `false`（沒說要收尾就當作還沒講完） |
+| `task` | 選填 | Task struct（issue #658）：台詞是即時承諾時附帶，讓講出的話跟實際會做的事對得上。走 `_validate_task_shape()`（跟 persuade 的 `proposed_task` 同一套驗證），並擋掉巢狀 `persuade`；詳見《技術/LLM 串接與 AI 服務層》§回應 |
+| `engage` | 選填 | 布林，**僅對話第一輪**（被搭話方走 `validate_dialogue_open()`）：`false` 表示不理會這次搭話、不回 `line`／`end`，省略視為 `true` |
 
 對話輪數沒有設計上的硬上限，改用軟壓力＋`SAFETY_MAX_TURNS`（工程安全閥，值 10）兜底，見《技術/LLM 串接與 AI 服務層》§界線。
 
