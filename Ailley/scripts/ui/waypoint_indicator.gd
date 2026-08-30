@@ -33,7 +33,7 @@ const DISTANCE_TOLERANCE := 0.5
 ## 這個節點掛在角色頭上方（見場景裡的 position 偏移），拿它自己的位置算距離，
 ## 目標在角色上方時會提早判定抵達、目標在下方時會延後，兩邊都不準。
 ## 方向指標的旋轉角度不受影響，那個仍然要用這個節點自己的位置（見 _process()）
-@onready var _character: Character = get_parent()
+@onready var _character: Character = owner
 
 var _target_position := Vector2.ZERO
 var _on_arrived := Callable()

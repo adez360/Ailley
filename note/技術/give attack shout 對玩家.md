@@ -3,7 +3,7 @@ tags: [技術, character]
 status: 已實作
 scene: scenes/player.tscn
 script: scripts/character/character.gd, scripts/character/agent.gd, scripts/character/player.gd
-updated: 2026-08-23
+updated: 2026-08-28
 ---
 
 # give／attack／shout 對玩家
@@ -62,11 +62,11 @@ func _on_noise_heard(_source: Character) -> void:
 玩家按 `F` 鍵發出的聲音不會反過來讓自己冒泡——不需要在 `_on_noise_heard()`
 裡再判斷一次來源是不是自己。
 
-`tests/test_shout_reaches_player.gd` 驗證這個反應：需要真的
-`instantiate scenes/player.tscn`（不是像 give/attack 測試那樣手動組
-`Player.new()`），因為 `Bubble` 子節點只有走過 `_ready()` 才會由 `@onready`
-解析出來——沒有掛進場景樹的話 `bubble` 是 null，`say()` 直接靜默 return，
-測不出東西。這組測試在編輯器沒開場景時會 `skip_suite()`。
+`tests/test_shout_reaches_player.gd` 驗證這個反應：跟 give/attack 測試一樣
+手動組 `Player.new()`，`bubble`（及其內部 `box`／`label`）手動塞值卡位，
+`noise_heard.connect(_on_noise_heard)` 也手動補上——不能用
+`player_scene.instantiate()`，`test_run` 的 `@tool` 環境對非 `@tool` 腳本
+一律回傳 placeholder instance（見 [[自動化測試]] 限制 3，issue #624）。
 
 ## 檔案
 

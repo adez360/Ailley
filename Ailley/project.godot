@@ -24,6 +24,7 @@ AIService="*res://scripts/ai/ai_service.gd"
 SaveService="*res://scripts/save/json_save_service.gd"
 _mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
 DatabaseManager="*res://scripts/database/DatabaseManager.gd"
+EmbeddingService="*res://scripts/ai/embedding_service.gd"
 
 [display]
 
@@ -37,6 +38,13 @@ window/stretch/scale_mode="integer"
 [editor_plugins]
 
 enabled=PackedStringArray("res://addons/TileMapDual/plugin.cfg", "res://addons/godot_ai/plugin.cfg")
+
+[file_customization]
+
+folder_colors={
+"res://assets/": "orange",
+"res://scenes/": "green"
+}
 
 [gui]
 
@@ -164,5 +172,6 @@ locale/fallback="zh_TW"
 textures/canvas_textures/default_texture_filter=0
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
+textures/vram_compression/import_etc2_astc=true
 2d/snap/snap_2d_transforms_to_pixel=true
 2d/snap/snap_2d_vertices_to_pixel=true

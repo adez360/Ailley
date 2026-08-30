@@ -9,6 +9,12 @@ extends RefCounted
 ## current_place / current_state 只有 Agent（行程仲裁器）才有意義，Player
 ## 沒有這兩個欄位，見 scripts/core/game_manager.gd::get_world_save_data()，
 ## 所以兩欄都允許 NULL。
+##
+## following_npc_id：這個角色目前正在跟隨誰（issue #576），一樣只對 Agent
+## 有意義、允許 NULL。跟 grave.buried_by 同一種「可能指向自己、也可能沒有
+## 目標」的可選 npc 參照寫法，ON DELETE SET NULL——被跟隨的對象從 npc 表
+## 消失時（例如死亡清除角色），跟隨者不該連帶被 CASCADE 砍掉，只是失去
+## 跟隨目標。
 
 
 static func create(db) -> bool:
@@ -25,6 +31,8 @@ static func create(db) -> bool:
 		current_place TEXT,
 		current_state TEXT,
 
+		following_npc_id TEXT,
+
 		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
 		PRIMARY KEY (world_id, npc_id),
@@ -35,7 +43,11 @@ static func create(db) -> bool:
 
 		FOREIGN KEY (npc_id)
 			REFERENCES npc(npc_id)
-			ON DELETE CASCADE
+			ON DELETE CASCADE,
+
+		FOREIGN KEY (following_npc_id)
+			REFERENCES npc(npc_id)
+			ON DELETE SET NULL
 	);
 
 	CREATE INDEX IF NOT EXISTS

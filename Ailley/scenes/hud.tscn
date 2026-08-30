@@ -1,18 +1,32 @@
-[gd_scene load_steps=17 format=3 uid="uid://wo0a0v2y4gj1"]
+[gd_scene load_steps=26 format=3 uid="uid://wo0a0v2y4gj1"]
 
+[ext_resource type="Theme" uid="uid://dktke2k785jv0" path="res://assets/ui/ailley_theme.tres" id="1_3swnk"]
 [ext_resource type="PackedScene" uid="uid://cyrnw30ddh16r" path="res://scenes/debug_console.tscn" id="1_mphia"]
 [ext_resource type="PackedScene" uid="uid://q38st5oy2nj" path="res://scenes/chat_input.tscn" id="2_0m4u7"]
+[ext_resource type="PackedScene" uid="uid://biaxj6silb5o8" path="res://scenes/ui/esc_menu.tscn" id="2_eld54"]
 [ext_resource type="Script" uid="uid://pegp430ck1s5" path="res://scripts/ui/ai_status_label.gd" id="3_aistat"]
 [ext_resource type="Script" uid="uid://dm8733qx3w3uk" path="res://scripts/ui/time_label.gd" id="3_apjy4"]
 [ext_resource type="Script" uid="uid://dej3fk4srven5" path="res://scripts/ui/status_panel.gd" id="4_5n1hp"]
 [ext_resource type="Texture2D" uid="uid://b06f01r4ovc0r" path="res://assets/ui/Setting menu.png" id="5_eld54"]
 [ext_resource type="Script" uid="uid://bghlt4yqp6xrt" path="res://scripts/ui/inventory_panel.gd" id="6_3swnk"]
 [ext_resource type="Script" uid="uid://hism2nudt3ss" path="res://scripts/ui/hotbar.gd" id="7_qkknv"]
+[ext_resource type="Script" uid="uid://c6630bjn71tla" path="res://scripts/ui/clock_hud.gd" id="8_5357l"]
 [ext_resource type="PackedScene" uid="uid://cefpexpl7arvm" path="res://scenes/character_create.tscn" id="8_uxdf7"]
-[ext_resource type="PackedScene" uid="uid://xqribn8mdubp" path="res://scenes/character_library.tscn" id="9_5357l"]
+[ext_resource type="Texture2D" uid="uid://cy4w176sb7s0o" path="res://assets/ui/HUD.png" id="9_iypfu"]
 [ext_resource type="Script" uid="uid://djdfer2luq3s5" path="res://scripts/ui/pause.gd" id="10_iypfu"]
 [ext_resource type="PackedScene" uid="uid://d3no1g5djdk2s" path="res://scenes/god_stone_input.tscn" id="11_0m4u7"]
 [ext_resource type="PackedScene" uid="uid://ccx0ctgkyuok1" path="res://scenes/persuade_dialog.tscn" id="13_5n1hp"]
+[ext_resource type="Script" uid="uid://lutrmlqpql7v" path="res://scripts/ui/epitaph_input.gd" id="14_eld54"]
+[ext_resource type="PackedScene" uid="uid://byam6jwe3kml6" path="res://scenes/ui/side_bar.tscn" id="18_5357l"]
+[ext_resource type="PackedScene" uid="uid://c8x8h4qofhqg2" path="res://scenes/tip_menu.tscn" id="14_tipmn"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_iypfu"]
+atlas = ExtResource("9_iypfu")
+region = Rect2(1, 1, 25, 27)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_qpprf"]
+atlas = ExtResource("9_iypfu")
+region = Rect2(34, 3, 1, 11)
 
 [sub_resource type="StyleBoxTexture" id="StyleBoxTexture_jbj1t"]
 texture = ExtResource("5_eld54")
@@ -37,11 +51,20 @@ content_margin_right = 6.0
 content_margin_bottom = 6.0
 bg_color = Color(0.05, 0.05, 0.07, 0.6)
 
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_5357l"]
+texture = ExtResource("5_eld54")
+texture_margin_left = 6.0
+texture_margin_top = 28.0
+texture_margin_right = 6.0
+texture_margin_bottom = 6.0
+region_rect = Rect2(11, 12, 106, 122)
+
 [node name="PersistentUI" type="Control"]
 layout_mode = 3
 anchors_preset = 0
 offset_right = 40.0
 offset_bottom = 40.0
+theme = ExtResource("1_3swnk")
 
 [node name="Pause" type="CanvasLayer" parent="."]
 process_mode = 3
@@ -55,14 +78,20 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 color = Color(0.10196, 0.08235, 0.07059, 0.6)
 
-[node name="Text" type="Label" parent="Pause"]
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-theme_type_variation = &"HUDLabel"
-text = "UI_PAUSED"
-horizontal_alignment = 1
-vertical_alignment = 1
+[node name="EscMenu" parent="Pause" instance=ExtResource("2_eld54")]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -89.0
+offset_top = -71.0
+offset_right = 89.0
+offset_bottom = 71.0
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
 
 [node name="DebugConsole" parent="." instance=ExtResource("1_mphia")]
 
@@ -71,21 +100,43 @@ vertical_alignment = 1
 [node name="HUD" type="CanvasLayer" parent="."]
 
 [node name="TimeLabel" type="Label" parent="HUD"]
-offset_left = 4.0
-offset_top = 2.0
-offset_right = 5.0
-offset_bottom = 25.0
+offset_left = 34.0
+offset_top = 6.0
+offset_right = 35.0
+offset_bottom = 29.0
 theme_type_variation = &"HUDLabel"
 script = ExtResource("3_apjy4")
 
 [node name="AIStatusLabel" type="Label" parent="HUD"]
 offset_left = 4.0
-offset_top = 26.0
+offset_top = 34.0
 offset_right = 200.0
-offset_bottom = 49.0
+offset_bottom = 57.0
 theme_type_variation = &"HUDLabel"
 text = "排程模式（原因：尚未檢查）"
 script = ExtResource("3_aistat")
+
+[node name="ClockHUD" type="Control" parent="HUD"]
+layout_mode = 3
+anchors_preset = 0
+offset_left = 4.0
+offset_top = 4.0
+offset_right = 4.0
+offset_bottom = 4.0
+script = ExtResource("8_5357l")
+
+[node name="Face" type="TextureRect" parent="HUD/ClockHUD"]
+layout_mode = 0
+texture = SubResource("AtlasTexture_iypfu")
+
+[node name="Hand" type="TextureRect" parent="HUD/ClockHUD"]
+layout_mode = 0
+offset_left = 12.0
+offset_top = 2.5
+offset_right = 13.0
+offset_bottom = 13.5
+pivot_offset = Vector2(0.5, 11)
+texture = SubResource("AtlasTexture_qpprf")
 
 [node name="StatusPanel" type="CanvasLayer" parent="."]
 script = ExtResource("4_5n1hp")
@@ -315,8 +366,71 @@ columns = 9
 
 [node name="CharacterCreate" parent="." instance=ExtResource("8_uxdf7")]
 
-[node name="CharacterLibrary" parent="." instance=ExtResource("9_5357l")]
-
 [node name="GodStoneInput" parent="." instance=ExtResource("11_0m4u7")]
 
 [node name="PersuadeDialog" parent="." instance=ExtResource("13_5n1hp")]
+
+[node name="TipMenu" parent="." instance=ExtResource("14_tipmn")]
+
+[node name="CharacterSidebar" parent="." instance=ExtResource("18_5357l")]
+
+[node name="EpitaphInput" type="CanvasLayer" parent="."]
+script = ExtResource("14_eld54")
+
+[node name="Panel" type="Panel" parent="EpitaphInput"]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -140.0
+offset_top = -150.0
+offset_right = 140.0
+offset_bottom = 150.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxTexture_5357l")
+
+[node name="TitleBg" type="ColorRect" parent="EpitaphInput/Panel"]
+layout_mode = 0
+anchor_right = 1.0
+offset_left = 6.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = 24.0
+mouse_filter = 2
+color = Color(0.8627451, 0.7254902, 0.5411765, 1)
+
+[node name="TitleLabel" type="Label" parent="EpitaphInput/Panel"]
+layout_mode = 0
+anchor_right = 1.0
+offset_left = 6.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = 24.0
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+horizontal_alignment = 1
+vertical_alignment = 1
+clip_text = true
+
+[node name="StatusLabel" type="Label" parent="EpitaphInput/Panel"]
+layout_mode = 0
+anchor_right = 1.0
+offset_left = 10.0
+offset_top = 278.0
+offset_right = -10.0
+offset_bottom = 294.0
+theme_override_colors/font_color = Color(0.3647059, 0.2901961, 0.21960784, 1)
+horizontal_alignment = 1
+clip_text = true
+
+[node name="ContentScroll" type="ScrollContainer" parent="EpitaphInput/Panel"]
+layout_mode = 0
+offset_left = 10.0
+offset_top = 30.0
+offset_right = 270.0
+offset_bottom = 270.0
+
+[node name="ContentVBox" type="VBoxContainer" parent="EpitaphInput/Panel/ContentScroll"]
+layout_mode = 2
+size_flags_horizontal = 3

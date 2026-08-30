@@ -34,7 +34,7 @@ extends RefCounted
 ## CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
-const CURRENT_VERSION := 8
+const CURRENT_VERSION := 11
 
 
 ## 版本落後時依序套用的變更，每個 entry：
@@ -80,8 +80,23 @@ const MIGRATIONS: Array[Dictionary] = [
 	},
 	{
 		"version": 8,
+		"name": "Add world_character_state.following_npc_id (issue #576)",
+		"apply": Callable(DatabaseSchema, "_migrate_v8_add_following_npc_id")
+	},
+	{
+		"version": 9,
 		"name": "Rebuild npc/location and all their dependent tables with NOT NULL primary keys",
-		"apply": Callable(DatabaseSchema, "_migrate_v8_notnull_primary_keys")
+		"apply": Callable(DatabaseSchema, "_migrate_v9_notnull_primary_keys")
+	},
+	{
+		"version": 10,
+		"name": "Drop npc_relations.relations_trust (issue #601)",
+		"apply": Callable(DatabaseSchema, "_migrate_v10_drop_relations_trust")
+	},
+	{
+		"version": 11,
+		"name": "Add npc_relations.relations_met_count (issue #651)",
+		"apply": Callable(DatabaseSchema, "_migrate_v11_add_relations_met_count")
 	}
 ]
 
@@ -227,6 +242,20 @@ static func _migrate_rebuild_verify_column_shape(db, old_name: String, new_name:
 			+ "the NOT NULL primary key fix this migration handles."
 		) % [old_name, old_columns, new_columns]
 	)
+	return false
+
+
+## 查一張既有表目前是否帶某個欄位。給 migration 9 的 npc_relations entry
+## 動態選要用哪個 create_fn（見上面 _migrate_v9_notnull_primary_keys() 的
+## 說明），版本無關的共用工具，一樣可以給之後別的 migration 用。
+static func _migrate_table_has_column(db, table_name: String, column_name: String) -> bool:
+	if not db.query("PRAGMA table_info(%s);" % table_name):
+		return false
+
+	for row in (db.query_result as Array):
+		if String(row.get("name", "")) == column_name:
+			return true
+
 	return false
 
 
@@ -404,6 +433,13 @@ static func _migrate_rebuild_single_table(
 ##
 ## entry 可選帶 "repair_null_pk"（預設 false），見
 ## _migrate_rebuild_handle_null_primary_keys() 的說明。
+##
+## entry 也可選帶 "create_fn"（Callable(db)->bool，預設用 entry["schema"].create）：
+## 讓某張表用「這個 migration 當時的舊形狀」重建，而不是「現在的 *Schema.gd」——
+## 同一張表後續若被別的 migration 再改形狀（例如再拿掉一欄），這裡若還是呼叫
+## 活的 schema class，_migrate_rebuild_verify_column_shape() 會因為形狀已經
+## 對不上舊資料庫而中止，等於這個較舊的 migration 被後來的 schema 變更波及。
+## 見 migration 9 的 npc_relations（issue #601 拿掉 relations_trust 之後）。
 static func _migrate_rebuild_table_group(db, entries: Array) -> bool:
 	var old_names := {}
 
@@ -423,7 +459,11 @@ static func _migrate_rebuild_table_group(db, entries: Array) -> bool:
 			return false
 
 	for entry in entries:
-		if not entry["schema"].create(db):
+		var create_ok: bool = (
+			entry["create_fn"].call(db) if entry.has("create_fn")
+			else entry["schema"].create(db)
+		)
+		if not create_ok:
 			push_error(
 				"[DatabaseSchema] Table rebuild: Failed to recreate %s: %s"
 				% [entry["table"], db.error_message]
@@ -619,8 +659,61 @@ static func _migrate_v5_drop_death_grave_highlights(db) -> bool:
 ## 連同子表一起重建，讓子表的外鍵在刪暫存表之前先恢復指向新的
 ## world／item。
 ##
-## `npc`（近 20 張依附表）與 `npc`／`location` 之間的重建順序問題不在這個
-## migration 範圍內，見 migration 8（issue #561）。
+## `npc`（近 20 張依附表）與 `npc`／`location` 之間的重建順序問題不在這次
+## 範圍內，見《99》P-55、issue #561、migration 9。
+## Migration 7 當年重建 world_character_state 時的表結構凍結版（CodeRabbit
+## review 抓到）：不能直接傳目前的 WorldCharacterStateSchema 進
+## _migrate_rebuild_table_group()——那個 schema 後來（issue #576）加了
+## following_npc_id 欄位，用「現在的形狀」去對「user_version<=6、根本還沒
+## 有這個欄位」的舊資料庫做 _migrate_rebuild_verify_column_shape()，新舊
+## 欄位數對不上，驗證直接判定失敗、整個 migration 7 中止，migration 8
+## 永遠跑不到。這裡凍結 migration 7 完成當下（issue #576 之前）真正的表
+## 形狀，讓 migration 7 對舊資料庫還是能重建成功；之後 migration 8 的
+## ALTER TABLE ADD COLUMN following_npc_id（已經有查 PRAGMA table_info 擋
+## 重複欄位）才是唯一負責把這個新欄位補上去的地方
+class _WorldCharacterStateSchemaV7RebuildShape:
+	extends RefCounted
+
+	static func create(db) -> bool:
+		var sql := """
+		CREATE TABLE IF NOT EXISTS world_character_state (
+
+			world_id TEXT NOT NULL,
+			npc_id TEXT NOT NULL,
+
+			pos_x REAL NOT NULL DEFAULT 0.0,
+			pos_y REAL NOT NULL DEFAULT 0.0,
+
+			current_place TEXT,
+			current_state TEXT,
+
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+			PRIMARY KEY (world_id, npc_id),
+
+			FOREIGN KEY (world_id)
+				REFERENCES world(world_id)
+				ON DELETE CASCADE,
+
+			FOREIGN KEY (npc_id)
+				REFERENCES npc(npc_id)
+				ON DELETE CASCADE
+		);
+
+		CREATE INDEX IF NOT EXISTS
+		idx_world_character_state_npc
+		ON world_character_state(npc_id);
+		"""
+
+		if not db.query(sql):
+			push_error(
+				"[DatabaseSchema] Migration 7: Failed to recreate world_character_state (v7 shape)."
+			)
+			return false
+
+		return true
+
+
 static func _migrate_v7_notnull_primary_keys(db) -> bool:
 	var single_table_schemas := [
 		{"table": "npc_state", "schema": NPCStateSchema},
@@ -636,9 +729,11 @@ static func _migrate_v7_notnull_primary_keys(db) -> bool:
 	# world_character_state／npc_inventory／npc_home_storage／item_transaction
 	# 這幾張子表維持預設 false——它們的主鍵本來就不在原本 11 個缺 NOT NULL
 	# 的欄位裡（見 P-55 背景），這裡的檢查對它們只是防禦性的。
+	# world_character_state 傳的是上面凍結的 v7 形狀，不是目前的
+	# WorldCharacterStateSchema（原因見那個類別的註解）
 	if not _migrate_rebuild_table_group(db, [
 		{"table": "world", "schema": WorldSchema, "repair_null_pk": true},
-		{"table": "world_character_state", "schema": WorldCharacterStateSchema}
+		{"table": "world_character_state", "schema": _WorldCharacterStateSchemaV7RebuildShape}
 	]):
 		return false
 
@@ -648,6 +743,100 @@ static func _migrate_v7_notnull_primary_keys(db) -> bool:
 		{"table": "npc_home_storage", "schema": NPCHomeStorageSchema},
 		{"table": "item_transaction", "schema": ItemTransactionSchema}
 	])
+
+
+## Migration 10：拿掉 npc_relations.relations_trust（issue #601）。`trust` 全庫零
+## 引擎消費者（persuade 走模型判斷不擲骰、僅存的三個固定公式加減已改事實句
+## 陳述），不符合《00》原則三的留存門檻，比照 affinity/familiarity/debt 整條移除。
+## SQLite 不支援移除帶 CHECK 的欄位，要整張表重建；npc_relations 沒有任何其他
+## 表外鍵指向它（它自己外鍵指向 npc），單表重建即可。不能沿用
+## _migrate_rebuild_single_table()——那個走 INSERT ... SELECT * 並比對欄位形狀，
+## 是為「只補 NOT NULL、欄位不變」設計的，這裡欄位數變了會被形狀檢查擋下。
+## 改成明確列出保留欄位複製。
+##
+## 原本開發時跟 PR #607（npc/location NOT NULL 重建）撞號取 8，#607 先合併，
+## rebase 時重編為 9；之後合併 main 又發現 9 已被同一條 NOT NULL 重建佔走
+## （8 被 world_character_state.following_npc_id／issue #576 插隊，重建順延為
+## 9，見上面 Migration 9 的說明），再順延為 10——跟這個檔案先前 v6（原 4）、
+## v7（原 6）撞號重編同一套處理。
+static func _migrate_v10_drop_relations_trust(db) -> bool:
+	var old_name := "npc_relations__migrate_v10_old"
+
+	if not db.query("ALTER TABLE npc_relations RENAME TO %s;" % old_name):
+		push_error(
+			"[DatabaseSchema] Migration 10: Failed to rename npc_relations: "
+			+ db.error_message
+		)
+		return false
+
+	if not _migrate_rebuild_drop_stale_indexes(db, old_name):
+		return false
+
+	if not NPCRelationsSchema.create(db):
+		push_error(
+			"[DatabaseSchema] Migration 10: Failed to recreate npc_relations: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query(
+		"""
+		INSERT INTO npc_relations
+			(relation_id, character_id, target_id, relations_appearance_cache, updated_at)
+		SELECT
+			relation_id, character_id, target_id, relations_appearance_cache, updated_at
+		FROM %s;
+		""" % old_name
+	):
+		push_error(
+			"[DatabaseSchema] Migration 10: Failed to copy data into npc_relations: "
+			+ db.error_message
+		)
+		return false
+
+	if not db.query("DROP TABLE %s;" % old_name):
+		push_error(
+			"[DatabaseSchema] Migration 10: Failed to drop %s: " % old_name
+			+ db.error_message
+		)
+		return false
+
+	return true
+
+
+## Migration 11：補上 npc_relations.relations_met_count（issue #651）。
+## `get_character()`／`_replace_relationships()` 的讀寫映射一直只接
+## relations_appearance_cache，met_count 完全沒有對應欄位，round-trip 後遺失。
+## npc_relations 沒有其他表外鍵指向它，單純加欄位不影響其他表，跟 migration 8
+## 的 world_character_state.following_npc_id 同一種簡單 ADD COLUMN 案例，不需要
+## 整表重建。DEFAULT 0 是新關係的合理起點——跟 Relationships.DEFAULT_RECORD
+## 的 met_count 起始值一致，既有資料列補這個值也不會誤植成「已經見過面」。
+static func _migrate_v11_add_relations_met_count(db) -> bool:
+	if not db.query("PRAGMA table_info(npc_relations);"):
+		push_error(
+			"[DatabaseSchema] Migration 11: Failed to read columns of npc_relations: "
+			+ db.error_message
+		)
+		return false
+
+	var existing_columns: Array = (db.query_result as Array).map(
+		func(row): return row.get("name", "")
+	)
+	if existing_columns.has("relations_met_count"):
+		return true
+
+	if not db.query(
+		"ALTER TABLE npc_relations ADD COLUMN relations_met_count INTEGER NOT NULL DEFAULT 0 CHECK (relations_met_count >= 0);"
+	):
+		push_error(
+			"[DatabaseSchema] Migration 11: Failed to add relations_met_count: "
+			+ db.error_message
+		)
+		return false
+
+	return true
+
+
 ## Migration 6：npc_action_history 是同一輪開發（#428）才新增的表，
 ## NPCActionHistorySchema.gd 最初把 idx_npc_action_history_npc 只建在
 ## (npc_id)，後來（#511 CodeRabbit review）才發現重複率分析需要
@@ -677,8 +866,53 @@ static func _migrate_v6_action_history_composite_index(db) -> bool:
 	return true
 
 
-## Migration 8：既有資料庫的 npc／location 補 NOT NULL 主鍵——P-55 最後
-## 剩下的 2 張表，issue #561。
+## Migration 8：world_character_state 新增 following_npc_id（issue #576，
+## 「跟隨誰」的持續狀態，見 WorldCharacterStateSchema.gd 檔頭說明）。純新增
+## 一個允許 NULL、預設值也是 NULL 的欄位，不像 migration 3／6／7 那樣涉及
+## NOT NULL／索引形狀變更，不需要整張表重建——SQLite 的 ALTER TABLE ADD
+## COLUMN 本身就支援帶 REFERENCES 的欄位，只要沒有非 NULL 的預設值就不會
+## 卡既有資料列，直接 ALTER TABLE 就夠。
+## 先查欄位存不存在才 ALTER TABLE（CodeRabbit review 抓到）：user_version <= 6
+## 的既有資料庫，initialize() 會先跑 migration 7（整表重建 world_character_state），
+## 這次改動後 WorldCharacterStateSchema.create() 的 CREATE TABLE 本身就帶
+## following_npc_id，重建出來的新表已經有這個欄位——接著跑到 migration 8 若
+## 不查就直接 ALTER TABLE ADD COLUMN，會撞 duplicate column 錯誤，整個
+## migration rollback。user_version 剛好是 7（還沒跑過 migration 7 重建、
+## 或本來就在這個版位）的資料庫才需要真的 ALTER TABLE
+static func _migrate_v8_add_following_npc_id(db) -> bool:
+	if not db.query("PRAGMA table_info(world_character_state);"):
+		push_error(
+			"[DatabaseSchema] Migration 8: Failed to read columns of world_character_state: "
+			+ db.error_message
+		)
+		return false
+
+	var existing_columns: Array = (db.query_result as Array).map(
+		func(row): return row.get("name", "")
+	)
+	if existing_columns.has("following_npc_id"):
+		return true
+
+	if not db.query(
+		"ALTER TABLE world_character_state ADD COLUMN following_npc_id TEXT REFERENCES npc(npc_id) ON DELETE SET NULL;"
+	):
+		push_error(
+			"[DatabaseSchema] Migration 8: Failed to add following_npc_id: "
+			+ db.error_message
+		)
+		return false
+
+	return true
+
+
+## Migration 9：既有資料庫的 npc／location 補 NOT NULL 主鍵——P-55 最後
+## 剩下的 2 張表，issue #561。原訂版號 8，rebase 到 main 時發現 8 已被
+## world_character_state.following_npc_id（issue #576）佔用；following_npc_id
+## 那個 migration 改成 ALTER TABLE ADD COLUMN，必須排在這裡的
+## world_character_state 整表重建之前——重建時 world_character_state 用的是
+## 目前（已含 following_npc_id）的 WorldCharacterStateSchema，若這裡先跑，
+## 舊資料庫的 world_character_state 還沒有這個欄位，
+## _migrate_rebuild_verify_column_shape() 新舊欄位數對不上會直接判定失敗。
 ##
 ## 這兩張比 migration 7 處理過的 world／item 複雜得多：location 有 7 張表
 ## 外鍵指向它（npc 本身也是其中一張，透過 home_location_id），npc 則有
@@ -717,7 +951,22 @@ static func _migrate_v6_action_history_composite_index(db) -> bool:
 ## 這 4 張在 migration 7 已經因為 world／item 重建過一輪，這裡因為 npc
 ## 重建又要再重建一次——不是重複勞動，是因為兩次重建各自針對不同的父表
 ## （item／world vs. npc），沒有先後可以合併的空間。
-static func _migrate_v8_notnull_primary_keys(db) -> bool:
+##
+## npc_relations 的 entry 額外判斷：issue #601 在這個 migration 上線後才把
+## relations_trust 從 NPCRelationsSchema 拿掉，migration 10 才是正式移除它的
+## 地方。這裡若一律呼叫活的 NPCRelationsSchema.create() 重建，會在「舊資料庫
+## 真的帶著 relations_trust」時跟舊表形狀對不上而中止（_migrate_rebuild_table_group()
+## 的欄位形狀比對抓到）。在 _migrate_rebuild_table_group() 改名「之前」先查活表
+## npc_relations 有沒有 relations_trust 欄位動態判斷該用哪個 create：有 → 用凍結的 _migrate_v8_create_npc_relations_with_trust()
+## 原樣重建、留給 migration 10 拿掉；沒有（新資料庫從沒真的存過這欄，或已經是
+## #601 之後的形狀）→ 用現行 NPCRelationsSchema，跟其餘表的預設行為一致。
+static func _migrate_v9_notnull_primary_keys(db) -> bool:
+	var npc_relations_entry := {"table": "npc_relations", "schema": NPCRelationsSchema}
+	if _migrate_table_has_column(db, "npc_relations", "relations_trust"):
+		npc_relations_entry["create_fn"] = Callable(
+			DatabaseSchema, "_migrate_v8_create_npc_relations_with_trust"
+		)
+
 	return _migrate_rebuild_table_group(db, [
 		{"table": "location", "schema": LocationSchema, "repair_null_pk": true},
 		{"table": "npc", "schema": NPCSchema, "repair_null_pk": true},
@@ -741,13 +990,79 @@ static func _migrate_v8_notnull_primary_keys(db) -> bool:
 		{"table": "npc_last_action", "schema": NPCLastActionSchema},
 		{"table": "npc_occupation", "schema": NPCOccupationSchema},
 		{"table": "npc_personality", "schema": NPCPersonalitySchema},
-		{"table": "npc_relations", "schema": NPCRelationsSchema},
+		npc_relations_entry,
 		{"table": "npc_schedule", "schema": NPCScheduleSchema},
 		{"table": "npc_state", "schema": NPCStateSchema},
 		{"table": "npc_taboo", "schema": NPCTabooSchema},
 		{"table": "npc_wallet", "schema": NPCWalletSchema},
 		{"table": "world_character_state", "schema": WorldCharacterStateSchema}
 	])
+
+
+## npc_relations 在 migration 9 當下（issue #561；原訂版號 8，見上面 Migration 9
+## 的說明）的形狀，帶 relations_trust——凍結成獨立函式而不是呼叫
+## NPCRelationsSchema.create()，是因為 issue #601
+## 把 relations_trust 從那個活的 schema class 移除了。migration 9 的職責只是
+## 幫舊資料庫補 NOT NULL 主鍵，真的帶著 relations_trust 資料的舊資料庫不該因為
+## 之後別的 migration 又改了這張表的欄位，就連帶讓自己失敗（
+## _migrate_rebuild_table_group() 的欄位形狀比對會抓到：舊表有 relations_trust、
+## 新表沒有，直接中止整個 initialize()）。只在 _migrate_v9_notnull_primary_keys()
+## 動態判斷出舊表確實還帶 relations_trust 時才會被指定成 create_fn 呼叫；
+## 這裡凍結的 CREATE TABLE 就是 #601 之前 NPCRelationsSchema.gd 的內容，
+## trust 欄位由 migration 10 負責拿掉。
+static func _migrate_v8_create_npc_relations_with_trust(db) -> bool:
+	var sql := """
+	CREATE TABLE IF NOT EXISTS npc_relations (
+
+		relation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+		character_id TEXT NOT NULL,
+
+		target_id TEXT NOT NULL,
+
+		relations_trust INTEGER NOT NULL DEFAULT 20
+			CHECK (
+				relations_trust BETWEEN 0 AND 100
+			),
+
+		relations_appearance_cache TEXT NOT NULL DEFAULT ''
+			CHECK (
+				length(relations_appearance_cache) <= 20
+			),
+
+		updated_at TEXT NOT NULL
+			DEFAULT CURRENT_TIMESTAMP,
+
+		FOREIGN KEY (character_id)
+			REFERENCES npc(npc_id)
+			ON DELETE CASCADE,
+
+		FOREIGN KEY (target_id)
+			REFERENCES npc(npc_id)
+			ON DELETE CASCADE,
+
+		UNIQUE (character_id, target_id),
+
+		CHECK (character_id <> target_id)
+	);
+
+	CREATE INDEX IF NOT EXISTS
+	idx_npc_relations_character
+	ON npc_relations(character_id);
+
+	CREATE INDEX IF NOT EXISTS
+	idx_npc_relations_target
+	ON npc_relations(target_id);
+	"""
+
+	if not db.query(sql):
+		push_error(
+			"[DatabaseSchema] Migration 8: Failed to recreate npc_relations (frozen with-trust shape): "
+			+ db.error_message
+		)
+		return false
+
+	return true
 
 
 static func initialize(db) -> bool:
@@ -763,6 +1078,7 @@ static func initialize(db) -> bool:
 
 		WorldSchema,
 		LocationSchema,
+		HomeAssignmentSchema,
 
 		# NPC Core
 		NPCSchema,

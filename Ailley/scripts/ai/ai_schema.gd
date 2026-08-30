@@ -24,22 +24,24 @@ extends RefCounted
 # 動作（issue #88）。不在這張表上的 action 一律拒絕 —— 用白名單而不是
 # 黑名單，是因為黑名單漏掉的那一項就是被打穿的那一項。
 #
-# 刻意不含 spec 沒有的 "work"：《07》《11》的動作裡沒有它，嚴格照 spec。
-# 這只影響 LLM 回應的驗證——schedule 來源的任務（npc_schedule.json 轉換）是
-# agent.gd 直接建構、不經過這裡，既有的 work 排程不受影響；影響的是 LLM 之後
-# 不能自己決定叫角色去打工，只有寫死在 npc_schedule.json 的排程能觸發 work。
-#
 # "move_to" 沿用既有命名，不改成 spec 用的 "move"——兩者語意完全一樣，只是
 # 命名不同，改名要動 agent.gd／debug_console.gd／api.md 好幾處引用，不值得
 # 為了對齊規格書用詞冒這個風險
 #
 # "murmur"（自語，#162）原本 #88 population 時漏掉——《11》§1 拍板的 MVP 動作
 # 清單本來就有 murmur，只是那次沒被列進來，不是這次新拍板決定要加
+#
+# "work"（issue #700，2026-08-29 拍板）：原本刻意不含（《07》《11》拍板當時
+# 沒有它），因為執行層那時也還沒有 work 這個動作。#358 把 work_at() 接上執行層
+# 之後，這道白名單就只剩「LLM 選不到」這一層限制，跟 buy/gather 早就開放給
+# LLM 選是不對稱的——動態投放或玩家自建的角色因此完全沒有自主賺錢的手段
+# （buy 只會花錢，不會賺錢）。開放後 params 要求 place（跟 buy/gather 同一套
+# 驗證，見下方），執行層不變：_pursue_work_task() 已經是仲裁器既有路徑
 const ALLOWED_ACTIONS := [
 	# A 溝通類
 	"talk", "persuade", "give", "report", "shout", "perform", "murmur",
 	# B 工作與消費類
-	"hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink",
+	"hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink", "work",
 	# C 動作與移動類
 	"move_to", "sleep", "nap", "rest", "wash", "idle",
 	# D 敵對類
@@ -48,6 +50,9 @@ const ALLOWED_ACTIONS := [
 	"haul", "struggle",
 	# F 安葬類（#380，《規格書09》§3-2／§6）
 	"bury",
+	# G 邀約同行類（#576）：邀請另一個角色一起去某處，目標是會動的角色，
+	# 跟 talk／attack／bury 同一種「單純一個 target 字串」形狀
+	"follow",
 ]
 
 # 本輪真正有實作的動作。其餘動作驗證會過，但執行層要回 NOT_IMPLEMENTED，
@@ -92,7 +97,32 @@ const ALLOWED_ACTIONS := [
 # bury 是 #380 接上的：跟 attack 同一套「目標是另一個角色、一次執行完就退出
 # 任務池」模式（_pursue_bury_task()），差別是目標必須是已死亡且尚未安葬的
 # 屍體，且雙方都要在墓園錨點附近，見 Character.bury() 的檢查順序
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury"]
+#
+# hunt_small／hunt_large 是 #573 接上的：目標不是角色而是場上的 Animal 節點，
+# 一樣「走到旁邊、一次執行完就退出任務池」（_pursue_hunt_task()），但這兩個
+# 動作在 SUCCESS_PARAMS 表上——會擲骰，不是像 attack／bury 那樣硬規則過了就
+# 直接放行，見 agent.gd::resolve() 的對應分支
+#
+# gather 是 #574 接上的：跟 buy 同一套「先走到地點才執行」模式
+# （_pursue_gather_task()），差別是沒有販賣機這種場景物件——place 直接對應
+# PlaceAnchors 底下的「herb_field」錨點。跟 eat／drink／buy 不同的是 gather
+# 在 agent.gd 的 SUCCESS_PARAMS 上，resolve() 對它是真的擲骰，不是恆成功的
+# 硬規則檢查
+#
+# follow 是 #576 接上的：跟 talk／persuade 同一套「目標會動、每個 tick
+# 重新算移動目標」模式（_pursue_follow_task()），差別是沒有終點——只要
+# 還在 follow 狀態就持續逼近，停不停止完全交給跟隨者自己下一次決策判斷，
+# 引擎不寫死任何距離／逾時門檻（見 agent.gd 的 following_id 欄位說明）
+#
+# perform 是 #575 接上的：跟 work 同一套「立刻回傳 OK、協程跑完才收尾」的
+# 長動作模式（_pursue_perform_task()），差別是不用先到工作站——任意地點皆可，
+# 只認背包裡有沒有 instrument
+#
+# work 是 #700 接上的：執行層（_pursue_work_task() → work_at()）從 #358 就在，
+# 這次只是把它跟 buy／gather 一樣開放給 LLM 選。跟 gather 同一套「先走到地點
+# 才執行」模式，差別是地點錯了（沒有工作站）時失敗原因是 WORK_TARGET_NOT_FOUND
+# 而不是專屬的地點名檢查——見 agent.gd::_pursue_work_task() 的說明
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "nap", "rest", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "hunt_small", "hunt_large", "gather", "follow", "perform", "work"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -254,7 +284,15 @@ const MAX_LINE_CHARS := 200
 ## 100 字是上限不是底限：逼模型精簡寫完一條因果鏈，不是逼它湊字數
 const MAX_REASONING_CHARS := 100
 
-static func validate_dialogue(data: Dictionary) -> Dictionary:
+## task 是選填欄位（issue #658）：角色講的話若是真的當下就要兌現的承諾
+## （不是玩笑、不是還要對方答應的提議），可以順帶回傳一個任務，讓內容層
+## 講的話跟決策層實際會做的事對得上。跟 persuade 的 proposed_task（#227）
+## 共用同一套 _validate_task_shape()，不逐欄位另外驗一次——是不是「真的算
+## 承諾」交給模型自己判斷，這裡只驗證形狀，不逐字比對台詞裡有沒有特定關鍵字
+## （固定詞彙比對遲早漏接或誤判，語言表達方式千變萬化）。跟巢狀 persuade
+## 同理擋掉 action == "persuade"：對話裡口頭承諾「我要去說服誰」語意混亂，
+## 不是這個機制要支援的情境
+static func validate_dialogue(data: Dictionary, now_minutes: int) -> Dictionary:
 	if not data.has("line") or not data["line"] is String:
 		return _fail(ERROR_BAD_SHAPE)
 
@@ -278,8 +316,38 @@ static func validate_dialogue(data: Dictionary) -> Dictionary:
 			return _fail(ERROR_BAD_SHAPE)
 		end = data["end"]
 
-	return _ok({"line": line, "end": end})
+	var result := {"line": line, "end": end}
 
+	if data.has("task"):
+		var task: Variant = data["task"]
+		if not task is Dictionary:
+			return _fail(ERROR_BAD_SHAPE)
+		var task_dict := task as Dictionary
+		if task_dict.get("action") == "persuade":
+			return _fail(ERROR_BAD_SHAPE)
+		var task_result := _validate_task_shape(task_dict, now_minutes)
+		if not task_result["ok"]:
+			return _fail(task_result["error"])
+		result["task"] = task_result["data"]
+
+	return _ok(result)
+
+## 對話第一輪（turn 0，被搭話的那一方）專用：多開放 engage 欄位，可以選擇
+## 不理會這次搭話（issue #630——「他想講就講不想講就算了，跟真實社交一樣」）。
+## engage=false 時不強求 line/end 有內容，直接固定回一個空殼；其餘情況
+## （省略或 true）比照一般規則整個丟給 validate_dialogue()，正常回一句話，
+## 不要維護兩份幾乎一樣的檢查邏輯
+static func validate_dialogue_open(data: Dictionary, now_minutes: int) -> Dictionary:
+	if data.has("engage"):
+		if not data["engage"] is bool:
+			return _fail(ERROR_BAD_SHAPE)
+		if not data["engage"]:
+			return _ok({"engage": false, "line": "", "end": true})
+
+	var validated := validate_dialogue(data, now_minutes)
+	if validated["ok"]:
+		validated["data"]["engage"] = true
+	return validated
 
 # 單筆任務的通用邊界檢查：action 白名單、params 型別、talk/attack/give 的
 # 逐欄位檢查、expires_in_minutes 換算、priority／duration 範圍。從
@@ -302,15 +370,17 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 	if task.has("params") and not task["params"] is Dictionary:
 		return _fail(ERROR_BAD_SHAPE)
 
-	# talk／attack／bury／give 是目前有逐欄位驗證 params 的動作（talk 見 #90，
-	# attack 見 #159，give 見 #264，bury 見 #380）：沒有 target 的任務會被
-	# 各自的 _pursue_*_task() 誤判成「目標不存在」一路帶進任務池才發現，
-	# 不如在這一層就擋掉，跟這個檔案「外來內容一律不信任」的原則一致，
-	# 不等到執行層才發現資料是空的。bury 的 target 是要安葬的屍體（另一個
-	# 角色的名字），跟 attack 同一種「單純一個 target 字串」形狀，不需要
+	# talk／attack／bury／follow／give 是目前有逐欄位驗證 params 的動作（talk
+	# 見 #90，attack 見 #159，give 見 #264，bury 見 #380，follow 見 #576）：
+	# 沒有 target 的任務會被各自的 _pursue_*_task() 誤判成「目標不存在」
+	# 一路帶進任務池才發現，不如在這一層就擋掉，跟這個檔案「外來內容一律
+	# 不信任」的原則一致，不等到執行層才發現資料是空的。bury 的 target 是
+	# 要安葬的屍體、follow 的 target 是要跟隨的對象（都是另一個角色的
+	# 名字），跟 attack 同一種「單純一個 target 字串」形狀，不需要
 	# 像 give 那樣多驗 count。give 的 target 檢查獨立成下面一段，
-	# 因為它還要多驗 count 的範圍，跟 talk／attack／bury 共用的這段不同形狀
-	if ["talk", "attack", "bury"].has(action):
+	# 因為它還要多驗 count 的範圍，跟 talk／attack／bury／follow 共用的
+	# 這段不同形狀
+	if ["talk", "attack", "bury", "follow"].has(action):
 		var talk_params: Dictionary = task.get("params", {})
 		var target: Variant = talk_params.get("target")
 		if not target is String or (target as String).strip_edges().is_empty():
@@ -363,6 +433,39 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 		if not place is String or (place as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
 		buy_params["place"] = (place as String).strip_edges()
+
+	# move_to 動作的 params 驗證：跟 buy／gather 同一套「place 是必填
+	# 字串」——這個動作原本完全沒有逐欄位驗證，缺 place 或給空字串會直接
+	# 放行到執行層才發現走不到任何地方，跟這個檔案「外來內容一律不信任、
+	# 不等執行層才發現資料是空的」的原則不一致
+	if action == "move_to":
+		var move_params: Dictionary = task.get("params", {})
+		var move_place: Variant = move_params.get("place")
+		if not move_place is String or (move_place as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+		move_params["place"] = (move_place as String).strip_edges()
+
+	# gather 動作的 params 驗證（#574）：跟 buy 同一套「place 是必填字串」——
+	# 藥草叢目前是唯一的採集地點，但仍要求 LLM 明講去哪裡，place 錯了在
+	# 執行層才失敗、給理由（見 agent.gd::resolve() 的 "gather" 分支），跟這
+	# 個檔案不在驗證層幫忙補值的一貫做法一致
+	if action == "gather":
+		var gather_params: Dictionary = task.get("params", {})
+		var gather_place: Variant = gather_params.get("place")
+		if not gather_place is String or (gather_place as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+		gather_params["place"] = (gather_place as String).strip_edges()
+
+	# work 動作的 params 驗證（#700）：跟 gather 同一套「place 是必填字串」——
+	# 目前只有一個工作站，但仍要求 LLM 明講去哪裡；place 對不對得上實際的
+	# 工作站是執行層的事（見 agent.gd::_pursue_work_task()），這個檔案不在
+	# 驗證層幫忙補值或查表，跟 buy/gather 一貫的做法一致
+	if action == "work":
+		var work_params: Dictionary = task.get("params", {})
+		var work_place: Variant = work_params.get("place")
+		if not work_place is String or (work_place as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+		work_params["place"] = (work_place as String).strip_edges()
 
 	# #268／#290：expires_in_minutes（模型填的相對時長）現在有跟
 	# priority/duration 同一套量級上限，不再只有 is_finite()——
@@ -503,6 +606,36 @@ static func _validate_appointment(data: Variant, now_minutes: int) -> Dictionary
 	})
 
 
+## 打賞金額夾制範圍（#575）。上界參考 world/shop.gd 既有商品定價量級
+## （2～25），下界取 1（不接受 0 元的「假打賞」，那該用 give=false 表達）。
+## 沒有跟 WORK_PAYMENT（50，一次工作的收入）同量級——打賞是路人隨興給的
+## 小錢，不該比認真做一次工作賺得還多
+const TIP_MIN_AMOUNT := 1
+const TIP_MAX_AMOUNT := 20
+
+# tip 條件式欄位驗證（#575），跟 _validate_appointment() 同一種立場：give
+# 型別錯直接拒絕整包；give=false 時 amount 不重要，正規化成 0，不強制要求
+# 模型省略它。give=true 時 amount 必填且是有限數字，範圍外用 clampi() 夾制，
+# 不整包拒絕——理由跟 importance／intensity 那組「主觀強度不是安全問題」一樣，
+# 金額只是玩家/NPC 給多給少的偏好，不是需要嚴格把關的格式錯誤
+static func _validate_tip(data: Variant) -> Dictionary:
+	if not data is Dictionary:
+		return _fail(ERROR_BAD_SHAPE)
+	var tip := data as Dictionary
+
+	if not tip.has("give") or not tip["give"] is bool:
+		return _fail(ERROR_BAD_SHAPE)
+	var give: bool = tip["give"]
+	if not give:
+		return _ok({"give": false, "amount": 0})
+
+	var amount_value: Variant = tip.get("amount")
+	if not (amount_value is int or amount_value is float) or not is_finite(float(amount_value)):
+		return _fail(ERROR_BAD_SHAPE)
+
+	return _ok({"give": true, "amount": clampi(int(amount_value), TIP_MIN_AMOUNT, TIP_MAX_AMOUNT)})
+
+
 # persuade 專屬的 params 驗證（#227）：target／reason 必填非空字串，
 # proposed_task 選填——有填就重用 _validate_task_shape() 驗證它的形狀
 # （跟一般任務同一套邊界），不驗證內容合理性。reason 是說服的理由，自由
@@ -575,7 +708,8 @@ static func _validate_persuade_params(params: Variant, now_minutes: int) -> Dict
 # 也不要靜默吃一個看似合法、實際上錯誤的預設值（GDScript 規則：有預設值
 # 的參數後面不能接沒預設值的，allow_update_plan 只好跟著一起拿掉預設值）
 static func validate_tasks(
-	data: Dictionary, allow_update_plan: bool, now_minutes: int, allow_appointment: bool = false
+	data: Dictionary, allow_update_plan: bool, now_minutes: int, allow_appointment: bool = false,
+	allow_perform_tip: bool = false
 ) -> Dictionary:
 	if not data.has("tasks") or not data["tasks"] is Array:
 		return _fail(ERROR_BAD_SHAPE)
@@ -644,6 +778,16 @@ static func validate_tasks(
 		if not appointment_result["ok"]:
 			return _fail(appointment_result["error"])
 		appointment = appointment_result["data"]
+
+	# tip（#575）：跟 appointment 同一種條件式欄位態度——allow_perform_tip 為假
+	# 時模型硬塞了這個欄位也整包忽略，不影響其餘欄位；欄位真的存在時格式錯誤
+	# 讓整份回應失敗，不是單獨吞掉這一個欄位放行其餘部分
+	var tip: Variant = null
+	if allow_perform_tip and data.has("tip"):
+		var tip_result := _validate_tip(data["tip"])
+		if not tip_result["ok"]:
+			return _fail(tip_result["error"])
+		tip = tip_result["data"]
 
 	# update_plan：只有 allow_update_plan 為真時才驗證／放行。allow_update_plan
 	# 為假時就算模型硬塞了這個欄位也整包忽略、不因此讓回應失敗——模型不該
@@ -770,6 +914,7 @@ static func validate_tasks(
 		"current_goal": current_goal,
 		"current_goal_provided": current_goal_provided,
 		"appointment": appointment,
+		"tip": tip,
 	})
 
 
@@ -1062,7 +1207,8 @@ static func _validated_optional_line(data: Dictionary, key: String, max_chars: i
 # 給這三個欄位，多給的那兩個模型不會用到就好，不值得為了少給兩個欄位
 # 多一個判斷維度，見 issue #227 討論串
 static func plan_response_schema(
-	allow_update_plan: bool = false, has_pending_persuade: bool = false, allow_appointment: bool = false
+	allow_update_plan: bool = false, has_pending_persuade: bool = false, allow_appointment: bool = false,
+	allow_perform_tip: bool = false
 ) -> Dictionary:
 	var properties := {
 		"reasoning": {"type": "string", "maxLength": MAX_REASONING_CHARS},
@@ -1139,6 +1285,16 @@ static func plan_response_schema(
 				"game_time": {"type": "string"},
 			},
 			"required": ["with", "location", "game_time"],
+		}
+
+	if allow_perform_tip:
+		properties["tip"] = {
+			"type": "object",
+			"properties": {
+				"give": {"type": "boolean"},
+				"amount": {"type": "integer", "minimum": TIP_MIN_AMOUNT, "maximum": TIP_MAX_AMOUNT},
+			},
+			"required": ["give"],
 		}
 
 	return {
