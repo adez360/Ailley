@@ -112,7 +112,7 @@ WebSocket 在本專案有位置，但是**另一條線**：
 
 | 檔案 | 職責 |
 | --- | --- |
-| `ai_config.gd` | 讀 `user://ai_config.json`。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers`、全域的速率限制三個旋鈕，以及跟 `providers` 平行的頂層 `embedding` 區塊（見上方「Embedding」一節） |
+| `ai_config.gd` | 讀 `user://ai_config_<hash>.json`（hash 依 checkout 隔離，見 [[存檔]]「存哪」）。金鑰**永不進 log、永不進錯誤訊息**。檔案不存在 → `enabled = false`，全系統走 fallback。解析出一組具名 `providers`、全域的速率限制三個旋鈕，以及跟 `providers` 平行的頂層 `embedding` 區塊（見上方「Embedding」一節） |
 | `ai_service.gd` | **對話／決策唯一碰網路的地方**。autoload。節點池、佇列、逾時、速率限制、重試——只打玩家自己選的 Local／Cloud 對話 provider |
 | `embedding_service.gd` | **L3 語意檢索唯一碰網路的地方**（issue #571）。autoload，跟 `ai_service.gd` 分開、各自獨立打各自的端點——這裡永遠打本機的 embedding-only server，不受玩家的對話 provider 選擇影響，也不共用 `ai_service.gd` 的節點池／佇列／速率限制（呼叫頻率遠低於對話，見《03》§7 觸發時機表，不需要那一整套） |
 | `ai_schema.gd` | 回應驗證：`JSON.parse_string` → null 檢查 → 逐欄位型別檢查 → `action` 白名單 |
@@ -644,7 +644,7 @@ autoload 已註冊，主控台加了 `ai` 指令。
   `_dialogue_calls_today`／`_creation_calls_today`），`CREATION` 是建角一次性生成
   （words_to_creator，#682），預設 `SCHEDULED`——忘了指定的呼叫端落在保守那邊，
   不會意外拿到無限額度
-- 速率限制旋鈕搬進 `user://ai_config.json`（皆可設 0＝不限），預設值與規格數值
+- 速率限制旋鈕搬進 `user://ai_config_<hash>.json`（皆可設 0＝不限），預設值與規格數值
   見 `ai/api.md`（`AIConfig`）／規格書《13》§5
 - 回傳一律 `{"ok": bool, "data": Dictionary, "error": String}`，呼叫端一律 `await`
 - 4xx 不重試；網路錯誤／5xx 重試 1 次

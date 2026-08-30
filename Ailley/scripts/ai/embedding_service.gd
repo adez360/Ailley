@@ -37,7 +37,7 @@ func _ready() -> void:
 	reload_config()
 
 
-## 跟 AIService.reload_config() 同一個理由：玩家改了 user://ai_config.json
+## 跟 AIService.reload_config() 同一個理由：玩家改了 user://ai_config_<hash>.json
 ## 的 embedding 區塊之後不必重開遊戲
 func reload_config() -> void:
 	_config = AIConfig.load_from_user()

@@ -43,10 +43,20 @@ var _turn_waiting := false
 ## vision.get_visible_characters()，見 _get_interact_candidates() 的說明
 var _nearby_interactables: Array[Node2D] = []
 
-## Player 的 character_id 跨場次持久化檔案，跟世界／角色存檔（user://saves/
+## Player 的 character_id 跨場次持久化檔案，跟世界／角色存檔（user://saves_<hash>/
 ## characters|worlds/）分開放——這個檔案不屬於 SaveService 那套整包讀寫／
 ## 版本／鎖的機制，它從頭到尾只有一個值，寫一次之後只會被讀取（issue #399）
-const _PLAYER_ID_PATH := "user://saves/player_id.txt"
+##
+## user:// 只依 project.godot 的 project name 解析，不分 worktree/checkout，
+## 跟 DatabaseManager.DATABASE_PATH（issue #334）同一個病根：用這個 checkout
+## 的 res:// 絕對路徑算完整 sha256 接在子目錄後，讓不同 checkout 落地成不同
+## 實體檔案，不會互相覆寫（issue #769）
+var _PLAYER_ID_PATH := _compute_player_id_path()
+
+
+static func _compute_player_id_path() -> String:
+	var checkout_hash := ProjectSettings.globalize_path("res://").sha256_text()
+	return "user://saves_%s/player_id.txt" % checkout_hash
 
 
 func _ready() -> void:
