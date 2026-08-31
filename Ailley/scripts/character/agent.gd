@@ -2941,7 +2941,7 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 	# _reevaluate_once() 兩條 STUCK_RETRY 補漏分支（都掛在 best.is_empty()
 	# 上）完全碰不到這個情境。實測（Test B 診斷測試）踩到：一筆完成的 work
 	# 任務卡成殭屍，之後 51 遊戲天沒有任何新任務被選中，直到力竭反射介入
-	var current_still_valid := not _current_task.get("_logged", false) \
+	var current_still_valid := not bool(_current_task.get("_logged", false)) \
 		and not _is_expired(_current_task, now_minutes) \
 		and _in_window_or_unwindowed(_current_task, now) \
 		and _preconditions_met(_current_task)
