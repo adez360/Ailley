@@ -310,9 +310,12 @@ var _reacting := false
 # _consider_switch() 靠它決定要用 MIN_COMMIT 還是 LLM_WAIT_MIN_COMMIT
 var _awaiting_decision := false
 
-# 上次因為「任務池跟目前任務都空」補打一次保底重排的遊戲分鐘（issue #695，
-# 見 _reevaluate_once() 的 STUCK_RETRY_INTERVAL_MINUTES 節流）。初始值設成
-# 負的節流間隔，保證出生後第一次真的卡住時不用等滿一個間隔就能立刻補一次
+# 上次因為「選不出任何可執行任務」補打一次保底重排的遊戲分鐘（issue #695、
+# #796）：涵蓋兩種來源——任務池真的空（_tasks.is_empty()），或池子非空但
+# 候選全被視窗／前提／retry backoff 擋住、best 為空。兩條分支共用同一顆變數
+# 節流（見 _reevaluate_once() 的 STUCK_RETRY_INTERVAL_MINUTES，72 分鐘配額
+# 的推導綁在它上面）。初始值設成負的節流間隔，保證出生後第一次真的卡住時
+# 不用等滿一個間隔就能立刻補一次
 var _last_stuck_retry_minute := -STUCK_RETRY_INTERVAL_MINUTES
 
 # 長動作檢查點決策請求還有沒有一份在飛（issue #336）。跟 _awaiting_decision
@@ -2889,6 +2892,26 @@ func _reevaluate_once() -> void:
 		if memory != null:
 			memory.l1.clear()
 		request_sleep_reflection()
+
+	# STUCK_RETRY 補漏（issue #796）：上面 _tasks.is_empty() 那條節流分支只防
+	# 「池子真的空」。池子裡有任務，但每一筆都被視窗／前提／schedule retry
+	# backoff 擋住時，best 照樣為空，一樣會卡死問不到下一次決策——這正是
+	# _tasks.is_empty() 那條防不到的縫隙。_current_task 的兩種狀態都要接：
+	# 已被清空；或任務做滿 duration 後只 _remove_task()＋_log_task_ended()、
+	# 沒被換掉（_logged == true），之後那通決策又失敗或回空，手上就留著一筆
+	# 已完成的任務，等它自然過期最長要 7 個遊戲日（expires 預設上限）
+	#
+	# 位置刻意放在兩個睡眠轉換區塊之後（#812 review）：剛睡醒那通若真的發出
+	# （_request_next_decision() 在第一個 await 前同步設 _awaiting_decision），
+	# #89 的 allow_update_plan=true 與 #479 的爽約事實句補送都會搭上那一通，
+	# 這裡再被 not _awaiting_decision 自然擋住，不搶信封、也不消耗節流額度。
+	# 跟上面那條互斥（那條會 return，不會跑到這裡），共用同一顆
+	# _last_stuck_retry_minute，不會重複觸發
+	if best.is_empty() and (_current_task.is_empty() or _current_task.get("_logged", false)) \
+			and llm_decision_enabled and not _awaiting_decision \
+			and now_minutes - _last_stuck_retry_minute >= STUCK_RETRY_INTERVAL_MINUTES:
+		_last_stuck_retry_minute = now_minutes
+		_request_next_decision(_today_plan_needs_new_goal())
 
 	_pursue_current_task()
 
