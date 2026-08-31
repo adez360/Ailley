@@ -34,7 +34,7 @@ extends RefCounted
 ## CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
-const CURRENT_VERSION := 11
+const CURRENT_VERSION := 12
 
 
 ## 版本落後時依序套用的變更，每個 entry：
@@ -97,6 +97,11 @@ const MIGRATIONS: Array[Dictionary] = [
 		"version": 11,
 		"name": "Add npc_relations.relations_met_count (issue #651)",
 		"apply": Callable(DatabaseSchema, "_migrate_v11_add_relations_met_count")
+	},
+	{
+		"version": 12,
+		"name": "Add location.pos_x/pos_y for dynamically-created homes (issue #751)",
+		"apply": Callable(DatabaseSchema, "_migrate_v12_add_location_position")
 	}
 ]
 
@@ -833,6 +838,45 @@ static func _migrate_v11_add_relations_met_count(db) -> bool:
 			+ db.error_message
 		)
 		return false
+
+	return true
+
+
+## Migration 12：location 補 pos_x／pos_y（issue #751）。座標的單一事實來源
+## 一直是場景裡的 Marker2D（places.gd 檔頭說明），原本 5 間靜態家的座標故意
+## 不在 DB 重複存一份。動態生成的家沒有對應的 .tscn 節點能保存座標——
+## 遊戲重開後 level.tscn 只會載入原始的 5 個錨點，動態新增的節點與座標
+## 一起消失，讀檔後房子解析不到。這兩欄只給動態生成的家用，允許 NULL：
+## 靜態 5 間座標仍由場景決定，不寫這兩欄，跟 migration 8
+## 的 world_character_state.following_npc_id 同一種簡單 ADD COLUMN 案例，
+## 不需要整表重建
+static func _migrate_v12_add_location_position(db) -> bool:
+	if not db.query("PRAGMA table_info(location);"):
+		push_error(
+			"[DatabaseSchema] Migration 12: Failed to read columns of location: "
+			+ db.error_message
+		)
+		return false
+
+	var existing_columns: Array = (db.query_result as Array).map(
+		func(row): return row.get("name", "")
+	)
+
+	if not existing_columns.has("pos_x"):
+		if not db.query("ALTER TABLE location ADD COLUMN pos_x REAL;"):
+			push_error(
+				"[DatabaseSchema] Migration 12: Failed to add pos_x: "
+				+ db.error_message
+			)
+			return false
+
+	if not existing_columns.has("pos_y"):
+		if not db.query("ALTER TABLE location ADD COLUMN pos_y REAL;"):
+			push_error(
+				"[DatabaseSchema] Migration 12: Failed to add pos_y: "
+				+ db.error_message
+			)
+			return false
 
 	return true
 
