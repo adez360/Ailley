@@ -3748,11 +3748,12 @@ func _pursue_eat_task() -> void:
 	if proceed:
 		food_item = str(_find_food_slot().get("item_id", ""))
 		var reason := eat()
-		last_action_result = reason
 		if reason != Character.EAT_OK:
+			last_action_result = _eat_failure_reason_text(reason)
 			push_warning("Agent %s: eat 失敗（%s）" % [character_name, reason])
 			_mark_schedule_retry_backoff(_current_task)
 		else:
+			last_action_result = reason
 			var food_name := ItemDatabase.get_display_name(food_item)
 			_push_daily_event("你吃了%s。" % food_name)
 		# 連續失敗事實句涵蓋所有實際執行的動作，不分來源——跟 talk 的既有規則
@@ -3795,11 +3796,12 @@ func _pursue_drink_task() -> void:
 	if proceed:
 		drink_item = str(_find_drink_slot().get("item_id", ""))
 		var reason := drink()
-		last_action_result = reason
 		if reason != Character.DRINK_OK:
+			last_action_result = _drink_failure_reason_text(reason)
 			push_warning("Agent %s: drink 失敗（%s）" % [character_name, reason])
 			_mark_schedule_retry_backoff(_current_task)
 		else:
+			last_action_result = reason
 			var drink_name := ItemDatabase.get_display_name(drink_item)
 			_push_daily_event("你喝了%s。" % drink_name)
 		# 不分來源都記——理由同 _pursue_eat_task()
@@ -4090,6 +4092,35 @@ func _buy_failure_reason_text(reason: String, place: String) -> String:
 			return "背包已滿，無法購買"
 		_:
 			return "購買失敗（%s）" % reason
+
+# issue #820：eat()／drink() 的失敗代碼跟修 #795 之前的 buy_from() 是同一種
+# 疏漏——resolve() 對 llm 來源任務已經先擋掉「背包沒有食物/飲品」這條最常見
+# 的路（回中文），但 schedule 來源任務不走 resolve()，以及 EAT_NO_STATS 這種
+# resolve() 沒檢查的情況，還是會讓 eat()/drink() 的原始英文代碼直接進
+# last_action_result。這裡補齊翻譯，並在「沒有食物/飲品」這條順手提示可以去
+# tavern 買，把 eat/drink 缺貨跟 buy 動作串起來（Test A 診斷測試發現 buy 33
+# 次決策從未被選過，懷疑跟 LLM 收不到「該去買」的訊號有關）
+func _eat_failure_reason_text(reason: String) -> String:
+	match reason:
+		Character.EAT_NO_INVENTORY:
+			return "沒有背包，無法吃東西"
+		Character.EAT_NO_FOOD:
+			return "背包裡沒有食物，可以去 tavern 買一些"
+		Character.EAT_NO_STATS:
+			return "沒有生理數值可以恢復，無法吃東西"
+		_:
+			return "吃東西失敗（%s）" % reason
+
+func _drink_failure_reason_text(reason: String) -> String:
+	match reason:
+		Character.DRINK_NO_INVENTORY:
+			return "沒有背包，無法喝東西"
+		Character.DRINK_NO_DRINK:
+			return "背包裡沒有飲品，可以去 tavern 買一些"
+		Character.DRINK_NO_STATS:
+			return "沒有生理數值可以恢復，無法喝東西"
+		_:
+			return "喝東西失敗（%s）" % reason
 
 # gather 任務的執行（#574）：跟 _pursue_work_task() 同理，先走到地點錨點，
 # 抵達後才執行；跟 eat／drink／buy 同理，呼叫一次就完成，不像 nap 那樣佔滿
