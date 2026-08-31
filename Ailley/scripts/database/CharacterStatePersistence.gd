@@ -2386,6 +2386,7 @@ func _next_new_home_location_id() -> String:
 ## 每一間家（靜態＋動態）的距離都 > HOME_MIN_SEPARATION。用第一間現有的家
 ## 當搜尋起點，一圈圈往外找（跟 NavGrid.nearest_free_cell() 同一套「掃外框」
 ## 手法，這裡多一條距離篩選）。找不到回傳 Vector2.INF
+func _find_home_placement() -> Vector2:
 
 	var nav = get_tree().get_first_node_in_group("nav_grid")
 	if nav == null:
