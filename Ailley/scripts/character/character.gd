@@ -2074,10 +2074,19 @@ func load_save_data(data: Dictionary) -> void:
 	var loaded_dead: Variant = data.get("is_dead", false)
 	is_dead = loaded_dead if loaded_dead is bool else false
 	if is_dead:
+		# is int or is float：JsonSaveService（目前生效中的 SaveService，見
+		# project.godot autoload）走 JSON.parse_string() 讀檔，所有數字一律回傳
+		# TYPE_FLOAT（沒有 int/float 之分，同一個理由見 game_manager.gd
+		# apply_world_save_data() 讀 hour/minute 那段註解）。這裡原本只接受
+		# is int，讀回來的 float 值直接被判定成「型別不對」，整個 fallback 回
+		# 節點剛生成時的預設值（death_tick=-1／death_day=-1）——不是保留存檔前
+		# 的值，因為讀檔當下節點本來就是全新建立的，墓碑面板因此顯示「死於
+		# 第 -1 天」。跟下面 corpse_decay 用同一套 is int or is float 判斷、
+		# int() 轉型（issue #857）
 		var loaded_tick: Variant = data.get("death_tick", death_tick)
-		death_tick = loaded_tick if loaded_tick is int else death_tick
+		death_tick = int(loaded_tick) if (loaded_tick is int or loaded_tick is float) else death_tick
 		var loaded_day: Variant = data.get("death_day", death_day)
-		death_day = loaded_day if loaded_day is int else death_day
+		death_day = int(loaded_day) if (loaded_day is int or loaded_day is float) else death_day
 		var loaded_at: Variant = data.get("death_at", death_at)
 		death_at = loaded_at if loaded_at is String else death_at
 		var loaded_cause: Variant = data.get("death_cause", death_cause)
@@ -2100,8 +2109,11 @@ func load_save_data(data: Dictionary) -> void:
 		grave_id = loaded_grave if (loaded_grave == null or loaded_grave is String) else null
 		var loaded_buried_by: Variant = data.get("buried_by", null)
 		buried_by = loaded_buried_by if (loaded_buried_by == null or (loaded_buried_by is String and not loaded_buried_by.is_empty())) else null
+		# 同上 death_tick／death_day：JSON 讀回來的整數是 float，is int 判斷
+		# 會整條 fallback 到 -1（issue #857）
 		var loaded_buried_tick: Variant = data.get("buried_tick", -1)
-		buried_tick = loaded_buried_tick if (loaded_buried_tick is int and (loaded_buried_tick == -1 or loaded_buried_tick >= 0)) else -1
+		var buried_tick_is_number := loaded_buried_tick is int or loaded_buried_tick is float
+		buried_tick = int(loaded_buried_tick) if (buried_tick_is_number and (int(loaded_buried_tick) == -1 or int(loaded_buried_tick) >= 0)) else -1
 		var loaded_anonymous: Variant = data.get("is_anonymous", false)
 		is_anonymous = loaded_anonymous if loaded_anonymous is bool else false
 
