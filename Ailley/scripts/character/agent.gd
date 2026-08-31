@@ -2558,6 +2558,26 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 	if is_dead:
 		return
 
+	# 入眠觸發（issue #827，《10》§6.4「模型失效處理」：模型下架／額度用盡／
+	# 格式錯誤時視同離線，走 §4.5 入眠流程）。只在「本來就該有 AI 決策」的
+	# 角色身上檢查——沒開 llm_decision 的角色本來就是排程模式，不算「離線」，
+	# 那是另一種正常狀態，不該被當成入眠。直接查現成的 readiness 快照
+	# （跟 main_scene.gd 開機判斷「排程模式」HUD 指示器同一個依據），不另開
+	# 一條新的偵測管線。ready 恢復時這裡自動退出，不需要另外補一個「重新
+	# 連線」的呼叫端——每遊戲分鐘都會重新檢查一次
+	if llm_decision_enabled:
+		var provider_ready := bool(AIService.get_readiness(get_provider_name()).get("ready", false))
+		if not provider_ready and not is_offline_asleep:
+			enter_offline_sleep("model_unavailable")
+		elif provider_ready and is_offline_asleep:
+			exit_offline_sleep()
+
+	# 入眠中不重算任何東西——跟死屍同一種「石化，不再仲裁」的立場，差別是
+	# 入眠不是終局狀態，恢復連線後 _is_movement_locked() 自然解除、下一次
+	# tick 這個 if 就不會再擋
+	if is_offline_asleep:
+		return
+
 	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務
 	# 會用新任務的 current_state 結算最後一分鐘
 	_apply_action_recovery()
