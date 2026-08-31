@@ -78,7 +78,7 @@ func _maybe_launch() -> void:
 		status_reason = ""
 		return
 
-	var provider := config.get_local_provider()
+	var provider: AIConfig.Provider = config.get_local_provider()
 	var port := _port_from_url(provider.base_url, 8080)
 	var sidecar_dir := _sidecar_dir()
 	var binary_path := sidecar_dir.path_join(_platform_subdir()).path_join(_binary_name())
