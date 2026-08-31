@@ -2853,6 +2853,18 @@ func _reevaluate_once() -> void:
 		# 建構方式保證連續，碰不到；有間隔的任務才會
 		_clear_current_task(true)
 
+	# STUCK_RETRY 補漏（issue #796）：上面 _tasks.is_empty() 那條節流分支只防
+	# 「池子真的空」。池子裡有任務，但每一筆都被視窗／前提／schedule retry
+	# backoff 擋住，導致 best 連續多輪為空、_current_task 也是空的，一樣會
+	# 卡死問不到下一次決策——這正是 _tasks.is_empty() 那條防不到的縫隙。用
+	# 同一顆 _last_stuck_retry_minute 節流，跟上面那條互斥（那條會 return，
+	# 不會跑到這裡），不會重複觸發
+	if best.is_empty() and _current_task.is_empty() \
+			and llm_decision_enabled and not _awaiting_decision \
+			and now_minutes - _last_stuck_retry_minute >= STUCK_RETRY_INTERVAL_MINUTES:
+		_last_stuck_retry_minute = now_minutes
+		_request_next_decision(_today_plan_needs_new_goal())
+
 	# 剛睡醒（#89 觸發時機之一，重寫整份 today_plan）：這次重算進來的時候
 	# 在睡，選完任務之後不再是了，就是這個轉換瞬間。只在真正換出 sleep 的
 	# 那一次觸發，不會每個遊戲分鐘都重問——_was_sleeping 是這次呼叫一開頭
