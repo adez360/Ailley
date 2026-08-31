@@ -1,5 +1,13 @@
 extends Node
 
+## deploy_from_library(as_player=true) 換掉場上 "player" 分組成員（換身、
+## 讀檔還原化身）時發出，帶新的化身節點。UI 端（hotbar.gd／inventory_panel.gd
+## 底下的 InventorySlotButton）靠這個重新把 Inventory.changed 接到新節點的
+## Inventory 上——舊節點被 deploy_from_library() queue_free() 掉，訂在舊
+## Inventory 上的連線跟著消失，不會自己搬到新節點（bug 現象：換角後快捷欄
+## 卡著舊角色的背包內容，新角色買東西也不會刷新畫面）
+signal player_body_changed(new_player: Character)
+
 ## 目前只有一個世界，MVP 沒有建立/選擇世界的流程，先固定一個 id 頂著——
 ## 真的要支援多世界時，這裡才需要變成可選清單
 const DEFAULT_WORLD_ID := "world_001"
@@ -460,6 +468,9 @@ func deploy_from_library(id: String, as_player: bool = false) -> Character:
 
 	entry["deployed"] = true
 	activate_llm_decision_if_ready(character)
+
+	if as_player:
+		player_body_changed.emit(character)
 
 	return character
 

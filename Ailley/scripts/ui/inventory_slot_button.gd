@@ -24,8 +24,13 @@ extends TextureButton
 ## slot_index 是這格對應到 Inventory.slots 的絕對索引（0-35，快捷欄 0-8、
 ## 主背包 9-35，見 inventory.gd）。跟 hotbar.gd／inventory_panel.gd 一樣不快取
 ## player 節點——每次刷新當下才查，避免角色重生、場景切換後拿到卡死的舊參照。
-## 只有 changed 的連線是綁在開場那一個 Inventory 上的：目前沒有任何角色重生
-## 或 despawn 的路徑，真的做出來時這裡要跟著重連。
+##
+## changed 的連線綁在目前查到的那個 Inventory 實例上，換角（deploy_from_library
+## queue_free 舊 player、生出新 player）時舊實例連同連線一起消失，新實例的
+## changed 沒有人接，格子會卡著換角前最後一次刷新的畫面（實測重現過：換角後
+## 快捷欄還顯示舊角色的物品，新角色買東西畫面也不會刷新）。靠
+## GameManager.player_body_changed 訊號在換角當下重新接一次，_connected_inventory
+## 記著目前接的是哪個實例，避免每次都重複 connect。
 ##
 ## 拖放搬移物品（#304）：放到空格呼叫 Inventory.move_slot()，放到已佔用的格
 ## 呼叫 swap_slot()，格子本身不算堆疊、不判斷能不能放——那是資料層的事。
@@ -39,6 +44,7 @@ const MAX_NAME_CHARS := 2		# 11px × 2 字 = 22px 進得去 26px 格；字級 NA
 var slot_index := -1
 
 var _label: Label
+var _connected_inventory: Inventory = null	# 目前 changed 訊號接在哪個實例上，見檔頭「changed 的連線」
 
 
 func _ready() -> void:
@@ -65,8 +71,22 @@ func _ready() -> void:
 	# _ready() 由場景樹順序決定，這一幀不保證找得到 player
 	await get_tree().process_frame
 
+	GameManager.player_body_changed.connect(_rebind_inventory)
+	_rebind_inventory()
+
+## 換角時重新把 changed 接到目前的 Inventory 實例上（見檔頭說明）。
+## 也是 _ready() 首次連線的路徑，跟換角走同一套，不用另外寫一份。
+## `_new_player` 收 player_body_changed 帶的新化身節點，但這裡固定重新用
+## get_first_node_in_group("player") 查，不直接用帶進來的節點——理由跟
+## _get_inventory() 不快取 player 一致；參數只是為了配 signal.connect()
+## 的呼叫簽章，實機測過 Godot 不會自動丟掉多餘引數，方法收的參數數量必須對得上
+func _rebind_inventory(_new_player: Character = null) -> void:
 	var inventory := _get_inventory()
-	if inventory != null:
+	if inventory == _connected_inventory:
+		return
+	_connected_inventory = inventory
+	# 舊實例已經被 queue_free()，不用手動 disconnect——物件釋放時連線自動清掉
+	if inventory != null and not inventory.changed.is_connected(_refresh_label):
 		inventory.changed.connect(_refresh_label)
 	_refresh_label()
 
