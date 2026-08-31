@@ -191,6 +191,11 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 		character.character_id = identity["character_id"]
 	if identity.has("character_name"):
 		character.character_name = identity["character_name"]
+	# age 是 Character 基底欄位（Player 也有，跟 decision_source／model_name
+	# 那種 Agent 專屬欄位不同），走跟 character_name 一樣的識別資料管線即可
+	# （issue #837）
+	if identity.has("age"):
+		character.age = int(identity["age"])
 
 	# words_to_creator 只有角色庫投放這條路徑會給（那份是建角當下就生成好、
 	# 可能已人工檢閱過的內容）。要在 add_child() 觸發 _ready() 之前設好——
@@ -443,6 +448,7 @@ func deploy_from_library(id: String, as_player: bool = false) -> Character:
 		"character_id": entry["id"],
 		"character_name": entry["character_name"],
 		"words_to_creator": entry.get("words_to_creator", ""),
+		"age": entry.get("age", 30),
 	})
 
 	# decision_source／model_name 是 agent.gd 的 @export 欄位，player.gd 沒有
@@ -916,6 +922,7 @@ func _respawn_character(character_id: String, entry: Dictionary) -> void:
 		"character_id": character_id,
 		"character_name": library_entry.get("character_name", ""),
 		"words_to_creator": library_entry.get("words_to_creator", ""),
+		"age": library_entry.get("age", 30),
 	})
 
 	# decision_source／model_name 是投放後不可改的欄位（《06》），還原時要跟著
