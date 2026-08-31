@@ -569,11 +569,13 @@ func _decide_velocity() -> Vector2:
 
 	var input_dir := get_input_direction()
 
-	# 手動操作優先，直接中斷自動移動
+	# 手動操作優先，直接中斷自動移動。乘 effective_speed() 而非 SPEED——
+	# 搬運屍體時要吃到 _speed_multiplier 減速，跟 _follow_hauler() 用的
+	# 是同一個倍率，玩家跟被搬運目標才會同速（issue #822）
 	if input_dir != Vector2.ZERO:
 		if is_moving():
 			stop_moving()
-		return input_dir * SPEED
+		return input_dir * effective_speed()
 
 	return super()
 
