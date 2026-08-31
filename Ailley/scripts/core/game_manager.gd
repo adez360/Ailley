@@ -80,6 +80,8 @@ func _ready():
 	load_character_templates()
 	# 跨遊戲日自動存檔（#359），見下方 _on_day_changed_autosave() 的時序說明
 	GameClock.day_changed.connect(_on_day_changed_autosave)
+	# 低頻背景重試 AI 就緒狀態（#824），見下方 recheck_ai_readiness() 的說明
+	GameClock.day_changed.connect(_on_day_changed_ai_readiness_recheck)
 
 # 讀取NPC行程
 func load_npc_data():
@@ -525,6 +527,50 @@ func activate_llm_decision_if_ready(character: Character) -> void:
 	# （Policy.SCHEDULED）是各自獨立的冷卻池，不用像 issue #682 之前那樣
 	# 等一輪冷卻才能開決策
 	agent.debug_set_llm_decision(true)
+
+
+## #824：對場上所有 `not llm_decision_enabled` 的既有 Agent 補打一次就緒探測。
+## `_apply_startup_ai_state()`（main_scene.gd）跟 `activate_llm_decision_if_ready()`
+## 都只在各自的觸發時機（開場／單一角色投放）補打一次，救不了「已經在場上、
+## 早就被判定失敗」的既有角色——這個函式是給遊戲執行期間任何時候呼叫的第三個
+## 入口，同一套「readiness 快照可能過期，補打一次 reload_config_and_wait()
+## 再重判」邏輯（issue #728），批次套用在整批既有 Agent 上。
+##
+## 沒有任何角色卡在未就緒時直接回傳、完全不打網路——這是低頻背景重試
+## （`_on_day_changed_ai_readiness_recheck()`）不會造成不必要網路負載的關鍵：
+## 每遊戲日觸發一次，但只有真的有角色卡住時才會真的送出探測請求。
+func recheck_ai_readiness() -> Dictionary:
+	var not_ready_agents: Array[Agent] = []
+	for node in get_tree().get_nodes_in_group("agents"):
+		var agent := node as Agent
+		if agent != null and not agent.llm_decision_enabled:
+			not_ready_agents.append(agent)
+
+	if not_ready_agents.is_empty():
+		return {"checked": 0, "recovered": 0, "reasons": {}}
+
+	await AIService.reload_config_and_wait()
+
+	var recovered := 0
+	var reasons := {}
+	for agent in not_ready_agents:
+		if not is_instance_valid(agent):
+			continue
+		var readiness := AIService.get_readiness(agent.get_provider_name())
+		if bool(readiness.get("ready", false)):
+			agent.debug_set_llm_decision(true)
+			recovered += 1
+		else:
+			reasons[str(readiness.get("reason", ""))] = true
+
+	return {"checked": not_ready_agents.size(), "recovered": recovered, "reasons": reasons}
+
+
+## 低頻背景重試（issue #824「建議」的第二個選項）：跨遊戲日觸發，不是 tick
+## 輪詢。跟 `_on_day_changed_autosave()` 同一個理由用 call_deferred()——訊號
+## 處理當下不適合直接跑非同步流程
+func _on_day_changed_ai_readiness_recheck(_day: int) -> void:
+	call_deferred("recheck_ai_readiness")
 
 
 # ---- 存檔 ----
