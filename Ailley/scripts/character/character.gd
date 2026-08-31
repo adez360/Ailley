@@ -363,6 +363,9 @@ var _outline: ShaderMaterial = null
 
 
 func _ready() -> void:
+	# GRAVE_SLOT_OFFSETS 的個數就是墓位上限（兩者改動要一起改，見常數註解）——
+	# 個數兜不起來時越早炸越好，不然墓位會配置到沒有偏移座標的索引
+	assert(GRAVE_SLOT_OFFSETS.size() == CEMETERY_GRAVE_CAPACITY)
 	# 場景裡固定的 NPC，身分是設計時決定好的資料——先用節點名查 npc_schedule.json 的
 	# identities（跟 agent.gd::_load_schedule() 查 assignments 同一個模式）。查到就用，
 	# 讓 character_id 跨場次穩定（relationships 拿它當 key，每次重開都變等於認識的人全歸零）。
@@ -2149,7 +2152,12 @@ func load_save_data(data: Dictionary) -> void:
 		# 缺席預設 -1（未分配），不是沿用目前值，跟 is_buried／grave_id 同一個理由——
 		# 這是這則 issue 新增的欄位，既有存檔都沒有這個 key
 		var loaded_slot: Variant = data.get("grave_slot_index", -1)
-		grave_slot_index = loaded_slot if (loaded_slot is int and loaded_slot >= -1 and loaded_slot < GRAVE_SLOT_OFFSETS.size()) else -1
+		# 同 death_tick／death_day（issue #857）：JSON 讀回來的整數一律是 float
+		# （JsonSaveService 走 JSON.parse_string()），is int 判斷會整條 fallback
+		# 到 -1，墓位索引讀檔後遺失、下次安葬疊墓。比照同一套 is int or is float
+		# + int() 轉型
+		var slot_is_number := loaded_slot is int or loaded_slot is float
+		grave_slot_index = int(loaded_slot) if (slot_is_number and int(loaded_slot) >= -1 and int(loaded_slot) < GRAVE_SLOT_OFFSETS.size()) else -1
 		var loaded_buried_by: Variant = data.get("buried_by", null)
 		buried_by = loaded_buried_by if (loaded_buried_by == null or (loaded_buried_by is String and not loaded_buried_by.is_empty())) else null
 		var loaded_buried_tick: Variant = data.get("buried_tick", -1)
