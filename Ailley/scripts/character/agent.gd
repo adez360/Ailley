@@ -3973,7 +3973,9 @@ func _pursue_buy_task() -> void:
 		stop_moving()
 		_pursued_place = ""
 		_pursuit_done = false
-		last_action_result = Character.BUY_TARGET_NOT_FOUND
+		# 失敗原因同樣翻成中文——這個守衛是「LLM 填了不是商店的 place」最
+		# 常見的失敗路徑，不能把英文常數原樣塞進 last_action_result
+		last_action_result = _buy_failure_reason_text(Character.BUY_TARGET_NOT_FOUND, place)
 		if failed_task_source == "llm":
 			_remove_task(failed_task_id)
 		else:
@@ -4067,10 +4069,12 @@ func _pursue_buy_task() -> void:
 # ITEM_NOT_FOUND／NOT_ENOUGH／NO_SPACE 等）先前原封不動塞進
 # last_action_result，下一輪 prompt 就是一串英文常數——走路失敗那幾條
 # 分支（「走不到商店，無法購買」）早就是手寫中文，買東西失敗卻沒有，
-# 純粹是疏漏。這裡補齊中文人話，ITEM_NOT_FOUND 額外列出這個地點真正
-# 賣什麼，讓 LLM 下一輪決策能直接照著清單修正，而不是引擎自己猜一個
-# 「最接近」的品項幫它買——見 #795 的討論，模糊比對等於引擎替 AI 決定
-# 它真正想要什麼，這裡只給事實，選擇權留給 LLM 自己
+# 純粹是疏漏。這裡補齊中文人話，ITEM_NOT_FOUND 額外用 Shop.list_items()
+# 列出這個地點真正賣什麼，同時給 item_id 與中文顯示名——AISchema 只擋
+# 空字串、不做顯示名→id 正規化，只給顯示名的話 LLM 照字面填中文會再撞
+# 一次同樣的錯。不做模糊比對／引擎幫它選「最接近」的品項直接買——見
+# #795 的討論，那等於引擎替 AI 決定它真正想要什麼，這裡只給事實，
+# 選擇權留給 LLM 自己
 func _buy_failure_reason_text(reason: String, place: String) -> String:
 	match reason:
 		Character.BUY_TARGET_NOT_FOUND:
@@ -4081,8 +4085,8 @@ func _buy_failure_reason_text(reason: String, place: String) -> String:
 			return "沒有背包，無法購買"
 		Character.BUY_ITEM_NOT_FOUND:
 			var names: Array[String] = []
-			for item_id in Shop.CATALOGS.get(place, {}):
-				names.append(ItemDatabase.get_display_name(item_id))
+			for item_id in Shop.list_items(place):
+				names.append("%s（%s）" % [item_id, ItemDatabase.get_display_name(item_id)])
 			return "%s沒有賣這個東西，目前只賣：%s" % [place, ", ".join(names)]
 		Inventory.MONEY_NOT_ENOUGH:
 			return "身上的錢不夠，無法購買"
@@ -4097,15 +4101,17 @@ func _buy_failure_reason_text(reason: String, place: String) -> String:
 # 疏漏——resolve() 對 llm 來源任務已經先擋掉「背包沒有食物/飲品」這條最常見
 # 的路（回中文），但 schedule 來源任務不走 resolve()，以及 EAT_NO_STATS 這種
 # resolve() 沒檢查的情況，還是會讓 eat()/drink() 的原始英文代碼直接進
-# last_action_result。這裡補齊翻譯，並在「沒有食物/飲品」這條順手提示可以去
-# tavern 買，把 eat/drink 缺貨跟 buy 動作串起來（Test A 診斷測試發現 buy 33
-# 次決策從未被選過，懷疑跟 LLM 收不到「該去買」的訊號有關）
+# last_action_result。這裡補齊翻譯；「沒有食物/飲品」這條只陳述事實——背包
+# 現況，加上由 Shop.CATALOGS × ItemDatabase.category 推導出哪些地點有賣該
+# 分類（item_id ＋中文顯示名，見 _no_supply_reason_text()），不寫死地點名、
+# 也不給「可以去哪買」的行動建議：引擎只報告發生什麼，下一步怎麼補是 LLM
+# 自己的判斷，跟 _buy_failure_reason_text() 只給事實、不替 AI 猜是同一立場
 func _eat_failure_reason_text(reason: String) -> String:
 	match reason:
 		Character.EAT_NO_INVENTORY:
 			return "沒有背包，無法吃東西"
 		Character.EAT_NO_FOOD:
-			return "背包裡沒有食物，可以去 tavern 買一些"
+			return _no_supply_reason_text("食物", "food")
 		Character.EAT_NO_STATS:
 			return "沒有生理數值可以恢復，無法吃東西"
 		_:
@@ -4116,11 +4122,29 @@ func _drink_failure_reason_text(reason: String) -> String:
 		Character.DRINK_NO_INVENTORY:
 			return "沒有背包，無法喝東西"
 		Character.DRINK_NO_DRINK:
-			return "背包裡沒有飲品，可以去 tavern 買一些"
+			return _no_supply_reason_text("飲品", "drink")
 		Character.DRINK_NO_STATS:
 			return "沒有生理數值可以恢復，無法喝東西"
 		_:
 			return "喝東西失敗（%s）" % reason
+
+# 「背包裡沒有 X」的訊息組裝：只給事實——背包現況一句，加上由 Shop.CATALOGS
+# × ItemDatabase.category 推導出哪些地點有賣該分類（item_id ＋中文顯示名），
+# 不寫死地點名（誰在賣照實列，商店資料改了訊息跟著變），也不給「可以去哪裡
+# 買」的行動建議——下一步怎麼補是 LLM 自己的判斷。沒有任何地點賣該分類時
+# 只留背包現況那句
+func _no_supply_reason_text(noun: String, category: String) -> String:
+	var place_facts: Array[String] = []
+	for place in Shop.CATALOGS:
+		var items: Array[String] = []
+		for item_id in Shop.CATALOGS[place]:
+			if ItemDatabase.get_item(item_id).get("category", "") == category:
+				items.append("%s（%s）" % [item_id, ItemDatabase.get_display_name(item_id)])
+		if not items.is_empty():
+			place_facts.append("%s：%s" % [place, ", ".join(items)])
+	if place_facts.is_empty():
+		return "背包裡沒有%s，目前沒有地點賣%s" % [noun, noun]
+	return "背包裡沒有%s。目前有賣%s的地點：%s" % [noun, noun, "；".join(place_facts)]
 
 # gather 任務的執行（#574）：跟 _pursue_work_task() 同理，先走到地點錨點，
 # 抵達後才執行；跟 eat／drink／buy 同理，呼叫一次就完成，不像 nap 那樣佔滿
