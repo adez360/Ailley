@@ -1431,9 +1431,17 @@ func _request_next_decision(
 		_fact_lines_summary(), had_pending_persuade, current_place, allow_appointment,
 		allow_perform_tip, _recalled_summary(), _workplaces_summary()
 	)
+	# issue #794：跟這次組 envelope 送出去的 context.visible 用同一份名字
+	# 清單，讓驗證層能擋掉「語法上合法但不是真實可見角色」的幻覺目標
+	# （不只是 #766 那種照抄 schema 字面文字），不用等執行層才因為
+	# 找不到這個角色而失敗
+	var visible_names := PackedStringArray()
+	for character in visible:
+		visible_names.append(character.character_name)
 	var validator := func(data: Dictionary) -> Dictionary:
 		return AISchema.validate_tasks(
-			data, effective_allow_update_plan, now_minutes, allow_appointment, allow_perform_tip
+			data, effective_allow_update_plan, now_minutes, allow_appointment, allow_perform_tip,
+			visible_names
 		)
 
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
@@ -1484,9 +1492,17 @@ func _request_next_decision(
 		#
 		# stats.get_lowest_need_place()（《系統分析計畫》§5 早就指定的
 		# fallback 路徑：問不到 AI 就先去滿足最低的那項需求，不是站在原地）
-		# 一直沒有任何呼叫端接上——只有真的有需求跌破 CRITICAL 時才用它排
-		# move_to，沒有需求需要處理時維持原本的 idle，不會讓角色沒事也到處
-		# 亂晃
+		# 只有真的有需求跌破 CRITICAL 時才用它排 move_to——這條分支不動，
+		# 危急狀態下的角色永遠導向最需要的地點，不受下面的改動影響。
+		#
+		# 沒有需求需要處理時（issue #798），把原本的 idle 換成 wander：
+		# Test A/B 實測角色常常因為 context.visible 是空的、或（#794 之後）
+		# 幻覺出來的 talk 對象在驗證層就被擋掉，導致 LLM 這輪交回空
+		# tasks——原本站在原地等下一輪，現在到處走走，才有機會碰到人。
+		# wander（#753）本身不看需求、純隨機取附近一格，所以只能放在
+		# 「什麼都不缺」這個分支，不能碰上面 move_to(lowest-need) 那條：
+		# 危急狀態下亂走會讓角色更難被找到食物/水源，等於拆掉現有唯一
+		# 在保護生存底線的路徑
 		if tasks_added == 0 and _current_task.is_empty():
 			var fallback_place := ""
 			if stats != null and stats.needs_attention():
@@ -1494,7 +1510,7 @@ func _request_next_decision(
 			if not fallback_place.is_empty():
 				_push_llm_tasks([{"action": "move_to", "params": {"place": fallback_place}, "priority": 0.0}], data)
 			else:
-				_push_llm_tasks([{"action": "idle", "params": {}, "priority": 0.0}], data)
+				_push_llm_tasks([{"action": "wander", "params": {}, "priority": 0.0}], data)
 
 		# emotion（#351）：每次決策都必填，validate_tasks() 已經驗證過 type／
 		# intensity 合法，這裡直接套用，不再二次判斷——AI 自己宣告的內在狀態，
