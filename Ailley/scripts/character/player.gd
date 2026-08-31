@@ -196,6 +196,22 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	get_viewport().set_input_as_handled()
 
+	# 搬運中時 E 只做「安葬或放下」，不落入下面搭話／工作／商店的判斷——雙手
+	# 抱著屍體沒道理還能開別的互動。bury() 本身已經檢查距離／是否在墓園／
+	# 墓碑格數，這裡不用重複算：能安葬就安葬；只差墓園位置的話，直接當成
+	# 玩家想放下（issue #826 建議 2：不強制走到墓園才能結束搬運），沒有專門
+	# 另開一個按鍵；其餘失敗原因（墓碑滿了）才真的回報給玩家
+	if is_hauling():
+		var haul_target := get_hauling_target()
+		var bury_reason := bury(haul_target)
+		if bury_reason == BURY_OK:
+			return
+		if bury_reason == BURY_NOT_AT_CEMETERY:
+			stop_haul()
+			return
+		report_action_failure("bury", bury_reason)
+		return
+
 	if is_in_conversation():
 		leave_conversation()
 		return
@@ -569,11 +585,13 @@ func _decide_velocity() -> Vector2:
 
 	var input_dir := get_input_direction()
 
-	# 手動操作優先，直接中斷自動移動
+	# 手動操作優先，直接中斷自動移動。乘 effective_speed() 而非 SPEED——
+	# 搬運屍體時要吃到 _speed_multiplier 減速，跟 _follow_hauler() 用的
+	# 是同一個倍率，玩家跟被搬運目標才會同速（issue #822）
 	if input_dir != Vector2.ZERO:
 		if is_moving():
 			stop_moving()
-		return input_dir * SPEED
+		return input_dir * effective_speed()
 
 	return super()
 

@@ -20,7 +20,12 @@ float alpha_at(sampler2D tex, vec2 uv) {
 }
 
 void fragment() {
-	vec4 base = texture(TEXTURE, UV);
+	// COLOR 在這裡已經是套用過 modulate／self_modulate 的貼圖顏色（Godot
+	// canvas_item shader 進入 fragment() 前的預設值），不能像 alpha_at() 的
+	// 鄰近像素取樣那樣直接對 TEXTURE 重新取樣——那樣會繞過 sprite.modulate，
+	// 死亡角色的灰色 tint（_apply_death_tint()）在描邊生效期間就會消失
+	// （issue #828）
+	vec4 base = COLOR;
 	vec2 span = TEXTURE_PIXEL_SIZE * thickness;
 
 	float around = max(

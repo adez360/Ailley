@@ -291,11 +291,16 @@ review 抓到：「髒兮兮」「乾淨多了」「傷已經好了」這幾種�
 > 誤判成生成長度限制或模型品質問題，實測截圖比對才確認是顯示區域跑出畫面，
 > 文字本身沒有被截斷）。
 >
-> `_render()` 算完 `box.position` 之後多一步 `_clamp_to_camera_view()`：拿
-> `get_viewport().get_camera_2d()` 的 `get_screen_center_position()` 跟
-> `get_viewport().get_visible_rect().size / cam.zoom` 算出目前鏡頭的可視
-> 世界座標範圍，把 `box` 的全域矩形夾回這個範圍內——只平移 `box.position`，
-> 不動 `Bubble` 節點自己的 `global_position`（那是角色頭上的錨點）。代價是
+> `_clamp_to_camera_view()` 拿 `get_viewport().get_camera_2d()` 的
+> `get_screen_center_position()` 跟 `get_viewport().get_visible_rect().size /
+> cam.zoom` 算出目前鏡頭的可視世界座標範圍，把 `box` 的全域矩形夾回這個範圍
+> 內——只平移 `box.position`，不動 `Bubble` 節點自己的 `global_position`
+> （那是角色頭上的錨點）。**不是只在 `_render()` 算一次**：角色（鏡頭跟著）
+> 移動後畫面範圍就變了，`_process()` 顯示期間每幀重跑一次，起點固定用
+> `_render()` 記下的 `_unclamped_box_position`，不是 `box.position` 本身——
+> 不然每幀的偏移會疊加，回到可視範圍內時也不會自動歸零。`get_viewport()`
+> 在節點沒進場景樹時是 `null`（例如 `tests/test_shout_reaches_player.gd`
+> 手動組 `Bubble` 測試），要先擋過這關才能再問 `get_camera_2d()`。代價是
 > 夾制生效的那幾幀，箭嘴（烤在 `box` 的九宮格材質裡，跟著整個框體一起
 > 平移）不會再精準指向角色頭上；沒有鏡頭時整段跳過，維持原本行為。
 

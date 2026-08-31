@@ -189,6 +189,7 @@ const FAILURE_MESSAGE_KEYS := {
 	"IS_DEAD": "FAIL_IS_DEAD",
 	"TARGET_NOT_DEAD": "FAIL_TARGET_NOT_DEAD",
 	"TARGET_ALREADY_BURIED": "FAIL_TARGET_ALREADY_BURIED",
+	"CEMETERY_FULL": "FAIL_CEMETERY_FULL",
 }
 
 ## 滑鼠指到時套在 sprite 上的描邊
@@ -1876,6 +1877,11 @@ func attack(other: Character) -> String:
 		if not other.is_dead:
 			other._set_condition(CONDITION_BLEEDING, other.stats.get_value("injury") >= 20.0)
 			other.stats.injury_decay_paused = other.has_condition(CONDITION_BLEEDING)
+			# 立即同步昏迷判定，跟上面 bleeding 同一個理由（#821）：不等
+			# _update_conditions() 的下一次 tick（最長約 10 秒空窗期）才發現
+			# health 已經歸零。判定條件跟 _update_conditions() 完全一致
+			if other.stats.get_value("health") <= 0.0 and not other.has_condition(CONDITION_INCAPACITATED):
+				other._start_incapacitation()
 	other.force_interrupt()
 	other._on_attacked(self)
 	return ATTACK_OK
@@ -2421,6 +2427,12 @@ func hauler_count() -> int:
 
 func is_hauling() -> bool:
 	return _hauling_target != null
+
+## 給 player.gd 用：搬運中按 E 要嘗試安葬／放下，需要知道搬的是誰
+## （issue #826）。NPC 走 _pursue_bury_task()，從 LLM 給的 target 名字另外
+## 查角色，不透過這個搬運中狀態，不需要這個 getter
+func get_hauling_target() -> Character:
+	return _hauling_target
 
 func effective_speed() -> float:
 	return SPEED * _speed_multiplier

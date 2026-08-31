@@ -13,7 +13,7 @@ extends Control
 ##     ButtonsBox（VBoxContainer，置中）
 ##       ContinueButton（預設隱藏，只有 SaveService.has_world() 為 true 且
 ##                       is_world_data_valid() 通過才顯示）
-##       StartButton / CreditsButton
+##       StartButton / CreditsButton / QuitButton
 ##       LoadErrorLabel（預設隱藏，只有「存檔存在但讀不出來或格式不完整」時才顯示）
 ##     Scrim（ColorRect，全螢幕半透明，預設隱藏；點面板外關閉銘謝子畫面，
 ##            做法跟 status_panel.gd／各面板的「點面板外或按 Esc 關閉」一致）
@@ -28,6 +28,7 @@ const MAIN_SCENE := "res://scenes/main.tscn"
 @onready var continue_button: Button = $ButtonsBox/ContinueButton
 @onready var start_button: Button = $ButtonsBox/StartButton
 @onready var credits_button: Button = $ButtonsBox/CreditsButton
+@onready var quit_button: Button = $ButtonsBox/QuitButton
 @onready var load_error_label: Label = $ButtonsBox/LoadErrorLabel
 @onready var scrim: ColorRect = $Scrim
 
@@ -40,6 +41,7 @@ func _ready() -> void:
 	continue_button.pressed.connect(_on_continue_pressed)
 	start_button.pressed.connect(_on_start_pressed)
 	credits_button.pressed.connect(_on_credits_pressed)
+	quit_button.pressed.connect(_on_quit_pressed)
 	scrim.gui_input.connect(_on_scrim_gui_input)
 	start_button.grab_focus()
 
@@ -91,17 +93,22 @@ func _on_start_pressed() -> void:
 	get_tree().change_scene_to_file(MAIN_SCENE)
 
 
+func _on_quit_pressed() -> void:
+	get_tree().quit()
+
+
 func _on_credits_pressed() -> void:
 	scrim.show()
 	# CreditsPanel 沒有可聚焦的控制項，ButtonsBox 底下的按鈕卻還留著
 	# FOCUS_ALL——純鍵盤玩家開著銘謝時按 Tab 還是能切回去，按 Enter 就會在
-	# 面板還開著的情況下直接開始/繼續遊戲。銘謝開著時先把按鈕摘出焦點鏈，
-	# 關閉時在 _close_credits() 復原。continue_button 隱藏時 Godot 的焦點
-	# 導覽本來就會跳過它，這裡一併處理不用另外判斷 visible
+	# 面板還開著的情況下直接開始/繼續遊戲/離開遊戲。銘謝開著時先把按鈕摘出
+	# 焦點鏈，關閉時在 _close_credits() 復原。continue_button 隱藏時 Godot
+	# 的焦點導覽本來就會跳過它，這裡一併處理不用另外判斷 visible
 	credits_button.release_focus()
 	continue_button.focus_mode = Control.FOCUS_NONE
 	start_button.focus_mode = Control.FOCUS_NONE
 	credits_button.focus_mode = Control.FOCUS_NONE
+	quit_button.focus_mode = Control.FOCUS_NONE
 
 
 # Scrim 蓋滿全螢幕，CreditsPanel 疊在它上面。CreditsPanel 底下的 TitleBg 有
@@ -122,4 +129,5 @@ func _close_credits() -> void:
 	continue_button.focus_mode = Control.FOCUS_ALL
 	start_button.focus_mode = Control.FOCUS_ALL
 	credits_button.focus_mode = Control.FOCUS_ALL
+	quit_button.focus_mode = Control.FOCUS_ALL
 	credits_button.grab_focus()
