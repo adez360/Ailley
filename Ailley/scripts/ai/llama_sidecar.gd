@@ -35,6 +35,7 @@ enum Status {
 	LAUNCH_FAILED,		# OS.create_process() 本身失敗（回傳 -1）
 	CRASHED,		# 叫起來了，但撐不過起跳觀察窗就自己結束
 	START_TIMEOUT,		# 撐過起跳觀察窗、活著，但 STARTUP_TIMEOUT_SEC 內探測不到回應
+	UNSUPPORTED_HOST,	# provider host 不支援自拉（非 127.0.0.1／localhost，見 _maybe_launch 防呆）
 }
 
 const STARTUP_TIMEOUT_SEC := 30.0
@@ -44,7 +45,10 @@ const POLL_INTERVAL_SEC := 1.0
 # 通常會馬上因為 bind 失敗而退出）
 const CRASH_CHECK_SEC := 2.0
 
-const SIDECAR_ARGS_TAIL := ["--parallel", "3", "-c", "16000"]	# 《04》§1 已定案的數值
+# 《04》§1 已定案的數值。--parallel 不寫死在這裡——它要對齊 AIService.POOL_SIZE
+# （HTTP 請求池大小），組 args 時引用 autoload 的同一份常數，兩邊只寫一份，
+# 不會出現「改了池大小忘記改啟動參數」的脫鉤
+const SIDECAR_ARGS_TAIL := ["-c", "16000"]
 
 var status: Status = Status.NOT_ATTEMPTED
 var status_reason := ""
@@ -55,15 +59,18 @@ func _ready() -> void:
 	_maybe_launch()
 
 
-func _notification(what: int) -> void:
-	# 跟 game_manager.gd 同一個通知，各自獨立處理——那邊負責存檔跟呼叫
-	# get_tree().quit()，這裡只負責在引擎真的要關之前先收掉子進程，不用互相
-	# 等待。編輯器 Play 模式按 Stop 鍵是強制砍掉整個編輯器子行程，不會走
-	# 這條通知，子進程因此可能變成孤兒——跟本機遠端 GPU 隧道「機器關機／
-	# 重開會中止」是同一種已知的開發期限制，沒有更好的解法，留給開發者自己
-	# 用工作管理員清理
-	if what == NOTIFICATION_WM_CLOSE_REQUEST:
-		_shutdown()
+# GameManager 收到 WM_CLOSE_REQUEST 負責存檔與 get_tree().quit()，await 期間
+# 控制權交回樹上，可能長達數十秒（等的是還在飛的睡眠反思請求，見
+# game_manager.gd::_wait_for_sleep_reflections_to_settle()）——autoload 順序
+# GameManager 第一、本節點最後，這裡若在同一個通知就同步 OS.kill(_pid)，會把
+# GameManager 還在等的服務提前殺掉。改成引擎真的拆樹（EXIT_TREE，存檔完成
+# 之後）才收，兩邊不用互相等待的分工不變
+#
+# 編輯器 Play 模式按 Stop 鍵是強制砍掉整個編輯器子行程，不會走拆樹路徑，
+# 子進程因此可能變成孤兒——跟本機遠端 GPU 隧道「機器關機／重開會中止」是
+# 同一種已知的開發期限制，沒有更好的解法，留給開發者自己用工作管理員清理
+func _exit_tree() -> void:
+	_shutdown()
 
 
 func _shutdown() -> void:
@@ -79,6 +86,16 @@ func _maybe_launch() -> void:
 		return
 
 	var provider: AIConfig.Provider = config.get_local_provider()
+	# sidecar 自拉只支援 IPv4 loopback：--host 與探針 URL 都寫死 127.0.0.1，
+	# provider 填了其他 host（例如 [::1]）就算 port 解析對了也連不上——不
+	# 靜默錯連，明確標記 UNSUPPORTED_HOST 讓人知道這次不自動啟動；手動開著
+	# 的服務不受影響（AIService 照常連它）
+	var host := _host_from_url(provider.base_url)
+	if host != "127.0.0.1" and host != "localhost":
+		status = Status.UNSUPPORTED_HOST
+		status_reason = L10n.tf("SIDECAR_UNSUPPORTED_HOST", {"host": host})
+		push_warning("[LlamaSidecar] " + status_reason)
+		return
 	var port := _port_from_url(provider.base_url, 8080)
 	var sidecar_dir := _sidecar_dir()
 	var binary_path := sidecar_dir.path_join(_platform_subdir()).path_join(_binary_name())
@@ -101,7 +118,12 @@ func _maybe_launch() -> void:
 		push_warning("[LlamaSidecar] " + status_reason)
 		return
 
-	var args := PackedStringArray(["-m", model_path, "--host", "127.0.0.1", "--port", str(port)])
+	# --parallel 對齊 AIService.POOL_SIZE（見 SIDECAR_ARGS_TAIL 的說明）
+	var args := PackedStringArray([
+		"-m", model_path,
+		"--host", "127.0.0.1", "--port", str(port),
+		"--parallel", str(AIService.POOL_SIZE),
+	])
 	args.append_array(PackedStringArray(SIDECAR_ARGS_TAIL))
 
 	_pid = OS.create_process(binary_path, args, false)
@@ -123,15 +145,23 @@ func _watch(port: int) -> void:
 		push_warning("[LlamaSidecar] " + status_reason)
 		return
 
-	var elapsed := CRASH_CHECK_SEC
-	while elapsed < STARTUP_TIMEOUT_SEC:
+	# 比照 game_manager.gd 的 deadline 寫法（_wait_for_sleep_reflections_to_settle()）：
+	# 用 ticks 起點算差值，不用常數累加——一圈實際是 _probe_port() 的 2 秒
+	# timeout＋1 秒 sleep，常數累加會讓 STARTUP_TIMEOUT_SEC 名不符實（最壞近
+	# 90 秒才放棄）。比照它的 while 條件，每圈開頭重新檢查
+	var deadline_msec := Time.get_ticks_msec() + int(STARTUP_TIMEOUT_SEC * 1000.0)
+	while Time.get_ticks_msec() < deadline_msec:
 		if await _probe_port(port):
 			status = Status.READY
 			status_reason = L10n.tf("SIDECAR_READY", {"pid": _pid})
-			# 補一次探測讓狀態列跟上——AIService 開機那一批探測多半打在 sidecar
-			# 都還沒起來的時間點，靠這裡的成功時機重打一次，玩家不用自己
-			# 到 debug 主控台打 `ai` 才看得到「AI 決策中」
-			AIService.reload_config()
+			# 補一次就緒套用讓場上 Agent 跟上——AIService 開機那一批探測多半打在
+			# sidecar 都還沒起來的時間點，場上 Agent 已被 main_scene.gd::
+			# _apply_startup_ai_state() 鎖在排程模式（它只在開機套用一次），
+			# activate_llm_decision_if_ready() 又只在存檔還原／debug spawn 呼叫——
+			# 沒有人在這個時機重新套用的話，這一局不會有 LLM 決策，正式建置又
+			# 停用 debug 主控台，玩家沒有任何救回路徑
+			await AIService.reload_config_and_wait()
+			_apply_ready_to_agents()
 			return
 		if not OS.is_process_running(_pid):
 			status = Status.CRASHED
@@ -139,11 +169,31 @@ func _watch(port: int) -> void:
 			push_warning("[LlamaSidecar] " + status_reason)
 			return
 		await get_tree().create_timer(POLL_INTERVAL_SEC).timeout
-		elapsed += POLL_INTERVAL_SEC
 
 	status = Status.START_TIMEOUT
 	status_reason = L10n.tf("SIDECAR_START_TIMEOUT", {"sec": STARTUP_TIMEOUT_SEC})
 	push_warning("[LlamaSidecar] " + status_reason)
+
+
+## sidecar 就緒後的消費端補套用（見 _watch() 就緒分支的說明）：開機套用只在
+## main_scene.gd::_apply_startup_ai_state() 跑一次，那時 sidecar 多半還沒起來，
+## 場上 Agent 已被關在排程模式，沒有其他消費端會在這個時機重新套用。這裡整批
+## 共用一次 reload_config_and_wait()（_watch() 裡已 await 完才進來，不是逐隻
+## 各等一次），再對還沒打開 llm_decision_enabled 的 Agent 重跑就緒套用；已經
+## 開著的不動——debug 主控台 ai_decision 手動設過的狀態不被這裡蓋掉。
+## activate_llm_decision_if_ready() 內部自帶 is_instance_valid 防呆與 readiness
+## 判定，這裡不重抄
+func _apply_ready_to_agents() -> void:
+	var tree := get_tree()
+	if tree == null:
+		return
+	for node in tree.get_nodes_in_group("agents"):
+		var agent := node as Agent
+		# agents group 只收 Agent（agent.gd::_ready() add_to_group），as 轉型
+		# 判空是型別安全慣例（見 debug_console.gd 同款註解）
+		if agent == null or agent.llm_decision_enabled:
+			continue
+		GameManager.activate_llm_decision_if_ready(agent)
 
 
 ## 輕量 HTTP 探針：只看連不連得上，不驗證回應內容——AIService._probe_models()
@@ -188,11 +238,33 @@ func _binary_name() -> String:
 	return "llama-server.exe" if OS.get_name() == "Windows" else "llama-server"
 
 
+## 從 provider.base_url 取 host 字面值（不解析 DNS）：[::1] 連括號一起回，
+## 一般 host 去掉 :port。_maybe_launch 的防呆用——sidecar 自拉只支援
+## 127.0.0.1／localhost 兩種寫法，跟 AIConfig._is_loopback_url() 的字面比對
+## 同一套哲學（不做 DNS 解析，只擋最直接的手滑）
+static func _host_from_url(url: String) -> String:
+	var scheme_index := url.find("://")
+	var without_scheme := url.substr(scheme_index + 3) if scheme_index != -1 else url
+	var host_port := without_scheme.split("/")[0]
+	if host_port.begins_with("["):
+		var bracket_index := host_port.find("]")
+		return host_port.substr(0, bracket_index + 1) if bracket_index != -1 else host_port
+	var colon_index := host_port.rfind(":")
+	return host_port.substr(0, colon_index) if colon_index != -1 else host_port
+
+
 static func _port_from_url(url: String, fallback: int) -> int:
 	var scheme_index := url.find("://")
 	var without_scheme := url.substr(scheme_index + 3) if scheme_index != -1 else url
 	var host_port := without_scheme.split("/")[0]
-	var parts := host_port.split(":")
-	if parts.size() >= 2 and parts[1].is_valid_int():
-		return int(parts[1])
+	# bracket-aware：[::1] 內部的冒號不是 port 分隔——rfind(":") 的位置要比
+	# rfind("]") 靠後才可能是 port；無 port 的 URL（http://localhost/v1）沒有
+	# 冒號，同樣退回 fallback
+	var colon_index := host_port.rfind(":")
+	var bracket_index := host_port.rfind("]")
+	if colon_index == -1 or (bracket_index != -1 and colon_index < bracket_index):
+		return fallback
+	var port_text := host_port.substr(colon_index + 1)
+	if port_text.is_valid_int():
+		return int(port_text)
 	return fallback

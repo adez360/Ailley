@@ -101,6 +101,7 @@ SIDECAR_CRASHED,"llama-server 啟動後立刻結束，可能是連接埠 {port} 
 SIDECAR_START_TIMEOUT,"llama-server 在 {sec} 秒內沒有回應，放棄這次自動連線","llama-server did not respond within {sec}s; giving up on this auto-connect attempt"
 SIDECAR_ALREADY_RUNNING,"偵測到 127.0.0.1:{port} 已有服務在跑，直接沿用，不重複啟動","Detected an existing service on 127.0.0.1:{port}; reusing it instead of launching a duplicate"
 SIDECAR_READY,"本機 llama-server 已就緒（PID {pid}）","Local llama-server is ready (PID {pid})"
+SIDECAR_UNSUPPORTED_HOST,"本機 AI 自動啟動只支援 127.0.0.1，provider 的位址是 {host}，這次不自動啟動（服務自己開著的話不受影響）","Local AI auto-launch supports 127.0.0.1 only; provider address is {host}, not auto-launching this run (a manually started service is unaffected)"
 UI_CC_TITLE,"建立角色","Create Character"
 UI_CC_SLOTS,"投放中 {used} / {max}","Deployed {used} / {max}"
 UI_CC_TAB_BASIC,"基本","Basics"
