@@ -5275,9 +5275,53 @@ func _time_bonus(task: Dictionary, now: String) -> float:
 		return 0.0
 	return TIME_BONUS if _in_window(window, now) else 0.0
 
-# 這一版恆為 0——schedule 任務不看角色需求，等 LLM 依 Stats 產生任務時才會用到
-func _need_bonus(_task: Dictionary) -> float:
-	return 0.0
+# issue #802：瀕死生理數值只在 prompt 文字層級要求 LLM「同等重視」，但候選
+# 計分數學完全沒有對應加成——LLM 自己給 eat/drink/sleep/buy 這類任務的
+# priority 經常低到個位數（Test A/B 實測 reasoning 明確看到 100 的脫水數值，
+# 仍選了 priority 10 的其他任務），純文字勸說對 7B 小模型不可靠。這裡補上
+# 真的計分加成，讓生存類任務在數值真的跌破 CRITICAL 時，計分數學本身就會
+# 贏過一般偏好，不必依賴 LLM 自己選對 priority。
+#
+# NEED_BONUS_MAX=100：對齊 TIME_BONUS（見上面 const），確保滿額加成時
+# 就算 LLM 給的 priority 只有個位數，也大致打平「已排定時間窗任務」的量級，
+# 但仍低於 115-125 那個保留給 LLM 自己判斷的真緊急事件區間——引擎只負責
+# 「這件事很重要」，不僭越到「這是全場最急事件」那一層判斷。
+# 從 CRITICAL(30) 到 0 線性內插，30 以上（還沒到「該處理了」的門檻）不給
+# 加成，維持現行「危急才加重，不是無條件偏袒生存」的立場。
+# 量級是估計值，等下一輪多日測試量到真實候選分數分佈後再校準（比照
+# HYSTERESIS／STUCK_RETRY_INTERVAL_MINUTES 當初的作法）
+const NEED_BONUS_MAX := 100.0
+
+func _need_bonus(task: Dictionary) -> float:
+	if stats == null:
+		return 0.0
+	var action: String = task.get("action", "")
+	match action:
+		"eat":
+			return _need_bonus_for_value(stats.get_value("satiety"))
+		"drink":
+			return _need_bonus_for_value(stats.get_value("hydration"))
+		"sleep":
+			# sleep 同時處理 wakefulness／stamina 兩項，用比較差的那個算加成，
+			# 避免其中一項已經不缺、掩蓋掉另一項還在瀕死的事實
+			return _need_bonus_for_value(minf(stats.get_value("wakefulness"), stats.get_value("stamina")))
+		"buy":
+			var item_id: String = String(task.get("params", {}).get("item_id", ""))
+			if item_id.is_empty():
+				return 0.0
+			var category: String = ItemDatabase.get_item(item_id).get("category", "")
+			if category == "food":
+				return _need_bonus_for_value(stats.get_value("satiety"))
+			elif category == "drink":
+				return _need_bonus_for_value(stats.get_value("hydration"))
+			return 0.0
+		_:
+			return 0.0
+
+func _need_bonus_for_value(value: float) -> float:
+	if value >= Stats.CRITICAL:
+		return 0.0
+	return NEED_BONUS_MAX * (Stats.CRITICAL - value) / Stats.CRITICAL
 
 # 這一版恆為 0——schedule 任務是「到點就可用」的固定候選，不是排隊等執行、
 # 需要防餓死的任務。LLM 任務有真的 created_at 時間戳之後才有意義
