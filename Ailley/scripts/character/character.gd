@@ -348,6 +348,7 @@ var buried_by: Variant = null	# 誰安葬了你，String（character_id）或 nu
 var buried_tick := -1			# 安葬當下的全域 tick，同 death_tick 換算方式，見 bury()
 var is_anonymous := false		# 無名碑（《規格書09》§3-4／§4-3）：_erect_unmarked_grave() 自動立碑時設 true；
 								# bury() 人為安葬不改這個值，只有《規格書09》§4-4 擦拭墓碑（未實作）能清成 false
+var _grave_marker: Node2D = null	# 安葬後取代石化本體的墓碑造型，見 _apply_grave_visual()（issue #832）
 
 # 滑鼠 hover（selection.gd）跟 E 鍵目前的互動目標（player.gd）是兩個獨立的
 # 高亮來源，任一個成立就該顯示描邊。分開存，不是合用一個布林值——CodeRabbit
@@ -395,6 +396,7 @@ func _ready() -> void:
 	# 時會因為 sprite 還不存在而跳過灰階——sprite 現在已就緒，補套一次
 	# （CodeRabbit review 抓到）
 	_apply_death_tint(is_dead)
+	_apply_grave_visual(is_buried)
 
 	# emotion.duration_left／conditions[].turns_left 都是離散單位，用 GameClock 既有的
 	# 「每遊戲分鐘」訊號驅動比自己在 _process(delta) 裡做累加器精簡（agent.gd 也是這樣接的），
@@ -843,6 +845,27 @@ func _apply_death_tint(dead: bool) -> void:
 		return
 	sprite.modulate = Color(0.5, 0.5, 0.5) if dead else Color(1, 1, 1)
 
+## 安葬視覺切換（issue #832，《規格書09》§1）：bury()／_erect_unmarked_grave()
+## 安葬完成時 true，revive()／存讀檔還原成活人時 false。取代而非疊加本體貼圖——
+## 安葬前後外觀要能一眼分辨（issue #832 的問題本身），已安葬的屍體不再顯示
+## 「這個人」，改顯示墓碑。跟 _apply_death_tint() 同一個理由要擋 sprite==null：
+## load_save_data() 可能在進場景樹前、sprite 還沒 @onready 就先被呼叫，
+## _ready() 會在 sprite 就緒後補呼叫一次（見該函式）
+func _apply_grave_visual(buried: bool) -> void:
+	if buried:
+		if _grave_marker == null:
+			_grave_marker = GraveMarker.new()
+			_grave_marker.position = Vector2(0, -12)		# 跟 AnimatedSprite2D.offset（character.tscn）同一個值，讓墓碑對齊原本的本體位置
+			add_child(_grave_marker)
+		if sprite != null:
+			sprite.visible = false
+	else:
+		if _grave_marker != null:
+			_grave_marker.queue_free()
+			_grave_marker = null
+		if sprite != null:
+			sprite.visible = true
+
 ## 臨終遺言請求的掛點，基底 no-op：Player 沒有 LLM 決策，last_words 維持 null
 ## （來不及開口，跟《規格書09》§2 表格「無機會留遺言」的語意不同，是單純沒有
 ## 生成管道）。Agent 覆寫這個 hook 真正送出 LLM 請求，見 agent.gd
@@ -947,6 +970,7 @@ func bury(corpse: Character) -> String:
 	# petrified 鎖定之前（見該函式註解），is_buried 本身不會讓身體停止跟著
 	# 搬運者走，不主動放手的話墓碑會被拖出墓園
 	corpse._release_all_haulers()
+	corpse._apply_grave_visual(true)
 
 	print_debug("Character %s 安葬了 %s" % [character_name, corpse.character_name])
 	return BURY_OK
@@ -987,6 +1011,7 @@ func _erect_unmarked_grave() -> void:
 	buried_by = null
 	buried_tick = _current_tick()
 	is_anonymous = true
+	_apply_grave_visual(true)
 	print_debug("Character %s 腐壞見底，自動立無名碑" % character_name)
 
 
@@ -1100,6 +1125,7 @@ func _is_within_free_revival_window() -> bool:
 func _clear_death_state() -> void:
 	conditions = conditions.filter(func(c): return c["type"] != CONDITION_PETRIFIED)
 	_apply_death_tint(false)
+	_apply_grave_visual(false)
 	is_dead = false
 	death_tick = -1
 	death_day = -1
@@ -2115,6 +2141,7 @@ func load_save_data(data: Dictionary) -> void:
 		conditions.clear()
 		conditions.append({"type": CONDITION_PETRIFIED, "turns_left": -1})
 		_apply_death_tint(true)
+		_apply_grave_visual(is_buried)
 		# 跟 _die() 同一個理由（CodeRabbit review 抓到）：還原死亡存檔時若既有
 		# _hauling_target 殘留，同樣要放手，不然目標卡在死掉的搬運者身上走不動
 		if is_hauling():
