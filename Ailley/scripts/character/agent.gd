@@ -1122,10 +1122,20 @@ func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) ->
 	# 立刻蓋掉正在顯示的東西，讓玩家知道「這個角色在想」，不是卡住。
 	# AIService.request() 還沒送出就已經先顯示——冷卻/配額檢查也算在等待時間裡，
 	# 玩家看到「…」的時間可能比實際打網路的時間長，這是刻意的：早一點給回饋
-	# 比精準對齊網路延遲更重要。broadcast=false：這是「正在想」的內部狀態
-	# 泡泡，不是角色真的說了什麼，不該觸發鄰近角色的 speech_heard（CodeRabbit
-	# review 抓到，PR #674）
-	say(AI_THINKING_TEXT, true, false)
+	# 比精準對齊網路延遲更重要。
+	#
+	# 直接呼叫 bubble.hold()，不走 say()：say() 排隊顯示的秒數是依文字長度算的
+	# （bubble.gd 的 SECONDS_PER_CHAR），「…」只有 1 個字元會被夾到下限 1.2 秒，
+	# 但 LLM 常常等超過 1.2 秒（ai_config.gd 預設逾時 10 秒）——泡泡提早消失、
+	# 答案還沒回來，畫面上會有一段看起來像「他不理你」的空窗，玩家分不出
+	# 「還在等」跟「他不想理你」。改用 hold() 撐到明確收掉為止：拿到台詞或
+	# fallback 時，_speak()／_finish_with_fallback() 呼叫 say(interrupt=true)
+	# 會先 bubble.clear() 換成真正的台詞；對話中途被打斷（走遠/角色離場）時
+	# exit_conversation() 統一 release_hold()（見 character.gd）。hold() 本來
+	# 就不會觸發 speech_heard 廣播，不用像 say() 那樣額外傳 broadcast=false
+	# （CodeRabbit review PR #674 的顧慮在這裡改用 hold() 就不成立了）
+	if bubble != null:
+		bubble.hold(AI_THINKING_TEXT)
 
 	# turns 空陣列＝被搭話的第一輪，還沒人開口——這輪多開放 engage 欄位，
 	# 讓對象可以選擇不理會這次搭話（issue #630）。之後的輪次已經在聊，

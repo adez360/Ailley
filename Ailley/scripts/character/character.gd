@@ -1257,6 +1257,14 @@ func enter_conversation(conversation: Node) -> void:
 
 func exit_conversation(_reason: String = "") -> void:
 	_conversation = null
+	# 對話不管用哪種原因結束（正常收尾／被打斷／走遠）都會呼叫到這裡，是
+	# 唯一保證「這場對話真的結束了」的單一收斂點。agent.gd::next_line() 的
+	# 「思考中」提示改用 bubble.hold() 撐住整個等待期間，沒有 say() 排隊顯示
+	# 那種自動消失的時間兜底——LLM 還沒回應、玩家就走遠的話，沒人會去收這顆
+	# 泡泡。在這裡統一 release_hold() 收掉，release_hold() 沒在 hold 時本來就是
+	# no-op，不用先判斷有沒有真的在 hold
+	if bubble != null:
+		bubble.release_hold()
 
 # 自己主動離開對話
 func leave_conversation() -> void:
