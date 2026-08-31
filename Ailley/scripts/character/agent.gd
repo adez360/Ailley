@@ -2930,7 +2930,19 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 	# not current_still_valid → _select() 的 outgoing_ok=true，today_log 記
 	# ok=true——跟過期／出窗同一種「自然結束」收尾，不是被搶占（ok=false）
 	# 那條；要不要為前提失效另立更細的訊號是產品決策，見《行程佇列與任務仲裁》
-	var current_still_valid := not _is_expired(_current_task, now_minutes) \
+	#
+	# _logged：llm 任務做滿 duration 後（_reevaluate_once() 的事件驅動觸發）
+	# 只 _remove_task() + 標記 _logged=true，不清空 _current_task——等待下
+	# 一次決策回覆期間，池子裡的 fallback 任務要能頂上來。但這裡原本沒把
+	# _logged 算進「這筆還算不算數」，一筆已經做完、已經離開任務池的殭屍
+	# 任務會被當成仍在進行，繼續用它原本的分數跟新候選比 HYSTERESIS——分數
+	# 通常贏（例如排進時間窗的 schedule 任務 110 分），導致往後每一輪重新
+	# 仲裁，任何比它分數低的候選永遠選不中，且因為 best 本身不為空，
+	# _reevaluate_once() 兩條 STUCK_RETRY 補漏分支（都掛在 best.is_empty()
+	# 上）完全碰不到這個情境。實測（Test B 診斷測試）踩到：一筆完成的 work
+	# 任務卡成殭屍，之後 51 遊戲天沒有任何新任務被選中，直到力竭反射介入
+	var current_still_valid := not _current_task.get("_logged", false) \
+		and not _is_expired(_current_task, now_minutes) \
 		and _in_window_or_unwindowed(_current_task, now) \
 		and _preconditions_met(_current_task)
 
