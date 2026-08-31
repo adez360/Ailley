@@ -28,6 +28,16 @@ custom_minimum_size = Vector2(124, 24)
 layout_mode = 2
 text = "UI_MENU_SETTINGS"
 
+[node name="AiRecheck" type="Button" parent="MarginContainer/VBoxContainer"]
+custom_minimum_size = Vector2(124, 24)
+layout_mode = 2
+text = "UI_MENU_AI_RECHECK"
+
+[node name="AiRecheckStatus" type="Label" parent="MarginContainer/VBoxContainer"]
+layout_mode = 2
+horizontal_alignment = 1
+autowrap_mode = 3
+
 [node name="Exit" type="Button" parent="MarginContainer/VBoxContainer"]
 custom_minimum_size = Vector2(124, 24)
 layout_mode = 2
