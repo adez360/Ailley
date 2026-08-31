@@ -138,6 +138,14 @@ const LLM_TASK_POOL_CAP := 20
 ## 性質不同）
 const STUCK_RETRY_INTERVAL_MINUTES := 72
 
+## 入眠中補打恢復探測的節流間隔（遊戲分鐘，1 遊戲分鐘 = 1 現實秒）。入眠的
+## 觸發掛在真實決策結果上（見 _request_next_decision() 的失敗分支），但入眠
+## 之後沒有任何決策會再發出，解除得靠這裡的低頻探測：每個間隔補打一次
+## reload_config_and_wait()，provider 恢復就退出入眠。抓 30：跟 AIService
+## 的 min_interval_sec（30 現實秒）同一個量級——再短就逼近輪詢，再長的話
+## provider 恢復後角色要多石化半分多鐘才醒，玩家體感明顯
+const OFFLINE_RECOVERY_PROBE_INTERVAL_MINUTES := 30
+
 ## 候選任務池。這一版只在 _load_schedule() 建立一次就不再變動——
 ## 「到點才可用」靠仲裁時的 window 過濾，不是把任務從池子裡搬進搬出
 var _tasks: Array[Dictionary] = []
@@ -317,6 +325,11 @@ var _awaiting_decision := false
 # 的推導綁在它上面）。初始值設成負的節流間隔，保證出生後第一次真的卡住時
 # 不用等滿一個間隔就能立刻補一次
 var _last_stuck_retry_minute := -STUCK_RETRY_INTERVAL_MINUTES
+
+# 入眠恢復探測的節流錨點（遊戲分鐘，見 _probe_offline_recovery()）：下一個
+# 遊戲分鐘之前不打探測。入眠當下（_request_next_decision() 的失敗分支）會
+# 先設成「現在 + 間隔」——剛確認完 provider 失效，不值得立刻再打一輪
+var _offline_probe_not_before_minute := 0
 
 # 長動作檢查點決策請求還有沒有一份在飛（issue #336）。跟 _awaiting_decision
 # 是兩個獨立的旗標，各自防各自的重疊呼叫——檢查點問的是「這筆任務要不要
@@ -1372,11 +1385,14 @@ func _request_last_words(cause: String) -> void:
 func _request_next_decision(
 	allow_update_plan: bool = false, allow_appointment: bool = false, allow_perform_tip: bool = false
 ) -> Dictionary:
-	# 死屍不建立新的決策請求（CodeRabbit review 抓到）：跟下面 await 之後的
-	# is_dead 判斷是兩件事——那道只擋「套用已經送出去的回應」，這裡擋在送出
-	# 請求之前，避免死亡後還被 _pending_reaction_lines 補問邏輯（見本函式
-	# 結尾）之類的呼叫端觸發一次白白浪費的 AI 請求
-	if is_dead:
+	# 死屍／入眠中的角色不建立新的決策請求（CodeRabbit review 抓到）：跟下面
+	# await 之後的 is_dead 判斷是兩件事——那道只擋「套用已經送出去的回應」，
+	# 這裡擋在送出請求之前，避免死亡後還被 _pending_reaction_lines 補問邏輯
+	# （見本函式結尾）之類的呼叫端觸發一次白白浪費的 AI 請求。is_offline_asleep
+	# 同理：入眠中石化在原地，_on_perform_finished()／_on_action_interrupted()
+	# 等事件收尾路徑雖然各自有旗標判斷，但呼叫端很多，統一擋在這裡才不會
+	# 漏掉哪一條路徑在入眠中偷偷發出決策請求
+	if is_dead or is_offline_asleep:
 		return {"ok": false, "triggered": false}
 	if _awaiting_decision:
 		return {"ok": false, "triggered": false}
@@ -1459,7 +1475,27 @@ func _request_next_decision(
 		final_result = {"ok": false, "triggered": true}
 	elif not result["ok"]:
 		final_result = {"ok": false, "triggered": true}
+		# 入眠觸發（issue #827，《10》§6.4「模型失效處理」：模型下架／額度用盡／
+		# 格式錯誤時視同離線，走 §4.5 入眠流程）：決策請求確定失敗（世代沒變、
+		# 不是被 debug 開關作廢、角色也沒死）代表 provider 現在真的問不到。比照
+		# main_scene.gd／game_manager.gd 的既有先例，事件觸發補打一次
+		# reload_config_and_wait() 再確認——瞬斷會在探測期間自己恢復，不值得為
+		# 它入眠；確認仍未就緒才入眠。恢復靠 _probe_offline_recovery() 的低頻
+		# 探測或入眠發生當下還在飛的回應成功抵達，AIService 自己不做背景輪詢
+		# （見 ai_service.gd reload_config() 註解）的既有原則不變
+		if llm_decision_enabled and not is_dead and not is_offline_asleep:
+			await AIService.reload_config_and_wait()
+			if llm_decision_enabled and not is_dead and not is_offline_asleep \
+					and not bool(AIService.get_readiness(get_provider_name()).get("ready", false)):
+				_offline_probe_not_before_minute = _now_minutes() \
+					+ OFFLINE_RECOVERY_PROBE_INTERVAL_MINUTES
+				enter_offline_sleep("model_unavailable")
 	else:
+		# 決策成功代表 provider 活著（issue #827）：入眠發生當下還在飛的回應
+		# （檢查點、反思這類不吃 _awaiting_decision 旗標的請求）成功抵達時，
+		# 順手把入眠解除，不用等 _probe_offline_recovery() 的下一輪探測
+		if is_offline_asleep:
+			exit_offline_sleep()
 		var data: Dictionary = result["data"]
 
 		# 這輪回應真的通過驗證、確定會被套用，才消費快照下來的一次性事實句數量
@@ -2019,7 +2055,7 @@ func _on_perform_finished(completed: bool) -> void:
 	_pursuit_done = false
 	_clear_current_task(true)
 	_push_daily_event("你的表演結束了。")
-	if llm_decision_enabled and not _awaiting_decision:
+	if llm_decision_enabled and not _awaiting_decision and not is_offline_asleep:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
 
@@ -2056,7 +2092,7 @@ func _on_action_interrupted() -> void:
 	_pursued_place = ""
 	_pursuit_done = false
 	_clear_current_task(false)
-	if llm_decision_enabled and not _awaiting_decision:
+	if llm_decision_enabled and not _awaiting_decision and not is_offline_asleep:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
 
@@ -2558,24 +2594,16 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 	if is_dead:
 		return
 
-	# 入眠觸發（issue #827，《10》§6.4「模型失效處理」：模型下架／額度用盡／
-	# 格式錯誤時視同離線，走 §4.5 入眠流程）。只在「本來就該有 AI 決策」的
-	# 角色身上檢查——沒開 llm_decision 的角色本來就是排程模式，不算「離線」，
-	# 那是另一種正常狀態，不該被當成入眠。直接查現成的 readiness 快照
-	# （跟 main_scene.gd 開機判斷「排程模式」HUD 指示器同一個依據），不另開
-	# 一條新的偵測管線。ready 恢復時這裡自動退出，不需要另外補一個「重新
-	# 連線」的呼叫端——每遊戲分鐘都會重新檢查一次
-	if llm_decision_enabled:
-		var provider_ready := bool(AIService.get_readiness(get_provider_name()).get("ready", false))
-		if not provider_ready and not is_offline_asleep:
-			enter_offline_sleep("model_unavailable")
-		elif provider_ready and is_offline_asleep:
-			exit_offline_sleep()
-
 	# 入眠中不重算任何東西——跟死屍同一種「石化，不再仲裁」的立場，差別是
-	# 入眠不是終局狀態，恢復連線後 _is_movement_locked() 自然解除、下一次
-	# tick 這個 if 就不會再擋
+	# 入眠不是終局狀態。觸發與解除都改掛在真實決策結果上（見
+	# _request_next_decision() 的失敗／成功分支）：readiness 是探測完就定型的
+	# 快照，不會自己更新，掛在它上面的話 provider 玩到一半失效不會入眠、
+	# 入了眠也沒有任何路徑會再探測，角色會永久凍結。這裡只負責低頻補打恢復
+	# 探測——事件驅動（GameClock 的 time_changed 訊號本身就是事件）、節流在
+	# OFFLINE_RECOVERY_PROBE_INTERVAL_MINUTES，不是持續輪詢，跟 ai_service.gd
+	# reload_config() 註解「不做背景輪詢」的既有原則不衝突
 	if is_offline_asleep:
+		_probe_offline_recovery()
 		return
 
 	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務
@@ -2586,6 +2614,27 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 	_process_appointment(_now_minutes())
 	_scan_for_performers()
 	_reevaluate()
+
+# 入眠中的低頻恢復探測（issue #827）：入眠之後沒有任何決策會再發出，解除
+# 得靠這裡主動補打一次 reload_config_and_wait()——跟 game_manager.gd 的
+# activate_llm_decision_if_ready() 同一種「事件觸發、補打一次再重判」的
+# 先例，不是 AIService 自己在背景輪詢。fire-and-forget，不 await：呼叫端
+# （_on_time_changed）不需要等探測結果才能繼續，這個遊戲分鐘本來就沒有
+# 其他事要做了
+func _probe_offline_recovery() -> void:
+	var now := _now_minutes()
+	if now < _offline_probe_not_before_minute:
+		return
+	_offline_probe_not_before_minute = now + OFFLINE_RECOVERY_PROBE_INTERVAL_MINUTES
+	await AIService.reload_config_and_wait()
+	# 探測吃 await，等待期間角色可能已經醒（debug ai_decision off）或死了
+	if is_dead or not is_offline_asleep:
+		return
+	if bool(AIService.get_readiness(get_provider_name()).get("ready", false)):
+		exit_offline_sleep()
+		# 立刻補一次仲裁：醒來的這個遊戲分鐘就接回正常的任務排程，不用等
+		# 下一個分鐘的 _on_time_changed()（那時也會跑，這裡只是不用多等一秒）
+		_reevaluate()
 
 # 力竭時強制進入休息，直到 stamina 恢復
 func _force_rest_until_recovered(now_minutes: int) -> void:
@@ -2664,12 +2713,14 @@ func _autosave_on_wake() -> void:
 # #265：真正的重新仲裁邏輯搬進 _reevaluate_once()，這個函式只負責
 # trampoline——見上面 _reevaluating／_reevaluate_pending 的宣告註解
 func _reevaluate() -> void:
-	# 死屍不重新仲裁（CodeRabbit review 抓到）：擋在 trampoline 這一層，一次
-	# 涵蓋所有會走到這裡的路徑——_on_time_changed()、_on_action_interrupted()
+	# 死屍／入眠中不重新仲裁（CodeRabbit review 抓到）：擋在 trampoline 這一層，
+	# 一次涵蓋所有會走到這裡的路徑——_on_time_changed()、_on_action_interrupted()
 	# 各自已經有 is_dead 判斷，但 _end_work() → Agent._on_work_finished() →
 	# _reevaluate() 這條（work_at() 死亡當下同步被 force_interrupt() 收尾時
-	# 觸發）沒有，漏了就會讓死屍立刻選中並執行新任務
-	if is_dead:
+	# 觸發）沒有，漏了就會讓死屍立刻選中並執行新任務。is_offline_asleep 同理：
+	# 入眠中石化在原地，_on_work_finished()／_on_perform_finished() 這類在途
+	# 動作的收尾路徑仍可能撞進來，不能讓它們繞過石化重新仲裁
+	if is_dead or is_offline_asleep:
 		return
 
 	if _reevaluating:
@@ -5555,6 +5606,12 @@ func debug_set_llm_decision(enabled: bool) -> Dictionary:
 	# 世代淘汰掉，見它自己的註解
 	if state_changed:
 		_decision_generation += 1
+
+	# 關閉開關時順手解除入眠（issue #827）：入眠是「模型失效，暫停 AI 決策」
+	# 的狀態，決策都被手動關掉之後角色該走回排程模式繼續動，不能永遠石化在
+	# 「被天神召喚中」——不然 ai_decision <name> off 看起來會像把角色弄死了
+	if not enabled and is_offline_asleep:
+		exit_offline_sleep()
 
 	if not enabled or _awaiting_decision:
 		return {"triggered": false}
