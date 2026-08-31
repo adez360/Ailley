@@ -189,6 +189,7 @@ const FAILURE_MESSAGE_KEYS := {
 	"IS_DEAD": "FAIL_IS_DEAD",
 	"TARGET_NOT_DEAD": "FAIL_TARGET_NOT_DEAD",
 	"TARGET_ALREADY_BURIED": "FAIL_TARGET_ALREADY_BURIED",
+	"CEMETERY_FULL": "FAIL_CEMETERY_FULL",
 }
 
 ## 滑鼠指到時套在 sprite 上的描邊
@@ -2426,6 +2427,12 @@ func hauler_count() -> int:
 
 func is_hauling() -> bool:
 	return _hauling_target != null
+
+## 給 player.gd 用：搬運中按 E 要嘗試安葬／放下，需要知道搬的是誰
+## （issue #826）。NPC 走 _pursue_bury_task()，從 LLM 給的 target 名字另外
+## 查角色，不透過這個搬運中狀態，不需要這個 getter
+func get_hauling_target() -> Character:
+	return _hauling_target
 
 func effective_speed() -> float:
 	return SPEED * _speed_multiplier
