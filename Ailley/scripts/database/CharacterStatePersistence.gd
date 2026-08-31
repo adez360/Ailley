@@ -2048,6 +2048,12 @@ const HOME_SCENE_PATH := "res://scenes/house.tscn"
 ## 兩者都顧到了
 const HOME_MIN_SEPARATION := 128.0
 
+## _find_home_placement() 的落點搜尋半徑上界（單位：格）：從第一間現有的家
+## 一圈圈往外掃，掃到這個半徑還找不到就回 Vector2.INF、走溢出共用安全閥。
+## 遠大於現實需求（NavGrid 可走範圍不可能被家占滿到這個程度），只是給搜尋
+## 一條明確的停止線，跟其他成長參數一樣收成常數
+const HOME_PLACEMENT_MAX_RADIUS := 60
+
 
 ## _ensure_npc_record() 的共用收尾：用 _resolve_home_location() 驗證／必要時
 ## 重新分配 character 目前的 home_location_id，寫回記憶體；若跟 DB 現存值不同
@@ -2378,9 +2384,8 @@ func _find_home_placement() -> Vector2:
 		return Vector2.INF
 
 	var seed_cell: Vector2i = nav.world_to_cell(existing_positions[0])
-	var max_radius := 60
 
-	for radius in range(0, max_radius + 1):
+	for radius in range(0, HOME_PLACEMENT_MAX_RADIUS + 1):
 		for y in range(-radius, radius + 1):
 			for x in range(-radius, radius + 1):
 
@@ -2557,6 +2562,17 @@ func _demolish_home_scene(location_id: String) -> void:
 ## 拆除對應的場景表現（issue #751：重進不保留分配權）。靜態 5 間不受影響
 ## ——本來就是永久場景內容，空出來後照舊靠 round-robin 給下一個人
 func _release_home_if_dynamic(npc_id: String) -> void:
+
+	# 整個世界卸載（Esc「回主選單」的 change_scene_to_file()、關視窗的 quit()）
+	# 也會讓場上每個角色 tree_exited——那是整樹拆除，不是「這個角色被從世界中
+	# 移除」。這個節點掛在 DatabaseManager（autoload）底下，比當前場景晚釋放、
+	# DB 還活著，回呼照樣執行：不擋的話每次離開世界，所有動態家都會被標
+	# is_active=0，下次進場 _rebuild_dynamic_homes() 查不到任何 active 的動態列，
+	# 「讀檔原樣重建」變死碼（CodeRabbit review on #825 抓到）。只有單一角色
+	# 退場才拆除動態家；世界卸載中一律跳過，旗標由 GameManager 管理
+	# （離開流程起點設 true，進場／deploy 時重置）
+	if GameManager._world_unloading:
+		return
 
 	var rows := DatabaseManager.select_where(
 		NPC_TABLE, "npc_id = ?", [npc_id], ["home_location_id"]

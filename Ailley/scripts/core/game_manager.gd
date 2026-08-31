@@ -25,6 +25,16 @@ var continue_requested := false
 ## 就要重設回 false（見 main_scene.gd::_apply_continue()）
 var continue_load_failed := false
 
+## 整個世界正在卸載中（Esc 選單「回主選單」／關閉視窗，兩條離開流程的起點設
+## true，見 esc_menu.gd::_on_exit_pressed() 與下方 _notification()）。
+## change_scene_to_file()／quit() 的整樹拆除也會讓場上每個角色 tree_exited，
+## 跟「單一角色被從世界中移除」在訊號層面無法分辨——CharacterStatePersistence
+## ._release_home_if_dynamic() 靠這個旗標分辨：卸載中不拆除動態家，否則每次
+## 離開世界，所有動態家都會被標 is_active=0，下次進場 _rebuild_dynamic_homes()
+## 查不到任何可重建的列，「讀檔原樣重建」變死碼（CodeRabbit review on #825）。
+## 進場（main_scene.gd::_ready()）與 deploy_from_library() 重置回 false
+var _world_unloading := false
+
 ## 目前被玩家操控的 character_id，跟 allow_player_join 同一層世界存檔資料
 ## （見 note/技術/存檔.md、issue #373）。這裡是「玩家化過身沒」的唯一即時來源：
 ## deploy_from_library() 以 as_player=true 投放時寫入，讀檔時由
@@ -395,6 +405,9 @@ func remove_from_library(id: String) -> bool:
 # 不能重複投放——一份靈魂同時只該有一具肉體，是《05》§7-1「已投放的角色
 # 不可編輯」規則的自然延伸
 func deploy_from_library(id: String, as_player: bool = false) -> Character:
+	# 投放代表世界是活的（主選單開著時不會投角色）——上一輪離開流程殘留的
+	# _world_unloading 在這裡收掉，單一角色退場的拆除才不會被誤跳過
+	_world_unloading = false
 	var entry := get_library_entry(id)
 	if entry.is_empty() or entry.get("deployed", false):
 		return null
@@ -680,6 +693,10 @@ func _wait_for_sleep_reflections_to_settle() -> void:
 func _notification(what: int) -> void:
 	if what != NOTIFICATION_WM_CLOSE_REQUEST:
 		return
+	# 整樹拆除（quit()）也會讓每個角色 tree_exited，先立起 _world_unloading
+	# 讓 _release_home_if_dynamic() 跳過拆除——存檔成敗都不影響接下來的整樹
+	# 拆除，沒有「留在遊戲裡」的路徑，不需要復原
+	_world_unloading = true
 	await save_before_leaving()
 	get_tree().quit()
 

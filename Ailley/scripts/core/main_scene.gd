@@ -17,6 +17,10 @@ const MAIN_MENU_SCENE := "res://scenes/main_menu.tscn"
 
 
 func _ready() -> void:
+	# 進場重置：離開流程立起的 GameManager._world_unloading 不會自己消退
+	# （GameManager 是 autoload），不收掉的話這次對局單一角色退場時，
+	# CharacterStatePersistence._release_home_if_dynamic() 會誤跳過拆除
+	GameManager._world_unloading = false
 	if GameManager.continue_requested:
 		GameManager.continue_requested = false
 		if not _apply_continue():
