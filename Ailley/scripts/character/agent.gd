@@ -4039,9 +4039,11 @@ func _pursue_buy_task() -> void:
 	if proceed:
 		var item_id: String = str(_current_task.get("params", {}).get("item_id", ""))
 		var reason := buy_from(place, item_id)
-		last_action_result = reason
 		if reason != Character.BUY_OK:
+			last_action_result = _buy_failure_reason_text(reason, place)
 			push_warning("Agent %s: buy 失敗（%s）" % [character_name, reason])
+		else:
+			last_action_result = reason
 
 	if _current_task.get("source", "") == "llm":
 		_remove_task(_current_task.get("id", ""))
@@ -4058,6 +4060,36 @@ func _pursue_buy_task() -> void:
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
+
+# issue #795：buy_from() 回傳的原始代碼（TARGET_NOT_FOUND／TOO_FAR／
+# ITEM_NOT_FOUND／NOT_ENOUGH／NO_SPACE 等）先前原封不動塞進
+# last_action_result，下一輪 prompt 就是一串英文常數——走路失敗那幾條
+# 分支（「走不到商店，無法購買」）早就是手寫中文，買東西失敗卻沒有，
+# 純粹是疏漏。這裡補齊中文人話，ITEM_NOT_FOUND 額外列出這個地點真正
+# 賣什麼，讓 LLM 下一輪決策能直接照著清單修正，而不是引擎自己猜一個
+# 「最接近」的品項幫它買——見 #795 的討論，模糊比對等於引擎替 AI 決定
+# 它真正想要什麼，這裡只給事實，選擇權留給 LLM 自己
+func _buy_failure_reason_text(reason: String, place: String) -> String:
+	match reason:
+		Character.BUY_TARGET_NOT_FOUND:
+			return "這裡沒有商店可以購買"
+		Character.BUY_TOO_FAR:
+			return "距離商店太遠，無法購買"
+		Character.BUY_NO_INVENTORY:
+			return "沒有背包，無法購買"
+		Character.BUY_ITEM_NOT_FOUND:
+			var names: Array[String] = []
+			for item_id in Shop.CATALOGS.get(place, {}):
+				names.append(ItemDatabase.get_display_name(item_id))
+			return "%s沒有賣這個東西，目前只賣：%s" % [place, ", ".join(names)]
+		Inventory.MONEY_NOT_ENOUGH:
+			return "身上的錢不夠，無法購買"
+		Inventory.MONEY_INVALID_AMOUNT:
+			return "購買金額有誤，無法購買"
+		Inventory.ADD_NO_SPACE:
+			return "背包已滿，無法購買"
+		_:
+			return "購買失敗（%s）" % reason
 
 # gather 任務的執行（#574）：跟 _pursue_work_task() 同理，先走到地點錨點，
 # 抵達後才執行；跟 eat／drink／buy 同理，呼叫一次就完成，不像 nap 那樣佔滿
