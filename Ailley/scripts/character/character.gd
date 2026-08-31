@@ -99,13 +99,14 @@ const GATHER_OK := ""
 const GATHER_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法採集
 const GATHER_NO_STATS := "NO_STATS"	# 沒有 Stats 的角色沒地方扣 hygiene（跟 PERFORM_NO_STATS 同一個理由）
 
-## use_selected_item() 的失敗原因碼，形狀比照 EAT_*／DRINK_*（#611）。除了這四個，
-## use_selected_item() 還會**原樣轉傳** Inventory.use_item() 自己的原因碼
+## use_item()／use_selected_item() 的失敗原因碼，形狀比照 EAT_*／DRINK_*（#611）。
+## 除了這五個，use_item() 還會**原樣轉傳** Inventory.use_item() 自己的原因碼
 ## （`NOT_CONSUMABLE`、`INVALID_EFFECT`、`REMOVE_FAILED`……），跟 buy_from() 轉傳
 ## `NOT_ENOUGH`／`NO_SPACE` 同一個理由，不重新取名
 const USE_ITEM_OK := ""
 const USE_ITEM_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法使用道具
-const USE_ITEM_NO_SELECTION := "NO_SELECTION"	# 快捷欄沒選格，或選到的是空格
+const USE_ITEM_NO_SELECTION := "NO_SELECTION"	# 快捷欄沒選格，或選到的是空格（僅 use_selected_item()）
+const USE_ITEM_NOT_FOUND := "NOT_FOUND"	# 背包裡沒有這個 item_id（#865，use_item(item_id) 直接指名時）
 const USE_ITEM_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復數值
 const USE_ITEM_IS_DEAD := "IS_DEAD"		# 死屍不能使用道具（CodeRabbit review 抓到，PR #615）——
 						# 跟 talk_to() 擋自己是死屍發起搭話同一種漏洞：is_dead
@@ -124,6 +125,7 @@ const GIVE_TOO_FAR := "TOO_FAR"
 const GIVE_NO_INVENTORY := "NO_INVENTORY"
 
 const HAUL_RANGE := 32.0		# 跟 TALK_RANGE／GIVE_RANGE 一樣的距離門檻，2 格
+const HERB_SHOP_TREATMENT_RANGE := 32.0	# 「被搬到藥草鋪」判定的距離門檻（#865），同一套 2 格慣例
 const HAUL_SPEED_MULTIPLIER := 0.5		# 搬運時速度倍率（《99》P-27 #3-1）
 const HAUL_STAMINA_DRAIN := 3.0			# 搬運者每現實秒額外扣的體力（《99》P-27 #3-2）
 
@@ -738,14 +740,42 @@ func _send_to_herb_shop_for_treatment() -> void:
 	_herb_shop_lookup_error_reported = false
 
 	global_position = anchors.resolve_for(self, "herb_shop")
+	_begin_treatment("herb_shop")
 
-	# 記錄治療開始時間，_update_treatment() 會處理倒計時
+## 由 _send_to_herb_shop_for_treatment()（瞬移送醫）與 _check_herb_shop_arrival()
+## （被搬到藥草鋪，#865）共用的收尾：記錄治療開始時間、清掉昏迷狀態。抽出來是因為
+## 後者已經人在藥草鋪，不需要瞬移那一段，但計時器與昏迷互斥這兩件事兩邊都要做
+func _begin_treatment(location: String) -> void:
 	_treatment_start_minute = GameClock.hour * 60 + GameClock.minute
-	_treatment_location = "herb_shop"
+	_treatment_location = location
 
 	# 進入治療時移除昏迷狀態（治療與昏迷互斥）
 	_set_condition(CONDITION_INCAPACITATED, false)
 	_incapacitation_start_minute = -1
+
+## 搬運者放手時檢查：這裡是不是藥草鋪、這個角色還需不需要治療（#865，《07_地點/
+## 藥草鋪》表格「昏迷者被搬到藥草鋪」那條觸發——跟 _update_incapacitation() 逾時
+## 轉死亡流程是不同的觸發路徑，互不影響，#379 動的只有逾時那條）。
+## 只看 injury／昏迷，不管清醒與否：P-27 #7 本來就允許強制搬運清醒角色，被送到
+## 藥草鋪放下時一併開始治療是同一套邏輯的延伸，不是新的定性。刻意不對「完全沒
+## 傷」的角色觸發——不然任何一次搬運路過藥草鋪都會把人強制鎖住 60 分鐘
+func _check_herb_shop_arrival() -> void:
+	if _treatment_start_minute != -1:
+		return
+	if stats == null:
+		return
+	var needs_treatment := stats.get_value("injury") > 0.0 or has_condition(CONDITION_INCAPACITATED)
+	if not needs_treatment:
+		return
+
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null or not anchors.has("herb_shop"):
+		return
+	if global_position.distance_to(anchors.resolve_for(self, "herb_shop")) > HERB_SHOP_TREATMENT_RANGE:
+		return
+
+	print_debug("Character %s 被搬到藥草鋪，開始治療" % character_name)
+	_begin_treatment("herb_shop")
 
 ## 每遊戲分鐘檢查治療進度。60 分鐘治療完成後解除所有異常狀態
 func _update_treatment() -> void:
@@ -1796,13 +1826,49 @@ func _end_perform(completed: bool) -> void:
 func _on_perform_finished(_completed: bool) -> void:
 	pass
 
-# ---- 使用背包目前選取的道具 ----
+# ---- 使用道具 ----
+
+## 用某個 item_id 對自己使用一份背包裡的道具（#865）。是不是消耗品不再依
+## category 白名單判斷（原本只認 food／drink，medicine 這種 carry 分類但帶
+## effect_* 的道具會被擋下，見 use_selected_item() 原本的寫法）——改成「這個
+## item_id 在 items.json 裡有沒有定義任何 effect_* 欄位」：有效果代表用了會
+## 消耗，knife／instrument 這類純攜帶物沒有 effect_* 欄位，維持不可消耗。
+## 新增道具不用回頭改這裡的判斷式。用玩家與 NPC 共用的同一個入口，是《00》
+## 原則五（玩家與 NPC 能力對稱）落地：use_selected_item()（玩家快捷欄）與
+## agent.gd 的 use_item AI 動作都呼叫這裡，不各自維護一份消耗品判斷
+func use_item(item_id: String) -> String:
+	if is_dead:
+		return USE_ITEM_IS_DEAD
+	if inventory == null:
+		return USE_ITEM_NO_INVENTORY
+	if not inventory.has_item(item_id, 1):
+		return USE_ITEM_NOT_FOUND
+	if stats == null:
+		return USE_ITEM_NO_STATS
+
+	var item := ItemDatabase.get_item(item_id)
+	var is_consumable := _item_has_any_effect(item)
+
+	var use_reason := inventory.use_item(item_id, stats, item, is_consumable)
+	if use_reason != Inventory.USE_OK:
+		return use_reason
+
+	apply_personality_delta(item.get("personality_delta", {}))
+	return USE_ITEM_OK
+
+## items.json 裡這筆物品有沒有定義任何 "effect_*" 欄位——判斷「用了會不會
+## 做什麼事」，取代 use_item() 原本 category == "food"/"drink" 的白名單
+func _item_has_any_effect(item: Dictionary) -> bool:
+	for key in item.keys():
+		if str(key).begins_with("effect_"):
+			return true
+	return false
 
 # 玩家按下 use_item 鍵時，使用快捷欄目前選取格裡的東西（#611）。跟 eat()／
 # drink() 的差異：那兩個是「自動找背包裡第一個符合分類的物品」，這裡固定用
-# 玩家自己選的那一格——選到的不是食物/飲品就直接失敗，不會幫忙跳去找別的。
-# 是不是消耗品交給 inventory.use_item() 的 is_consumable 參數判斷，這裡只
-# 負責把分類轉成布林值；其餘原因碼直接轉傳，見上面 USE_ITEM_* 常數的說明
+# 玩家自己選的那一格——選到的不是消耗品就直接失敗，不會幫忙跳去找別的。實際
+# 判斷與套用效果交給上面的 use_item(item_id)，這裡只負責把「選到的那一格」
+# 換成 item_id
 func use_selected_item() -> String:
 	if is_dead:
 		return USE_ITEM_IS_DEAD
@@ -1812,21 +1878,8 @@ func use_selected_item() -> String:
 	var slot := inventory.get_slot(inventory.get_selected_index())
 	if slot.is_empty():
 		return USE_ITEM_NO_SELECTION
-	if stats == null:
-		return USE_ITEM_NO_STATS
 
-	var item_id: String = slot["item_id"]
-	var item := ItemDatabase.get_item(item_id)
-	var category: String = item.get("category", "")
-	var is_consumable := category == "food" or category == "drink"
-
-	var use_reason := inventory.use_item(item_id, stats, item, is_consumable)
-	if use_reason != Inventory.USE_OK:
-		return use_reason
-
-	apply_personality_delta(item.get("personality_delta", {}))
-	return USE_ITEM_OK
-
+	return use_item(slot["item_id"])
 
 # ---- 送禮 ----
 
@@ -2604,6 +2657,9 @@ func _detach_haul(hauler: Character) -> void:
 	# 「這次事件還在補發」而多記一次救助事實句（CodeRabbit review 抓到）
 	if _hauled_by.is_empty():
 		_rescued_haulers.clear()
+		# 所有搬運者都放手了——這才是「搬運完成、把人放下來」的時間點，
+		# 檢查放下的地方是不是藥草鋪（#865）
+		_check_herb_shop_arrival()
 
 ## 離開場景樹前放掉搬運關係的兩個方向——GameManager 可以直接對角色呼叫
 ## queue_free()，不經過 stop_haul()：

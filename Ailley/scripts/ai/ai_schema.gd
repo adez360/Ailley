@@ -40,8 +40,10 @@ extends RefCounted
 const ALLOWED_ACTIONS := [
 	# A 溝通類
 	"talk", "persuade", "give", "report", "shout", "perform", "murmur",
-	# B 工作與消費類
-	"hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink", "work",
+	# B 工作與消費類。use_item（#865）是背包裡食物/飲品以外的道具，例如
+	# medicine 治傷——跟 eat／drink 同一類，只是不自動找分類，由 params.item_id
+	# 指名
+	"hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink", "use_item", "work",
 	# C 動作與移動類。nap／rest 已併入 sleep（#771），LLM 只填 duration，
 	# 引擎依時長分級決定套用哪組回復量——見 agent.gd 的
 	# ACTION_RECOVERY／_classify_sleep_tier()
@@ -140,7 +142,13 @@ const ALLOWED_ACTIONS := [
 # 這次只是把它跟 buy／gather 一樣開放給 LLM 選。跟 gather 同一套「先走到地點
 # 才執行」模式，差別是地點錯了（沒有工作站）時失敗原因是 WORK_TARGET_NOT_FOUND
 # 而不是專屬的地點名檢查——見 agent.gd::_pursue_work_task() 的說明
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "hunt_small", "hunt_large", "gather", "follow", "perform", "work", "spit_at_stone", "worship_stone", "praise_stone", "wander"]
+#
+# use_item 是 #865 接上的：跟 eat／drink 同一套「呼叫一次就完成」模式
+# （_pursue_use_item_task()），差別是不自動找分類、由 params.item_id 指名要用
+# 哪一個——原本只有玩家能透過快捷欄呼叫 Character.use_selected_item()，NPC
+# 完全沒有「使用道具」這個動作可選（例如受傷了想吃 medicine 止血），違反
+# 《00》原則五（玩家與 NPC 能力對稱）。兩邊現在共用同一個 Character.use_item(item_id)
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "wash", "idle", "eat", "drink", "use_item", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "hunt_small", "hunt_large", "gather", "follow", "perform", "work", "spit_at_stone", "worship_stone", "praise_stone", "wander"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -499,6 +507,16 @@ static func _validate_task_shape(
 		if not place is String or (place as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
 		buy_params["place"] = (place as String).strip_edges()
+
+	# use_item 動作的 params 驗證（#865）：item_id 是必填字串，跟 buy 的
+	# item_id 驗證同一套，只是沒有 place——use_item 是對自己使用背包裡已有
+	# 的東西，原地執行，不像 buy 要指定去哪買
+	if action == "use_item":
+		var use_item_params: Dictionary = task.get("params", {})
+		var use_item_id: Variant = use_item_params.get("item_id")
+		if not use_item_id is String or (use_item_id as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+		use_item_params["item_id"] = (use_item_id as String).strip_edges()
 
 	# move_to 動作的 params 驗證：跟 buy／gather 同一套「place 是必填
 	# 字串」——這個動作原本完全沒有逐欄位驗證，缺 place 或給空字串會直接
