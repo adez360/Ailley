@@ -40,14 +40,24 @@ static func _compute_config_path() -> String:
 const DEFAULT_BASE_URL := "https://openrouter.ai/api/v1"
 const DEFAULT_MODEL := "openai/gpt-4o-mini"
 
-# 10 秒是 HTTPRequest.timeout 的值，不是自寫的計時器 —— 引擎原生支援逾時。
+# 是 HTTPRequest.timeout 的值，不是自寫的計時器 —— 引擎原生支援逾時。
 # 這是逐 provider 設定不到時的退回值，不是唯一生效的全域值：_parse_provider()
 # 把設定檔裡沒填、或填了非正值（0／負值，HTTPRequest 會解讀成「不逾時」）的
 # provider.timeout 一律退回這個值；填了正值的話 provider.timeout 蓋過它，
 # ai_service.gd::_send()／_probe_models() 每次發送前都把節點的
 # HTTPRequest.timeout 設成當次呼叫的 provider.timeout，同一個節點池跨請求
 # 換著用不同 provider 時逐次生效，不是建立節點當下定死的一次性初值
-const DEFAULT_TIMEOUT := 10.0
+#
+# #852：原本 10 秒，實測本機 llama-server（Qwen2.5-7B-Instruct-Q4_K_M）偶爾
+# 會撞到——單人測試 127 次真實決策呼叫裡撞到 1 次安靜逾時，角色因此完全沒被
+# 問到那一輪，跟 prompt 措辭或 need_bonus 加權無關，是請求本身沒能在時限內
+# 拿到回應。20 秒／30 秒各自跑了 40 次以上、0 次逾時，但這個樣本量沒辦法
+# 精確定出「最佳」數字（伺服器延遲是叢集性的，小樣本容易漏抓），20 秒是
+# 「有實測資料撐腰的最小候選值」，不是理論上限。沒有調更高（例如一度討論
+# 過的 60 秒）：AIService.POOL_SIZE 只有 3 個 HTTP 節點，timeout 拉更長會在
+# 多角色場景下放大排隊風險，這次是單人測試量不到，留給之後的多角色測試
+# 決定要不要再往上調
+const DEFAULT_TIMEOUT := 20.0
 
 ## 速率限制的預設值。放在設定檔而不是寫死在 ai_service.gd，是因為這兩個數字
 ## 是「花多少錢」的旋鈕，屬於玩家的決定，不是程式的常數（決策裡它們也標著「暫定」）。
