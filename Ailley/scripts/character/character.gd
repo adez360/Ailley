@@ -1876,6 +1876,11 @@ func attack(other: Character) -> String:
 		if not other.is_dead:
 			other._set_condition(CONDITION_BLEEDING, other.stats.get_value("injury") >= 20.0)
 			other.stats.injury_decay_paused = other.has_condition(CONDITION_BLEEDING)
+			# 立即同步昏迷判定，跟上面 bleeding 同一個理由（#821）：不等
+			# _update_conditions() 的下一次 tick（最長約 10 秒空窗期）才發現
+			# health 已經歸零。判定條件跟 _update_conditions() 完全一致
+			if other.stats.get_value("health") <= 0.0 and not other.has_condition(CONDITION_INCAPACITATED):
+				other._start_incapacitation()
 	other.force_interrupt()
 	other._on_attacked(self)
 	return ATTACK_OK
