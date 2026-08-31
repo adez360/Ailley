@@ -41,6 +41,17 @@ func test_load_save_data_restores_age() -> void:
 	assert_eq(character.age, 55, "load_save_data() 應把 age 還原成存檔值")
 
 
+func test_load_save_data_accepts_float_age() -> void:
+	# JsonSaveService 走 JSON.parse_string()，JSON 數字一律回 float（#862
+	# 同型陷阱）——load_save_data() 只收 int 的話，存檔年齡永不生效
+	var character := Character.new()
+	track(character)
+
+	character.load_save_data({"age": 55.0})
+
+	assert_eq(character.age, 55, "float 的 age 應轉型後還原成存檔值")
+
+
 func test_load_save_data_missing_age_keeps_current_value() -> void:
 	# 缺席（issue #837 前的舊存檔）沿用目前值，不強制清空——理由跟
 	# home_location_id／character_name 那幾個既有欄位一致

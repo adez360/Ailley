@@ -2058,7 +2058,11 @@ func load_save_data(data: Dictionary) -> void:
 	# （只接受 -1 或 16–70，見《規格書01》§1-1）同理不強制清空，沿用目前值
 	# （CodeRabbit review 抓到，PR #845）
 	var loaded_age: Variant = data.get("age", age)
-	age = loaded_age if loaded_age is int and (loaded_age == -1 or (loaded_age >= 16 and loaded_age <= 70)) else age
+	if loaded_age is int or loaded_age is float:
+		# JsonSaveService 走 JSON.parse_string()，JSON 數字一律回 float（#862
+		# 同型陷阱）——只驗 is int 會讓存檔年齡永不生效；int() 轉型後再驗範圍
+		var age_value: int = int(loaded_age)
+		age = age_value if age_value == -1 or (age_value >= 16 and age_value <= 70) else age
 
 	# 還原昏迷與治療狀態（用 -1 作為哨兵值表示未進入該狀態，其餘合法值是
 	# GameClock.hour*60+GameClock.minute 那個 [0, 1439] 範圍——只驗證 is int
