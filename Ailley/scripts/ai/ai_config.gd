@@ -496,6 +496,24 @@ func has_provider(provider_name: String) -> bool:
 	return get_provider(provider_name) != null
 
 
+## 第一個設定完整、且 base_url 指向本機 loopback 位址的 provider（issue
+## #772，《16》§2.2）。`LlamaSidecar` 用這個決定要不要、以及拿哪一份設定去
+## 拉起隨機附帶的 llama-server——刻意不只認 "local" 這個名字：provider 的
+## key 是玩家自訂的代號（見 get_provider_by_model() 的說明），判斷條件看的
+## 是 base_url 指到哪裡，不是名字本身。查無符合的回 null
+func get_local_provider() -> Provider:
+	for provider in providers.values():
+		if (provider as Provider).valid and _is_loopback_url((provider as Provider).base_url):
+			return provider
+	return null
+
+
+## 玩家如果把本機 provider 拿掉、只留雲端，就不該平白多開一個背景進程——
+## LlamaSidecar 開機時用這個判斷要不要嘗試自動拉起
+func has_local_provider() -> bool:
+	return get_local_provider() != null
+
+
 ## 依「型號字串」反查 provider（#122）。角色存的 `model_name`（《06》）是
 ## 給玩家看的型號（如 `qwen2.5-7b-instruct`），不是 `providers` 字典的 key
 ## （如 `local`）——那個 key 只是玩家自己在設定檔取的代號，規格書故意不讓它
