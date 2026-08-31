@@ -388,18 +388,25 @@ static func _is_literal_context_reference(value: String) -> bool:
 # fail-closed：不在清單裡就不是合法目標，不逐一列舉幻覺的各種可能寫法。
 # attack 額外允許 "god_stone" 這個非角色的特例目標（見該動作原本的說明）。
 #
-# visible_names 傳空陣列代表呼叫端沒有清單可比對（例如 validate_dialogue()
+# visible_names 用 null 代表呼叫端沒有清單可比對（例如 validate_dialogue()
 # 內嵌的承諾任務——對話當下沒有重新組一次完整 envelope，沒有現成清單），
 # 這時只做字面抄襲檢查、不做白名單，避免因為沒有清單就把所有目標都判定
-# 不合法
-static func _is_valid_target(target_name: String, action: String, visible_names: PackedStringArray) -> bool:
+# 不合法。
+#
+# 這裡刻意不用「空陣列代表沒有清單」——空陣列本身是合法值：單人場景／
+# 當下真的沒有人在視野內時，呼叫端傳的就是空陣列，這時「沒有清單」跟
+# 「清單裡沒有半個人」語意完全相反，混用同一個空陣列會讓後者被誤判成前者，
+# 使白名單在最需要擋幻覺的情境（context.visible 真的是空的）形同虛設
+# （實測 Test B 診斷測試踩到：單人測試裡 LLM 選 talk 目標「村民」，這種
+# 情境仍被當成「沒有清單」放行）
+static func _is_valid_target(target_name: String, action: String, visible_names: Variant) -> bool:
 	if _is_literal_context_reference(target_name):
 		return false
-	if visible_names.is_empty():
+	if visible_names == null:
 		return true
 	if action == "attack" and target_name == "god_stone":
 		return true
-	return visible_names.has(target_name)
+	return (visible_names as PackedStringArray).has(target_name)
 
 # 單筆任務的通用邊界檢查：action 白名單、params 型別、talk/attack/give 的
 # 逐欄位檢查、expires_in_minutes 換算、priority／duration 範圍。從
@@ -412,7 +419,7 @@ static func _is_valid_target(target_name: String, action: String, visible_names:
 # 這次決策」的 now_minutes，不是被接受那一刻的；agent.gd::
 # _resolve_pending_persuade() 推進任務池前會重設這個值，見那邊的說明
 static func _validate_task_shape(
-	task: Dictionary, now_minutes: int, visible_names: PackedStringArray = PackedStringArray()
+	task: Dictionary, now_minutes: int, visible_names: Variant = null
 ) -> Dictionary:
 	if not task.has("action") or not task["action"] is String:
 		return _fail(ERROR_BAD_SHAPE)
@@ -703,7 +710,7 @@ static func _validate_tip(data: Variant) -> Dictionary:
 # 刻意擋掉 proposed_task.action == "persuade"：巢狀說服（說服對方去說服
 # 別人）語意混亂，不是這個機制要支援的情境
 static func _validate_persuade_params(
-	params: Variant, now_minutes: int, visible_names: PackedStringArray = PackedStringArray()
+	params: Variant, now_minutes: int, visible_names: Variant = null
 ) -> Dictionary:
 	if not params is Dictionary:
 		return _fail(ERROR_BAD_SHAPE)
@@ -772,7 +779,7 @@ static func _validate_persuade_params(
 # 的參數後面不能接沒預設值的，allow_update_plan 只好跟著一起拿掉預設值）
 static func validate_tasks(
 	data: Dictionary, allow_update_plan: bool, now_minutes: int, allow_appointment: bool = false,
-	allow_perform_tip: bool = false, visible_names: PackedStringArray = PackedStringArray()
+	allow_perform_tip: bool = false, visible_names: Variant = null
 ) -> Dictionary:
 	if not data.has("tasks") or not data["tasks"] is Array:
 		return _fail(ERROR_BAD_SHAPE)
