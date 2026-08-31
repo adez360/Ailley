@@ -692,7 +692,11 @@ func witness_god_stone_gesture(line: String) -> void:
 ## _words_to_creator_spoken 會一起通過早退檢查，兩個回應都成立時就會說兩次
 ## ——CodeRabbit review 抓到的競態
 func maybe_speak_to_creator(heard_line: String) -> void:
-	if words_to_creator.is_empty() or _words_to_creator_spoken or _words_to_creator_pending:
+	# 入眠中不發請求（CodeRabbit review 抓到）：words_to_creator 的 AI 判定
+	# 跟決策請求一樣不該對入眠者發出；回應側（下方 is_dead 那排）同樣補上
+	# is_offline_asleep，入眠發生在請求在途時，回應抵達也不會說出口
+	if is_offline_asleep or words_to_creator.is_empty() \
+			or _words_to_creator_spoken or _words_to_creator_pending:
 		return
 
 	var chance := 0.4 if int(emotion.get("intensity", 0)) >= 70 else 0.25
@@ -707,7 +711,7 @@ func maybe_speak_to_creator(heard_line: String) -> void:
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	_words_to_creator_pending = false
 
-	if is_dead or my_generation != _decision_generation:
+	if is_dead or is_offline_asleep or my_generation != _decision_generation:
 		return
 	if not result["ok"] or not result["data"]["say_it"]:
 		return
@@ -1491,9 +1495,10 @@ func _request_next_decision(
 					+ OFFLINE_RECOVERY_PROBE_INTERVAL_MINUTES
 				enter_offline_sleep("model_unavailable")
 	else:
-		# 決策成功代表 provider 活著（issue #827）：入眠發生當下還在飛的回應
-		# （檢查點、反思這類不吃 _awaiting_decision 旗標的請求）成功抵達時，
-		# 順手把入眠解除，不用等 _probe_offline_recovery() 的下一輪探測
+		# 決策成功代表 provider 活著（issue #827）：入眠發生當下還在飛的決策
+		# 回應成功抵達時，順手把入眠解除。檢查點／反思這類不吃 _awaiting_decision
+		# 旗標的請求不會路過這裡解除入眠，那條路的恢復由 _probe_offline_recovery()
+		# 的低頻探測兜底，不靠在途回應
 		if is_offline_asleep:
 			exit_offline_sleep()
 		var data: Dictionary = result["data"]

@@ -1230,8 +1230,10 @@ func is_in_conversation() -> bool:
 # 是意外共用不是設計決定，issue #113 把它們拆開成各自獨立的判斷
 func is_talk_interruptible() -> bool:
 	# is_dead 排除（CodeRabbit review 抓到）：force_interrupt() 只收尾死亡當下
-	# 已經存在的對話，沒擋之後別人再對死屍發起新對話——死屍不該再被搭話
-	return not _working and not is_dead
+	# 已經存在的對話，沒擋之後別人再對死屍發起新對話——死屍不該再被搭話。
+	# is_offline_asleep 同理：入眠中對話照開的話，下一輪 next_line() 的「…」
+	# 泡泡會蓋掉「被天神召喚中」的入眠指示，AI 對話請求也照發
+	return not _working and not is_dead and not is_offline_asleep
 
 # 對某人搭話。成功回傳 TALK_OK（空字串），否則回傳失敗原因碼
 func talk_to(other: Character) -> String:
@@ -1295,10 +1297,14 @@ func enter_offline_sleep(reason: String) -> void:
 		return
 	is_offline_asleep = true
 	_offline_asleep_since_unix = Time.get_unix_time_from_system()
-	# _is_movement_locked() 已經涵蓋 is_offline_asleep，往後的 _decide_velocity()
-	# 不會再算出移動輸出——但這一刻可能已經在移動中，跟昏迷觸發（見上面
-	# _start_incapacitation()）同一個理由，立即停止，不等下一次決策點才收斂
-	stop_moving()
+	# 比照 _die() 先例用 force_interrupt() 一次收尾：入眠當下可能正在移動、
+	# 對話中或工作中——對話不收掉的話 conversation.gd 會繼續要台詞，下一輪
+	# next_line() 的「…」泡泡會蓋掉入眠指示、AI 對話請求也照發。旗標先設
+	# true 再收尾，_on_action_interrupted()／_reevaluate() 的入眠守衛才接得住，
+	# 不會反過來對入眠者問出新決策（_is_movement_locked() 已涵蓋
+	# is_offline_asleep，force_interrupt() 裡的 stop_moving() 收掉當下已在
+	# 移動中的那一段，跟 _start_incapacitation() 同一個理由）
+	force_interrupt()
 	if stats != null:
 		stats.all_drift_paused = true
 	if bubble != null:
