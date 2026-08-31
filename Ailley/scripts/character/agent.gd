@@ -4265,6 +4265,12 @@ const WANDER_RANGE_CELLS := 6
 ## 選這個選項完全憑它自己判斷（《00》原則二）。目的地只在任務剛開始時選一次
 ## （用任務 id 比對是不是同一趟），不是每次重算都重選，否則角色會在原地
 ## 對著一連串新亂數目標反覆折返，永遠走不到任何一個
+## #818 review：原本抵達第一個目的地就立刻收尾，跟其他長動作（work／sleep／
+## gather）不同——那些占滿整段 duration 才問下一步，wander 卻通常 2-3 遊戲
+## 分鐘就走完一整輪決策，決策請求頻率變成 3-4 倍，多半撞上 AIService 的
+## min_interval_sec 冷卻白跑。改成抵達後若還沒做滿 duration，重新挑一個附近
+## 目的地繼續晃，直到 duration 用完（或附近真的挑不出下一個點）才收尾——
+## 跟其他長動作同一套「占滿 duration」節奏
 func _pursue_wander_task() -> void:
 	if _current_task.get("source", "") == "llm":
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
@@ -4296,6 +4302,15 @@ func _pursue_wander_task() -> void:
 		return
 
 	stop_moving()
+
+	var elapsed := _now_minutes() - _current_task_started_at
+	var duration := int(_current_task.get("duration", 0.0))
+	if elapsed < duration:
+		var next_leg: Variant = _pick_wander_target()
+		if next_leg != null:
+			_wander_target = next_leg
+			return
+
 	last_action_result = ""
 	_track_action_result_for_facts("wander", true)
 	_finish_task_and_request_next()
