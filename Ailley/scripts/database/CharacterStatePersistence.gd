@@ -2054,6 +2054,19 @@ const HOME_MIN_SEPARATION := 128.0
 ## 一條明確的停止線，跟其他成長參數一樣收成常數
 const HOME_PLACEMENT_MAX_RADIUS := 60
 
+## 動態家錨點到房屋原點的固定偏移。錨點不能跟房屋同一點——house.tscn 的
+## StaticBody2D（112x80，見 DYNAMIC_HOME_FOOTPRINT）會把錨點整個蓋住，
+## 角色 move_to 錨點永遠被擋在箱緣（_has_arrived_at() 對動態家永不成立、
+## resolve_from_position() 也反查不到，CodeRabbit review on #825）。比照
+## 靜態家「錨點在門口」的慣例：房屋往北收 48px（3 格），碰撞箱下緣剛好
+## 落在錨點格外，錨點那格與錨點那一整列保持可走
+const DYNAMIC_HOME_ANCHOR_TO_HOUSE := Vector2(0.0, -48.0)
+
+## house.tscn StaticBody2D 碰撞箱尺寸（16px 一格 → 7x5 格的實體足跡）。
+## _find_home_placement() 的落點足跡檢查以這個尺寸為準；house.tscn 改碰撞
+## 尺寸時這裡要跟著改
+const DYNAMIC_HOME_FOOTPRINT := Vector2(112.0, 80.0)
+
 
 ## _ensure_npc_record() 的共用收尾：用 _resolve_home_location() 驗證／必要時
 ## 重新分配 character 目前的 home_location_id，寫回記憶體；若跟 DB 現存值不同
@@ -2369,11 +2382,10 @@ func _next_new_home_location_id() -> String:
 	return "%s%02d" % [HOME_LOCATION_PREFIX, candidate]
 
 
-## 幫一間新家找位置：NavGrid 可走、跟現有每一間家（靜態＋動態）的距離都
-## > HOME_MIN_SEPARATION。用第一間現有的家當搜尋起點，一圈圈往外找（跟
-## NavGrid.nearest_free_cell() 同一套「掃外框」手法，這裡多一條距離篩選）。
-## 找不到回傳 Vector2.INF
-func _find_home_placement() -> Vector2:
+## 幫一間新家找位置：錨點格與房屋 7x5 格足跡在 NavGrid 上都可走、跟現有
+## 每一間家（靜態＋動態）的距離都 > HOME_MIN_SEPARATION。用第一間現有的家
+## 當搜尋起點，一圈圈往外找（跟 NavGrid.nearest_free_cell() 同一套「掃外框」
+## 手法，這裡多一條距離篩選）。找不到回傳 Vector2.INF
 
 	var nav = get_tree().get_first_node_in_group("nav_grid")
 	if nav == null:
@@ -2393,9 +2405,8 @@ func _find_home_placement() -> Vector2:
 					continue
 
 				var cell: Vector2i = seed_cell + Vector2i(x, y)
-				if not nav.is_cell_free(cell):
+				if not _home_footprint_free(nav, cell):
 					continue
-
 				var candidate: Vector2 = nav.cell_to_world(cell)
 				if _far_enough_from_all(candidate, existing_positions):
 					return candidate
@@ -2411,6 +2422,34 @@ func _far_enough_from_all(candidate: Vector2, positions: Array) -> bool:
 
 	return true
 
+
+## 落點足跡檢查：錨點那格可走，且房屋碰撞箱罩住的 7x5 格全部可走。房子
+## 生成後這些格會變成 solid（_spawn_home_scene() 生成後會重建 NavGrid），
+## 只驗錨點單一格會把家蓋在牆上／其他靜態障礙上（CodeRabbit review on #825）
+##
+## 格數由 DYNAMIC_HOME_FOOTPRINT（112x80）對 16px 的 NavGrid 格換算：
+## 以錨點 cell 為基準，房屋中心在北邊 3 格（DYNAMIC_HOME_ANCHOR_TO_HOUSE），
+## 足跡涵蓋 x: -3..+3、y: -5..-1（相對錨點 cell）的 35 格
+func _home_footprint_free(nav, anchor_cell: Vector2i) -> bool:
+
+	if not nav.is_cell_free(anchor_cell):
+		return false
+
+	var house_cell: Vector2i = anchor_cell + Vector2i(
+		int(DYNAMIC_HOME_ANCHOR_TO_HOUSE.x / 16.0),
+		int(DYNAMIC_HOME_ANCHOR_TO_HOUSE.y / 16.0)
+	)
+	var half_cells := Vector2i(
+		int(DYNAMIC_HOME_FOOTPRINT.x / 32.0),
+		int(DYNAMIC_HOME_FOOTPRINT.y / 32.0)
+	)
+
+	for dy in range(-half_cells.y, half_cells.y + 1):
+		for dx in range(-half_cells.x, half_cells.x + 1):
+			if not nav.is_cell_free(house_cell + Vector2i(dx, dy)):
+				return false
+
+	return true
 
 ## 現有每一間家的世界座標，不分靜態動態。靜態 5 間座標來自場景 Marker2D
 ## （單一事實來源，DB 不重複存），動態的座標存在 location.pos_x/pos_y
@@ -2491,6 +2530,10 @@ func _create_or_reactivate_home(location_id: String, position: Vector2) -> void:
 ## resolve_for() 永遠解析不到剛建好的這間家。兩邊都先檢查存不存在才建立，
 ## 讀檔重建（_rebuild_dynamic_homes()）跟成長路徑可能對同一個 location_id
 ## 各呼叫一次，不該疊出兩份
+##
+## position 是錨點（門口可走格）的世界座標，也是 DB pos_x/pos_y 存的值；
+## 房屋本體另用 DYNAMIC_HOME_ANCHOR_TO_HOUSE 往北收，碰撞箱不蓋住錨點。
+## 生成後 deferred 重建 NavGrid（見 _schedule_nav_rebuild()）
 func _spawn_home_scene(location_id: String, position: Vector2) -> void:
 
 	if _home_location_index(location_id) <= STATIC_HOME_ANCHOR_COUNT:
@@ -2527,8 +2570,12 @@ func _spawn_home_scene(location_id: String, position: Vector2) -> void:
 
 	var house := house_scene.instantiate()
 	house.name = house_name
-	house.global_position = position
+	house.global_position = position + DYNAMIC_HOME_ANCHOR_TO_HOUSE
 	world.add_child(house)
+
+	# 新的 StaticBody2D 要等一個物理幀才會反映到物理空間，deferred 重建
+	# NavGrid 讓房子底下的格子立刻變 solid，find_path() 不會把終點算進房裡
+	_schedule_nav_rebuild()
 
 
 ## 拆除一間動態家的場景表現（issue #751：「拆除」語意）。location 列本身
@@ -2556,6 +2603,10 @@ func _demolish_home_scene(location_id: String) -> void:
 			"[CharacterStatePersistence] %s 標記 is_active=0 失敗 | DB=%s"
 			% [location_id, DatabaseManager.db.error_message]
 		)
+
+	# 房子拆掉了，它的格子要還回來——同樣 deferred 一幀（queue_free() 的
+	# 節點要等幀末才真的離開樹）
+	_schedule_nav_rebuild()
 
 
 ## 角色節點離開場景樹時，若牠住的是動態成長出來的家（超出 5 間靜態範圍），
@@ -2585,13 +2636,20 @@ func _release_home_if_dynamic(npc_id: String) -> void:
 		_demolish_home_scene(location_id)
 
 
-## 開機時場景只有原始 5 個 loc_home_0N 錨點（level.tscn 裡的永久內容）——
-## 動態成長出來的那些，錨點與房屋節點都是純執行期產物，重開遊戲後場景樹
-## 裡什麼都沒有，只剩 DB 裡的 pos_x/pos_y 記得它們存在過。開機時把每一筆
-## 仍是 active 的動態家重新 instantiate 一次（issue #751「讀檔時重建」）
+## 進世界時把 DB 裡每一筆仍是 active 的動態家重新 instantiate 一次
+## （issue #751「讀檔時重建」）。動態家的錨點與房屋節點都是純執行期產物，
+## 重開遊戲／回選單再進場後場景樹裡什麼都沒有，只剩 DB 的 pos_x/pos_y。
+##
+## 呼叫時機：autoload 開機的 deferred 那次撞的是主選單場景（沒有世界可掛），
+## 真正的重建入口在世界進場點 main_scene.gd::_ready()——每次進世界（新遊戲／
+## 繼續／回選單再進）都會呼叫（CodeRabbit review on #825 抓到進世界後沒有
+## 任何重建路徑）。場景沒有 place_anchors 就直接跳過：主選單開機不噴錯
 func _rebuild_dynamic_homes() -> void:
 
 	if not DatabaseManager.is_ready:
+		return
+
+	if get_tree().get_first_node_in_group("place_anchors") == null:
 		return
 
 	var rows := DatabaseManager.select_where(
@@ -2607,6 +2665,33 @@ func _rebuild_dynamic_homes() -> void:
 			continue
 		var position := Vector2(float(row.get("pos_x", 0.0)), float(row.get("pos_y", 0.0)))
 		_spawn_home_scene(location_id, position)
+
+## 生成／拆除動態家之後重建 NavGrid（CodeRabbit review on #825）：房子底下
+## 的格子要變 solid、拆掉的要還回來。新加／剛移除的碰撞體要等一個物理幀
+## 才會反映到物理空間（NavGrid._ready() 開場建置同樣的理由），所以 await
+## 一幀再 rebuild。同一拍多次生成／拆除只重建一次——rebuild() 是整張網格
+## 重掃，沒必要逐棟各掃一遍
+var _nav_rebuild_pending := false
+
+func _schedule_nav_rebuild() -> void:
+
+	if _nav_rebuild_pending:
+		return
+
+	var tree := get_tree()
+	if tree == null:
+		return
+
+	_nav_rebuild_pending = true
+	await tree.physics_frame
+	_nav_rebuild_pending = false
+
+	if not is_inside_tree():
+		return
+
+	var nav = tree.get_first_node_in_group("nav_grid")
+	if nav != null:
+		nav.rebuild()
 
 
 ## 占用集合＝「目前還在世界上的角色」的 character_id 對到的 npc 列所占的家。
