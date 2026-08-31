@@ -2054,9 +2054,11 @@ func load_save_data(data: Dictionary) -> void:
 	var loaded_home: Variant = data.get("home_location_id", home_location_id)
 	home_location_id = loaded_home if loaded_home is String else home_location_id
 	# 缺席（issue #837 前的舊存檔）沿用目前值——大多數情況下這是 spawn_character()
-	# 剛從角色庫寫入的真實年齡，比灌回 -1「未知」更正確；型別不對同理不強制清空
+	# 剛從角色庫寫入的真實年齡，比灌回 -1「未知」更正確；型別不對／範圍不對
+	# （只接受 -1 或 16–70，見《規格書01》§1-1）同理不強制清空，沿用目前值
+	# （CodeRabbit review 抓到，PR #845）
 	var loaded_age: Variant = data.get("age", age)
-	age = loaded_age if loaded_age is int else age
+	age = loaded_age if loaded_age is int and (loaded_age == -1 or (loaded_age >= 16 and loaded_age <= 70)) else age
 
 	# 還原昏迷與治療狀態（用 -1 作為哨兵值表示未進入該狀態，其餘合法值是
 	# GameClock.hour*60+GameClock.minute 那個 [0, 1439] 範圍——只驗證 is int

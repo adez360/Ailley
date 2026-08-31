@@ -61,3 +61,26 @@ func test_load_save_data_wrong_type_keeps_current_value() -> void:
 	character.load_save_data({"age": "old"})
 
 	assert_eq(character.age, 33, "型別不對的 age 不該被套用，沿用目前值")
+
+
+func test_load_save_data_out_of_range_keeps_current_value() -> void:
+	# 型別是 int 但超出《規格書01》§1-1 的 16–70 合法範圍（例如手改／損毀存檔）
+	# 不該被套用，同樣沿用目前值（CodeRabbit review 抓到，PR #845）
+	var character := Character.new()
+	track(character)
+	character.age = 33
+
+	character.load_save_data({"age": 999})
+
+	assert_eq(character.age, 33, "超出 16–70 範圍的 age 不該被套用，沿用目前值")
+
+
+func test_load_save_data_accepts_unknown_sentinel() -> void:
+	# -1（未知）本身是合法值，不該被範圍檢查誤擋——理由見 age 欄位本身的說明
+	var character := Character.new()
+	track(character)
+	character.age = 33
+
+	character.load_save_data({"age": -1})
+
+	assert_eq(character.age, -1, "-1 是合法的「未知」哨兵值，應該被接受")

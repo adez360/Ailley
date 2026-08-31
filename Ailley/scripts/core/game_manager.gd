@@ -193,9 +193,14 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 		character.character_name = identity["character_name"]
 	# age 是 Character 基底欄位（Player 也有，跟 decision_source／model_name
 	# 那種 Agent 專屬欄位不同），走跟 character_name 一樣的識別資料管線即可
-	# （issue #837）
+	# （issue #837）。範圍驗證（16–70，《規格書01》§1-1）在這個唯一的寫入點
+	# 做一次就夠，呼叫端（deploy_from_library()／_respawn_character()）不用
+	# 各自重複驗證——角色庫資料若因手改／損毀存檔帶著界外值，落到 30（跟
+	# 角色庫本身 entry.get("age", 30) 的既有預設一致），不會把壞資料直接
+	# 顯示在狀態面板上（CodeRabbit review 抓到，PR #845）
 	if identity.has("age"):
-		character.age = int(identity["age"])
+		var raw_age: int = int(identity["age"])
+		character.age = raw_age if raw_age >= 16 and raw_age <= 70 else 30
 
 	# words_to_creator 只有角色庫投放這條路徑會給（那份是建角當下就生成好、
 	# 可能已人工檢閱過的內容）。要在 add_child() 觸發 _ready() 之前設好——
