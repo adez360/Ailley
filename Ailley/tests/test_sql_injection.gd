@@ -7,10 +7,14 @@ extends McpTestSuite
 ## 1. insert()/update()/query() 的資料值一律走 db.insert_row()/
 ##    db.query_with_bindings() 綁定參數，不拼字串——任何文字都只是被綁進
 ##    一個參數位置存進資料庫，不會被當成 SQL 語法解析。
-## 2. select()/update()/delete() 的 WHERE 條件不支援 bindings（godot-sqlite
-##    這個 addon 的限制，見 DatabaseManager.gd::update() 的檔頭註解），
-##    靠共用的 DatabaseManager.escape_sql_string() 手動轉義（單引號雙寫，
-##    SQL 字串轉義的標準寫法）後才拼進條件字串。
+## 2. select()/update()/delete() 的 WHERE 條件是呼叫端自行組的原始 SQL 字串
+##    （需要 bindings 的查詢請改用 select_where()，見 DatabaseManager.gd 檔頭），
+##    把文字拼進條件前靠 DatabaseManager.escape_sql_string() 轉義（單引號雙寫，
+##    SQL 字串轉義的標準寫法）。
+##
+##    覆蓋範圍：本套件只覆蓋 DatabaseManager.escape_sql_string() 這一份，
+##    sqlite_save_service.gd:451 的 _esc() 等處另有自己的同義副本（轉義規則
+##    相同、不是同一行程式碼），不在覆蓋範圍。
 ##
 ## 不能直接用 autoload 單例（`DatabaseManager.xxx`）測：DatabaseManager.gd
 ## 不是 @tool script，test_run 在編輯器的 tool 環境裡執行，這時候引用
@@ -26,12 +30,19 @@ extends McpTestSuite
 ## delete()/escape_sql_string() 都是同一份正式程式碼，只是資料庫檔案跟正式
 ## 存檔完全分開，不會動到玩家真正的存檔。
 
-const SCRATCH_DB_PATH := "user://__test_sql_injection_scratch.db"
+## scratch DB 的實體路徑不能寫死：user:// 只認 project name、不分 worktree
+## （見 note/技術/存檔.md「user:// 只認 project name，不分 worktree」），
+## 比照 DatabaseManager.DATABASE_PATH（issue #334）用這個 checkout 的 res://
+## 絕對路徑 sha256 組出實際路徑，多個平行 worktree 同時 test_run 才不會
+## 共用／互刪同一份檔案。const 不能呼叫函式，這裡只留名稱，路徑在
+## suite_setup() 內組（_scratch_db_path）。
+const SCRATCH_DB_NAME := "__test_sql_injection_scratch"
 const TAUTOLOGY_PAYLOAD := "x' OR '1'='1"
 const DROP_PAYLOAD := "x'; DROP TABLE scratch; --"
 const UNION_PAYLOAD := "x' UNION SELECT sql FROM sqlite_master --"
 
 var _dbm: Node = null
+var _scratch_db_path := ""
 
 
 func suite_name() -> String:
@@ -44,6 +55,11 @@ func suite_setup(_ctx: Dictionary) -> void:
 		fail_setup("找不到 res://scripts/database/DatabaseManager.gd")
 		return
 
+	_scratch_db_path = "user://%s_%s.db" % [
+		SCRATCH_DB_NAME,
+		ProjectSettings.globalize_path("res://").sha256_text()
+	]
+
 	_dbm = script.new()
 	# 不用 track()：那是給「每個測試各自建、每個測試跑完就該回收」的物件用的
 	# （McpTestRunner 每一個 test_*() 跑完都會呼叫 _free_tracked()）。_dbm 是
@@ -53,10 +69,10 @@ func suite_setup(_ctx: Dictionary) -> void:
 
 	# 不呼叫 _dbm._ready()——那會去開正式存檔的 DATABASE_PATH。這裡自己接一個
 	# scratch db，只建這個測試需要的最小表，不碰任何正式 schema 或種子資料
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(SCRATCH_DB_PATH))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(_scratch_db_path))
 
 	_dbm.db = SQLite.new()
-	_dbm.db.path = SCRATCH_DB_PATH
+	_dbm.db.path = _scratch_db_path
 
 	if not _dbm.db.open_db():
 		fail_setup("scratch SQLite 開不起來：%s" % _dbm.db.error_message)
@@ -75,7 +91,8 @@ func suite_teardown() -> void:
 	if _dbm != null:
 		_dbm.free()
 		_dbm = null
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(SCRATCH_DB_PATH))
+	if not _scratch_db_path.is_empty():
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(_scratch_db_path))
 
 
 func teardown() -> void:
@@ -124,10 +141,18 @@ func test_malicious_string_round_trips_verbatim_through_bound_insert() -> void:
 ## conditions，轉義後應該變成一整段字面值，查不到任何一列——不能讓它
 ## 繞過原本的 id 比對、變成回傳全表
 func test_tautology_condition_matches_nothing() -> void:
-	assert_true(_dbm.insert("scratch", {"id": "row_tautology", "note": "irrelevant"}))
+	assert_true(
+		_dbm.insert("scratch", {"id": "row_tautology", "note": "irrelevant"}),
+		"前置資料插不進去，下面的「查不到任何一列」就不具意義"
+	)
 
 	var condition := "id = '%s'" % _dbm.escape_sql_string(TAUTOLOGY_PAYLOAD)
 	var rows: Array = _dbm.select("scratch", condition, ["id"])
+
+	assert_false(
+		_dbm.last_query_failed,
+		"轉義後的條件應該是合法 SQL，查詢不該失敗——select() 對「查詢失敗」與「沒有符合的列」都回 []，空陣列若只是錯誤就不代表沒被繞過"
+	)
 
 	assert_eq(
 		rows.size(), 0,
