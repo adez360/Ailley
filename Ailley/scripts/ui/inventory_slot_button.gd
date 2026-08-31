@@ -75,8 +75,12 @@ func _ready() -> void:
 	_rebind_inventory()
 
 ## 換角時重新把 changed 接到目前的 Inventory 實例上（見檔頭說明）。
-## 也是 _ready() 首次連線的路徑，跟換角走同一套，不用另外寫一份
-func _rebind_inventory() -> void:
+## 也是 _ready() 首次連線的路徑，跟換角走同一套，不用另外寫一份。
+## `_new_player` 收 player_body_changed 帶的新化身節點，但這裡固定重新用
+## get_first_node_in_group("player") 查，不直接用帶進來的節點——理由跟
+## _get_inventory() 不快取 player 一致；參數只是為了配 signal.connect()
+## 的呼叫簽章，實機測過 Godot 不會自動丟掉多餘引數，方法收的參數數量必須對得上
+func _rebind_inventory(_new_player: Character = null) -> void:
 	var inventory := _get_inventory()
 	if inventory == _connected_inventory:
 		return
