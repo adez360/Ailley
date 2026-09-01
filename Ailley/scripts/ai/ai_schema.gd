@@ -377,6 +377,37 @@ static func validate_dialogue_open(data: Dictionary, now_minutes: int) -> Dictio
 static func _is_literal_context_reference(value: String) -> bool:
 	return value.contains("context.")
 
+# issue #794：上面的 _is_literal_context_reference() 只抓模型照抄 schema
+# 措辭本身當成值那種字面案例（#766），抓不到自由幻覺出來的名字（「路人」、
+# 「村民」、憑空捏造的角色名）——這種字串語法上合法、非空、也不含
+# "context." 字面片段，會被舊版驗證直接放行，一路帶到 resolve() 才因為
+# 找不到這個角色而失敗，保證失敗的任務卻要浪費一整輪決策才會被發現。
+#
+# 這裡改成直接跟呼叫端傳入的 visible_names（組 envelope 當下 context.visible
+# 的真實名字清單）做白名單比對，不管字串「看起來」合不合理，一律
+# fail-closed：不在清單裡就不是合法目標，不逐一列舉幻覺的各種可能寫法。
+# attack 額外允許 "god_stone" 這個非角色的特例目標（見該動作原本的說明）。
+#
+# visible_names 用 null 代表呼叫端沒有清單可比對（例如 validate_dialogue()
+# 內嵌的承諾任務——對話當下沒有重新組一次完整 envelope，沒有現成清單），
+# 這時只做字面抄襲檢查、不做白名單，避免因為沒有清單就把所有目標都判定
+# 不合法。
+#
+# 這裡刻意不用「空陣列代表沒有清單」——空陣列本身是合法值：單人場景／
+# 當下真的沒有人在視野內時，呼叫端傳的就是空陣列，這時「沒有清單」跟
+# 「清單裡沒有半個人」語意完全相反，混用同一個空陣列會讓後者被誤判成前者，
+# 使白名單在最需要擋幻覺的情境（context.visible 真的是空的）形同虛設
+# （實測 Test B 診斷測試踩到：單人測試裡 LLM 選 talk 目標「村民」，這種
+# 情境仍被當成「沒有清單」放行）
+static func _is_valid_target(target_name: String, action: String, visible_names: Variant) -> bool:
+	if _is_literal_context_reference(target_name):
+		return false
+	if visible_names == null:
+		return true
+	if action == "attack" and target_name == "god_stone":
+		return true
+	return (visible_names as PackedStringArray).has(target_name)
+
 # 單筆任務的通用邊界檢查：action 白名單、params 型別、talk/attack/give 的
 # 逐欄位檢查、expires_in_minutes 換算、priority／duration 範圍。從
 # validate_tasks() 的逐筆迴圈裡抽出來，讓 persuade 的 proposed_task
@@ -387,7 +418,9 @@ static func _is_literal_context_reference(value: String) -> bool:
 # 絕對 expires_at 要吃呼叫當下的時間——proposed_task 換算時用的是「發起者
 # 這次決策」的 now_minutes，不是被接受那一刻的；agent.gd::
 # _resolve_pending_persuade() 推進任務池前會重設這個值，見那邊的說明
-static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictionary:
+static func _validate_task_shape(
+	task: Dictionary, now_minutes: int, visible_names: Variant = null
+) -> Dictionary:
 	if not task.has("action") or not task["action"] is String:
 		return _fail(ERROR_BAD_SHAPE)
 
@@ -414,7 +447,7 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 		if not target is String or (target as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
 		var target_name: String = (target as String).strip_edges()
-		if _is_literal_context_reference(target_name):
+		if not _is_valid_target(target_name, action, visible_names):
 			return _fail(ERROR_BAD_SHAPE)
 		# 存回去的是修剪過的值——_find_character_by_name() 用精確比對，
 		# LLM 輸出偶爾帶前後空白的話，不修剪會讓合法目標在執行層被誤判成
@@ -431,7 +464,7 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 		var give_target: Variant = give_params.get("target")
 		if not give_target is String or (give_target as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
-		if _is_literal_context_reference((give_target as String).strip_edges()):
+		if not _is_valid_target((give_target as String).strip_edges(), action, visible_names):
 			return _fail(ERROR_BAD_SHAPE)
 
 		if give_params.has("count"):
@@ -676,7 +709,9 @@ static func _validate_tip(data: Variant) -> Dictionary:
 # 判斷內容」的原則，這裡只驗證格式，不驗證說服的理由站不站得住腳。
 # 刻意擋掉 proposed_task.action == "persuade"：巢狀說服（說服對方去說服
 # 別人）語意混亂，不是這個機制要支援的情境
-static func _validate_persuade_params(params: Variant, now_minutes: int) -> Dictionary:
+static func _validate_persuade_params(
+	params: Variant, now_minutes: int, visible_names: Variant = null
+) -> Dictionary:
 	if not params is Dictionary:
 		return _fail(ERROR_BAD_SHAPE)
 	var persuade_params := params as Dictionary
@@ -685,7 +720,7 @@ static func _validate_persuade_params(params: Variant, now_minutes: int) -> Dict
 	if not target is String or (target as String).strip_edges().is_empty():
 		return _fail(ERROR_BAD_SHAPE)
 	var target_name: String = (target as String).strip_edges()
-	if _is_literal_context_reference(target_name):
+	if not _is_valid_target(target_name, "persuade", visible_names):
 		return _fail(ERROR_BAD_SHAPE)
 
 	var reason: Variant = persuade_params.get("reason")
@@ -712,7 +747,7 @@ static func _validate_persuade_params(params: Variant, now_minutes: int) -> Dict
 		var proposed_task := proposed as Dictionary
 		if proposed_task.get("action") == "persuade":
 			return _fail(ERROR_BAD_SHAPE)
-		var proposed_result := _validate_task_shape(proposed_task, now_minutes)
+		var proposed_result := _validate_task_shape(proposed_task, now_minutes, visible_names)
 		if not proposed_result["ok"]:
 			return _fail(proposed_result["error"])
 		normalized["proposed_task"] = proposed_result["data"]
@@ -744,7 +779,7 @@ static func _validate_persuade_params(params: Variant, now_minutes: int) -> Dict
 # 的參數後面不能接沒預設值的，allow_update_plan 只好跟著一起拿掉預設值）
 static func validate_tasks(
 	data: Dictionary, allow_update_plan: bool, now_minutes: int, allow_appointment: bool = false,
-	allow_perform_tip: bool = false
+	allow_perform_tip: bool = false, visible_names: Variant = null
 ) -> Dictionary:
 	if not data.has("tasks") or not data["tasks"] is Array:
 		return _fail(ERROR_BAD_SHAPE)
@@ -765,13 +800,13 @@ static func validate_tasks(
 		# 共用邊界檢查與最後 append 進 tasks[] 的是同一份乾淨資料，不是模型
 		# 的原始輸入
 		if task.get("action") == "persuade":
-			var persuade_result := _validate_persuade_params(task.get("params"), now_minutes)
+			var persuade_result := _validate_persuade_params(task.get("params"), now_minutes, visible_names)
 			if not persuade_result["ok"]:
 				return _fail(persuade_result["error"])
 			task = task.duplicate()
 			task["params"] = persuade_result["data"]
 
-		var shape_result := _validate_task_shape(task, now_minutes)
+		var shape_result := _validate_task_shape(task, now_minutes, visible_names)
 		if not shape_result["ok"]:
 			return _fail(shape_result["error"])
 		tasks.append(shape_result["data"])

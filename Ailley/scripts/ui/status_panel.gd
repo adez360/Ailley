@@ -201,7 +201,10 @@ func _set_tab(tab: int) -> void:
 		2: _refresh_items_tab()
 
 func _refresh_status_tab() -> void:
-	age_label.text = _line("UI_STATUS_AGE", AGE_PLACEHOLDER)
+	# -1 是「未知」（見 character.gd::age 的說明）——固定寫在場景裡的 NPC
+	# 沒有年齡資料，維持既有的佔位符，不是假造一個數字（issue #837）
+	var age_value := str(_character.age) if _character.age >= 0 else AGE_PLACEHOLDER
+	age_label.text = _line("UI_STATUS_AGE", age_value)
 
 	# 跟 debug_console.gd 的 status 指令同一個條件——沒掛 Inventory 就沒有錢可顯示，
 	# 不是「顯示 0」，是這個角色根本沒有這項資料

@@ -9,11 +9,20 @@ extends Node2D
 ## 現在只有一份，找不到就是真的沒有這個地點，不用假裝有座標。
 
 
-## 站位避讓半徑（issue #657）：多個角色被排到同一個地點錨點時，長時間停留
-## 下來會完全疊在同一個像素上，視覺上分不清有幾個角色在場。抓 8px（半格）——
-## 夠讓角色視覺上分得開，又不會偏出 TALK_RANGE（32px，見 character.gd）讓
-## 角色明明站在「同一個地點」卻搭不到話
-const OVERLAP_AVOID_RADIUS := 8.0
+## 站位散開的最小離心距離（issue #657 的後繼設計，見 #814）：角色被排到
+## 同一個地點時，雜湊點若剛好落在區域正中心（跟玩家、跟錨點原座標同一點），
+## 長時間停留會完全疊圖。抓 6px 當下限，雜湊點離中心太近就沿同方向推到這個
+## 距離，不追求「一定分得很開」——真的分多開由地點區域大小決定，這裡只保證
+## 不會疊在正中心
+const MIN_OFFSET_FROM_CENTER := 6.0
+
+## 站位散開的最大離心距離（review round 1 major，PR #869）：雜湊點被矩形
+## clamp 之後可能貼到角落，離中心最遠 45px，超出 TALK_RANGE/WORK_RANGE/
+## BUY_RANGE 的 32px 互動半徑——buy/work 會永久判定 TOO_FAR、排程 talk
+## 配對不到。限縮在 TALK_RANGE/2（16px）以內，任意兩個站位點相距最遠 32px，
+## 三種 32px 互動檢查全部安全；跟 MIN_OFFSET_FROM_CENTER（6）一上一下，
+## 兩者不衝突
+const MAX_STANCE_DISTANCE := 16.0
 
 ## AI 決策／`current_place`／`npc_schedule.json` 看到的抽象地點名（issue #391，
 ## 《規格書07_地點/家》）。場景裡沒有一個叫這個名字的錨點——每個角色實際
@@ -31,46 +40,61 @@ func has(place_name: String) -> bool:
 	return has_node(NodePath(place_name))
 
 
-## 純座標查詢：回傳錨點原座標本身，不帶任何站位偏移。給手上沒有「這是誰
-## 要去的」Character 的呼叫端用——debug 主控台、建角流程的一次性座標查詢、
-## 販賣機選單的距離判斷（vending_menu.gd）這類只問「這個地點在哪」、不問
-## 「誰站在這裡」的情境。要問「某個角色在這個地點的站位」一律走 resolve_for()，
-## 兩個函式的差別只有那裡有沒有偏移，不要在呼叫端自己手動加
+## 純座標查詢：回傳地點的代表座標（Area2D 原點），不帶任何站位偏移。給手上
+## 沒有「這是誰要去的」Character 的呼叫端用——debug 主控台、建角流程的一次性
+## 座標查詢、販賣機選單的距離判斷（vending_menu.gd）這類只問「這個地點在哪」、
+## 不問「誰站在這裡」的情境。要問「某個角色在這個地點的站位」一律走
+## resolve_for()，兩個函式的差別只有那裡有沒有偏移，不要在呼叫端自己手動加
 func resolve(place_name: String) -> Vector2:
-	var marker: Node2D = get_node_or_null(NodePath(place_name))
-	if marker == null:
+	var area: Node2D = get_node_or_null(NodePath(place_name))
+	if area == null:
 		push_error("PlaceAnchors: 沒有這個地點 %s" % place_name)
 		return Vector2.ZERO
-	return marker.global_position
+	return area.global_position
 
 
-## 用 character_id 的雜湊值算一個固定方向的偏移，半徑固定 OVERLAP_AVOID_RADIUS。
-## 同一個角色每次呼叫都拿到同一個偏移——不能每次都不同，否則移動中的抵達
-## 判定（_has_arrived_at()）會追著一個一直在動的目標跑，永遠判定不了「到了」。
-## 不同角色的雜湊值大機率不同、偏移方向也跟著不同，多角色排到同一個錨點時
-## 自然散開，不需要引擎去追蹤「這個地點現在站了幾個人、該讓下一個站哪裡」
-## 這種主動式排位邏輯——跟這個檔案「座標就是場景裡的單一事實來源」一致，
-## 不額外維護一份佔位狀態
+## 地點 Area2D 底下第一個 CollisionShape2D 子節點。issue #814：12 個地點目前
+## 都是 RectangleShape2D 矩形範圍，多邊形留到真的需要非矩形範圍時再加
+func _place_shape_node(area: Node) -> CollisionShape2D:
+	for child in area.get_children():
+		if child is CollisionShape2D:
+			return child
+	return null
+
+
+## 用 character_id 的雜湊值在地點的 Area2D 矩形範圍內算一個固定點（issue #814，
+## 前身是 #657 的 _overlap_offset()）。同一個角色每次呼叫都拿到同一個點——
+## 不能每次都不同，否則移動中的抵達判定（_has_arrived_at()）會追著一個一直
+## 在動的目標跑，永遠判定不了「到了」。不同角色的雜湊值大機率不同，多角色
+## 排到同一地點時自然散落在整個區域內，不需要引擎去追蹤「這個地點現在站了
+## 幾個人、該讓下一個站哪裡」這種主動式排位邏輯——跟這個檔案「座標就是場景
+## 裡的單一事實來源」一致，不額外維護一份佔位狀態
 ##
-## 已知取捨（code review 抓到，PR #721）：hash() % 360 只有 360 個離散角度，
-## 角色一多（5–10 個擠同一錨點）就有機率抽到相同或相近（角差 20° 內兩點
-## 距離 < 2.8px）的角度，視覺上仍然貼近甚至重疊。這是「純函式、無狀態」
-## 換來的——要徹底分開就得維護佔位狀態做主動排位，這個設計已拍板不做。
-## 屬已知取捨，不是 bug，之後看到不要當缺陷回報
-func _overlap_offset(character_id: String) -> Vector2:
-	var angle: float = (hash(character_id) % 360) * TAU / 360.0
-	return Vector2.RIGHT.rotated(angle) * OVERLAP_AVOID_RADIUS
+## 雜湊點離中心太近（< MIN_OFFSET_FROM_CENTER）會被推到這個下限距離，避免
+## 落在正中心跟玩家／錨點原座標疊在一起
+func _place_hashed_point(area: Node2D, character_id: String) -> Vector2:
+	var shape_node := _place_shape_node(area)
+	if shape_node == null or not (shape_node.shape is RectangleShape2D):
+		return area.global_position
+	var half: Vector2 = (shape_node.shape as RectangleShape2D).size / 2.0
+	var hx: float = (hash(character_id) % 2000) / 1000.0 - 1.0
+	var hy: float = (hash(character_id + "_y") % 2000) / 1000.0 - 1.0
+	var local_offset := Vector2(hx * half.x, hy * half.y)
+	if local_offset.length() < MIN_OFFSET_FROM_CENTER and local_offset.length() > 0.001:
+		local_offset = local_offset.normalized() * MIN_OFFSET_FROM_CENTER
+	local_offset.x = clampf(local_offset.x, -half.x, half.x)
+	local_offset.y = clampf(local_offset.y, -half.y, half.y)
+	local_offset = local_offset.limit_length(MAX_STANCE_DISTANCE)
+	return area.to_global(shape_node.position + local_offset)
 
-
-## 偏移落點的可走性驗證（code review 抓到，PR #721）：8px 是半格，錨點又
-## 不一定在格心，雜湊方向跨格時落點可能落在鄰格——包括販賣機 StaticBody2D
-## 佔掉的障礙格。落點格 solid 的話，find_path() 會把終點 snap 到別格、
-## _has_arrived_at() 兩個判定（2px 距離／同格）都永不成立，任務被誤報
-## 「走不到」還不重試（重現 #670 修掉的結構性死鎖）。所以偏移產生後一律
-## 用 NavGrid 驗證，不可走就退回錨點原座標——寧可重疊也不要走不到。
-## NavGrid 跟 PlaceAnchors 一樣走場景群組取得（get_first_node_in_group，
-## 見 character.gd／agent.gd 的既有慣例），不在樹上或還沒建完時一律視為
-## 不可走、退回錨點，跟「寧可重疊」同一個方向
+## 落點的可走性驗證（code review 抓到，PR #721）：地點區域內的落點可能落在
+## 障礙格（例如販賣機 StaticBody2D 佔掉的格子）。落點格 solid 的話，
+## find_path() 會把終點 snap 到別格、_has_arrived_at() 兩個判定（2px 距離／
+## 同格）都永不成立，任務被誤報「走不到」還不重試（重現 #670 修掉的結構性
+## 死鎖）。所以落點產生後一律用 NavGrid 驗證，不可走就退回地點代表座標——
+## 寧可重疊也不要走不到。NavGrid 跟 PlaceAnchors 一樣走場景群組取得
+## （get_first_node_in_group，見 character.gd／agent.gd 的既有慣例），不在
+## 樹上或還沒建完時一律視為不可走、退回代表座標，跟「寧可重疊」同一個方向
 func _offset_position_walkable(position: Vector2) -> bool:
 	var nav = get_tree().get_first_node_in_group("nav_grid")
 	if nav == null:
@@ -90,22 +114,18 @@ func has_for(character: Character, place_name: String) -> bool:
 	return has(place_name)
 
 
-## 回傳「這個角色在這個地點的站位」：錨點座標外加一個依角色 id 雜湊算出的
-## 固定方向偏移（見 _overlap_offset()），多角色排到同一錨點時自然散開，
-## 不會完全疊在同一個像素上。偏移是掛在這裡而不是 resolve()——resolve()
-## 要維持純座標查詢，而且 resolve_for() 內部解析 home（resolve
-## (character.home_location_id)）也會經過這裡，家的站位避讓才不會被繞過
-## （code review 抓到，PR #721 跟 #727 的簽名衝突）。
+## 回傳「這個角色在這個地點的站位」：在地點 Area2D 的矩形範圍內，依角色 id
+## 雜湊算出的固定點（見 _place_hashed_point()），多角色排到同一地點時自然
+## 散落在整個區域內，不會完全疊在同一個像素上。偏移是掛在這裡而不是
+## resolve()——resolve() 要維持純座標查詢，而且 resolve_for() 內部解析 home
+## （resolve(character.home_location_id)）也會經過這裡，家的站位避讓才不會
+## 被繞過（code review 抓到，PR #721 跟 #727 的簽名衝突）。
 ##
-## 玩家不吃偏移（明確決定，PR #721 review nit-2）：玩家是自由行動、人手
-## 控制，沒有 _has_arrived_at() 這種要跟移動目標對齊的自動抵達判定；而且
-## 玩家站錨點原座標、NPC 固定偏移 8px 離開錨點，玩家跟任一 NPC 的距離
-## 恆為 8px、永遠不會疊——這是當初 PR #721 拍板「player.gd 不改」時驗過
-## 的性質，偏移若也套到玩家身上，玩家跟 NPC 就有機會抽到相近角度而疊站，
-## 這個性質就沒了。所以 player（"player" 群組，跟 agent.gd 的識別慣例
-## 同一套）一律回錨點原座標——包括 agent.gd 說服流程的 waypoint indicator
-## （resolve_for(player, place)，#415）：指標指向錨點本身，引導玩家去
-## 「這個地點」，不是去某個 NPC 的偏移站位
+## 玩家不吃偏移（明確決定，PR #721 review nit-2，issue #814 沿用）：玩家是
+## 自由行動、人手控制，沒有 _has_arrived_at() 這種要跟移動目標對齊的自動
+## 抵達判定，一律回地點代表座標——包括 agent.gd 說服流程的 waypoint
+## indicator（resolve_for(player, place)，#415）：指標指向地點本身，引導
+## 玩家去「這個地點」，不是去某個 NPC 的偏移站位
 func resolve_for(character: Character, place_name: String) -> Vector2:
 	if place_name == HOME_PLACE_NAME:
 		if character.home_location_id.is_empty():
@@ -121,9 +141,10 @@ func resolve_for(character: Character, place_name: String) -> Vector2:
 	var anchor := resolve(place_name)
 	if character.is_in_group("player"):
 		return anchor
-	var offset_position: Vector2 = anchor + _overlap_offset(character.character_id)
-	if _offset_position_walkable(offset_position):
-		return offset_position
+	var area: Node2D = get_node(NodePath(place_name))
+	var candidate: Vector2 = _place_hashed_point(area, character.character_id)
+	if _offset_position_walkable(candidate):
+		return candidate
 	return anchor
 
 
@@ -146,20 +167,34 @@ func to_ai_place_name(place_name: String) -> String:
 	return place_name
 
 
-# 反向解析（issue #426）：給一個世界座標，回傳它落在哪個地點的錨點半徑內，
-# 都不在的話回傳空字串——「在地點之間」是合法值，不是錯誤，呼叫端不用另外
-# 判斷。跟 resolve() 相反方向，只給事實句這類「記錄當下實際位置」的用途用，
-# 不取代 current_place（那個欄位對「移動任務進行中，目的地是哪」仍然是對的
-# 語意，見 agent.gd 的呼叫端）。多個地點錨點重疊的話回傳最近的一個
-func resolve_from_position(position: Vector2, radius: float) -> String:
+# 反向解析（issue #426，issue #814 改用地點實際範圍取代單一固定半徑）：給一個
+# 世界座標，回傳它落在哪個地點的 Area2D 範圍內，都不在的話回傳空字串——
+# 「在地點之間」是合法值，不是錯誤，呼叫端不用另外判斷。跟 resolve() 相反
+# 方向，只給事實句這類「記錄當下實際位置」的用途用，不取代 current_place
+# （那個欄位對「移動任務進行中，目的地是哪」仍然是對的語意，見 agent.gd 的
+# 呼叫端）。多個地點範圍重疊的話回傳中心最近的一個
+#
+# 不再吃 radius 參數——舊版每個地點共用同一個呼叫端自訂半徑（agent.gd 的
+# ACTUAL_PLACE_RADIUS／character.gd 的 DEATH_LOCATION_RADIUS，兩者其實同一個
+# 值），沒辦法反映每個地點實際大小不同（森林/藥田只隔 24px，家跟家最近
+# 48px，卻要跟酒館這種大地點共用同一個判斷半徑）。現在直接問「這個座標在
+# 不在這個地點自己的範圍裡」，範圍多大是場景裡每個地點自己的事
+func resolve_from_position(position: Vector2) -> String:
 	var nearest_name := ""
 	var nearest_distance := INF
 	for child in get_children():
 		if not (child is Node2D):
 			continue
-		var anchor := child as Node2D
-		var distance: float = position.distance_to(anchor.global_position)
-		if distance <= radius and distance < nearest_distance:
+		var area := child as Node2D
+		var shape_node := _place_shape_node(area)
+		if shape_node == null or not (shape_node.shape is RectangleShape2D):
+			continue
+		var half: Vector2 = (shape_node.shape as RectangleShape2D).size / 2.0
+		var local_pos: Vector2 = area.to_local(position) - shape_node.position
+		if absf(local_pos.x) > half.x or absf(local_pos.y) > half.y:
+			continue
+		var distance: float = position.distance_to(area.global_position)
+		if distance < nearest_distance:
 			nearest_distance = distance
 			nearest_name = child.name
 	return nearest_name
