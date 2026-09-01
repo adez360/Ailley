@@ -4042,22 +4042,48 @@ func _pursue_work_task() -> void:
 	last_action_result = reason
 
 	if reason == Character.WORK_OCCUPIED:
-		# 工作站已被佔用：保留目前的 schedule work 任務，不清掉也不呼叫 _reevaluate()。
-		# 讓下一個時間事件觸發重試，避免頻繁的同步重評估導致遊戲無回應
+		# 工作站被佔用：先原地重試（名額通常很快釋出，不急著放棄），但要記進
+		# 跨任務失敗計數（issue #868）——不然這個分支會變成全檔案唯一「失敗
+		# 但什麼都不記錄」的路徑，AI 永遠不會被告知它其實一直失敗。
 		push_warning("Agent %s: work_at 失敗（工作站被佔用）" % [character_name])
+		_track_action_result_for_facts("work", false)
+		if _consecutive_failure_count >= FACT_CONSECUTIVE_FAILURE_THRESHOLD:
+			# 連續 3 次還是佔用中：退避／放棄，別再每個遊戲分鐘原地重試。
+			# schedule 來源退避到這個 window 結束（同 eat/drink 那套機制）；
+			# llm 來源沒有 window 可退，直接離開任務池（同 eat/drink 對 llm
+			# 失敗的既有處理）
+			_pursued_place = ""
+			_pursuit_done = false
+			_mark_schedule_retry_backoff(_current_task)
+			if _current_task.get("source", "") != "schedule":
+				_remove_task(_current_task.get("id", ""))
+			_clear_current_task(false)
+			if llm_decision_enabled and not _awaiting_decision:
+				_request_next_decision(_today_plan_needs_new_goal())
 		return
 
 	if reason != Character.WORK_OK:
 		push_warning("Agent %s: work_at 失敗（%s）" % [character_name, reason])
 		# 其他失敗原因：清掉任務、重置 pursuit state 並等待決策。同上改用
 		# _clear_current_task()，避免漏記 today_log；失敗也一併設退避，理由
-		# 同上一條路徑（CodeRabbit review 抓到）
+		# 同上一條路徑（CodeRabbit review 抓到）。這裡也補上跨任務失敗計數
+		# （issue #868 發現這個分支原本沒記）跟 llm 來源的任務池清除
+		# （沒有這行，llm 來源的失敗任務會留在池子裡，下一次重算原地選回來）
 		_pursued_place = ""
 		_pursuit_done = false
 		_mark_schedule_retry_backoff(_current_task)
+		if _current_task.get("source", "") == "llm":
+			_remove_task(_current_task.get("id", ""))
+		_track_action_result_for_facts("work", false)
 		_clear_current_task(false)
 		if llm_decision_enabled and not _awaiting_decision:
 			_request_next_decision(_today_plan_needs_new_goal())
+		return
+
+	# work_at() 成功卡位（不代表已做滿撥款，撥款另由 _run_work() 協程完成）。
+	# 一併記成功，才能把連續失敗計數歸零——不然這裡若漏記，一次成功卡位
+	# 之後的下一次失敗會延續上一輪沒被清掉的計數，門檻提早觸發
+	_track_action_result_for_facts("work", true)
 
 # perform 任務的執行（#575）：跟 eat／drink 一樣先用 resolve() 判定（perform
 # 在 SUCCESS_PARAMS 上，這裡才是真正擲骰的那一刻，只呼叫一次，不是每個
