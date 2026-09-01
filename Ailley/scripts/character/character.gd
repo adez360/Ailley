@@ -351,6 +351,8 @@ var last_words: Variant = null	# String 或 null（來不及開口）；只有 A
 var corpse_decay := 0.0		# 0–100，_update_corpse_decay() 每 tick +0.7；達 100 觸發 _erect_unmarked_grave()
 var is_buried := false			# 人為安葬見 bury()（#380），自動立無名碑見 _erect_unmarked_grave()（#387）
 var grave_id: Variant = null	# 同上，String 或 null
+var grave_slot_index := -1		# 安葬在墓園時分配到的墓位索引（0~CEMETERY_GRAVE_CAPACITY-1），
+								# -1 代表未分配（尚未安葬，或立碑當下不在墓園範圍內，見 _assign_cemetery_grave_slot()）
 var buried_by: Variant = null	# 誰安葬了你，String（character_id）或 null（無名碑等非人為安葬，見 _erect_unmarked_grave()）
 var buried_tick := -1			# 安葬當下的全域 tick，同 death_tick 換算方式，見 bury()
 var is_anonymous := false		# 無名碑（《規格書09》§3-4／§4-3）：_erect_unmarked_grave() 自動立碑時設 true；
@@ -368,6 +370,9 @@ var _outline: ShaderMaterial = null
 
 
 func _ready() -> void:
+	# GRAVE_SLOT_OFFSETS 的個數就是墓位上限（兩者改動要一起改，見常數註解）——
+	# 個數兜不起來時越早炸越好，不然墓位會配置到沒有偏移座標的索引
+	assert(GRAVE_SLOT_OFFSETS.size() == CEMETERY_GRAVE_CAPACITY)
 	# 場景裡固定的 NPC，身分是設計時決定好的資料——先用節點名查 npc_schedule.json 的
 	# identities（跟 agent.gd::_load_schedule() 查 assignments 同一個模式）。查到就用，
 	# 讓 character_id 跨場次穩定（relationships 拿它當 key，每次重開都變等於認識的人全歸零）。
@@ -909,6 +914,16 @@ const CEMETERY_PLACE_NAME := "cemetery"
 ## Phase 3（《99》P-57），不在這則範圍內
 const CEMETERY_GRAVE_CAPACITY := 6
 
+## 6 個墓位相對墓園錨點的偏移座標，3×2 排列（issue #833）。角色影格是 16×16px
+## （見 assets/characters），橫向間距 20px、縱向間距 20px 確保相鄰墓位的
+## get_pick_rect() 不會重疊；四角墓位離錨點最遠 sqrt(20²+10²)≈22.4px，仍在
+## BURY_RANGE／DEATH_LOCATION_RADIUS（32px）內，不影響既有的距離與地點判斷。
+## 個數固定對應 CEMETERY_GRAVE_CAPACITY，兩者改動要一起改
+const GRAVE_SLOT_OFFSETS: Array[Vector2] = [
+	Vector2(-20, -10), Vector2(0, -10), Vector2(20, -10),
+	Vector2(-20, 10), Vector2(0, 10), Vector2(20, 10),
+]
+
 const BURY_OK := ""
 const BURY_TARGET_NOT_FOUND := "TARGET_NOT_FOUND"
 const BURY_TARGET_IS_SELF := "TARGET_IS_SELF"
@@ -945,6 +960,7 @@ func bury(corpse: Character) -> String:
 	corpse.grave_id = "grave_%s" % corpse.character_id
 	corpse.buried_by = character_id
 	corpse.buried_tick = _current_tick()
+	_assign_cemetery_grave_slot(corpse)
 
 	# 解除既有搬運關係——is_being_hauled() 在 _decide_velocity() 裡排在
 	# petrified 鎖定之前（見該函式註解），is_buried 本身不會讓身體停止跟著
@@ -975,6 +991,38 @@ func _cemetery_grave_count() -> int:
 			count += 1
 	return count
 
+## 目前空著的墓位索引，跟 _cemetery_grave_count() 同一種「不另存計數器」寫法——
+## 直接掃場上已安葬且 grave_slot_index 已分配的角色，找 GRAVE_SLOT_OFFSETS
+## 範圍內第一個沒被占用的索引。呼叫端已經用 _cemetery_grave_count() 檢查過
+## 還有空位，理論上不會拿到 -1，這裡仍防呆回傳 -1 避免呼叫端誤用越界索引
+func _cemetery_free_grave_slot() -> int:
+	var occupied: Array[int] = []
+	for node in get_tree().get_nodes_in_group("characters"):
+		if node is Character and (node as Character).is_buried:
+			occupied.append((node as Character).grave_slot_index)
+	for i in GRAVE_SLOT_OFFSETS.size():
+		if not occupied.has(i):
+			return i
+	return -1
+
+## 把 corpse 吸附到一個空的墓位座標（issue #833）：bury()／_erect_unmarked_grave()
+## 立碑成功時共用，修掉「所有墓碑疊在同一個錨點，後面的永遠點不到」的問題
+## （selection.gd::character_at() 用 pick_rect 中心距離判勝負，座標相同時
+## 恆平局，先加入場景樹的永遠贏）。只在 corpse 當下確實位於墓園範圍內才吸附
+## ——_erect_unmarked_grave() 也可能發生在墓園以外的地方腐壞見底，那種情況
+## 不該把屍體「傳送」過來，維持《規格書09》§1「腐壞原地立無名碑」的語意
+func _assign_cemetery_grave_slot(corpse: Character) -> void:
+	if not _is_at_cemetery(corpse.get_body_position()):
+		return
+	var slot := _cemetery_free_grave_slot()
+	if slot < 0:
+		return
+	corpse.grave_slot_index = slot
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null:
+		return
+	corpse.global_position = anchors.resolve(CEMETERY_PLACE_NAME) + GRAVE_SLOT_OFFSETS[slot]
+
 ## 屍體腐壞見底、沒人安葬時，引擎自動立「無名碑」（#387，《規格書09》§1／§3-4）：
 ## 確保每一個死亡都會被記錄，不需要搬到墓園、不需要任何人動手。跟 bury() 的差別
 ## 只在「誰做的」——is_buried 一樣設 true，但 buried_by 留 null（自動、非人為），
@@ -990,6 +1038,7 @@ func _erect_unmarked_grave() -> void:
 	buried_by = null
 	buried_tick = _current_tick()
 	is_anonymous = true
+	_assign_cemetery_grave_slot(self)
 	print_debug("Character %s 腐壞見底，自動立無名碑" % character_name)
 
 
@@ -1113,6 +1162,7 @@ func _clear_death_state() -> void:
 	corpse_decay = 0.0
 	is_buried = false
 	grave_id = null
+	grave_slot_index = -1
 	buried_by = null
 	buried_tick = -1
 	is_anonymous = false
@@ -2017,6 +2067,7 @@ func get_save_data() -> Dictionary:
 		"corpse_decay": corpse_decay,
 		"is_buried": is_buried,
 		"grave_id": grave_id,
+		"grave_slot_index": grave_slot_index,
 		"buried_by": buried_by,
 		"buried_tick": buried_tick,
 		"is_anonymous": is_anonymous,
@@ -2112,6 +2163,15 @@ func load_save_data(data: Dictionary) -> void:
 		is_buried = loaded_buried if loaded_buried is bool else false
 		var loaded_grave: Variant = data.get("grave_id", null)
 		grave_id = loaded_grave if (loaded_grave == null or loaded_grave is String) else null
+		# 缺席預設 -1（未分配），不是沿用目前值，跟 is_buried／grave_id 同一個理由——
+		# 這是這則 issue 新增的欄位，既有存檔都沒有這個 key
+		var loaded_slot: Variant = data.get("grave_slot_index", -1)
+		# 同 death_tick／death_day（issue #857）：JSON 讀回來的整數一律是 float
+		# （JsonSaveService 走 JSON.parse_string()），is int 判斷會整條 fallback
+		# 到 -1，墓位索引讀檔後遺失、下次安葬疊墓。比照同一套 is int or is float
+		# + int() 轉型
+		var slot_is_number := loaded_slot is int or loaded_slot is float
+		grave_slot_index = int(loaded_slot) if (slot_is_number and int(loaded_slot) >= -1 and int(loaded_slot) < GRAVE_SLOT_OFFSETS.size()) else -1
 		var loaded_buried_by: Variant = data.get("buried_by", null)
 		buried_by = loaded_buried_by if (loaded_buried_by == null or (loaded_buried_by is String and not loaded_buried_by.is_empty())) else null
 		var loaded_buried_tick: Variant = data.get("buried_tick", -1)
