@@ -597,8 +597,16 @@ func _log_task_ended(task: Dictionary, ok: bool, target_override: String = "") -
 ## 1 tick = 10 遊戲分鐘（《02》§1-4／《01-3》§3 三處門檻互相驗證過），下面
 ## 門檻常數統一換算成遊戲分鐘，跟 _now_minutes() 同一個時間基準
 
-const FACT_SOCIAL_SILENCE_3H_MIN := 180		# 18 tick
-const FACT_SOCIAL_SILENCE_HALF_DAY_MIN := 360	# 36 tick
+## #797：三個門檻原本是獨立選的敘事節奏常數，跟生理衰減無關；但 #731 把生理
+## drift 大幅調慢後，兩者的「多久算危急」撞在一起甚至反過來——舊數值下生理
+## 危機最快 23-50 分鐘就觸發，遠早於這裡任何一級，社交敘事排不上競爭；新
+## drift 下生理危機最慢要到 252 分鐘（satiety）才觸發，跟舊的「3 小時」
+## （180 分鐘）幾乎重疊，wakefulness/stamina（143 分鐘）甚至更早觸發。
+## 下面重新抓的三個數字，全部明顯晚於 252 分鐘，讓生理需求真的危急時能
+## 搶到決策權重，社交沉默只在生理需求都還過得去、角色相對閒暇時才會被
+## 優先考慮
+const FACT_SOCIAL_SILENCE_6H_MIN := 360		# 36 tick
+const FACT_SOCIAL_SILENCE_HALF_DAY_MIN := 720	# 72 tick
 const FACT_SOCIAL_SILENCE_1_DAY_MIN := 1440	# 144 tick
 const FACT_GOAL_STALE_MIN := 360				# 36 tick
 const FACT_CONSECUTIVE_FAILURE_THRESHOLD := 3
@@ -5492,8 +5500,8 @@ func _fact_lines_summary() -> Array[String]:
 		lines.append("你整整一天沒有和任何人說過話。")
 	elif since_social >= FACT_SOCIAL_SILENCE_HALF_DAY_MIN:
 		lines.append("你已經大半天沒和任何人說過話了。")
-	elif since_social >= FACT_SOCIAL_SILENCE_3H_MIN:
-		lines.append("你已經三個小時沒和任何人說過話了。")
+	elif since_social >= FACT_SOCIAL_SILENCE_6H_MIN:
+		lines.append("你已經六個小時沒和任何人說過話了。")
 
 	# 目標拖延：只有真的設過 current_goal（_goal_set_minute >= 0）才判斷，
 	# 沒設過目標不該無中生有講「你想做的那件事拖很久」
