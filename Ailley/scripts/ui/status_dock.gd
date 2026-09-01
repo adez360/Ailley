@@ -56,6 +56,16 @@ func _on_toggled(expanded: bool) -> void:
 	if expanded:
 		_bar.size.x = _open_width
 		return
+
+	# 收合時「狀態」按鈕會跟著上面那個迴圈一起被藏起來——卡片若當下是開著
+	# 的，玩家會連唯一能關掉它的入口都不見，卡片因此孤兒化留在畫面上
+	# （issue #940）。直接把按鈕的 button_pressed 撥回 false：BaseButton
+	# 的 set_pressed()（.button_pressed 的 setter）本身就會發 toggled 訊號
+	# （跟不發訊號的 set_pressed_no_signal() 是兩個方法），觸發既有的
+	# _on_status_toggled(false) 收尾，不在這裡另外複製一份關卡片的動畫邏輯
+	if _status_button.button_pressed:
+		_status_button.button_pressed = false
+
 	# 隱藏分頁後容器的最小寬度要等下一輪排版才穩，延一輪再收
 	await get_tree().process_frame
 	_bar.size.x = _panel.get_combined_minimum_size().x + _tab_button.custom_minimum_size.x
