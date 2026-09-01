@@ -343,6 +343,20 @@ Enter 開啟／送出，Esc 取消。不在對話中就是單純冒一句氣泡�
 > 同一套邏輯：有人在等就 `emit(ok=false)` 取消，沒有就只清掉可能殘留的緩衝，
 > 不讓上一場對話沒送出的半句話流進下一場。
 
+> [!important] 排隊上限（issue #843）：打太快要鎖輸入框，不能無限緩衝
+> `_pending_lines` 原本沒有上限——玩家可以趁 NPC／LLM 還沒回應時連續打好
+> 幾句排隊，體驗上會跟對話實際節奏脫節（打的話已經不是在回應剛剛聽到的
+> 內容）。`player.gd` 加了 `const MAX_PENDING_LINES := 3` 與
+> `can_queue_line()`：真的輪到玩家（`_turn_waiting`）永遠放行，不是輪到
+> 玩家時才看緩衝區還有沒有位置。`chat_input.gd::_unhandled_input()` 開啟
+> 輸入框前呼叫 `can_queue_line()`，滿了就不開框，改用
+> `player.say(L10n.t("DLG_TOO_FAST"), true, false)` 在玩家頭上冒一句
+> 「等等村民回覆啦，太快了」——跟 `DLG_SURPRISE`／`DLG_NOISE_ALERT` 那類
+> 系統提示同一種做法，`broadcast=false` 是同一個理由。沒有另外做「解鎖」
+> 事件：`can_queue_line()` 每次都是即時看緩衝區大小，`next_line()` 消化掉
+> 排隊的句子、`_pending_lines.size()` 降到上限以下，下次玩家按開輸入框自然
+> 就通過了。
+
 > [!important] 常駐提示：真的在等待時才顯示，撐到有結果才收
 > `Bubble.say()`／`_show_next()` 是固定秒數自動消失的排隊機制——秒數由文字
 > 長度算，單一符號（「…」「？」）會被夾到下限 1.2 秒，撐不過一次 LLM 等待
