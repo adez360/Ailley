@@ -5302,8 +5302,20 @@ func _need_bonus(task: Dictionary) -> float:
 		"drink":
 			return _need_bonus_for_value(stats.get_value("hydration"))
 		"sleep":
-			# sleep 同時處理 wakefulness／stamina 兩項，用比較差的那個算加成，
-			# 避免其中一項已經不缺、掩蓋掉另一項還在瀕死的事實
+			# 加成要對應任務「實際會被分級到哪一層」，而不是 action 字面——
+			# LLM 的 sleep 依 duration 分級（與 _select() 同一套判斷：同樣用
+			# task.get("duration", 0.0) 取值），rest 層只回 stamina、完全不碰
+			# wakefulness，加成若吃滿 wakefulness 就是在給一項修不到的需求
+			# 虛高計分。只有分級到 sleep／nap 層（兩層的 ACTION_RECOVERY 都回
+			# wakefulness）才用 minf() 同時看兩項。非 LLM 來源（schedule 等）
+			# 的 sleep 是明確寫死的字面值，current_state 不經過分級，直接走
+			# sleep 層。task 缺 duration 時 _classify_sleep_tier(0.0) 會落在
+			# rest 層，保守只看 stamina——寧可少給加成，不虛高
+			var sleep_tier: String = "sleep"
+			if task.get("source", "") == "llm":
+				sleep_tier = _classify_sleep_tier(float(task.get("duration", 0.0)))
+			if sleep_tier == "rest":
+				return _need_bonus_for_value(stats.get_value("stamina"))
 			return _need_bonus_for_value(minf(stats.get_value("wakefulness"), stats.get_value("stamina")))
 		"buy":
 			var item_id: String = String(task.get("params", {}).get("item_id", ""))
