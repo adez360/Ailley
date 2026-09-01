@@ -25,6 +25,10 @@ signal turn_resolved(text: String, ok: bool)
 ## 跟 agent.gd::AI_THINKING_TEXT（"…"）同一種處理，不走 L10n
 const WAITING_FOR_PLAYER_TEXT := "？"
 
+## 玩家頭上「休息中」的常駐提示符號（issue #926），跟 WAITING_FOR_PLAYER_TEXT
+## 同一種「純符號不走 L10n」處理
+const RESTING_TEXT := "💤"
+
 ## 玩家提早打字（還沒真的輪到自己）時暫存的話，見 _on_line_submitted()
 ## 與 next_line() 開頭的緩衝檢查（#207）。FIFO 佇列而不是單一欄位——
 ## 單一欄位在玩家提交兩次時，較晚的那句會直接覆蓋掉還沒被 next_line()
@@ -172,6 +176,14 @@ func _unhandled_input(event: InputEvent) -> void:
 		var attack_reason := attack(attack_target)
 		if attack_reason != ATTACK_OK:
 			report_action_failure("attack", attack_reason)
+		return
+
+	# 休息（issue #926）：獨立按鍵，跟 make_noise／use_item／attack／give 同一種
+	# 「不擠進 interact 優先序鏈」的頂層檢查，按下去立刻切換開始/結束，不用先
+	# 找互動候選
+	if event.is_action_pressed("rest"):
+		get_viewport().set_input_as_handled()
+		_toggle_resting()
 		return
 
 	# 送禮（issue #841）：獨立按鍵，不擠進 interact（E）那條已經很長的優先序鏈
@@ -627,11 +639,74 @@ func _decide_velocity() -> Vector2:
 	# 搬運屍體時要吃到 _speed_multiplier 減速，跟 _follow_hauler() 用的
 	# 是同一個倍率，玩家跟被搬運目標才會同速（issue #822）
 	if input_dir != Vector2.ZERO:
+		# 移動輸入立即取消休息——玩家按方向鍵顯然是想走了，不用另外按一次休息鍵
+		# 才能離開這個狀態（issue #926）
+		if _is_resting:
+			_stop_resting()
 		if is_moving():
 			stop_moving()
 		return input_dir * effective_speed()
 
 	return super()
+
+## 玩家專屬體力／清醒度回復機制（issue #926）。玩家沒有 Agent 的 LLM 決策
+## 迴圈，沒辦法比照 NPC 那樣「先講好要睡多久」再一次套用整段回復量，改成
+## 「按住休息鍵、依累積已休息的時長重新分級」——每經過一個遊戲分鐘依
+## Agent.SLEEP_TIER_NAP_MIN_MINUTES／SLEEP_TIER_SLEEP_MIN_MINUTES 兩個門檻
+## 重新分級一次、查 Agent.ACTION_RECOVERY 套用對應那格的回復量。三者都是
+## Agent 的公開成員（class_name 靜態存取，不需要繼承關係），跟 NPC 共用
+## 同一張已校調過的表，不重複一份數字；分級判斷本身很單純，直接在這裡
+## 重寫兩行，不去呼叫 Agent 命名帶底線、語意上屬於內部實作的
+## _classify_sleep_tier()（見 note/技術/進食與飲用.md）
+var _is_resting := false
+var _rest_elapsed_minutes := 0
+
+## 開始休息前擋掉的狀態，跟 NPC 那邊「入眠中不能再入眠」同一類防呆：死亡／
+## 昏迷／治療中／被天神召喚中（_is_movement_locked() 涵蓋後三者）、對話中、
+## 搬運屍體、被搬運中，這些狀態下休息沒有意義或會跟既有機制衝突
+func _is_resting_blocked() -> bool:
+	return is_dead or _is_movement_locked() or is_in_conversation() or is_hauling() or is_being_hauled()
+
+## 按下休息鍵：已經在休息就結束，否則檢查能不能開始。失敗原因統一用共用
+## 詞彙表的 "BUSY"（FAILURE_MESSAGE_KEYS 已有對應），不用為這個動作另開新碼
+func _toggle_resting() -> void:
+	if _is_resting:
+		_stop_resting()
+		return
+	if _is_resting_blocked():
+		report_action_failure("rest", "BUSY")
+		return
+	_is_resting = true
+	_rest_elapsed_minutes = 0
+	if bubble != null:
+		bubble.hold(RESTING_TEXT)
+
+func _stop_resting() -> void:
+	if not _is_resting:
+		return
+	_is_resting = false
+	if bubble != null:
+		bubble.release_hold()
+
+## Character._ready() 已經把 GameClock.time_changed 接到這個函式（見該檔
+## _ready()），這裡覆寫並呼叫 super() 保留昏迷／治療／exhausted 檢查，不是
+## 另開一條獨立連線——跟 agent.gd 的 _apply_action_recovery() 同一種「掛在
+## 既有的每遊戲分鐘訊號上」的作法
+func _on_game_minute(hour: int, minute: int) -> void:
+	super(hour, minute)
+	if not _is_resting:
+		return
+	if stats == null or _is_resting_blocked():
+		_stop_resting()
+		return
+	_rest_elapsed_minutes += 1
+	var tier := "rest"
+	if _rest_elapsed_minutes >= Agent.SLEEP_TIER_SLEEP_MIN_MINUTES:
+		tier = "sleep"
+	elif _rest_elapsed_minutes >= Agent.SLEEP_TIER_NAP_MIN_MINUTES:
+		tier = "nap"
+	for recovery in Agent.ACTION_RECOVERY.get(tier, []):
+		stats.add(recovery["stat"], recovery["amount"])
 
 # 玩家的下一句話就是玩家打的字。
 #
