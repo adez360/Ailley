@@ -779,9 +779,11 @@ func save_before_leaving() -> bool:
 # 重置執行期會殘留的世界層欄位（issue #875）：GameManager 是 autoload，整個
 # process 存活期間都不會自動重新初始化，identity_assignments 開場由
 # load_npc_data() 從 npc_schedule.json 載入、執行期由 deploy_from_library()／
-# _respawn_character() 附加投放角色的身分；character_library／
-# embodied_character_id／allow_player_join 則只有「繼續遊戲」的
-# apply_world_save_data() 會蓋寫。同一次執行裡玩過一次「繼續遊戲」之後再按
+# _respawn_character() 附加投放角色的身分；character_library 開場為空、
+# 執行期由建角流程 _append_library_entry() 附加、deploy_from_library() 改寫
+# deployed 旗標；embodied_character_id 由 deploy_from_library(as_player=true)
+# 寫入；allow_player_join 則只有「繼續遊戲」的 apply_world_save_data() 會
+# 蓋寫。同一次執行裡玩過一次「繼續遊戲」之後再按
 # 「開始新遊戲」，這些欄位不會自己變回全新狀態——main_menu.gd::
 # _on_start_pressed() 呼叫這個函式補上這條路徑，跟同一個函式已經在呼叫的
 # GameClock.reset_to_new_game_start()（#606）是同一個根因、同一種修法。
