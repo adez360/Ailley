@@ -3999,7 +3999,7 @@ func _pursue_use_item_task() -> void:
 
 	if proceed:
 		var reason := use_item(item_id)
-		last_action_result = reason
+		last_action_result = _use_item_failure_reason_text(reason)
 		if reason != Character.USE_ITEM_OK:
 			push_warning("Agent %s: use_item 失敗（%s）" % [character_name, reason])
 			_mark_schedule_retry_backoff(_current_task)
@@ -4330,6 +4330,29 @@ func _drink_failure_reason_text(reason: String) -> String:
 			return "沒有生理數值可以恢復，無法喝東西"
 		_:
 			return "喝東西失敗（%s）" % reason
+
+func _use_item_failure_reason_text(reason: String) -> String:
+	match reason:
+		Character.USE_ITEM_IS_DEAD:
+			return "死了，無法使用道具"
+		Character.USE_ITEM_NO_INVENTORY:
+			return "沒有背包，無法使用道具"
+		Character.USE_ITEM_NOT_FOUND:
+			return "背包裡沒有這個道具"
+		Character.USE_ITEM_NO_STATS:
+			return "沒有生理數值可以恢復，無法使用道具"
+		Inventory.USE_NOT_FOUND:
+			return "背包裡沒有這個道具"
+		Inventory.USE_NOT_CONSUMABLE:
+			return "這個道具不是消耗品，用了沒有效果"
+		Inventory.USE_INVALID_STATS:
+			return "這個道具的數值設定有誤，無法使用"
+		Inventory.USE_INVALID_EFFECT:
+			return "這個道具的效果設定有誤，無法使用"
+		Inventory.USE_REMOVE_FAILED:
+			return "這個道具用不成功"
+		_:
+			return "使用道具失敗（%s）" % reason
 
 # 「背包裡沒有 X」的訊息組裝。開口前先核對背包現況：eat()／drink() 對「找到
 # X 但 use_item() != USE_OK」也回 NO_FOOD／NO_DRINK，這時「背包裡沒有 X」是
