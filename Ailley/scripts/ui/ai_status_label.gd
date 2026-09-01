@@ -20,6 +20,8 @@ const COLOR_SCHEDULE := Color(1.0, 0.8, 0.3)
 func _ready() -> void:
 	if not OS.is_debug_build():
 		visible = false
+	custom_minimum_size = Vector2(200, 0)
+	autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 
 
 ## ready_count／total_count 是這輪開場探測後，場上總共有幾隻 Agent、其中幾隻
@@ -29,12 +31,14 @@ func _ready() -> void:
 ## 或反過來看到「AI 決策中」卻有幾隻其實是排程 fallback（CodeRabbit review
 ## 抓到，PR #467）。reason 只在有角色沒就緒時才有意義，全部就緒時忽略
 func set_status(ready_count: int, total_count: int, reason: String) -> void:
+	var state_text := ""
 	if ready_count == total_count:
-		text = "AI 決策中"
+		state_text = "AI 決策中"
 		modulate = COLOR_READY
 	elif ready_count == 0:
-		text = "排程模式（原因：%s）" % reason
+		state_text = "排程模式（原因：%s）" % reason
 		modulate = COLOR_SCHEDULE
 	else:
-		text = "AI 決策中（%d／%d，其餘排程模式，原因：%s）" % [ready_count, total_count, reason]
+		state_text = "AI 決策中（%d／%d，其餘排程模式，原因：%s）" % [ready_count, total_count, reason]
 		modulate = COLOR_PARTIAL
+	text = state_text

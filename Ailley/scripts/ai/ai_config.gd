@@ -40,6 +40,9 @@ static func _compute_config_path() -> String:
 const DEFAULT_BASE_URL := "https://openrouter.ai/api/v1"
 const DEFAULT_MODEL := "openai/gpt-4o-mini"
 
+const AI_BASE_URL_ENV := "AILLEY_AI_BASE_URL"
+const AI_MODEL_ENV := "AILLEY_AI_MODEL"
+
 # 10 秒是 HTTPRequest.timeout 的值，不是自寫的計時器 —— 引擎原生支援逾時。
 # 這是逐 provider 設定不到時的退回值，不是唯一生效的全域值：_parse_provider()
 # 把設定檔裡沒填、或填了非正值（0／負值，HTTPRequest 會解讀成「不逾時」）的
@@ -342,6 +345,8 @@ func _apply(data: Dictionary) -> void:
 			if raw_provider is Dictionary:
 				providers[str(provider_name)] = _parse_provider(str(provider_name), raw_provider as Dictionary)
 
+	_apply_environment_overrides()
+
 	# enabled 是「算出來的結果」不是「照抄設定檔」：設定檔寫 true 但沒填金鑰時
 	# 仍然要 false，否則每次呼叫都會撞 401，錯誤訊息還離真正的原因很遠
 	var wants_enabled := bool(data.get("enabled", false))
@@ -372,6 +377,51 @@ func _apply(data: Dictionary) -> void:
 	var default_ok: bool = not default_provider.is_empty() and providers.has(default_provider)
 	status_reason = L10n.t("AI_STATUS_ENABLED") if default_ok \
 		else L10n.tf("AI_STATUS_BAD_DEFAULT", {"path": CONFIG_PATH})
+
+
+static func endpoint_host(url: String) -> String:
+	var authority := url.strip_edges()
+	var scheme_index := authority.find("://")
+	if scheme_index != -1:
+		authority = authority.substr(scheme_index + 3)
+	var slash_index := authority.find("/")
+	if slash_index != -1:
+		authority = authority.substr(0, slash_index)
+	var userinfo_index := authority.rfind("@")
+	if userinfo_index != -1:
+		authority = authority.substr(userinfo_index + 1)
+	if authority.begins_with("["):
+		var bracket_end := authority.find("]")
+		return authority.substr(0, bracket_end + 1) if bracket_end != -1 else authority
+	var colon_index := authority.rfind(":")
+	return authority.substr(0, colon_index) if colon_index != -1 else authority
+
+
+static func classify_endpoint(url: String) -> String:
+	var host := endpoint_host(url).to_lower()
+	if host == "localhost" or host == "127.0.0.1" or host == "::1" or host == "[::1]":
+		return "localhost"
+	var octets := host.split(".")
+	if octets.size() == 4 and octets[0].is_valid_int() and octets[1].is_valid_int():
+		var first := int(octets[0])
+		var second := int(octets[1])
+		if first == 10 or (first == 172 and second >= 16 and second <= 31) or (first == 192 and second == 168):
+			return "lan"
+	return "cloud"
+
+
+func connection_info(provider_name: String = "") -> Dictionary:
+	var provider: Provider = get_provider(provider_name)
+	if provider == null:
+		return {"kind": "unavailable", "base_url": "", "host": "", "model": ""}
+	return {
+		"kind": classify_endpoint(provider.base_url),
+		"base_url": provider.base_url,
+		"host": endpoint_host(provider.base_url),
+		"model": provider.model,
+		"provider": provider.name,
+		"valid": provider.valid,
+	}
 
 
 ## embedding.base_url 的 loopback 檢查（見 _apply() 的呼叫處說明）。只認
@@ -447,6 +497,26 @@ static func _is_valid_port(port_str: String) -> bool:
 		return false
 	var port := int(port_str)
 	return port >= 1 and port <= 65535
+
+
+static func environment_override(environment: Dictionary, variable_name: String) -> String:
+	return str(environment.get(variable_name, "")).strip_edges()
+
+
+func _apply_environment_overrides() -> void:
+	if default_provider.is_empty() or not providers.has(default_provider):
+		return
+
+	var provider: Provider = providers[default_provider]
+	var base_url := environment_override({AI_BASE_URL_ENV: OS.get_environment(AI_BASE_URL_ENV)}, AI_BASE_URL_ENV).rstrip("/")
+	var model := environment_override({AI_MODEL_ENV: OS.get_environment(AI_MODEL_ENV)}, AI_MODEL_ENV)
+	if not base_url.is_empty():
+		provider.base_url = base_url
+	if not model.is_empty():
+		provider.model = model
+	provider.valid = not provider.base_url.is_empty() and not provider.model.is_empty()
+	if not provider.valid:
+		provider.status_reason = L10n.tf("AI_STATUS_NO_ENDPOINT", {"path": CONFIG_PATH})
 
 
 func _parse_provider(provider_name: String, data: Dictionary) -> Provider:

@@ -1,5 +1,7 @@
 extends Node
 
+const DISPLAY_SETTINGS := preload("res://scripts/core/display_settings.gd")
+
 ## main.tscn 根節點腳本。issue #343：開場讀檔的實際套用時機。
 ##
 ## GameManager.continue_requested 由主選單「繼續遊戲」按鈕設定，這裡是唯一
@@ -17,6 +19,8 @@ const MAIN_MENU_SCENE := "res://scenes/main_menu.tscn"
 
 
 func _ready() -> void:
+	DISPLAY_SETTINGS.apply_saved_fps()
+
 	if GameManager.continue_requested:
 		GameManager.continue_requested = false
 		if not _apply_continue():

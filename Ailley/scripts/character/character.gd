@@ -1993,10 +1993,6 @@ func get_save_data() -> Dictionary:
 		"is_being_carried": _is_being_carried,
 		"treatment_start_minute": _treatment_start_minute,
 		"treatment_location": _treatment_location,
-		# 睡前反思（#349）會用 personality_delta 累積調整這 10 項，跨天累積的
-		# 性格漂移不該因為重開就被重置回建角當下的原始值——跟 today_plan「跨天
-		# 承諾不該憑空消失」同一個道理（見 note/技術/存檔.md）
-		"personality": personality.duplicate(true),
 		# 讀檔後保留角色存檔當下的情緒殘留，不要每次重開都歸零成 neutral
 		# （issue #688，2026-08-30 拍板）：長期記憶（L2/L4）本來就會存，角色
 		# 讀檔後記得起因事件，卻沒有對應的情緒表現，比 current_goal 消失更
@@ -2017,6 +2013,11 @@ func get_save_data() -> Dictionary:
 		"buried_tick": buried_tick,
 		"is_anonymous": is_anonymous,
 	}
+
+	# Player／沒有人格資料的角色合法地使用空 Dictionary；空值不寫進存檔，
+	# 避免下次載入被十欄完整性驗證誤判成損毀。
+	if not personality.is_empty():
+		data["personality"] = personality.duplicate(true)
 
 	if stats != null:
 		data["stats"] = stats.get_save_data()
@@ -2171,7 +2172,9 @@ func load_save_data(data: Dictionary) -> void:
 	# 也不要讓半殘資料靜默生效（CodeRabbit review 抓到）
 	if data.has("personality") and data["personality"] is Dictionary:
 		var loaded_personality: Dictionary = data["personality"]
-		if _is_valid_personality_data(loaded_personality):
+		if loaded_personality.is_empty():
+			pass # 舊版 Player 存檔會寫空 personality；視為沒有資料，不是損毀
+		elif _is_valid_personality_data(loaded_personality):
 			personality = loaded_personality.duplicate(true)
 		else:
 			push_error("Character %s: 存檔的 personality 資料結構不合法，保留目前人格" % character_name)
@@ -2185,7 +2188,10 @@ func load_save_data(data: Dictionary) -> void:
 	if data.has("emotion") and data["emotion"] is Dictionary:
 		var loaded_emotion: Dictionary = data["emotion"]
 		if _is_valid_emotion_data(loaded_emotion):
-			emotion = loaded_emotion.duplicate(true)
+			var normalized_emotion: Dictionary = loaded_emotion.duplicate(true)
+			normalized_emotion["intensity"] = int(normalized_emotion["intensity"])
+			normalized_emotion["duration_left"] = int(normalized_emotion["duration_left"])
+			emotion = normalized_emotion
 		else:
 			push_error("Character %s: 存檔的 emotion 資料結構不合法，保留目前情緒" % character_name)
 
@@ -2231,13 +2237,21 @@ func _is_valid_emotion_data(loaded: Dictionary) -> bool:
 			return false
 	if not (loaded["type"] is String) or not EMOTION_TYPES.has(loaded["type"]):
 		return false
-	if not (loaded["intensity"] is int) or loaded["intensity"] < 0 or loaded["intensity"] > 100:
+	if not _is_integer_number(loaded["intensity"]) or float(loaded["intensity"]) < 0.0 or float(loaded["intensity"]) > 100.0:
 		return false
 	if not (loaded["cause_event_id"] is String):
 		return false
-	if not (loaded["duration_left"] is int) or loaded["duration_left"] < 0 or loaded["duration_left"] > EMOTION_DURATION_MAX:
+	if not _is_integer_number(loaded["duration_left"]) or float(loaded["duration_left"]) < 0.0 or float(loaded["duration_left"]) > float(EMOTION_DURATION_MAX):
 		return false
 	return true
+
+
+func _is_integer_number(value: Variant) -> bool:
+	if value is int:
+		return true
+	if not (value is float) or not is_finite(float(value)):
+		return false
+	return is_equal_approx(float(value), round(float(value)))
 
 # ---- 滑鼠選取 ----
 

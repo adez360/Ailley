@@ -205,13 +205,8 @@ func _sync_all_characters_periodic() -> void:
 		if _save_character_state_only(character):
 			success_count += 1
 
-	print(
-		"[CharacterStatePersistence] 定期同步完成（僅 state/wallet）：%d / %d"
-		% [
-			success_count,
-			characters.size()
-		]
-	)
+	if success_count != characters.size():
+		push_warning("[CharacterStatePersistence] 定期同步不完整：%d / %d" % [success_count, characters.size()])
 
 
 func _save_character_state_only(
@@ -411,12 +406,6 @@ func _save_character_state_only(
 		return false
 
 
-	print(
-		"[CharacterStatePersistence] "
-		+ "%s STATE = PASS"
-		% character_id
-	)
-
 
 	# -------------------------------------------------
 	# Wallet
@@ -426,15 +415,7 @@ func _save_character_state_only(
 		character
 	)
 
-	if wallet_ok:
-
-		print(
-			"[CharacterStatePersistence] "
-			+ "%s WALLET = PASS"
-			% character_id
-		)
-
-	else:
+	if not wallet_ok:
 
 		push_error(
 			"[CharacterStatePersistence] "
@@ -664,12 +645,6 @@ func _save_character(
 		return false
 
 
-	print(
-		"[CharacterStatePersistence] "
-		+ "%s STATE = PASS"
-		% character_id
-	)
-
 
 	# -------------------------------------------------
 	# Inventory
@@ -679,15 +654,7 @@ func _save_character(
 		character
 	)
 
-	if inventory_ok:
-
-		print(
-			"[CharacterStatePersistence] "
-			+ "%s INVENTORY = PASS"
-			% character_id
-		)
-
-	else:
+	if not inventory_ok:
 
 		push_error(
 			"[CharacterStatePersistence] "
@@ -704,15 +671,7 @@ func _save_character(
 		character
 	)
 
-	if wallet_ok:
-
-		print(
-			"[CharacterStatePersistence] "
-			+ "%s WALLET = PASS"
-			% character_id
-		)
-
-	else:
+	if not wallet_ok:
 
 		push_error(
 			"[CharacterStatePersistence] "
@@ -2366,50 +2325,12 @@ func _set_home_cursor(value: int) -> void:
 # =====================================================
 
 func _log_state(
-	operation: String,
-	character: Character,
-	state_data: Dictionary
+	_operation: String,
+	_character: Character,
+	_state_data: Dictionary
 ) -> void:
-
-	var message := (
-		"[CharacterStatePersistence] %s %s | "
-		+ "satiety=%.1f hydration=%.1f stamina=%.1f "
-		+ "wakefulness=%.1f hygiene=%.1f alcohol=%.1f "
-		+ "health=%.1f injury=%.1f"
-	)
-
-
-	print(
-		message
-		% [
-			operation,
-			character.character_name,
-			float(
-				state_data["satiety"]
-			),
-			float(
-				state_data["hydration"]
-			),
-			float(
-				state_data["stamina"]
-			),
-			float(
-				state_data["wakefulness"]
-			),
-			float(
-				state_data["hygiene"]
-			),
-			float(
-				state_data["alcohol"]
-			),
-			float(
-				state_data["health"]
-			),
-			float(
-				state_data["injury"]
-			)
-		]
-	)
+	# 成功狀態每遊戲分鐘都會寫入，預設不輸出；失敗仍由呼叫端 push_error。
+	pass
 
 
 # =====================================================

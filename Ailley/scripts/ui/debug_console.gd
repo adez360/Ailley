@@ -834,8 +834,8 @@ func _cmd_debug(args: PackedStringArray) -> void:
 	var layer := args[0].to_lower()
 
 	if layer == "off":
-		for name in overlay.layers.keys():
-			overlay.set_layer(name, false)
+		for layer_name in overlay.layers.keys():
+			overlay.set_layer(layer_name, false)
 		_print(L10n.t("CON_OVERLAY_ALL_OFF"))
 		return
 
@@ -855,9 +855,9 @@ func _cmd_debug(args: PackedStringArray) -> void:
 
 func _print_overlay_states(overlay: Node) -> void:
 	var parts: Array[String] = []
-	for name in overlay.layers:
-		var on: bool = overlay.layers[name]
-		parts.append("[color=%s]%s[/color]" % ["88ff88" if on else "888888", name])
+	for layer_name in overlay.layers:
+		var on: bool = overlay.layers[layer_name]
+		parts.append("[color=%s]%s[/color]" % ["88ff88" if on else "888888", layer_name])
 
 	_print(L10n.tf("CON_OVERLAY_STATES", {"layers": SEP.join(parts)}))
 	_print("[color=888888]%s[/color]" % L10n.t("CON_OVERLAY_USAGE"))
@@ -1059,13 +1059,13 @@ func _cmd_ai(args: PackedStringArray) -> void:
 
 	# 就緒狀態逐 provider 印，不是只印 default_provider 一個——地端沒開、
 	# 雲端連得上這種情況，取單一代表值會蓋掉另一邊的資訊（issue #345）
-	for name in config.providers.keys():
-		var readiness: Dictionary = AIService.get_readiness(name)
-		var marker := " (default)" if name == config.default_provider else ""
+	for configured_provider_name in config.providers.keys():
+		var readiness: Dictionary = AIService.get_readiness(configured_provider_name)
+		var marker := " (default)" if configured_provider_name == config.default_provider else ""
 		var color := "88ff88" if readiness["ready"] else "ff8888"
 		_print("[color=%s]%s[/color]" % [color, L10n.tf("CON_AI_READY_LINE", {
 			"ready": L10n.t("CON_AI_READY_YES" if readiness["ready"] else "CON_AI_READY_NO"),
-			"name": name,
+			"name": configured_provider_name,
 			"default_marker": marker,
 			"reason": readiness["reason"],
 		})])
@@ -1174,11 +1174,11 @@ func _cmd_locale(args: PackedStringArray) -> void:
 # 直接照 _commands 的順序印，help 欄留空的（目前只有 help 自己）跳過不印。
 # ai dialogue 是 ai 底下的子指令，_commands 沒有它自己的 entry，緊接在 ai 後面手動補一行
 func _cmd_help(_args: PackedStringArray) -> void:
-	for name in _commands:
-		var entry: Dictionary = _commands[name]
+	for command_name in _commands:
+		var entry: Dictionary = _commands[command_name]
 		if entry["help"] != "":
 			_help_line(entry["usage"], entry["help"])
-		if name == "ai":
+		if command_name == "ai":
 			_help_line("ai dialogue [text]", "HELP_AI_DIALOGUE")
 
 # 方括號要轉義成 [lb]，否則會被當成 BBCode 標籤吃掉 ——

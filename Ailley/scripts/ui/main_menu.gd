@@ -24,6 +24,7 @@ extends Control
 ##           HintLabel
 
 const MAIN_SCENE := "res://scenes/main.tscn"
+const DISPLAY_SETTINGS := preload("res://scripts/core/display_settings.gd")
 
 @onready var continue_button: Button = $ButtonsBox/ContinueButton
 @onready var start_button: Button = $ButtonsBox/StartButton
@@ -34,6 +35,8 @@ const MAIN_SCENE := "res://scenes/main.tscn"
 
 
 func _ready() -> void:
+	DISPLAY_SETTINGS.apply_saved_fps()
+
 	scrim.hide()
 	load_error_label.hide()
 	_refresh_continue_button()

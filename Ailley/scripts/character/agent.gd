@@ -137,6 +137,7 @@ const LLM_TASK_POOL_CAP := 20
 ## 寫死不變的量級常數（跟 MIN_ACTION_DURATION 那種純粹的「動作最小顆粒」
 ## 性質不同）
 const STUCK_RETRY_INTERVAL_MINUTES := 72
+const MAX_REEVALUATE_ITERATIONS := 32
 
 ## 候選任務池。這一版只在 _load_schedule() 建立一次就不再變動——
 ## 「到點才可用」靠仲裁時的 window 過濾，不是把任務從池子裡搬進搬出
@@ -744,7 +745,10 @@ func _ready() -> void:
 	super()
 	add_to_group("agents")
 	_provider = _make_provider()
-	_load_schedule()
+	if not _load_schedule():
+		# 沒有可執行的 schedule 時不要再接時間事件或啟動仲裁器；
+		# 否則空任務池會在每次事件中反覆嘗試重算。
+		return
 	_generate_words_to_creator()
 	GameClock.day_changed.connect(_on_day_changed)
 	# 出生那一刻起算，不是 0——不然剛出生的角色會立刻背著「一整天沒說話」
@@ -894,7 +898,7 @@ func _actual_place_of(character: Character) -> String:
 #
 # 查表用的是**節點名**不是 character_id：id 是生成的 UUID，手寫不出來，
 # 而 assignments 是人在編輯的資料檔
-func _load_schedule() -> void:
+func _load_schedule() -> bool:
 	_warn_if_node_name_shared()
 
 	var assigned := GameManager.get_schedule_template(name)
@@ -909,14 +913,15 @@ func _load_schedule() -> void:
 
 	if schedule_template.is_empty():
 		push_error("Agent %s: 沒有指定 schedule_template（可在 npc_schedule.json 的 assignments 指派）" % name)
-		return
+		return false
 
 	var data = GameManager.get_npc(schedule_template)
 	if data == null:
 		push_error("Agent %s: npc_schedule.json 裡沒有模板 %s" % [name, schedule_template])
-		return
+		return false
 
 	_tasks = _tasks_from_schedule_json(data["schedule"])
+	return true
 
 # 把 npc_schedule.json 的 {time, place, state} 陣列轉成 Task 結構（見
 # [[行程佇列與任務仲裁]]）。window.end 由下一筆的 time 推出，最後一筆
@@ -2659,9 +2664,14 @@ func _reevaluate() -> void:
 	_reevaluate_excluded_ids.clear()
 	_reevaluating = true
 	_reevaluate_pending = true
-	while _reevaluate_pending:
+	var iterations := 0
+	while _reevaluate_pending and iterations < MAX_REEVALUATE_ITERATIONS:
 		_reevaluate_pending = false
+		iterations += 1
 		_reevaluate_once()
+	if _reevaluate_pending:
+		push_error("Agent %s: _reevaluate() 超過最大迭代次數，停止本輪重算" % character_name)
+		_reevaluate_pending = false
 	_reevaluating = false
 
 func _reevaluate_once() -> void:
