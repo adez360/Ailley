@@ -87,6 +87,70 @@ func test_character_drink_reads_real_item_database() -> void:
 	character.free()
 
 
+# 以下四個測試涵蓋 Character.use_item()／use_selected_item()（#865）：修正前，
+# medicine（category: "carry"，帶 effect_injury）完全沒有路徑能被使用——
+# use_selected_item() 原本寫死 is_consumable := category == "food" or "drink"，
+# 擋掉了所有 carry 分類的道具，不論它有沒有 effect_*
+
+func test_character_use_item_treats_injury_with_medicine() -> void:
+	var character = Character.new()
+	character.inventory = Inventory.new()
+	character.stats = Stats.new()
+	character.stats.add("injury", 50.0)
+	character.inventory.add_item("medicine", 1)
+
+	var result = character.use_item("medicine")
+
+	_assert_eq(result, Character.USE_ITEM_OK, "使用 medicine 應成功")
+	_assert_eq(character.stats.get_value("injury"), 20.0, "injury 應套用 items.json 的 effect_injury -30（50 → 20）")
+	_assert_eq(character.inventory.has_item("medicine", 1), false, "使用後應消耗 1 份")
+	character.free()
+
+
+func test_character_use_item_rejects_carry_item_without_effect() -> void:
+	# knife 是 carry 分類但沒有任何 effect_* 欄位——不該被判定成可消耗，
+	# 跟 medicine 的差別只在「有沒有 effect_*」，不是 category
+	var character = Character.new()
+	character.inventory = Inventory.new()
+	character.stats = Stats.new()
+	character.inventory.add_item("knife", 1)
+
+	var result = character.use_item("knife")
+
+	_assert_eq(result, Inventory.USE_NOT_CONSUMABLE, "沒有 effect_* 的道具應回 NOT_CONSUMABLE")
+	_assert_eq(character.inventory.has_item("knife", 1), true, "判定失敗不該消耗物品")
+	character.free()
+
+
+func test_character_use_item_not_found_in_inventory() -> void:
+	var character = Character.new()
+	character.inventory = Inventory.new()
+	character.stats = Stats.new()
+
+	var result = character.use_item("medicine")
+
+	_assert_eq(result, Character.USE_ITEM_NOT_FOUND, "背包沒有該物品應回 NOT_FOUND")
+	character.free()
+
+
+func test_character_use_selected_item_delegates_to_use_item() -> void:
+	# 玩家快捷欄路徑（原始 bug 的回歸測試，#865）：選到 medicine 那一格，
+	# use_selected_item() 應該跟直接呼叫 use_item("medicine") 效果一致，
+	# 不再被 is_consumable 的 category 白名單擋下
+	var character = Character.new()
+	character.inventory = Inventory.new()
+	character.stats = Stats.new()
+	character.stats.add("injury", 50.0)
+	character.inventory.add_item("medicine", 1)
+	character.inventory.set_selected_index(0)
+
+	var result = character.use_selected_item()
+
+	_assert_eq(result, Character.USE_ITEM_OK, "選到 medicine 時 use_selected_item() 應成功")
+	_assert_eq(character.stats.get_value("injury"), 20.0, "injury 應套用 effect_injury -30（50 → 20）")
+	character.free()
+
+
 func test_apply_personality_delta_clamps_both_boundaries() -> void:
 	var character = Character.new()
 	character.personality = {"greed": 95.0, "honesty": 5.0}

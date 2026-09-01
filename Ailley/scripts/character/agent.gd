@@ -3323,6 +3323,13 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 		"drink":
 			if inventory == null or _find_drink_slot().is_empty():
 				return {"success": false, "reason": _no_supply_reason_text("飲品", "drink")}
+		"use_item":
+			# 硬規則：背包裡真的有這個 item_id 才放行，跟 eat／drink 同一種
+			# 「目標/前提是不是真的存在」檢查（#865）。不走 _no_supply_reason_text()
+			# ——那支只認得 food／drink 兩種分類，use_item 是任意 item_id 查詢
+			var use_item_id: String = str(params.get("item_id", ""))
+			if inventory == null or not inventory.has_item(use_item_id, 1):
+				return {"success": false, "reason": "背包裡沒有這個東西"}
 		"buy":
 			# 檢查錢夠不夠（需要先查地點的商店目錄）、商品存不存在、背包有沒有空間。
 			# 失敗原因一律走 _buy_failure_reason_text()，跟 buy_from() 的原因碼共用
@@ -3677,6 +3684,12 @@ func _pursue_current_task() -> void:
 	# drink 跟 eat 同一種「呼叫一次就完成」（#163）
 	if current_state == "drink":
 		_pursue_drink_task()
+		return
+
+	# use_item 跟 eat／drink 同一種「呼叫一次就完成」，差別是不自動找分類、
+	# 由 params.item_id 指名（#865）
+	if current_state == "use_item":
+		_pursue_use_item_task()
 		return
 
 	# buy 跟 eat／drink 同理：呼叫一次就完成（#340）
@@ -4043,6 +4056,43 @@ func _pursue_drink_task() -> void:
 	# 那條同一個問題）
 	_reevaluate()
 
+# use_item 任務的執行（#865）：跟 _pursue_eat_task()／_pursue_drink_task()
+# 同一種「呼叫一次就完成」形狀，差別是不自動找分類（食物/飲品以外的道具，
+# 像 medicine，沒有共通分類可找），直接用 params.item_id 指名要用哪一個。
+# use_item 不在 daily schedule 模板上，理論上永遠是 llm 來源，但跟其他
+# _pursue_*_task() 一樣不假設這件事，用同一套「source == llm 才 resolve／
+# 移出任務池」判斷保持一致
+func _pursue_use_item_task() -> void:
+	stop_moving()
+	var item_id: String = str(_current_task.get("params", {}).get("item_id", ""))
+	var proceed := true
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		proceed = result["success"]
+		if not proceed:
+			_track_action_result_for_facts("use_item", false)
+
+	if proceed:
+		var reason := use_item(item_id)
+		if reason != Character.USE_ITEM_OK:
+			last_action_result = _use_item_failure_reason_text(reason)
+			push_warning("Agent %s: use_item 失敗（%s）" % [character_name, reason])
+			_mark_schedule_retry_backoff(_current_task)
+		else:
+			last_action_result = reason
+			var item_name := ItemDatabase.get_display_name(item_id)
+			_push_daily_event("你使用了%s。" % item_name)
+		# 不分來源都記——理由同 _pursue_eat_task()
+		_track_action_result_for_facts("use_item", reason == Character.USE_ITEM_OK)
+
+	if _current_task.get("source", "") == "llm":
+		_remove_task(_current_task.get("id", ""))
+	_clear_current_task(last_action_result == Character.USE_ITEM_OK, item_id)
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
+	_reevaluate()
+
 # work 任務的執行（#358）：長動作，執行協程會自己跑 5 遊戲分鐘。
 # 跟 eat／drink 的差異是需要先走到工作地點，到達後才呼叫 work_at()。
 # 工作開始後 `_working = true`，後續 _pursue_current_task() 會因 is_working()
@@ -4357,6 +4407,29 @@ func _drink_failure_reason_text(reason: String) -> String:
 			return "沒有生理數值可以恢復，無法喝東西"
 		_:
 			return "喝東西失敗（%s）" % reason
+
+func _use_item_failure_reason_text(reason: String) -> String:
+	match reason:
+		Character.USE_ITEM_IS_DEAD:
+			return "死了，無法使用道具"
+		Character.USE_ITEM_NO_INVENTORY:
+			return "沒有背包，無法使用道具"
+		Character.USE_ITEM_NOT_FOUND:
+			return "背包裡沒有這個道具"
+		Character.USE_ITEM_NO_STATS:
+			return "沒有生理數值可以恢復，無法使用道具"
+		Inventory.USE_NOT_FOUND:
+			return "背包裡沒有這個道具"
+		Inventory.USE_NOT_CONSUMABLE:
+			return "這個道具不是消耗品，用了沒有效果"
+		Inventory.USE_INVALID_STATS:
+			return "這個道具的數值設定有誤，無法使用"
+		Inventory.USE_INVALID_EFFECT:
+			return "這個道具的效果設定有誤，無法使用"
+		Inventory.USE_REMOVE_FAILED:
+			return "這個道具用不成功"
+		_:
+			return "使用道具失敗（%s）" % reason
 
 # 「背包裡沒有 X」的訊息組裝。開口前先核對背包現況：eat()／drink() 對「找到
 # X 但 use_item() != USE_OK」也回 NO_FOOD／NO_DRINK，這時「背包裡沒有 X」是
