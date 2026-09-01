@@ -862,14 +862,12 @@ func _is_own_pursuit_target(world_position: Vector2) -> bool:
 		return false
 	return world_position.distance_to(anchors.resolve_for(self, current_place)) <= ARRIVE_DISTANCE
 
-# 給事實句（_push_daily_event()）用的即時位置反查（issue #426）：current_place
-# 是目前任務的目的地，不是即時座標——移動中會提早等於目的地，talk／追逐這類
-# 無地點任務更是從頭到尾空字串，記事實句當下若直接沿用會記錯地點。半徑跟
-# TALK_RANGE／WORK_RANGE 等既有互動距離門檻取同一個值（32px，2 格），都在
-# 範圍外就回傳空字串——「在地點之間」是合法值，呼叫端（_push_daily_event()
-# 的 location_override）直接把這個結果原樣傳下去即可
-const ACTUAL_PLACE_RADIUS := 32.0
-
+# 給事實句（_push_daily_event()）用的即時位置反查（issue #426，issue #814
+# 改用地點各自的 Area2D 範圍取代單一固定半徑）：current_place 是目前任務的
+# 目的地，不是即時座標——移動中會提早等於目的地，talk／追逐這類無地點任務
+# 更是從頭到尾空字串，記事實句當下若直接沿用會記錯地點。不在任何地點範圍內
+# 就回傳空字串——「在地點之間」是合法值，呼叫端（_push_daily_event() 的
+# location_override）直接把這個結果原樣傳下去即可
 func _resolve_actual_place() -> String:
 	return _actual_place_of(self)
 
@@ -884,9 +882,7 @@ func _actual_place_of(character: Character) -> String:
 		return ""
 	# to_ai_place_name()：issue #391 之後這裡可能反查到 loc_home_0N 這種
 	# 物理錨點名稱，呼叫端（事實句／跟 current_place 比對）看到的要是抽象值
-	var physical_place: String = anchors.resolve_from_position(
-		character.get_body_position(), ACTUAL_PLACE_RADIUS
-	)
+	var physical_place: String = anchors.resolve_from_position(character.get_body_position())
 	return anchors.to_ai_place_name(physical_place)
 
 # 先問資料檔這隻角色被指派了哪份行程，沒有指派才用場景裡的 @export 後備值。
@@ -1980,7 +1976,7 @@ func _workplaces_summary() -> Array[String]:
 	for ws in get_tree().get_nodes_in_group("workstations"):
 		if not ws is Workstation:
 			continue
-		var place: String = anchors.resolve_from_position((ws as Workstation).global_position, ACTUAL_PLACE_RADIUS)
+		var place: String = anchors.resolve_from_position((ws as Workstation).global_position)
 		if not place.is_empty() and not places.has(place):
 			places.append(place)
 	return places
@@ -3906,7 +3902,7 @@ func _pursue_work_task() -> void:
 		if not ws is Workstation:
 			continue
 		var ws_node := ws as Workstation
-		if anchors.resolve_from_position(ws_node.global_position, ACTUAL_PLACE_RADIUS) != current_place:
+		if anchors.resolve_from_position(ws_node.global_position) != current_place:
 			continue
 		var distance := get_body_position().distance_to(ws_node.global_position)
 		if distance < nearest_distance:

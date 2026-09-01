@@ -782,10 +782,6 @@ func _complete_treatment() -> void:
 
 # ---- 死亡 ----
 
-## 死亡地點反查半徑，跟 agent.gd::ACTUAL_PLACE_RADIUS（事實句的即時位置反查）
-## 取同一個值——都是「站在哪個地點錨點附近算數」的同一種判斷，沒有理由不同
-const DEATH_LOCATION_RADIUS := 32.0
-
 ## 死亡流程（#379，《規格書09》§1／§2）。這批 issue 只處理
 ## 「health≤0→昏迷→逾時未獲救治→死亡」這一條觸發路徑；餓死／渴死／老化／
 ## 瞬間死亡 Flag 等其餘觸發源留給後續 issue，各自準備好 death_cause 文案後
@@ -871,7 +867,7 @@ func _resolve_death_location() -> String:
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
 	if anchors == null:
 		return ""
-	return anchors.resolve_from_position(get_body_position(), DEATH_LOCATION_RADIUS)
+	return anchors.resolve_from_position(get_body_position())
 
 ## 屍體腐壞（《規格書09》§3-4）：死亡後每 tick +0.7，clamp 在 [0,100]——
 ## 100/0.7 除不盡，不 clamp 會在某個 tick 算出 100.1，讓存檔的 CHECK 約束
@@ -967,7 +963,7 @@ func _is_at_cemetery(position: Vector2) -> bool:
 	var anchors := tree.get_first_node_in_group("place_anchors")
 	if anchors == null:
 		return false
-	return anchors.resolve_from_position(position, DEATH_LOCATION_RADIUS) == CEMETERY_PLACE_NAME
+	return anchors.resolve_from_position(position) == CEMETERY_PLACE_NAME
 
 ## 目前已佔用的墓碑格數：場上所有已安葬角色的數量。不另外維護一個計數器——
 ## 死亡角色不會被移除節點（見 _die()），直接數 is_buried 的人數就是即時正確
