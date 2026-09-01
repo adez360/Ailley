@@ -195,10 +195,6 @@ var _l3_recalled_for := {}
 # 與「地點換了要重新起步」
 var _pursued_place := ""
 
-# _on_action_interrupted() 存的即時位置反查快照，給 _on_attacked() 讀
-# （見那兩個函式的說明，#426）
-var _place_before_interrupt := ""
-
 # 這一趟移動已經有結論了（走到了，或 _check_stuck() 放棄了）。
 # 少了它，放棄之後下一次重算又會對同一個走不到的目標重新 move_to()，
 # 變成每秒一次的卡住／放棄迴圈
@@ -487,19 +483,28 @@ var _next_daily_event_id := 0
 ## location_override 時改用覆寫值，見下一段
 ##
 ## location_override 給 current_place 當下不可信或不適用的呼叫端用（#426：
-## _on_attacked() 用 _place_before_interrupt 快照的即時位置反查、
-## exit_conversation() 直接呼叫 _resolve_actual_place()——見那兩個函式的
-## 說明）：非 null 時取代 current_place，其餘呼叫端不用管這個參數（省略即為
-## null），維持原本「一律用 current_place」的行為（CodeRabbit review 抓到
-## force_interrupt() 會搶先把 current_place 清空，直接讀會拿到空字串）。
+## _on_attacked()／exit_conversation() 都直接呼叫 _resolve_actual_place()——
+## 見那兩個函式的說明）：非 null 時取代 current_place，其餘呼叫端不用管這個
+## 參數（省略即為 null），維持原本「一律用 current_place」的行為（CodeRabbit
+## review 抓到 force_interrupt() 會搶先把 current_place 清空，直接讀會拿到
+## 空字串）。
 ##
-## 一定要用 null 當「沒有指定」的哨兵，不能用空字串——`_place_before_interrupt`
-## 快照下來的值本來就可能合法地是空字串（角色被攻擊當下 current_place 本來就
+## 一定要用 null 當「沒有指定」的哨兵，不能用空字串——_resolve_actual_place()
+## 反查出來的值本來就可能合法地是空字串（角色被攻擊當下 current_place 本來就
 ## 沒設過），空字串當「沒指定」處理的話，會誤用呼叫這裡當下已經被 _reevaluate()
 ## 重新指派的 current_place（可能是完全不相關的新地點），而不是「這件事發生
 ## 時真的沒有地點」這個事實（CodeRabbit review 抓到）
+##
+## also_pending 給期待「緊接著那次決策」（不是隔天反思）就要讀到這件事的
+## 呼叫端用（#851）：_daily_events 只有睡前反思會讀，force_interrupt() 觸發的
+## 立即決策讀的是 _fact_lines_summary() → _pending_fact_lines，兩份完全不同
+## 的清單。true 時同時把 content 補進 _pending_fact_lines，兩處只維護一套
+## 文字，不用呼叫端各自重複組字串
 func _push_daily_event(
-	content: String, related_npcs: Array[String] = [], location_override: Variant = null
+	content: String,
+	related_npcs: Array[String] = [],
+	location_override: Variant = null,
+	also_pending: bool = false,
 ) -> void:
 	var location_id: String = current_place if location_override == null else str(location_override)
 	_daily_events.append({
@@ -511,6 +516,8 @@ func _push_daily_event(
 	_next_daily_event_id += 1
 	if _daily_events.size() > DAILY_EVENTS_CAP:
 		_daily_events.pop_front()
+	if also_pending:
+		_pending_fact_lines.append(content)
 
 ## 加一筆今天做過的事（#172）。minute 取 GameClock，target 沒有對象的動作
 ## 傳空字串——UI 端顯示時整個省略，不印「無」（《15》§2-5）
@@ -2067,14 +2074,6 @@ func _on_action_interrupted() -> void:
 		_pursuit_done = false
 		return
 
-	# 清空前先存一份快照——character.gd::attack() 的呼叫順序是
-	# force_interrupt()（跑到這裡，把 current_place 清空）先於 _on_attacked()
-	# （記事實句），直接讀 current_place 的話 _on_attacked() 永遠拿到空字串
-	# （CodeRabbit review 抓到）。#426：改存即時座標反查的結果，不是
-	# current_place 本身——force_interrupt() 這裡 stop_moving() 剛執行完、
-	# 位置還沒被任何東西改變，正是「事情發生當下人真正站在哪」，比
-	# current_place（任務目的地，移動途中被攻擊時還沒走到）準確
-	_place_before_interrupt = _resolve_actual_place()
 	_pursued_place = ""
 	_pursuit_done = false
 	_clear_current_task(false)
@@ -2084,17 +2083,23 @@ func _on_action_interrupted() -> void:
 
 # 被攻擊記成事實句（純客觀事件，不貼「這很可怕」之類的主觀標籤——見 CLAUDE.md
 # 「遊戲機制規格：AI 自主性自檢」），讓下次決策／睡前反思能讀到發生過這件事。
-# 地點用 _on_action_interrupted() 存的快照，不是這裡當下的 current_place——
-# 見 _push_daily_event() 的 location_override 說明
+# character.gd::attack() 呼叫順序是這裡先於 force_interrupt()（#851）：位置還沒
+# 被 stop_moving() 等中斷收尾動過，直接呼叫 _resolve_actual_place() 即為「事情
+# 發生當下人真正站在哪」，不用另外存快照——見 _push_daily_event() 的
+# location_override 說明。also_pending=true：force_interrupt() 接著會立即問一次
+# 新決策，那次決策也要讀得到這件事，不能只等睡前反思（#851）
 func _on_attacked(attacker: Character) -> void:
 	super._on_attacked(attacker)
 	_push_daily_event(
-		"你被 %s 攻擊了" % attacker.character_name, [attacker.character_id], _place_before_interrupt
+		"你被 %s 攻擊了" % attacker.character_name,
+		[attacker.character_id],
+		_resolve_actual_place(),
+		true,
 	)
 
 # 被救助記成事實句，跟 _on_attacked() 同一個理由（純客觀事件，不貼標籤，見
 # CLAUDE.md「遊戲機制規格：AI 自主性自檢」）。搬運中角色不是自己在移動，
-# 不需要比照 _on_attacked() 那樣取中斷前快照，直接用 current_place 就是對的
+# 不需要比照 _on_attacked() 那樣即時位置反查，直接用 current_place 就是對的
 func _on_rescued(hauler: Character) -> void:
 	_push_daily_event("你被 %s 救助了，脫離昏迷" % hauler.character_name, [hauler.character_id])
 

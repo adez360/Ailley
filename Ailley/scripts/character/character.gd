@@ -1943,8 +1943,13 @@ func attack(other: Character) -> String:
 			# health 已經歸零。判定條件跟 _update_conditions() 完全一致
 			if other.stats.get_value("health") <= 0.0 and not other.has_condition(CONDITION_INCAPACITATED):
 				other._start_incapacitation()
-	other.force_interrupt()
+	# 先記事實句再中斷（issue #851）：force_interrupt() 會觸發 Agent 立即問一次
+	# 新決策（_on_action_interrupted()），那次決策組信封是同步進行、不等
+	# _on_attacked()——順序反過來的話，事實句進了 _pending_fact_lines 也趕不上
+	# 那次立即決策，AI 完全不知道自己剛被打。other._on_attacked() 只是記事實句，
+	# 不依賴 force_interrupt() 做過的任何清理
 	other._on_attacked(self)
+	other.force_interrupt()
 	return ATTACK_OK
 
 ## 被攻擊的收尾鉤子。基底只是掛點——Player 沒有記憶系統可寫，只有 Agent
