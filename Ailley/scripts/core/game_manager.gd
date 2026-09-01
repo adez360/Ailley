@@ -776,17 +776,23 @@ func save_before_leaving() -> bool:
 		push_error("離開遊戲存檔失敗：世界 %s" % DEFAULT_WORLD_ID)
 	return result["world_ok"] and result["character_failures"].is_empty()
 
-# apply_world_save_data() 的對稱函式（issue #875）：GameManager 是 autoload，
-# 整個 process 存活期間都不會自動重新初始化，只有「繼續遊戲」這條路徑會呼叫
-# apply_world_save_data() 蓋掉這幾個欄位。同一次執行裡玩過一次「繼續遊戲」
-# 之後再按「開始新遊戲」，這幾個欄位不會自己變回全新狀態——main_menu.gd::
+# 重置執行期會殘留的世界層欄位（issue #875）：GameManager 是 autoload，整個
+# process 存活期間都不會自動重新初始化，identity_assignments 開場由
+# load_npc_data() 從 npc_schedule.json 載入、執行期由 deploy_from_library()／
+# _respawn_character() 附加投放角色的身分；character_library／
+# embodied_character_id／allow_player_join 則只有「繼續遊戲」的
+# apply_world_save_data() 會蓋寫。同一次執行裡玩過一次「繼續遊戲」之後再按
+# 「開始新遊戲」，這些欄位不會自己變回全新狀態——main_menu.gd::
 # _on_start_pressed() 呼叫這個函式補上這條路徑，跟同一個函式已經在呼叫的
-# GameClock.reset_to_new_game_start()（#606）是同一個根因、同一種修法
+# GameClock.reset_to_new_game_start()（#606）是同一個根因、同一種修法。
+# identity_assignments 不是清成空表，而是重呼 load_npc_data() 回到開機載入後
+# 的狀態（行為等冪，npc_data／schedule_assignments 一併重載）；它不動
+# character_library 等其他欄位，重置邏輯互不干擾
 func reset_for_new_game() -> void:
 	character_library.clear()
 	embodied_character_id = ""
 	allow_player_join = true
-	identity_assignments = {}
+	load_npc_data()
 
 
 # data 缺欄位一律用預設值補，不當成錯誤（跟 character.gd 同一條規則）。
