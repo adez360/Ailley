@@ -228,13 +228,24 @@ const PLAN_SYSTEM_PERSUADE := """
 ## 原本沒有清除的路徑，目標一旦設定就永遠不會消滅，拖延事實句會無限期觸發）——
 ## 這個目標本來就是角色自己給自己訂的，達成與否沒有外部依據可查核，只能由
 ## 角色自己判斷、自己明確表示清除，引擎不會替它認定
+##
+## #802（延伸 #765/#791）：純粹「講清楚危機的意思」還是不夠——Test B（三人
+## 多日測試）三隻全滅，reasoning 常常完全繞過瀕死數值不提，不是算錯輕重，
+## 是根本沒看見。#816 提案讓 _need_bonus() 用公式幫這類任務加權，但那等於
+## 引擎預先替 AI 的主觀判斷下結論，跟《00》原則二（引擎只給事件，不給情緒）
+## 衝突——已跟使用者確認過，先試這條更節制的路：只逼模型在 reasoning 裡
+## 明講「我有沒有瀕死數值、這輪要不要處理」，不逼模型選哪個。這樣至少擋住
+## 「完全沒看見」這個已確認的失敗模式，同時要不要真的處理仍然是 AI 自己的
+## 判斷，沒有幫它把生理需求跟其他念頭的輕重排出優先順序。這條路如果實測
+## 還是不夠，再回頭評估 #816 那條路，而且即使那時候採用也不該照抄 Maslow
+## 的絕對排序，要抓得更節制
 const PLAN_SYSTEM_TAIL_TEMPLATE := """
 "priority" must be an integer between %d and %d, on the same scale your schedule already uses. 10-110 is for ordinary preferences — a task already in its scheduled time window is worth 110, so an everyday preference at that level still won't outrank it. Only use %d-%d, and only for a genuine emergency happening right now (someone in danger, an attack, one of your own stats at its worst label) that would justify abandoning a meal or work already in progress — never for ordinary preferences.
 "duration" is your own estimate, in game minutes, of how long this action will take. It must be a positive integer, up to %d (one full day) — never 0. Most actions take somewhere between 10 and 60 minutes; sleeping through the night can reasonably take several hundred.
 "expires_in_minutes" is optional: how many game minutes from now this task should still be worth doing before it's no longer relevant (e.g. an appointment you're setting up for later today). It must be an integer between %d and %d. Omit it for tasks you intend to act on right away.
 "emotion" is required every time — it's the only inner state you get to declare yourself. Set "type" to whichever of these fits best right now: %s (use "neutral" if nothing stands out), and "intensity" (0-100) to how strong it is. Base it on your personality and what just happened to you, not on some neutral default. Do not include a duration — how long it lasts is not yours to decide.
 "current_goal" is optional: a short label (a few words, not a sentence) for the one thing you most want to accomplish right now. Omit it if nothing's changed since last time. Once you've accomplished it, or it's no longer something you're pursuing, send an empty string "" to clear it — don't just stop mentioning it, since omitting the field only means "no change."
-"reasoning" must be written first, before you decide on "tasks" — think it through here, then decide, not the other way around. In at most %d characters, walk through: what's the biggest problem right now, what options could address it, which one you're picking, and why — a complete cause-and-effect chain (e.g. "A isn't working, so I need B"), not a list of every option you considered.
+"reasoning" must be written first, before you decide on "tasks" — think it through here, then decide, not the other way around. In at most %d characters, walk through: what's the biggest problem right now, what options could address it, which one you're picking, and why — a complete cause-and-effect chain (e.g. "A isn't working, so I need B"), not a list of every option you considered. If any of your own stats are at their worst label right now, "reasoning" must name it explicitly and say whether you're addressing it this turn — you can still decide something else matters more, but you have to say so, not just leave it out.
 Reply with JSON only, no prose, no code fence:
 {"reasoning": "<problem, options, choice, why — one causal chain, %d chars max>",
  "inner_monologue": "<what this character is thinking right now, first person>",
