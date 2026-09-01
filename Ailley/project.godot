@@ -25,6 +25,7 @@ SaveService="*res://scripts/save/json_save_service.gd"
 _mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
 DatabaseManager="*res://scripts/database/DatabaseManager.gd"
 EmbeddingService="*res://scripts/ai/embedding_service.gd"
+LlamaSidecar="*res://scripts/ai/llama_sidecar.gd"
 
 [display]
 
