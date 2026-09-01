@@ -1014,9 +1014,10 @@ func _cemetery_free_grave_slot() -> int:
 ## 把 corpse 吸附到一個空的墓位座標（issue #833）：bury()／_erect_unmarked_grave()
 ## 立碑成功時共用，修掉「所有墓碑疊在同一個錨點，後面的永遠點不到」的問題
 ## （selection.gd::character_at() 用 pick_rect 中心距離判勝負，座標相同時
-## 恆平局，先加入場景樹的永遠贏）。只在 corpse 當下確實位於墓園範圍內才吸附
-## ——_erect_unmarked_grave() 也可能發生在墓園以外的地方腐壞見底，那種情況
-## 不該把屍體「傳送」過來，維持《規格書09》§1「腐壞原地立無名碑」的語意
+## 恆平局，先加入場景樹的永遠贏）。呼叫端負責先確保 corpse 已經在墓園範圍內——
+## bury() 靠人為把屍體搬過去，_erect_unmarked_grave() 直接把角色傳送過去（issue
+## #856）——這裡只管分配座標；仍保留 _is_at_cemetery() 防呆，理論上呼叫端保證
+## 成立不該觸發，避免未來新增呼叫端漏做這一步時默默吸到錯的地方
 func _assign_cemetery_grave_slot(corpse: Character) -> void:
 	if not _is_at_cemetery(corpse.get_body_position()):
 		return
@@ -1030,20 +1031,31 @@ func _assign_cemetery_grave_slot(corpse: Character) -> void:
 	corpse.global_position = anchors.resolve(CEMETERY_PLACE_NAME) + GRAVE_SLOT_OFFSETS[slot]
 
 ## 屍體腐壞見底、沒人安葬時，引擎自動立「無名碑」（#387，《規格書09》§1／§3-4）：
-## 確保每一個死亡都會被記錄，不需要搬到墓園、不需要任何人動手。跟 bury() 的差別
-## 只在「誰做的」——is_buried 一樣設 true，但 buried_by 留 null（自動、非人為），
-## is_anonymous 設 true 讓墓碑面板只顯示死亡原因與日期（§4-3）。跟 bury() 共用
-## 同一組 CEMETERY_GRAVE_CAPACITY 上限（§6 拍板：滿格時兩者都直接失敗）——
-## 滿格時這裡直接放棄，corpse_decay 已經是 100、grave_id 仍是 null，
-## _update_corpse_decay() 之後每個 tick 都會重試，直到有格子空出來
+## 確保每一個死亡都會被記錄。跟 bury() 的差別只在「誰做的」——is_buried 一樣設
+## true，但 buried_by 留 null（自動、非人為），is_anonymous 設 true 讓墓碑面板
+## 只顯示死亡原因與日期（§4-3）。2026-09-01（issue #856）拍板：無名碑跟人為安葬
+## 一樣要搬到墓園，兩條路徑統一收斂到「已安葬（墓園）」——這裡沒有人手動把屍體
+## 搬過去，所以直接傳送到墓園錨點，再交給 _assign_cemetery_grave_slot() 吸附到
+## 空位。跟 bury() 共用同一組 CEMETERY_GRAVE_CAPACITY 上限（§6 拍板：滿格時
+## 兩者都直接失敗）——滿格時這裡直接放棄，corpse_decay 已經是 100、grave_id
+## 仍是 null，_update_corpse_decay() 之後每個 tick 都會重試，直到有格子空出來。
+## 墓園錨點不存在也走同一套防呆（比照滿格放棄、下個 tick 重試），所以錨點檢查
+## 放在動 is_buried／grave_id 之前——那兩個欄位一動，重試條件就永遠不成立了
 func _erect_unmarked_grave() -> void:
 	if _cemetery_grave_count() >= CEMETERY_GRAVE_CAPACITY:
+		return
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null or not anchors.has(CEMETERY_PLACE_NAME):
 		return
 	is_buried = true
 	grave_id = "grave_%s" % character_id
 	buried_by = null
 	buried_tick = _current_tick()
 	is_anonymous = true
+	# 跟 bury()（968 行）同一個理由：is_buried 不會讓身體停止跟著搬運者走，
+	# 傳送到墓園後不放手的話，下一幀就被拖出墓園（見 _decide_velocity()）
+	_release_all_haulers()
+	global_position = anchors.resolve(CEMETERY_PLACE_NAME)
 	_assign_cemetery_grave_slot(self)
 	print_debug("Character %s 腐壞見底，自動立無名碑" % character_name)
 
