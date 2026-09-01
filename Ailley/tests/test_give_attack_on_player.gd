@@ -89,3 +89,23 @@ func test_attack_dead_target_still_applies_damage() -> void:
 	assert_eq(failure, Character.ATTACK_OK, "活人攻擊死屍應照舊成功")
 	assert_eq(corpse.stats.get_value("health"), 100.0 + Character.ATTACK_HEALTH_DELTA, "攻擊死屍仍應套用傷害")
 	assert_true(corpse.has_condition(Character.CONDITION_BLEEDING) == false, "死屍不該被疊加 bleeding（#379）")
+
+
+## #821：health 命中歸零應比照 bleeding 立即同步昏迷，不等 _update_conditions()
+## 下一次 tick（最長約 10 秒空窗期）。_start_incapacitation() 會讀 GameClock.hour／
+## minute，但這兩個角色沒有掛進場景樹（跟本檔其他測試同一種輕量寫法）——
+## test_run 執行環境本身在這種情況下對 GameClock 這個 autoload 只能解析到
+## placeholder（跟 test_task_preconditions.gd 兩個既有失敗同一根因，屬於
+## test_run 環境的既有落差，不是這次改動的問題），沒有可靠寫法能在這裡驗證
+## 這條路徑；已改用 game_eval 在真正跑起來的遊戲裡活測試過（見
+## note/技術/昏迷狀態機制.md），這裡只保留不會踩到 GameClock 的負向情境
+func test_attack_not_lethal_does_not_trigger_incapacitation() -> void:
+	var attacker := _make_character(Agent)
+	var target := _make_character(Player)
+	target.position = attacker.position  # 同一個位置，一定在 ATTACK_RANGE 內
+	# health 保持預設 100.0，攻擊後仍遠高於 0
+
+	attacker.attack(target)
+
+	assert_true(target.stats.get_value("health") > 0.0, "health 不該歸零")
+	assert_true(target.has_condition(Character.CONDITION_INCAPACITATED) == false, "health 未歸零不該誤觸發昏迷")

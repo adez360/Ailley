@@ -174,6 +174,26 @@ func _unhandled_input(event: InputEvent) -> void:
 			report_action_failure("attack", attack_reason)
 		return
 
+	# 送禮（issue #841）：獨立按鍵，不擠進 interact（E）那條已經很長的優先序鏈
+	# （工作／商店／搬運／復活／打賞／搭話）——give 目標判定只看「面向且在
+	# 範圍內」，跟 attack 同一套 _get_interact_candidates()["other"]，不需要
+	# 額外分流。開的是選單（選物品），不像 attack 按下去立刻執行，所以目標
+	# 找不到時直接回報失敗，找得到就交給 give_menu 自己接手後續
+	if event.is_action_pressed("give"):
+		get_viewport().set_input_as_handled()
+		var give_menu := get_tree().get_first_node_in_group("give_menu")
+		if give_menu != null and give_menu.is_open():
+			return
+		var give_target: Character = _get_interact_candidates()["other"]
+		if give_target != null and give_target.is_dead:
+			give_target = null
+		if give_target == null:
+			report_action_failure("give", Character.GIVE_TARGET_NOT_FOUND)
+			return
+		if give_menu != null:
+			give_menu.open(give_target, self)
+		return
+
 	if not event.is_action_pressed("interact"):
 		return
 
@@ -206,7 +226,29 @@ func _unhandled_input(event: InputEvent) -> void:
 	if corpse_menu != null and corpse_menu.is_open():
 		return
 
+	# give_menu 開著時同一個理由（issue #841）：give_menu.gd 自己接 interact
+	# 當關閉鍵，這裡漏了 guard 的話，E 會被這裡搶先吃掉、選單關不掉
+	var give_menu_open_check := get_tree().get_first_node_in_group("give_menu")
+	if give_menu_open_check != null and give_menu_open_check.is_open():
+		return
+
 	get_viewport().set_input_as_handled()
+
+	# 搬運中時 E 只做「安葬或放下」，不落入下面搭話／工作／商店的判斷——雙手
+	# 抱著屍體沒道理還能開別的互動。bury() 本身已經檢查距離／是否在墓園／
+	# 墓碑格數，這裡不用重複算：能安葬就安葬；只差墓園位置的話，直接當成
+	# 玩家想放下（issue #826 建議 2：不強制走到墓園才能結束搬運），沒有專門
+	# 另開一個按鍵；其餘失敗原因（墓碑滿了）才真的回報給玩家
+	if is_hauling():
+		var haul_target := get_hauling_target()
+		var bury_reason := bury(haul_target)
+		if bury_reason == BURY_OK:
+			return
+		if bury_reason == BURY_NOT_AT_CEMETERY:
+			stop_haul()
+			return
+		report_action_failure("bury", bury_reason)
+		return
 
 	if is_in_conversation():
 		leave_conversation()
@@ -379,15 +421,15 @@ func _is_facing(target: Vector2) -> bool:
 ##
 ## 昏迷角色（`downed`）跟可搭話對象（`other`）從同一份 vision 清單分流、互斥——
 ## 昏迷者不進 `other`：talk_to() 沒有擋昏迷目標（is_talk_interruptible() 只看
-## _working／is_dead），兩邊都收會讓同一個人同時是搭話候選又是搬運候選，
-## 距離又剛好一樣（HAUL_RANGE == TALK_RANGE），還得另外決哪個優先。分流後
-## 兩邊各自呼叫一次 _nearest_facing()，跟 workstation 同一種寫法（issue #637）
+## _working／is_dead／is_offline_asleep），兩邊都收會讓同一個人同時是搭話候選
+## 又是搬運候選，距離又剛好一樣（HAUL_RANGE == TALK_RANGE），還得另外決哪個優先。
+## 分流後兩邊各自呼叫一次 _nearest_facing()，跟 workstation 同一種寫法（issue #637）
 func _get_interact_candidates() -> Dictionary:
 	var workstation := _nearest_facing(_nearby_group("workstations"), WORK_RANGE, func(n): return n.global_position) as Workstation
 	var shop_place := _nearest_shop_place()
 	var visible_characters: Array = vision.get_visible_characters() if vision != null else []
 	var downed_characters := visible_characters.filter(func(n): return (n as Character).has_condition(CONDITION_INCAPACITATED))
-	var talkable_characters := visible_characters.filter(func(n): return not (n as Character).has_condition(CONDITION_INCAPACITATED))
+	var talkable_characters := visible_characters.filter(func(n): return not (n as Character).has_condition(CONDITION_INCAPACITATED) and not (n as Character).is_offline_asleep)
 	var downed := _nearest_facing(downed_characters, HAUL_RANGE, func(n): return (n as Character).get_body_position()) as Character
 	var other := _nearest_facing(talkable_characters, TALK_RANGE, func(n): return (n as Character).get_body_position()) as Character
 
@@ -581,11 +623,13 @@ func _decide_velocity() -> Vector2:
 
 	var input_dir := get_input_direction()
 
-	# 手動操作優先，直接中斷自動移動
+	# 手動操作優先，直接中斷自動移動。乘 effective_speed() 而非 SPEED——
+	# 搬運屍體時要吃到 _speed_multiplier 減速，跟 _follow_hauler() 用的
+	# 是同一個倍率，玩家跟被搬運目標才會同速（issue #822）
 	if input_dir != Vector2.ZERO:
 		if is_moving():
 			stop_moving()
-		return input_dir * SPEED
+		return input_dir * effective_speed()
 
 	return super()
 

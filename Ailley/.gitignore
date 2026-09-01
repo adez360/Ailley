@@ -52,6 +52,11 @@ venv/
 .env
 *.log
 
+# ---- 本機 sidecar（llama-server 執行檔＋模型檔，issue #772）----
+# 開發者自己放實體檔案進來測試連線，不進版控；THIRD_PARTY_LICENSES/ 的授權
+# 文字是另一回事，那個要進版控
+sidecar/
+
 # ---- 其他暫存檔 ----
 *.tmp
 *.bak
