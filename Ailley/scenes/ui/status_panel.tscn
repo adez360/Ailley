@@ -1,0 +1,94 @@
+[gd_scene load_steps=4 format=3 uid="uid://dbcfofyr1gv4j"]
+
+[ext_resource type="Script" uid="uid://ds0vju8nopom0" path="res://scripts/ui/status_dock.gd" id="1_dvh5f"]
+[ext_resource type="Theme" uid="uid://dktke2k785jv0" path="res://assets/ui/ailley_theme.tres" id="2_ycn8u"]
+[ext_resource type="PackedScene" uid="uid://dabbyhdjbp36g" path="res://scenes/ui/status_panel_expand.tscn" id="3_ycn8u"]
+
+[node name="StatusPanel" type="CanvasLayer"]
+script = ExtResource("1_dvh5f")
+
+[node name="HBoxContainer" type="HBoxContainer" parent="."]
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_top = -46.0
+offset_right = 181.0
+grow_vertical = 0
+theme = ExtResource("2_ycn8u")
+theme_override_constants/separation = 0
+
+[node name="TabContainer" type="PanelContainer" parent="HBoxContainer"]
+layout_mode = 2
+
+[node name="MarginContainer" type="MarginContainer" parent="HBoxContainer/TabContainer"]
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_constants/margin_left = 1
+theme_override_constants/margin_top = 1
+theme_override_constants/margin_right = 1
+theme_override_constants/margin_bottom = 1
+
+[node name="HBoxContainer" type="HBoxContainer" parent="HBoxContainer/TabContainer/MarginContainer"]
+layout_mode = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="HBoxContainer/TabContainer/MarginContainer/HBoxContainer"]
+custom_minimum_size = Vector2(32.626, 0)
+layout_mode = 2
+theme_override_constants/separation = 0
+alignment = 1
+
+[node name="Space" type="Control" parent="HBoxContainer/TabContainer/MarginContainer/HBoxContainer/VBoxContainer"]
+custom_minimum_size = Vector2(0, 2.297)
+layout_mode = 2
+
+[node name="快照" type="TextureRect" parent="HBoxContainer/TabContainer/MarginContainer/HBoxContainer/VBoxContainer"]
+custom_minimum_size = Vector2(20, 20)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Label" type="Label" parent="HBoxContainer/TabContainer/MarginContainer/HBoxContainer/VBoxContainer"]
+auto_translate_mode = 2
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 6
+text = "name"
+horizontal_alignment = 1
+
+[node name="VSeparator" type="VSeparator" parent="HBoxContainer/TabContainer/MarginContainer/HBoxContainer"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="狀態" type="Button" parent="HBoxContainer/TabContainer/MarginContainer/HBoxContainer"]
+custom_minimum_size = Vector2(25, 27)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+toggle_mode = true
+
+[node name="行程" type="Button" parent="HBoxContainer/TabContainer/MarginContainer/HBoxContainer"]
+custom_minimum_size = Vector2(25, 27)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+
+[node name="Button3" type="Button" parent="HBoxContainer/TabContainer/MarginContainer/HBoxContainer"]
+custom_minimum_size = Vector2(25, 27)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+
+[node name="CollapsButton" type="Button" parent="HBoxContainer"]
+custom_minimum_size = Vector2(16, 40)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+focus_mode = 0
+theme_type_variation = &"SideBarButton_mirror"
+toggle_mode = true
+
+[node name="StatusExpand" parent="." instance=ExtResource("3_ycn8u")]
+visible = false
