@@ -3,7 +3,8 @@ extends CanvasLayer
 ## 右側角色側欄：列出地圖上所有 Character（縮圖＋名稱），底部「新增角色」開角色庫。
 ##
 ## 面板結構在 side_bar.tscn 裡排好（錨點＋ailley_theme.tres 的 SideBarButton
-## 樣式變體），這支腳本只接訊號、管展開/收合、刷新清單，不再用程式碼組節點。
+## 樣式變體），清單裡的每一列是 character_row.tscn 的實例，這支腳本只接訊號、
+## 管展開/收合、刷新清單，不再用程式碼組節點。
 ## 縮圖借用角色本身 AnimatedSprite2D 當下那一幀（character.gd 的
 ## _current_frame_texture() 同一招，但那支是私有方法，這裡自己重算一次）。
 ##
@@ -17,9 +18,8 @@ extends CanvasLayer
 const VIEWPORT_W := 640
 const SLIDE_TIME := 0.2
 
-const THUMB_SIZE := 24
+const ROW_SCENE := preload("res://scenes/ui/character_row.tscn")
 
-const BARK := Color("2F2522")
 const CLAY := Color("75593C")
 
 @onready var _control: Control = $Control
@@ -93,29 +93,15 @@ func _refresh() -> void:
 		_list.add_child(_row(character))
 
 
-## row 本身是 HBoxContainer，靠 gui_input 偵測點擊——跟 status_panel.gd 點世界
-## 角色同一種判斷方式。刻意不包 Button：Button 不是 Container，不會照子節點
-## 內容自動撐開大小，縮圖＋名稱包在裡面會讓可點擊範圍跟看到的範圍對不上
+## 一列就是 character_row.tscn 的實例（Button 內含縮圖＋名稱），這裡只填內容
+## 跟接 pressed。要調外觀去改那份場景，不要在這裡再寫一套組節點的程式碼
 func _row(character: Character) -> Control:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	row.gui_input.connect(_on_row_gui_input.bind(character))
-
-	var thumb := TextureRect.new()
-	thumb.custom_minimum_size = Vector2(THUMB_SIZE, THUMB_SIZE)
-	thumb.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	thumb.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	var row: Button = ROW_SCENE.instantiate()
+	var thumb: TextureRect = row.get_node("MarginContainer/HBoxContainer/Thumb")
 	thumb.texture = _thumbnail(character)
-	thumb.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(thumb)
-
-	var name_label := Label.new()
-	name_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
+	var name_label: Label = row.get_node("MarginContainer/HBoxContainer/Label")
 	name_label.text = character.character_name
-	name_label.add_theme_color_override("font_color", BARK)
-	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(name_label)
-
+	row.pressed.connect(_on_row_pressed.bind(character))
 	return row
 
 
@@ -123,9 +109,7 @@ func _row(character: Character) -> Control:
 ## 選取機制，不繞過去直接呼叫 FollowCamera，這樣 _selected／描邊那些狀態
 ## 才會跟世界地圖上點角色是同一回事，不會兩邊各自一套。側欄本身留著不收合，
 ## 方便連續點好幾個角色比較
-func _on_row_gui_input(event: InputEvent, character: Character) -> void:
-	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
-		return
+func _on_row_pressed(character: Character) -> void:
 	if not is_instance_valid(character):
 		return
 	var selection := get_tree().get_first_node_in_group("selection") as Selection

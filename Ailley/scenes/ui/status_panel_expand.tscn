@@ -1,0 +1,162 @@
+[gd_scene load_steps=10 format=3 uid="uid://dabbyhdjbp36g"]
+
+[ext_resource type="Theme" uid="uid://dktke2k785jv0" path="res://assets/ui/ailley_theme.tres" id="1_py2ra"]
+[ext_resource type="Texture2D" uid="uid://cfisgoin75p8o" path="res://assets/icons/icons.png" id="2_exj4r"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_2semd"]
+atlas = ExtResource("2_exj4r")
+region = Rect2(0, 0, 16, 16)
+
+[sub_resource type="CompressedTexture2D" id="CompressedTexture2D_7nx0u"]
+load_path = "res://.godot/imported/icons.png-5c52b2a8ef046341f695bea1654b31ed.ctex"
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_n6sp7"]
+atlas = SubResource("CompressedTexture2D_7nx0u")
+region = Rect2(0, 48, 16, 16)
+
+[sub_resource type="CompressedTexture2D" id="CompressedTexture2D_n6sp7"]
+load_path = "res://.godot/imported/icons.png-5c52b2a8ef046341f695bea1654b31ed.ctex"
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ricfp"]
+atlas = SubResource("CompressedTexture2D_n6sp7")
+region = Rect2(0, 64, 16, 16)
+
+[sub_resource type="CompressedTexture2D" id="CompressedTexture2D_e4wax"]
+load_path = "res://.godot/imported/icons.png-5c52b2a8ef046341f695bea1654b31ed.ctex"
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_ta7wn"]
+atlas = SubResource("CompressedTexture2D_e4wax")
+region = Rect2(0, 80, 16, 16)
+
+[node name="CanvasLayer" type="CanvasLayer"]
+
+[node name="PanelContainer" type="PanelContainer" parent="."]
+custom_minimum_size = Vector2(90.168, 0)
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_top = -135.0
+offset_right = 90.168
+offset_bottom = -46.0
+grow_vertical = 0
+theme = ExtResource("1_py2ra")
+
+[node name="MarginContainer" type="MarginContainer" parent="PanelContainer"]
+layout_mode = 2
+size_flags_vertical = 0
+
+[node name="VBoxContainer" type="VBoxContainer" parent="PanelContainer/MarginContainer"]
+layout_mode = 2
+
+[node name="LabelScale" type="Control" parent="PanelContainer/MarginContainer/VBoxContainer"]
+custom_minimum_size = Vector2(0, 9.486)
+layout_mode = 2
+size_flags_horizontal = 0
+
+[node name="Label" type="Label" parent="PanelContainer/MarginContainer/VBoxContainer/LabelScale"]
+layout_mode = 0
+offset_right = 26.0
+offset_bottom = 14.0
+scale = Vector2(0.795, 0.795)
+size_flags_horizontal = 0
+text = "狀態"
+
+[node name="生命值" type="HBoxContainer" parent="PanelContainer/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="PanelContainer" type="PanelContainer" parent="PanelContainer/MarginContainer/VBoxContainer/生命值"]
+layout_mode = 2
+theme_type_variation = &"PanelContainer_B"
+
+[node name="TextureRect" type="TextureRect" parent="PanelContainer/MarginContainer/VBoxContainer/生命值/PanelContainer"]
+custom_minimum_size = Vector2(8, 8)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+theme_type_variation = &"ProgressBar_simple"
+texture = SubResource("AtlasTexture_2semd")
+expand_mode = 1
+
+[node name="ProgressBar" type="ProgressBar" parent="PanelContainer/MarginContainer/VBoxContainer/生命值"]
+custom_minimum_size = Vector2(0, 6)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+theme_type_variation = &"ProgressBar_simple"
+value = 14.12
+show_percentage = false
+
+[node name="飽食度" type="HBoxContainer" parent="PanelContainer/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="PanelContainer" type="PanelContainer" parent="PanelContainer/MarginContainer/VBoxContainer/飽食度"]
+layout_mode = 2
+theme_type_variation = &"PanelContainer_B"
+
+[node name="TextureRect" type="TextureRect" parent="PanelContainer/MarginContainer/VBoxContainer/飽食度/PanelContainer"]
+custom_minimum_size = Vector2(8, 8)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+theme_type_variation = &"ProgressBar_simple"
+texture = SubResource("AtlasTexture_n6sp7")
+expand_mode = 1
+
+[node name="ProgressBar" type="ProgressBar" parent="PanelContainer/MarginContainer/VBoxContainer/飽食度"]
+custom_minimum_size = Vector2(0, 6)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+theme_type_variation = &"ProgressBar_simple"
+value = 14.12
+show_percentage = false
+
+[node name="水分值" type="HBoxContainer" parent="PanelContainer/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="PanelContainer" type="PanelContainer" parent="PanelContainer/MarginContainer/VBoxContainer/水分值"]
+layout_mode = 2
+theme_type_variation = &"PanelContainer_B"
+
+[node name="TextureRect" type="TextureRect" parent="PanelContainer/MarginContainer/VBoxContainer/水分值/PanelContainer"]
+custom_minimum_size = Vector2(8, 8)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+theme_type_variation = &"ProgressBar_simple"
+texture = SubResource("AtlasTexture_ricfp")
+expand_mode = 1
+
+[node name="ProgressBar" type="ProgressBar" parent="PanelContainer/MarginContainer/VBoxContainer/水分值"]
+custom_minimum_size = Vector2(0, 6)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+theme_type_variation = &"ProgressBar_simple"
+value = 14.12
+show_percentage = false
+
+[node name="體力" type="HBoxContainer" parent="PanelContainer/MarginContainer/VBoxContainer"]
+layout_mode = 2
+
+[node name="PanelContainer" type="PanelContainer" parent="PanelContainer/MarginContainer/VBoxContainer/體力"]
+layout_mode = 2
+theme_type_variation = &"PanelContainer_B"
+
+[node name="TextureRect" type="TextureRect" parent="PanelContainer/MarginContainer/VBoxContainer/體力/PanelContainer"]
+custom_minimum_size = Vector2(8, 8)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+theme_type_variation = &"ProgressBar_simple"
+texture = SubResource("AtlasTexture_ta7wn")
+expand_mode = 1
+
+[node name="ProgressBar" type="ProgressBar" parent="PanelContainer/MarginContainer/VBoxContainer/體力"]
+custom_minimum_size = Vector2(0, 6)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+theme_type_variation = &"ProgressBar_simple"
+value = 14.12
+show_percentage = false

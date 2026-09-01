@@ -568,10 +568,10 @@ func _refresh_template_list() -> void:
 	for entry in templates:
 		_template_list.add_child(_template_row(entry))
 
-## row 本身是 HBoxContainer，靠 gui_input 偵測點擊——跟 character_sidebar.gd
-## 點側欄角色同一種判斷方式（Button 不會照子節點內容自動撐開大小，包
-## Button 會讓可點擊範圍跟看到的範圍對不上）。刪除鈕是真的 Button，
-## 預設 mouse_filter=STOP 會先吃掉那次點擊，不會連帶觸發 row 的套用
+## row 本身是 HBoxContainer，靠 gui_input 偵測點擊——這一列裡面還有「操控」跟
+## 刪除兩顆真的 Button，整列包成一顆 Button 會把它們的點擊吃掉（側欄那邊沒有
+## 這個限制，已改成 character_row.tscn 的 Button）。刪除鈕預設
+## mouse_filter=STOP 會先吃掉那次點擊，不會連帶觸發 row 的套用
 func _template_row(entry: Dictionary) -> Control:
 	var id: String = entry.get("id", "")
 
