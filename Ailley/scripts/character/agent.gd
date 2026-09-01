@@ -3161,24 +3161,32 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			if matches.size() > 1:
 				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
 		"eat":
+			# 跟 _eat_failure_reason_text(EAT_NO_FOOD) 共用 _no_supply_reason_text()：
+			# llm 任務在這裡就被攔下、根本進不了 eat()，回自製短句的話兩條路徑
+			# 講的不是同一句事實，這條路徑也拿不到賣場清單（robot-ru review 抓到）
 			if inventory == null or _find_food_slot().is_empty():
-				return {"success": false, "reason": "背包裡沒有食物可以吃"}
+				return {"success": false, "reason": _no_supply_reason_text("食物", "food")}
 		"drink":
 			if inventory == null or _find_drink_slot().is_empty():
-				return {"success": false, "reason": "背包裡沒有飲品可以喝"}
+				return {"success": false, "reason": _no_supply_reason_text("飲品", "drink")}
 		"buy":
-			# 檢查錢夠不夠（需要先查地點的商店目錄）、商品存不存在、背包有沒有空間
+			# 檢查錢夠不夠（需要先查地點的商店目錄）、商品存不存在、背包有沒有空間。
+			# 失敗原因一律走 _buy_failure_reason_text()，跟 buy_from() 的原因碼共用
+			# 同一套中文事實——這些前置攔截是 buy 任務實際會走到的失敗路徑
+			# （_pursue_buy_task() 一定先跑 resolve()、通過才呼叫 buy_from()），
+			# 回自製短句的話 ITEM_NOT_FOUND 的商品清單在唯一會發生的路徑上構不到
+			# （robot-ru review 抓到）
 			var place: String = str(params.get("place", ""))
 			if not Shop.has_shop(place):
-				return {"success": false, "reason": "這裡沒有商店"}
+				return {"success": false, "reason": _buy_failure_reason_text(Character.BUY_TARGET_NOT_FOUND, place)}
 			var item_id: String = str(params.get("item_id", ""))
 			var price := Shop.get_price(place, item_id)
 			if price < 0:
-				return {"success": false, "reason": "這間商店沒有這個商品"}
+				return {"success": false, "reason": _buy_failure_reason_text(Character.BUY_ITEM_NOT_FOUND, place)}
 			if inventory == null:
-				return {"success": false, "reason": "背包裡沒有地方放東西"}
+				return {"success": false, "reason": _buy_failure_reason_text(Character.BUY_NO_INVENTORY, place)}
 			if inventory.get_money() < price:
-				return {"success": false, "reason": "身上沒有夠的錢"}
+				return {"success": false, "reason": _buy_failure_reason_text(Inventory.MONEY_NOT_ENOUGH, place)}
 			# 檢查是否有空位或是否可以堆疊（add_item 會幫我們檢查）
 			# 這裡先用樂觀假設，真的失敗讓 buy_from() 退款並傳回原因碼
 		"gather":
@@ -3807,11 +3815,12 @@ func _pursue_eat_task() -> void:
 	if proceed:
 		food_item = str(_find_food_slot().get("item_id", ""))
 		var reason := eat()
-		last_action_result = reason
 		if reason != Character.EAT_OK:
+			last_action_result = _eat_failure_reason_text(reason)
 			push_warning("Agent %s: eat 失敗（%s）" % [character_name, reason])
 			_mark_schedule_retry_backoff(_current_task)
 		else:
+			last_action_result = reason
 			var food_name := ItemDatabase.get_display_name(food_item)
 			_push_daily_event("你吃了%s。" % food_name)
 		# 連續失敗事實句涵蓋所有實際執行的動作，不分來源——跟 talk 的既有規則
@@ -3854,11 +3863,12 @@ func _pursue_drink_task() -> void:
 	if proceed:
 		drink_item = str(_find_drink_slot().get("item_id", ""))
 		var reason := drink()
-		last_action_result = reason
 		if reason != Character.DRINK_OK:
+			last_action_result = _drink_failure_reason_text(reason)
 			push_warning("Agent %s: drink 失敗（%s）" % [character_name, reason])
 			_mark_schedule_retry_backoff(_current_task)
 		else:
+			last_action_result = reason
 			var drink_name := ItemDatabase.get_display_name(drink_item)
 			_push_daily_event("你喝了%s。" % drink_name)
 		# 不分來源都記——理由同 _pursue_eat_task()
@@ -4030,7 +4040,9 @@ func _pursue_buy_task() -> void:
 		stop_moving()
 		_pursued_place = ""
 		_pursuit_done = false
-		last_action_result = Character.BUY_TARGET_NOT_FOUND
+		# 失敗原因同樣翻成中文——這個守衛是「LLM 填了不是商店的 place」最
+		# 常見的失敗路徑，不能把英文常數原樣塞進 last_action_result
+		last_action_result = _buy_failure_reason_text(Character.BUY_TARGET_NOT_FOUND, place)
 		if failed_task_source == "llm":
 			_remove_task(failed_task_id)
 		else:
@@ -4098,9 +4110,11 @@ func _pursue_buy_task() -> void:
 	if proceed:
 		var item_id: String = str(_current_task.get("params", {}).get("item_id", ""))
 		var reason := buy_from(place, item_id)
-		last_action_result = reason
 		if reason != Character.BUY_OK:
+			last_action_result = _buy_failure_reason_text(reason, place)
 			push_warning("Agent %s: buy 失敗（%s）" % [character_name, reason])
+		else:
+			last_action_result = reason
 
 	if _current_task.get("source", "") == "llm":
 		_remove_task(_current_task.get("id", ""))
@@ -4117,6 +4131,104 @@ func _pursue_buy_task() -> void:
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
+
+# issue #795：buy_from() 回傳的原始代碼（TARGET_NOT_FOUND／TOO_FAR／
+# ITEM_NOT_FOUND／NOT_ENOUGH／NO_SPACE 等）先前原封不動塞進
+# last_action_result，下一輪 prompt 就是一串英文常數——走路失敗那幾條
+# 分支（「走不到商店，無法購買」）早就是手寫中文，買東西失敗卻沒有，
+# 純粹是疏漏。這裡補齊中文人話，ITEM_NOT_FOUND 額外用 Shop.list_items()
+# 列出這個地點真正賣什麼，同時給 item_id 與中文顯示名——AISchema 只擋
+# 空字串、不做顯示名→id 正規化，只給顯示名的話 LLM 照字面填中文會再撞
+# 一次同樣的錯。不做模糊比對／引擎幫它選「最接近」的品項直接買——見
+# #795 的討論，那等於引擎替 AI 決定它真正想要什麼，這裡只給事實，
+# 選擇權留給 LLM 自己
+func _buy_failure_reason_text(reason: String, place: String) -> String:
+	match reason:
+		Character.BUY_TARGET_NOT_FOUND:
+			# 同一個原因碼有兩種觸發：地點真的沒有商店（_pursue_buy_task() 守衛
+			# (a)、buy_from() 的 has_shop 檢查），跟有商店但錨點解析不出來（守衛
+			# (b)——_pursue_buy_task() 的 anchors 檢查、buy_from() 的 anchors.has()
+			# 檢查）。後者該地點其實是商店，context.shop 還列著它，講「沒有商店」
+			# 是假事實——用 Shop.has_shop() 區分兩種事實句（robot-ru review 抓到）
+			if not Shop.has_shop(place):
+				return "%s 沒有可以購買的商店" % place
+			return "%s 是商店，但找不到可以走過去的位置" % place
+		Character.BUY_TOO_FAR:
+			return "距離商店太遠，無法購買"
+		Character.BUY_NO_INVENTORY:
+			return "沒有背包，無法購買"
+		Character.BUY_ITEM_NOT_FOUND:
+			var names: Array[String] = []
+			for item_id in Shop.list_items(place):
+				names.append("%s（%s）" % [item_id, ItemDatabase.get_display_name(item_id)])
+			return "%s沒有賣這個東西，目前只賣：%s" % [place, ", ".join(names)]
+		Inventory.MONEY_NOT_ENOUGH:
+			return "身上的錢不夠，無法購買"
+		Inventory.MONEY_INVALID_AMOUNT:
+			return "購買金額有誤，無法購買"
+		Inventory.ADD_NO_SPACE:
+			return "背包已滿，無法購買"
+		_:
+			return "購買失敗（%s）" % reason
+
+# issue #820：eat()／drink() 的失敗代碼跟修 #795 之前的 buy_from() 是同一種
+# 疏漏——resolve() 對 llm 來源任務已經先擋掉「背包沒有食物/飲品」這條最常見
+# 的路（回中文），但 schedule 來源任務不走 resolve()，以及 EAT_NO_STATS 這種
+# resolve() 沒檢查的情況，還是會讓 eat()/drink() 的原始英文代碼直接進
+# last_action_result。這裡補齊翻譯；「沒有食物/飲品」這條只陳述事實——背包
+# 真的沒有該分類時講背包現況，加上由 Shop.CATALOGS × ItemDatabase.category
+# 推導出哪些地點有賣該分類（item_id ＋中文顯示名，見 _no_supply_reason_text()）；
+# 背包有 X 但 use_item() 失敗時只講「這份 X 用不成功」——同一個原因碼的兩種
+# 事實在 helper 內部區分。不寫死地點名、也不給「可以去哪買」的行動建議：引擎
+# 只報告發生什麼，下一步怎麼補是 LLM 自己的判斷，跟 _buy_failure_reason_text()
+# 只給事實、不替 AI 猜是同一立場
+func _eat_failure_reason_text(reason: String) -> String:
+	match reason:
+		Character.EAT_NO_INVENTORY:
+			return "沒有背包，無法吃東西"
+		Character.EAT_NO_FOOD:
+			return _no_supply_reason_text("食物", "food")
+		Character.EAT_NO_STATS:
+			return "沒有生理數值可以恢復，無法吃東西"
+		_:
+			return "吃東西失敗（%s）" % reason
+
+func _drink_failure_reason_text(reason: String) -> String:
+	match reason:
+		Character.DRINK_NO_INVENTORY:
+			return "沒有背包，無法喝東西"
+		Character.DRINK_NO_DRINK:
+			return _no_supply_reason_text("飲品", "drink")
+		Character.DRINK_NO_STATS:
+			return "沒有生理數值可以恢復，無法喝東西"
+		_:
+			return "喝東西失敗（%s）" % reason
+
+# 「背包裡沒有 X」的訊息組裝。開口前先核對背包現況：eat()／drink() 對「找到
+# X 但 use_item() != USE_OK」也回 NO_FOOD／NO_DRINK，這時「背包裡沒有 X」是
+# 假事實——只陳述「這份 X 用不成功」，不附賣場清單；保守修法是不動
+# character.gd 的原因碼契約，在訊息組裝這端區分兩種事實（robot-ru review 抓到）。
+# 背包真的沒有該分類（或根本沒有背包）時才講「沒有 X」——一句背包現況，加上
+# 由 Shop.CATALOGS × ItemDatabase.category 推導出哪些地點有賣該分類（item_id
+# ＋中文顯示名），不寫死地點名（誰在賣照實列，商店資料改了訊息跟著變），也
+# 不給「可以去哪裡買」的行動建議——下一步怎麼補是 LLM 自己的判斷。沒有任何
+# 地點賣該分類時只留背包現況那句
+func _no_supply_reason_text(noun: String, category: String) -> String:
+	if inventory != null:
+		var slot: Dictionary = _find_food_slot() if category == "food" else _find_drink_slot()
+		if not slot.is_empty():
+			return "這份%s用不成功" % noun
+	var place_facts: Array[String] = []
+	for place in Shop.CATALOGS:
+		var items: Array[String] = []
+		for item_id in Shop.CATALOGS[place]:
+			if ItemDatabase.get_item(item_id).get("category", "") == category:
+				items.append("%s（%s）" % [item_id, ItemDatabase.get_display_name(item_id)])
+		if not items.is_empty():
+			place_facts.append("%s：%s" % [place, ", ".join(items)])
+	if place_facts.is_empty():
+		return "背包裡沒有%s，目前沒有地點賣%s" % [noun, noun]
+	return "背包裡沒有%s。目前有賣%s的地點：%s" % [noun, noun, "；".join(place_facts)]
 
 # gather 任務的執行（#574）：跟 _pursue_work_task() 同理，先走到地點錨點，
 # 抵達後才執行；跟 eat／drink／buy 同理，呼叫一次就完成，不像 nap 那樣佔滿
