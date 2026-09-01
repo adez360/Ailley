@@ -196,8 +196,11 @@ func _apply_ready_to_agents() -> void:
 		GameManager.activate_llm_decision_if_ready(agent)
 
 
-## 輕量 HTTP 探針：只看連不連得上，不驗證回應內容——AIService._probe_models()
-## 才是「這個 provider 真的能用」的正式判定，這裡只回答「這個埠有沒有東西在聽」
+## 輕量 HTTP 探針：連得上且回 2xx 才算埠有服務在聽——比照
+## AIService._probe_models() 的判定：RESULT_SUCCESS 只代表網路請求本身有始
+## 有終，llama.cpp 載模型期間回 503、埠被其他 HTTP 服務佔住回 404，都不能
+## 當成就緒。不驗證回應內容——正式的「這個 provider 真的能用」判定仍由
+## AIService._probe_models() 負責
 func _probe_port(port: int) -> bool:
 	var http := HTTPRequest.new()
 	http.timeout = 2.0
@@ -211,8 +214,12 @@ func _probe_port(port: int) -> bool:
 
 	var response: Array = await http.request_completed
 	http.queue_free()
-	var result: int = response[0]
-	return result == HTTPRequest.RESULT_SUCCESS
+	if int(response[0]) != HTTPRequest.RESULT_SUCCESS:
+		return false
+	# 只有 2xx 才算就緒（同 _probe_models() 的規則）：503／404 這種「有回應
+	# 但不是 ready」的情況不能誤判，交給 launch 後的觀察窗自然收斂
+	var response_code: int = response[1]
+	return response_code >= 200 and response_code < 300
 
 
 func _sidecar_dir() -> String:
@@ -266,5 +273,9 @@ static func _port_from_url(url: String, fallback: int) -> int:
 		return fallback
 	var port_text := host_port.substr(colon_index + 1)
 	if port_text.is_valid_int():
-		return int(port_text)
+		var port := int(port_text)
+		# TCP port 合法範圍是 1-65535（比照 AIConfig._is_valid_port()）：
+		# is_valid_int() 只驗格式，":-1"／":65536" 這種會過，不合法退回 fallback
+		if port >= 1 and port <= 65535:
+			return port
 	return fallback

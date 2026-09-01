@@ -4,7 +4,6 @@ tags:
   - agent
   - llm
 status: 進行中
-scene: scenes/main.tscn
 script: scripts/ai/llama_sidecar.gd
 updated: 2026-08-31
 ---
@@ -64,9 +63,10 @@ issue，見下方「相關」。
 
 ## 啟動流程
 
-1. 開機前先探測目標埠（`_probe_port()`，輕量 HTTP GET，只看連不連得上）——
-   已經有東西在聽就沿用，不重複啟動一份（`Status.ALREADY_RUNNING`），涵蓋
-   開發者手動已經開著一份 `llama-server` 的既有測試情境
+1. 開機前先探測目標埠（`_probe_port()`，輕量 HTTP GET，連得上且回 2xx 才算
+   有服務在聽，判定比照 `AIService._probe_models()`）——已經有東西在聽就
+   沿用，不重複啟動一份（`Status.ALREADY_RUNNING`），涵蓋開發者手動已經
+   開著一份 `llama-server` 的既有測試情境
 2. 執行檔／模型檔用 `FileAccess.file_exists()` 檢查，缺一個就 `push_warning`
    並停在 `Status.MISSING_BINARY`／`MISSING_MODEL`，不嘗試拉起
 3. `OS.create_process(binary_path, args, false)`，`args` 帶 `-m <model_path>
