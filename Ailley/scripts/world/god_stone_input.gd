@@ -115,6 +115,17 @@ func _input(event: InputEvent) -> void:
 	if _stone == null:
 		return
 
+	# _input() 跑在 GUI 的 _gui_input 之前（見 class 註解），所以點在任何
+	# Control 上面（例如建角面板的「投放」按鈕）的點擊事件一樣會先流進這裡。
+	# 若那顆按鈕的螢幕座標換算回世界座標剛好落在天神之石 CLICK_RADIUS 內
+	# （常見於玩家站在石頭旁邊開面板，鏡頭把石頭畫在跟按鈕重疊的螢幕位置），
+	# 面板一關就會被這裡誤判成「點了石頭」，直接彈出天神之石面板。
+	# status_panel.gd 踩過同一種坑（CodeRabbit review 抓到），那邊用自己
+	# panel 的 rect 擋；這裡的肇事面板是別支腳本（character_create.gd 等），
+	# 改用「滑鼠當下是否懸停在任一 Control 上」這個更通用的訊號
+	if get_viewport().gui_get_hovered_control() != null:
+		return
+
 	var world_pos := get_viewport().canvas_transform.affine_inverse() * mouse.position
 	if world_pos.distance_to(_stone.global_position) > CLICK_RADIUS:
 		return
