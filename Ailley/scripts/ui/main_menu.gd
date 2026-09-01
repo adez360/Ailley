@@ -90,8 +90,8 @@ func _on_start_pressed() -> void:
 	GameManager.continue_requested = false
 	# 開場時間拉回設計預期值，不讓主選單掛機時間流進新遊戲（#606）
 	GameClock.reset_to_new_game_start()
-	# 角色庫等只有 apply_world_save_data() 會重置的欄位，不讓上一次「繼續遊戲」
-	# 殘留的狀態流進新遊戲（#875）
+	# 角色庫等會殘留上一輪狀態的欄位，不讓上一次「繼續遊戲」的狀態流進
+	# 新遊戲（#875）
 	GameManager.reset_for_new_game()
 	get_tree().change_scene_to_file(MAIN_SCENE)
 
