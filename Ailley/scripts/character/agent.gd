@@ -1100,6 +1100,17 @@ const AI_THINKING_TEXT := "…"
 ## 沒有 CONVERSATION 那種豁免，重試間隔只有幾秒、遠低於預設 30 秒冷卻，不跳過
 ## 冷卻檢查的話重試永遠會被自己剛送出的上一次呼叫擋成 ERROR_RATE_LIMITED，
 ## 《12》§3.4 要求的重試在 SCHEDULED 路徑上會實際失效（PR #176 review 抓到）
+# 卡死保底用的輪詢間隔與逾時緩衝（issue #860）：實測到 _provider.decide()
+# 底層的 await 在極少數情況下永遠不會 resolve（AIService 自己的佇列與忙碌
+# 節點都已經清空，代表回應早就處理完，只是通知呼叫端的訊號沒有送達），
+# 導致 _awaiting_decision 卡死、這隻角色永久不會再送出任何決策請求。
+# 這裡不去猜確切是哪個訊號漏發——不管底層卡在哪裡，都要有一個不依賴
+# 「await 一定會 resolve」的保底機制
+const DECISION_WATCHDOG_POLL_SEC := 0.25
+const DECISION_WATCHDOG_GRACE_SEC := 5.0
+const DECISION_WATCHDOG_FALLBACK_TIMEOUT_SEC := 15.0
+
+
 func _decide_with_retry(envelope: Dictionary, policy: AIService.Policy, validator: Callable) -> Dictionary:
 	var attempts := _provider.max_validation_retries() + 1
 	# 記住最後一次的失敗原因，迴圈跑完直接回它——parse 與 validate 兩種失敗
@@ -1108,7 +1119,7 @@ func _decide_with_retry(envelope: Dictionary, policy: AIService.Policy, validato
 	for attempt in attempts:
 		var context := DecisionContext.new()
 		context.is_retry = attempt > 0
-		var result: Dictionary = await _provider.decide(envelope, character_id, policy, context)
+		var result: Dictionary = await _decide_with_watchdog(envelope, policy, context)
 		if not result["ok"]:
 			return result
 
@@ -1123,6 +1134,58 @@ func _decide_with_retry(envelope: Dictionary, policy: AIService.Policy, validato
 		last = validated
 
 	return last
+
+
+# 保底計時器（issue #860）：用輪詢取代訊號競賽，避免另外自己實作一套
+# 「等兩個訊號誰先到」的機制——GDScript 沒有內建的 race 原語，硬做一套反而
+# 多一種新的訊號漏發風險。期限取 provider 的 timeout 乘上最壞的排隊與
+# 內部重試倍數再加緩衝（公式見下方 if 內的註解），讓 HTTPRequest 正常的
+# 逾時失敗有機會先跑完；抓不到 provider timeout（例如 provider_name
+# 打錯字）就退回一個保守的固定值，不讓保底機制本身變成
+# 另一個沒有上限的等待
+#
+# 逾時之後不去追殺底層的 _provider.decide() 協程——它可能稍後才真的完成，
+# 但那時候 state 已經沒有任何呼叫端在讀，一份遲到的結果安靜地被丟棄，
+# 跟直接取消相比風險更低（不用去確認 AIService 內部的節點/佇列狀態
+# 中途被打斷會不會產生新的不一致）
+func _decide_with_watchdog(
+	envelope: Dictionary, policy: AIService.Policy, context: DecisionContext
+) -> Dictionary:
+	var state := {"done": false, "result": {}}
+	_run_decide_into_state(state, envelope, policy, context)
+
+	var timeout_sec := DECISION_WATCHDOG_FALLBACK_TIMEOUT_SEC
+	var provider := AIService.config.get_provider(_provider.provider_name())
+	if provider != null and provider.timeout > 0.0:
+		# 期限不只是「一次 HTTP 往返」的長度：時鐘從這裡起跑，涵蓋請求在
+		# AIService._queue 排隊與節點池對 retryable 失敗（network／HTTP 5xx）
+		# 內部重試 RETRY_LIMIT 次的階段。POOL_SIZE 個節點全被佔住時，排隊
+		# 最壞要等 POOL_SIZE 份「每份最多 (RETRY_LIMIT + 1) × timeout」的
+		# 請求做完，自己再花一份同樣的最壞值，所以取 POOL_SIZE + 1 份。
+		# 逾時本身（RESULT_TIMEOUT）不重試（ai_service.gd::_interpret()），
+		# 算進最壞值也不會低估。期限只是保底不是目標延遲——多等一輪比
+		# 把稍後會完成的合法排隊請求安靜丟掉好（PR #864 review major）
+		timeout_sec = (
+			provider.timeout * (AIService.RETRY_LIMIT + 1) * (AIService.POOL_SIZE + 1)
+			+ DECISION_WATCHDOG_GRACE_SEC
+		)
+
+	var deadline_msec := Time.get_ticks_msec() + int(timeout_sec * 1000.0)
+	while not state["done"] and Time.get_ticks_msec() < deadline_msec:
+		await get_tree().create_timer(DECISION_WATCHDOG_POLL_SEC).timeout
+
+	if state["done"]:
+		return state["result"]
+	return AISchema._fail("decision_watchdog_timeout")
+
+
+func _run_decide_into_state(
+	state: Dictionary, envelope: Dictionary, policy: AIService.Policy, context: DecisionContext
+) -> void:
+	var result: Dictionary = await _provider.decide(envelope, character_id, policy, context)
+	state["result"] = result
+	state["done"] = true
+
 
 func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) -> Dictionary:
 	# 立刻蓋掉正在顯示的東西，讓玩家知道「這個角色在想」，不是卡住。
