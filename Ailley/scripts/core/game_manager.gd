@@ -201,6 +201,19 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 		character.character_id = identity["character_id"]
 	if identity.has("character_name"):
 		character.character_name = identity["character_name"]
+	# age 是 Character 基底欄位（Player 也有，跟 decision_source／model_name
+	# 那種 Agent 專屬欄位不同），走跟 character_name 一樣的識別資料管線即可
+	# （issue #837）。範圍驗證（16–70，《規格書01》§1-1）在這個唯一的寫入點
+	# 做一次就夠，呼叫端（deploy_from_library()／_respawn_character()）不用
+	# 各自重複驗證——角色庫資料若因手改／損毀存檔帶著界外值，落到 30（跟
+	# 角色庫本身 entry.get("age", 30) 的既有預設一致），不會把壞資料直接
+	# 顯示在狀態面板上（CodeRabbit review 抓到，PR #845）
+	if identity.has("age"):
+		var raw_age: Variant = identity["age"]
+		# 只有數字才吃（JSON.parse_string() 回 float，int/float 都收）；字串等
+		# 非數值 Variant 不吃 int() 的隱式轉型，直接落到 30 預設（跟資料契約一致）
+		var age_value: int = int(raw_age) if raw_age is int or raw_age is float else 30
+		character.age = age_value if age_value >= 16 and age_value <= 70 else 30
 
 	# words_to_creator 只有角色庫投放這條路徑會給（那份是建角當下就生成好、
 	# 可能已人工檢閱過的內容）。要在 add_child() 觸發 _ready() 之前設好——
@@ -453,6 +466,7 @@ func deploy_from_library(id: String, as_player: bool = false) -> Character:
 		"character_id": entry["id"],
 		"character_name": entry["character_name"],
 		"words_to_creator": entry.get("words_to_creator", ""),
+		"age": entry.get("age", 30),
 	})
 
 	# decision_source／model_name 是 agent.gd 的 @export 欄位，player.gd 沒有
@@ -685,7 +699,7 @@ func _on_day_changed_autosave(_day: int) -> void:
 # #468：30 秒是抓寬的 best-effort 窗口，不是精確算出的完整最壞情況上限——
 # AIService.RETRY_LIMIT（1 次重試）只套用在逾時以外的可重試錯誤，逾時本身
 # 不重試（見 ai_service.gd::_interpret()）；provider.timeout 可能被設定檔
-# 覆寫，不保證等於 AIConfig.DEFAULT_TIMEOUT（10 秒）；_decide_with_retry() 的驗證
+# 覆寫，不保證等於 AIConfig.DEFAULT_TIMEOUT；_decide_with_retry() 的驗證
 # 重試（provider.max_validation_retries()）與撞期補跑
 # （_sleep_reflection_pending）都可能讓實際等待時間超過這個窗口。這裡不
 # 無限等——逾時就放棄等待、照樣存檔：存到的是反思套用前的狀態，跟完全不等
@@ -973,6 +987,7 @@ func _respawn_character(character_id: String, entry: Dictionary) -> void:
 		"character_id": character_id,
 		"character_name": library_entry.get("character_name", ""),
 		"words_to_creator": library_entry.get("words_to_creator", ""),
+		"age": library_entry.get("age", 30),
 	})
 
 	# decision_source／model_name 是投放後不可改的欄位（《06》），還原時要跟著
