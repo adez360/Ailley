@@ -3126,6 +3126,9 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 		"drink":
 			if inventory == null or _find_drink_slot().is_empty():
 				return {"success": false, "reason": "背包裡沒有飲品可以喝"}
+		"medicate":
+			if inventory == null or _find_curative_slot().is_empty():
+				return {"success": false, "reason": "背包裡沒有能治傷的藥品"}
 		"buy":
 			# 檢查錢夠不夠（需要先查地點的商店目錄）、商品存不存在、背包有沒有空間
 			var place: String = str(params.get("place", ""))
@@ -3475,6 +3478,11 @@ func _pursue_current_task() -> void:
 	# drink 跟 eat 同一種「呼叫一次就完成」（#163）
 	if current_state == "drink":
 		_pursue_drink_task()
+		return
+
+	# medicate 跟 eat／drink 同一種「呼叫一次就完成」（#865）
+	if current_state == "medicate":
+		_pursue_medicate_task()
 		return
 
 	# buy 跟 eat／drink 同理：呼叫一次就完成（#340）
@@ -3836,6 +3844,43 @@ func _pursue_drink_task() -> void:
 	# CodeRabbit review：_request_next_decision() 只有在非同步回應回來後才會
 	# 重新仲裁，不立刻補一次 _reevaluate() 的話，等回應期間排程或 fallback
 	# 任務不會被馬上接手，得空等到下一次 GameClock time_changed（跟 murmur
+	# 那條同一個問題）
+	_reevaluate()
+
+# medicate 任務的執行（#865）：跟 _pursue_drink_task() 完全同一種形狀，只是換
+# 呼叫 medicate() 而不是 drink()、_find_curative_slot() 而不是 _find_drink_slot()
+func _pursue_medicate_task() -> void:
+	stop_moving()
+	var proceed := true
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		proceed = result["success"]
+		if not proceed:
+			_track_action_result_for_facts("medicate", false)
+
+	var medicine_item := ""
+	if proceed:
+		medicine_item = str(_find_curative_slot().get("item_id", ""))
+		var reason := medicate()
+		last_action_result = reason
+		if reason != Character.MEDICATE_OK:
+			push_warning("Agent %s: medicate 失敗（%s）" % [character_name, reason])
+			_mark_schedule_retry_backoff(_current_task)
+		else:
+			var medicine_name := ItemDatabase.get_display_name(medicine_item)
+			_push_daily_event("你服用了%s治傷。" % medicine_name)
+		# 不分來源都記——理由同 _pursue_eat_task()
+		_track_action_result_for_facts("medicate", reason == Character.MEDICATE_OK)
+
+	if _current_task.get("source", "") == "llm":
+		_remove_task(_current_task.get("id", ""))
+	_clear_current_task(last_action_result == Character.MEDICATE_OK)
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
+	# CodeRabbit review：_request_next_decision() 只有在非同步回應回來後才會
+	# 重新仲裁，不立刻補一次 _reevaluate() 的話，等回應期間排程或 fallback
+	# 任務不會被馬上接手，得空等到下一次 GameClock time_changed（跟 drink
 	# 那條同一個問題）
 	_reevaluate()
 

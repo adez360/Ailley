@@ -80,6 +80,12 @@ const DRINK_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法喝�
 const DRINK_NO_DRINK := "NO_DRINK"		# 背包裡沒有 ItemDatabase 分類為 drink 的物品
 const DRINK_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 hydration，不能先扣飲品
 
+## medicate() 的失敗原因碼，形狀比照 EAT_*／DRINK_*（#865）
+const MEDICATE_OK := ""
+const MEDICATE_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法服藥
+const MEDICATE_NO_MEDICINE := "NO_MEDICINE"	# 背包裡沒有定義 effect_injury<0 的物品
+const MEDICATE_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 injury，不能先扣藥品
+
 ## perform() 的失敗原因碼，形狀比照 EAT_*／DRINK_*（#575）。跟 work_at() 一樣
 ## 是多分鐘的長動作，多了一個 BUSY——已經在表演、工作或對話中不能再開始一次
 const PERFORM_OK := ""
@@ -1680,6 +1686,41 @@ func drink() -> String:
 	return DRINK_OK
 
 
+# ---- 服藥 ----
+
+# 找背包裡第一筆能治傷的物品，跟 _find_food_slot()／_find_drink_slot() 同一招，
+# 但不是查 category（medicine 的 category 是 carry，跟刀子、電池同一類，
+# 分不出差別）——查 effect_injury 是不是負值，這才是「這個物品真的能治傷」
+# 的定義，未來加其他治傷道具也不用跟著改這裡
+func _find_curative_slot() -> Dictionary:
+	for entry in inventory.get_summary():
+		var item_id: String = entry["item_id"]
+		if float(ItemDatabase.get_item(item_id).get("effect_injury", 0.0)) < 0.0:
+			return entry
+	return {}
+
+# 服用背包裡的藥品治傷（#865）：跟 eat()／drink() 同一套「每個動作都要能講出
+# 為什麼失敗」規則，效果套用同樣交給 inventory.use_item()
+func medicate() -> String:
+	if inventory == null:
+		return MEDICATE_NO_INVENTORY
+
+	var slot := _find_curative_slot()
+	if slot.is_empty():
+		return MEDICATE_NO_MEDICINE
+	if stats == null:
+		return MEDICATE_NO_STATS
+
+	var item_id: String = slot["item_id"]
+	var item := ItemDatabase.get_item(item_id)
+	var use_reason := inventory.use_item(item_id, stats, item)
+	if use_reason != Inventory.USE_OK:
+		return MEDICATE_NO_MEDICINE
+
+	apply_personality_delta(item.get("personality_delta", {}))
+	return MEDICATE_OK
+
+
 # ---- 表演 ----
 
 ## 目前是否正在表演（#575）。跟 is_working() 同一種「多分鐘長動作進行中」
@@ -1740,9 +1781,12 @@ func _on_perform_finished(_completed: bool) -> void:
 
 # 玩家按下 use_item 鍵時，使用快捷欄目前選取格裡的東西（#611）。跟 eat()／
 # drink() 的差異：那兩個是「自動找背包裡第一個符合分類的物品」，這裡固定用
-# 玩家自己選的那一格——選到的不是食物/飲品就直接失敗，不會幫忙跳去找別的。
-# 是不是消耗品交給 inventory.use_item() 的 is_consumable 參數判斷，這裡只
-# 負責把分類轉成布林值；其餘原因碼直接轉傳，見上面 USE_ITEM_* 常數的說明
+# 玩家自己選的那一格——選到的不是能用的東西就直接失敗，不會幫忙跳去找別的。
+# 是不是消耗品看這個物品有沒有定義任一個 effect_* 欄位，不是看 category：
+# food／drink 一定有 effect_*（吃喝本來就是為了那個效果），但 carry 分類裡
+# 像 medicine 這種帶 effect_injury 的道具一樣要能用；knife／battery 這些
+# carry 沒有任何 effect_* 就不該被消耗掉（#865，藥品原本卡在只認
+# food/drink 分類，完全用不了）
 func use_selected_item() -> String:
 	if is_dead:
 		return USE_ITEM_IS_DEAD
@@ -1757,8 +1801,11 @@ func use_selected_item() -> String:
 
 	var item_id: String = slot["item_id"]
 	var item := ItemDatabase.get_item(item_id)
-	var category: String = item.get("category", "")
-	var is_consumable := category == "food" or category == "drink"
+	var is_consumable := false
+	for key in item.keys():
+		if (key as String).begins_with("effect_"):
+			is_consumable = true
+			break
 
 	var use_reason := inventory.use_item(item_id, stats, item, is_consumable)
 	if use_reason != Inventory.USE_OK:

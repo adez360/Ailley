@@ -42,6 +42,9 @@ const ALLOWED_ACTIONS := [
 	"talk", "persuade", "give", "report", "shout", "perform", "murmur",
 	# B 工作與消費類
 	"hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink", "work",
+	# B-1 治傷類（issue #865）：跟 eat／drink 同一種「吃掉背包裡已經有的東西」
+	# 形狀，只是查的是 effect_injury 不是 category，見 Character.medicate()
+	"medicate",
 	# C 動作與移動類。nap／rest 已併入 sleep（#771），LLM 只填 duration，
 	# 引擎依時長分級決定套用哪組回復量——見 agent.gd 的
 	# ACTION_RECOVERY／_classify_sleep_tier()
@@ -112,6 +115,12 @@ const ALLOWED_ACTIONS := [
 # drink 是 #163 接上的：跟 eat 同一套「呼叫一次就完成」模式，寫法照抄
 # _pursue_eat_task()（見 agent.gd::_pursue_drink_task()）
 #
+# medicate 是 #865 接上的：跟 eat／drink 同一套「呼叫一次就完成、吃掉背包裡
+# 已經有的東西」模式（_pursue_medicate_task()），差別是找的不是 category
+# 而是 effect_injury<0 的物品（見 Character._find_curative_slot()）——原本
+# medicine 這個道具雖然定義了 effect_injury，卻沒有任何動作會對它呼叫
+# Inventory.use_item()，玩家與 AI 角色都完全無法治傷止血
+#
 # bury 是 #380 接上的：跟 attack 同一套「目標是另一個角色、一次執行完就退出
 # 任務池」模式（_pursue_bury_task()），差別是目標必須是已死亡且尚未安葬的
 # 屍體，且雙方都要在墓園錨點附近，見 Character.bury() 的檢查順序
@@ -140,7 +149,7 @@ const ALLOWED_ACTIONS := [
 # 這次只是把它跟 buy／gather 一樣開放給 LLM 選。跟 gather 同一套「先走到地點
 # 才執行」模式，差別是地點錯了（沒有工作站）時失敗原因是 WORK_TARGET_NOT_FOUND
 # 而不是專屬的地點名檢查——見 agent.gd::_pursue_work_task() 的說明
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "hunt_small", "hunt_large", "gather", "follow", "perform", "work", "spit_at_stone", "worship_stone", "praise_stone", "wander"]
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "wash", "idle", "eat", "drink", "medicate", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "hunt_small", "hunt_large", "gather", "follow", "perform", "work", "spit_at_stone", "worship_stone", "praise_stone", "wander"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
