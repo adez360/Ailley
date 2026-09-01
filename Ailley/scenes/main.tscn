@@ -23,7 +23,7 @@ position = Vector2(-96, 19)
 character_name = "player"
 
 [node name="Workstation" parent="World" instance=ExtResource("12_0ld40")]
-position = Vector2(-88, 88)
+position = Vector2(-110, 90)
 
 [node name="PersistentUI" parent="." instance=ExtResource("13_trceg")]
 
