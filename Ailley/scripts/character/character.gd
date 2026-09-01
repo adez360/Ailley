@@ -2146,12 +2146,19 @@ func load_save_data(data: Dictionary) -> void:
 	# GameClock.hour*60+GameClock.minute 那個 [0, 1439] 範圍——只驗證 is int
 	# 不夠，-2 這種值會通過型別檢查、又不等於 -1，被當成合法的昏迷/治療
 	# 時間點還原，角色可能被錯誤鎖定或直接進入治療流程）
+	# JsonSaveService 走 JSON.parse_string()，JSON 數字一律回 float（同上面
+	# age 的 #862 同型陷阱，issue #861）——只驗 is int 會讓存檔的昏迷/治療
+	# 時間點永不生效；int() 轉型後再驗範圍
 	var loaded_incap: Variant = data.get("incapacitation_start_minute", _incapacitation_start_minute)
-	_incapacitation_start_minute = loaded_incap if loaded_incap is int and (loaded_incap == -1 or (loaded_incap >= 0 and loaded_incap < 1440)) else _incapacitation_start_minute
+	if loaded_incap is int or loaded_incap is float:
+		var incap_value: int = int(loaded_incap)
+		_incapacitation_start_minute = incap_value if incap_value == -1 or (incap_value >= 0 and incap_value < 1440) else _incapacitation_start_minute
 	var loaded_carried: Variant = data.get("is_being_carried", _is_being_carried)
 	_is_being_carried = loaded_carried if loaded_carried is bool else _is_being_carried
 	var loaded_treat_start: Variant = data.get("treatment_start_minute", _treatment_start_minute)
-	_treatment_start_minute = loaded_treat_start if loaded_treat_start is int and (loaded_treat_start == -1 or (loaded_treat_start >= 0 and loaded_treat_start < 1440)) else _treatment_start_minute
+	if loaded_treat_start is int or loaded_treat_start is float:
+		var treat_start_value: int = int(loaded_treat_start)
+		_treatment_start_minute = treat_start_value if treat_start_value == -1 or (treat_start_value >= 0 and treat_start_value < 1440) else _treatment_start_minute
 	var loaded_treat_loc: Variant = data.get("treatment_location", _treatment_location)
 	_treatment_location = loaded_treat_loc if loaded_treat_loc is String else _treatment_location
 
@@ -2297,6 +2304,12 @@ func load_save_data(data: Dictionary) -> void:
 		var loaded_emotion: Dictionary = data["emotion"]
 		if _is_valid_emotion_data(loaded_emotion):
 			emotion = loaded_emotion.duplicate(true)
+			# JsonSaveService 走 JSON.parse_string()，JSON 數字一律回 float
+			# （issue #861，同 #862 型別陷阱）；intensity／duration_left 是
+			# 離散單位（見 269 行），型別檢查通過後這裡轉型成 int，避免
+			# emotion 字典裡殘留 float 值
+			emotion["intensity"] = int(emotion["intensity"])
+			emotion["duration_left"] = int(emotion["duration_left"])
 		else:
 			push_error("Character %s: 存檔的 emotion 資料結構不合法，保留目前情緒" % character_name)
 
@@ -2342,11 +2355,11 @@ func _is_valid_emotion_data(loaded: Dictionary) -> bool:
 			return false
 	if not (loaded["type"] is String) or not EMOTION_TYPES.has(loaded["type"]):
 		return false
-	if not (loaded["intensity"] is int) or loaded["intensity"] < 0 or loaded["intensity"] > 100:
+	if not (loaded["intensity"] is int or loaded["intensity"] is float) or loaded["intensity"] < 0 or loaded["intensity"] > 100:
 		return false
 	if not (loaded["cause_event_id"] is String):
 		return false
-	if not (loaded["duration_left"] is int) or loaded["duration_left"] < 0 or loaded["duration_left"] > EMOTION_DURATION_MAX:
+	if not (loaded["duration_left"] is int or loaded["duration_left"] is float) or loaded["duration_left"] < 0 or loaded["duration_left"] > EMOTION_DURATION_MAX:
 		return false
 	return true
 
