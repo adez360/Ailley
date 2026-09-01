@@ -1135,9 +1135,10 @@ func _decide_with_retry(envelope: Dictionary, policy: AIService.Policy, validato
 
 # 保底計時器（issue #860）：用輪詢取代訊號競賽，避免另外自己實作一套
 # 「等兩個訊號誰先到」的機制——GDScript 沒有內建的 race 原語，硬做一套反而
-# 多一種新的訊號漏發風險。逾時抓 provider 自己設定的 timeout 再加一段緩衝，
-# 讓 HTTPRequest 正常的逾時失敗有機會先跑完；抓不到 provider timeout（例如
-# provider_name 打錯字）就退回一個保守的固定值，不讓保底機制本身變成
+# 多一種新的訊號漏發風險。期限取 provider 的 timeout 乘上最壞的排隊與
+# 內部重試倍數再加緩衝（公式見下方 if 內的註解），讓 HTTPRequest 正常的
+# 逾時失敗有機會先跑完；抓不到 provider timeout（例如 provider_name
+# 打錯字）就退回一個保守的固定值，不讓保底機制本身變成
 # 另一個沒有上限的等待
 #
 # 逾時之後不去追殺底層的 _provider.decide() 協程——它可能稍後才真的完成，
@@ -1153,7 +1154,18 @@ func _decide_with_watchdog(
 	var timeout_sec := DECISION_WATCHDOG_FALLBACK_TIMEOUT_SEC
 	var provider := AIService.config.get_provider(_provider.provider_name())
 	if provider != null and provider.timeout > 0.0:
-		timeout_sec = provider.timeout + DECISION_WATCHDOG_GRACE_SEC
+		# 期限不只是「一次 HTTP 往返」的長度：時鐘從這裡起跑，涵蓋請求在
+		# AIService._queue 排隊與節點池對 retryable 失敗（network／HTTP 5xx）
+		# 內部重試 RETRY_LIMIT 次的階段。POOL_SIZE 個節點全被佔住時，排隊
+		# 最壞要等 POOL_SIZE 份「每份最多 (RETRY_LIMIT + 1) × timeout」的
+		# 請求做完，自己再花一份同樣的最壞值，所以取 POOL_SIZE + 1 份。
+		# 逾時本身（RESULT_TIMEOUT）不重試（ai_service.gd::_interpret()），
+		# 算進最壞值也不會低估。期限只是保底不是目標延遲——多等一輪比
+		# 把稍後會完成的合法排隊請求安靜丟掉好（PR #864 review major）
+		timeout_sec = (
+			provider.timeout * (AIService.RETRY_LIMIT + 1) * (AIService.POOL_SIZE + 1)
+			+ DECISION_WATCHDOG_GRACE_SEC
+		)
 
 	var deadline_msec := Time.get_ticks_msec() + int(timeout_sec * 1000.0)
 	while not state["done"] and Time.get_ticks_msec() < deadline_msec:
@@ -1170,6 +1182,7 @@ func _run_decide_into_state(
 	var result: Dictionary = await _provider.decide(envelope, character_id, policy, context)
 	state["result"] = result
 	state["done"] = true
+
 
 func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) -> Dictionary:
 	# 立刻蓋掉正在顯示的東西，讓玩家知道「這個角色在想」，不是卡住。
