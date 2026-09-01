@@ -241,6 +241,13 @@ const CONDITION_PETRIFIED := "petrified"
 ## round-robin 自動分配並寫回這裡；留空是正常初始狀態，代表還沒建過 npc 記錄
 var home_location_id := ""
 
+## 建角面板滑桿設定的年齡（《規格書01》§1-1，16–70，預設 30），issue #837。
+## -1 是「未知」的哨兵值——只有走過角色庫投放（`GameManager.deploy_from_library()`／
+## `spawn_character()`）或存檔還原的角色才會被寫入真正的數值；固定寫在場景裡的
+## NPC（`npc_schedule.json` 的 `identities` 表）沒有年齡資料，維持 -1，
+## `status_panel.gd` 顯示佔位符，不是假造一個看起來合理的預設數字
+var age := -1
+
 ## 最近一次 LLM 決策的動作被 resolve() 判定的結果，中文自然語言，成功是空字串
 ## （#120，《01-2》§1 流程圖的「④ 寫回 last_action_result」）。目前只有 Agent
 ## 會寫這個欄位，Player 沒有 LLM 決策，留在 Character 是給 UI/debug 共用的掛點
@@ -1989,6 +1996,7 @@ func get_save_data() -> Dictionary:
 		"character_id": character_id,
 		"character_name": character_name,
 		"home_location_id": home_location_id,
+		"age": age,
 		"incapacitation_start_minute": _incapacitation_start_minute,
 		"is_being_carried": _is_being_carried,
 		"treatment_start_minute": _treatment_start_minute,
@@ -2051,6 +2059,16 @@ func load_save_data(data: Dictionary) -> void:
 	# _ensure_npc_record() 若發現這裡是空字串，本來就會重新跑 round-robin 分配
 	var loaded_home: Variant = data.get("home_location_id", home_location_id)
 	home_location_id = loaded_home if loaded_home is String else home_location_id
+	# 缺席（issue #837 前的舊存檔）沿用目前值——大多數情況下這是 spawn_character()
+	# 剛從角色庫寫入的真實年齡，比灌回 -1「未知」更正確；型別不對／範圍不對
+	# （只接受 -1 或 16–70，見《規格書01》§1-1）同理不強制清空，沿用目前值
+	# （CodeRabbit review 抓到，PR #845）
+	var loaded_age: Variant = data.get("age", age)
+	if loaded_age is int or loaded_age is float:
+		# JsonSaveService 走 JSON.parse_string()，JSON 數字一律回 float（#862
+		# 同型陷阱）——只驗 is int 會讓存檔年齡永不生效；int() 轉型後再驗範圍
+		var age_value: int = int(loaded_age)
+		age = age_value if age_value == -1 or (age_value >= 16 and age_value <= 70) else age
 
 	# 還原昏迷與治療狀態（用 -1 作為哨兵值表示未進入該狀態，其餘合法值是
 	# GameClock.hour*60+GameClock.minute 那個 [0, 1439] 範圍——只驗證 is int
