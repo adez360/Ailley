@@ -703,13 +703,17 @@ func set_being_carried(is_carried: bool) -> void:
 	if is_carried and has_condition(CONDITION_INCAPACITATED):
 		_is_being_carried = true
 		_end_incapacitation()
-	elif is_carried and _treatment_start_minute != -1:
-		# 治療中被再度搬起：取消治療（CodeRabbit review 抓到）。計時器清掉後，
-		# 被放回藥草鋪且還有傷時，_check_herb_shop_arrival() 會重新開始治療
-		_treatment_start_minute = -1
-		_treatment_location = ""
 	elif not is_carried:
 		_is_being_carried = false
+
+	# 治療取消獨立於昏迷分支（CodeRabbit review 抓到）：治療中再度昏迷後被搬起
+	# 時，上面的昏迷分支會吃掉整條 if/elif 鏈、治療不會被取消——計時器不看
+	# 搬運狀態照跑，角色被搬離藥草鋪後會在任意地點「完成治療」。獨立成自己的
+	# if 區塊，任何狀態下被搬起都取消治療；計時器清掉後，被放回藥草鋪且還有傷
+	# 時，_check_herb_shop_arrival() 會重新開始治療
+	if is_carried and _treatment_start_minute != -1:
+		_treatment_start_minute = -1
+		_treatment_location = ""
 
 ## 傳送到藥草鋪並開始治療。#379 之前是昏迷逾時的自動結局，現在改成死亡流程
 ## 接手那個結局分支（見 _update_incapacitation()），這個函式暫時沒有呼叫端——
@@ -1104,14 +1108,12 @@ func revive(corpse: Character) -> String:
 
 	corpse._clear_death_state()
 
-	# 解除既有搬運關係——跟 bury() 同一個理由：is_dead 變 false 後移動鎖解除，
-	# 但 _decide_velocity() 的 is_being_hauled() 判斷排在最前面且不看 is_dead，
-	# 不主動放手的話復活的角色會一直卡在「跟著搬運者走」，AI 決策或玩家自己
-	# 的移動意圖完全進不去
-	corpse._release_all_haulers()
-
 	# 恢復到安全值，跟 _complete_treatment()（昏迷治療完成）同一套「安全水平」
-	# 數字，理由見那邊：避免復活完立刻又因為某項生理數值歸零重新觸發 condition
+	# 數字，理由見那邊：避免復活完立刻又因為某項生理數值歸零重新觸發 condition。
+	# 要在 _release_all_haulers() 之前做（CodeRabbit review 抓到）：放手會觸發
+	# _detach_haul() → _check_herb_shop_arrival()，那時 is_dead 已經是 false，
+	# injury 若還是死亡前的舊值、屍體又恰好在藥草鋪旁放下，會給剛復活的人開
+	# 60 分鐘治療鎖——先把 injury 歸零，放手時 needs_treatment 不成立就不觸發
 	if corpse.stats != null:
 		corpse.stats.set_value("health", 50.0)
 		corpse.stats.set_value("injury", 0.0)
@@ -1121,6 +1123,13 @@ func revive(corpse: Character) -> String:
 		corpse.stats.set_value("stamina", EXHAUSTION_RECOVERY_THRESHOLD + 1.0)
 		corpse.stats.set_value("wakefulness", 50.0)
 		corpse.stats.set_value("hygiene", 50.0)
+
+	# 解除既有搬運關係——跟 bury() 同一個理由：is_dead 變 false 後移動鎖解除，
+	# 但 _decide_velocity() 的 is_being_hauled() 判斷排在最前面且不看 is_dead，
+	# 不主動放手的話復活的角色會一直卡在「跟著搬運者走」，AI 決策或玩家自己
+	# 的移動意圖完全進不去。注意這裡會經由 stop_haul() → _detach_haul() 觸發
+	# _check_herb_shop_arrival()，所以 injury 歸零要排在它前面
+	corpse._release_all_haulers()
 
 	# 事實句只有 Agent 有 AI 決策迴圈可以注入——Player 沒有 _push_daily_event()，
 	# 跟 haul()／stop_haul() 通知搬運事件同一種 is_in_group("agents") 判斷寫法
