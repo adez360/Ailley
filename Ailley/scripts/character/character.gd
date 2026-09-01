@@ -73,12 +73,14 @@ const EAT_OK := ""
 const EAT_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法吃東西
 const EAT_NO_FOOD := "NO_FOOD"			# 背包裡沒有 ItemDatabase 分類為 food 的物品
 const EAT_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 satiety，不能先扣食物
+const EAT_SPOILED := "SPOILED"			# 找到的那份食物 decay=100，跟 Inventory.USE_SPOILED 同一個共用詞彙碼（《規格書08》§6-1）
 
 ## drink() 的失敗原因碼，形狀比照 EAT_*（#163）
 const DRINK_OK := ""
 const DRINK_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法喝東西
 const DRINK_NO_DRINK := "NO_DRINK"		# 背包裡沒有 ItemDatabase 分類為 drink 的物品
 const DRINK_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 hydration，不能先扣飲品
+const DRINK_SPOILED := "SPOILED"		# 同 EAT_SPOILED，找到的那份飲品 decay=100
 
 ## perform() 的失敗原因碼，形狀比照 EAT_*／DRINK_*（#575）。跟 work_at() 一樣
 ## 是多分鐘的長動作，多了一個 BUSY——已經在表演、工作或對話中不能再開始一次
@@ -189,6 +191,7 @@ const FAILURE_MESSAGE_KEYS := {
 	"IS_DEAD": "FAIL_IS_DEAD",
 	"TARGET_NOT_DEAD": "FAIL_TARGET_NOT_DEAD",
 	"TARGET_ALREADY_BURIED": "FAIL_TARGET_ALREADY_BURIED",
+	"SPOILED": "FAIL_SPOILED",
 	"CEMETERY_FULL": "FAIL_CEMETERY_FULL",
 }
 
@@ -500,6 +503,8 @@ func _on_game_minute(_hour: int, _minute: int) -> void:
 		_tick_emotion()
 		_update_conditions()
 		_update_corpse_decay()
+		if inventory != null:
+			inventory.tick_decay(ItemDatabase.get_decay_rates())
 
 ## AI 宣告新情緒。type 必須是 EMOTION_TYPES 之一，intensity 0–100。
 ## stability／grudge 是《02》§1-4 持續時間公式的人格係數，人格資料還沒接上
@@ -1774,6 +1779,8 @@ func eat() -> String:
 	var item_id: String = food["item_id"]
 	var item := ItemDatabase.get_item(item_id)
 	var use_reason := inventory.use_item(item_id, stats, item)
+	if use_reason == Inventory.USE_SPOILED:
+		return EAT_SPOILED
 	if use_reason != Inventory.USE_OK:
 		return EAT_NO_FOOD
 
@@ -1809,6 +1816,8 @@ func drink() -> String:
 	var item_id: String = slot["item_id"]
 	var item := ItemDatabase.get_item(item_id)
 	var use_reason := inventory.use_item(item_id, stats, item)
+	if use_reason == Inventory.USE_SPOILED:
+		return DRINK_SPOILED
 	if use_reason != Inventory.USE_OK:
 		return DRINK_NO_DRINK
 
