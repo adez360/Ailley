@@ -1032,9 +1032,14 @@ func _assign_cemetery_grave_slot(corpse: Character) -> void:
 ## 搬過去，所以直接傳送到墓園錨點，再交給 _assign_cemetery_grave_slot() 吸附到
 ## 空位。跟 bury() 共用同一組 CEMETERY_GRAVE_CAPACITY 上限（§6 拍板：滿格時
 ## 兩者都直接失敗）——滿格時這裡直接放棄，corpse_decay 已經是 100、grave_id
-## 仍是 null，_update_corpse_decay() 之後每個 tick 都會重試，直到有格子空出來
+## 仍是 null，_update_corpse_decay() 之後每個 tick 都會重試，直到有格子空出來。
+## 墓園錨點不存在也走同一套防呆（比照滿格放棄、下個 tick 重試），所以錨點檢查
+## 放在動 is_buried／grave_id 之前——那兩個欄位一動，重試條件就永遠不成立了
 func _erect_unmarked_grave() -> void:
 	if _cemetery_grave_count() >= CEMETERY_GRAVE_CAPACITY:
+		return
+	var anchors := get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null or not anchors.has(CEMETERY_PLACE_NAME):
 		return
 	is_buried = true
 	grave_id = "grave_%s" % character_id
@@ -1044,9 +1049,7 @@ func _erect_unmarked_grave() -> void:
 	# 跟 bury()（968 行）同一個理由：is_buried 不會讓身體停止跟著搬運者走，
 	# 傳送到墓園後不放手的話，下一幀就被拖出墓園（見 _decide_velocity()）
 	_release_all_haulers()
-	var anchors := get_tree().get_first_node_in_group("place_anchors")
-	if anchors != null:
-		global_position = anchors.resolve(CEMETERY_PLACE_NAME)
+	global_position = anchors.resolve(CEMETERY_PLACE_NAME)
 	_assign_cemetery_grave_slot(self)
 	print_debug("Character %s 腐壞見底，自動立無名碑" % character_name)
 
