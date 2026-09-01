@@ -409,15 +409,15 @@ func _is_facing(target: Vector2) -> bool:
 ##
 ## 昏迷角色（`downed`）跟可搭話對象（`other`）從同一份 vision 清單分流、互斥——
 ## 昏迷者不進 `other`：talk_to() 沒有擋昏迷目標（is_talk_interruptible() 只看
-## _working／is_dead），兩邊都收會讓同一個人同時是搭話候選又是搬運候選，
-## 距離又剛好一樣（HAUL_RANGE == TALK_RANGE），還得另外決哪個優先。分流後
-## 兩邊各自呼叫一次 _nearest_facing()，跟 workstation 同一種寫法（issue #637）
+## _working／is_dead／is_offline_asleep），兩邊都收會讓同一個人同時是搭話候選
+## 又是搬運候選，距離又剛好一樣（HAUL_RANGE == TALK_RANGE），還得另外決哪個優先。
+## 分流後兩邊各自呼叫一次 _nearest_facing()，跟 workstation 同一種寫法（issue #637）
 func _get_interact_candidates() -> Dictionary:
 	var workstation := _nearest_facing(_nearby_group("workstations"), WORK_RANGE, func(n): return n.global_position) as Workstation
 	var shop_place := _nearest_shop_place()
 	var visible_characters: Array = vision.get_visible_characters() if vision != null else []
 	var downed_characters := visible_characters.filter(func(n): return (n as Character).has_condition(CONDITION_INCAPACITATED))
-	var talkable_characters := visible_characters.filter(func(n): return not (n as Character).has_condition(CONDITION_INCAPACITATED))
+	var talkable_characters := visible_characters.filter(func(n): return not (n as Character).has_condition(CONDITION_INCAPACITATED) and not (n as Character).is_offline_asleep)
 	var downed := _nearest_facing(downed_characters, HAUL_RANGE, func(n): return (n as Character).get_body_position()) as Character
 	var other := _nearest_facing(talkable_characters, TALK_RANGE, func(n): return (n as Character).get_body_position()) as Character
 

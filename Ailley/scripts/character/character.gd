@@ -358,6 +358,20 @@ var buried_tick := -1			# 安葬當下的全域 tick，同 death_tick 換算方�
 var is_anonymous := false		# 無名碑（《規格書09》§3-4／§4-3）：_erect_unmarked_grave() 自動立碑時設 true；
 								# bury() 人為安葬不改這個值，只有《規格書09》§4-4 擦拭墓碑（未實作）能清成 false
 
+## 入眠相關狀態（issue #827，《10》§4.5「玩家離線處置」／§6.4「模型失效
+## 處理」）。is_offline_asleep 是狀態的唯一事實來源，跟 is_dead 同一種寫法。
+## §4.5（真人離線）與§6.4（模型下架／額度用盡／格式錯誤）在規格書上是兩種
+## 情境，但對「角色現在該怎麼表現」而言是同一件事——暫停決策與需求衰減、
+## 顯示「被天神召喚中」，這裡不分流，呼叫端各自判斷「什麼時候該叫入眠」，
+## 這裡只負責「入眠時該做什麼」
+var is_offline_asleep := false
+var _offline_asleep_since_unix := 0.0	# Time.get_unix_time_from_system()，算現實 72 小時用
+
+## 現實 72 小時未恢復即達踢出門檻（《10》§4.5）。踢出後具體要怎麼處理
+## （存檔怎麼標記、要不要真的移除節點）留給後續 issue 拍板——這則只確保
+## 「已經入眠多久」量得到，不擅自決定踢出當下要做什麼
+const OFFLINE_KICK_THRESHOLD_SEC := 72 * 3600
+
 # 滑鼠 hover（selection.gd）跟 E 鍵目前的互動目標（player.gd）是兩個獨立的
 # 高亮來源，任一個成立就該顯示描邊。分開存，不是合用一個布林值——CodeRabbit
 # review 抓到的問題：合用的話，一邊把它關掉（例如滑鼠移開）會連帶關掉另一邊
@@ -635,11 +649,17 @@ func _start_incapacitation() -> void:
 	stop_moving()  # 立即停止移動
 	print_debug("Character %s 進入昏迷，計時器已啟動" % character_name)
 
-## 死亡／昏迷／治療中都不能動：死亡是終局的石化，昏迷是暫時的石化，治療是
-## 「住院中」，三者共用同一個移動鎖（《99》P-27／藥草鋪筆記／《規格書09》§1），
-## 供 move_to() 與 _decide_velocity()（含 Player 覆寫）共用
+## 死亡／昏迷／治療中／入眠都不能動：死亡是終局的石化，昏迷是暫時的石化，
+## 治療是「住院中」，入眠是「被天神召喚中」（issue #827，《10》§4.5），四者
+## 共用同一個移動鎖（《99》P-27／藥草鋪筆記／《規格書09》§1），供 move_to()
+## 與 _decide_velocity()（含 Player 覆寫）共用
 func _is_movement_locked() -> bool:
-	return is_dead or has_condition(CONDITION_INCAPACITATED) or _treatment_start_minute != -1
+	return (
+		is_dead
+		or has_condition(CONDITION_INCAPACITATED)
+		or _treatment_start_minute != -1
+		or is_offline_asleep
+	)
 
 ## 每遊戲分鐘檢查昏迷狀態：
 ## 1. 若被搬走（#161 設置 _is_being_carried），立即結束昏迷
@@ -1273,8 +1293,10 @@ func is_in_conversation() -> bool:
 # 是意外共用不是設計決定，issue #113 把它們拆開成各自獨立的判斷
 func is_talk_interruptible() -> bool:
 	# is_dead 排除（CodeRabbit review 抓到）：force_interrupt() 只收尾死亡當下
-	# 已經存在的對話，沒擋之後別人再對死屍發起新對話——死屍不該再被搭話
-	return not _working and not is_dead
+	# 已經存在的對話，沒擋之後別人再對死屍發起新對話——死屍不該再被搭話。
+	# is_offline_asleep 同理：入眠中對話照開的話，下一輪 next_line() 的「…」
+	# 泡泡會蓋掉「被天神召喚中」的入眠指示，AI 對話請求也照發
+	return not _working and not is_dead and not is_offline_asleep
 
 # 對某人搭話。成功回傳 TALK_OK（空字串），否則回傳失敗原因碼
 func talk_to(other: Character) -> String:
@@ -1334,6 +1356,50 @@ func exit_conversation(_reason: String = "") -> void:
 func leave_conversation() -> void:
 	if _conversation != null:
 		_conversation.interrupt()
+
+## 進入入眠（issue #827）：暫停 Stats 衰減、用持續顯示的泡泡標示「被天神
+## 召喚中」（不是一般台詞排隊顯示，靠 bubble.hold() 撐住，直到 exit_offline_
+## sleep() 才收掉，跟 next_line() 的「思考中」泡泡同一種持續提示手法）。
+## reason 目前只用來記錄／除錯（例如 "model_unavailable"、"human_afk"），
+## 不影響行為——§4.5／§6.4 兩種觸發情境對外表現完全一樣，呼叫端自己決定
+## 什麼時候該叫這個，這裡不做任何觸發判斷
+func enter_offline_sleep(reason: String) -> void:
+	if is_offline_asleep:
+		return
+	is_offline_asleep = true
+	_offline_asleep_since_unix = Time.get_unix_time_from_system()
+	# 比照 _die() 先例用 force_interrupt() 一次收尾：入眠當下可能正在移動、
+	# 對話中或工作中——對話不收掉的話 conversation.gd 會繼續要台詞，下一輪
+	# next_line() 的「…」泡泡會蓋掉入眠指示、AI 對話請求也照發。旗標先設
+	# true 再收尾，_on_action_interrupted()／_reevaluate() 的入眠守衛才接得住，
+	# 不會反過來對入眠者問出新決策（_is_movement_locked() 已涵蓋
+	# is_offline_asleep，force_interrupt() 裡的 stop_moving() 收掉當下已在
+	# 移動中的那一段，跟 _start_incapacitation() 同一個理由）
+	force_interrupt()
+	if stats != null:
+		stats.all_drift_paused = true
+	if bubble != null:
+		bubble.hold(L10n.t("STATUS_OFFLINE_ASLEEP"))
+	print_debug("Character %s: 進入入眠狀態（%s）" % [character_name, reason])
+
+## 恢復。呼叫端負責判斷「已經恢復連線／真人回來了」才呼叫，這裡只負責收尾——
+## 跟 enter_offline_sleep() 一樣不做任何判斷，純粹執行
+func exit_offline_sleep() -> void:
+	if not is_offline_asleep:
+		return
+	is_offline_asleep = false
+	_offline_asleep_since_unix = 0
+	if stats != null:
+		stats.all_drift_paused = false
+	if bubble != null:
+		bubble.release_hold()
+
+## 現實 72 小時未恢復是否已達踢出門檻。只回報，不執行任何踢出動作——見
+## OFFLINE_KICK_THRESHOLD_SEC 的說明
+func is_offline_kick_eligible() -> bool:
+	if not is_offline_asleep:
+		return false
+	return Time.get_unix_time_from_system() - _offline_asleep_since_unix >= OFFLINE_KICK_THRESHOLD_SEC
 
 ## interrupt=true 立刻蓋掉正在顯示/排隊中的內容（LLM 回應等待中的「…」要被
 ## 真正的台詞立刻換掉，不能排在它後面等它自己的顯示時間跑完）。
