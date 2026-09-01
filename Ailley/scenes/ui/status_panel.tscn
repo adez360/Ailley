@@ -67,6 +67,7 @@ custom_minimum_size = Vector2(25, 27)
 layout_mode = 2
 size_flags_horizontal = 4
 size_flags_vertical = 4
+focus_mode = 0
 toggle_mode = true
 
 [node name="行程" type="Button" parent="HBoxContainer/TabContainer/MarginContainer/HBoxContainer"]
@@ -74,12 +75,14 @@ custom_minimum_size = Vector2(25, 27)
 layout_mode = 2
 size_flags_horizontal = 4
 size_flags_vertical = 4
+focus_mode = 0
 
 [node name="Button3" type="Button" parent="HBoxContainer/TabContainer/MarginContainer/HBoxContainer"]
 custom_minimum_size = Vector2(25, 27)
 layout_mode = 2
 size_flags_horizontal = 4
 size_flags_vertical = 4
+focus_mode = 0
 
 [node name="CollapsButton" type="Button" parent="HBoxContainer"]
 custom_minimum_size = Vector2(16, 40)
