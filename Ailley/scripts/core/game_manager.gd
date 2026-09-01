@@ -776,6 +776,19 @@ func save_before_leaving() -> bool:
 		push_error("離開遊戲存檔失敗：世界 %s" % DEFAULT_WORLD_ID)
 	return result["world_ok"] and result["character_failures"].is_empty()
 
+# apply_world_save_data() 的對稱函式（issue #875）：GameManager 是 autoload，
+# 整個 process 存活期間都不會自動重新初始化，只有「繼續遊戲」這條路徑會呼叫
+# apply_world_save_data() 蓋掉這幾個欄位。同一次執行裡玩過一次「繼續遊戲」
+# 之後再按「開始新遊戲」，這幾個欄位不會自己變回全新狀態——main_menu.gd::
+# _on_start_pressed() 呼叫這個函式補上這條路徑，跟同一個函式已經在呼叫的
+# GameClock.reset_to_new_game_start()（#606）是同一個根因、同一種修法
+func reset_for_new_game() -> void:
+	character_library.clear()
+	embodied_character_id = ""
+	allow_player_join = true
+	identity_assignments = {}
+
+
 # data 缺欄位一律用預設值補，不當成錯誤（跟 character.gd 同一條規則）。
 # 場景裡目前找到的角色直接套用；存檔裡有記載但場景沒有的角色會被重新生成
 # 再套用（#344，見 _respawn_character()）——只處理反向情況（場景有、存檔沒有）
