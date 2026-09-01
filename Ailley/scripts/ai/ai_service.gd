@@ -627,7 +627,8 @@ func _on_request_completed(
 # 順便決定值不值得重試。多回一個 retryable 欄位，呼叫端看不到
 func _interpret(result: int, response_code: int, body: PackedByteArray) -> Dictionary:
 	if result == HTTPRequest.RESULT_TIMEOUT:
-		# 逾時**不重試**：已經燒掉 10 秒了，再來一次讓呼叫端等 20 秒，
+		# 逾時**不重試**：已經燒掉一整個 provider 逾時（AIConfig.DEFAULT_TIMEOUT）了，
+		# 再來一次讓呼叫端等兩倍逾時，
 		# 那時候 Agent 早該走 fallback 了。「網路錯誤重試一次」指的是
 		# 連不上／握手失敗那種立刻就知道結果的錯
 		return _outcome(ERROR_TIMEOUT, false)
