@@ -708,10 +708,18 @@ func _on_rescued(_hauler: Character) -> void:
 ## 下一個 time_changed 之前執行，_is_being_carried 會被重設回 false，
 ## _end_incapacitation() 永遠不會被呼叫到，角色維持昏迷、也拿不到 health
 ## 恢復（CodeRabbit review 抓到）
+## 治療中（_treatment_start_minute != -1）被再度搬起則取消治療——不然計時器
+## 不看搬運狀態照跑，角色被搬離藥草鋪後會在任意地點「完成治療」（CodeRabbit
+## review 抓到）
 func set_being_carried(is_carried: bool) -> void:
 	if is_carried and has_condition(CONDITION_INCAPACITATED):
 		_is_being_carried = true
 		_end_incapacitation()
+	elif is_carried and _treatment_start_minute != -1:
+		# 治療中被再度搬起：取消治療（CodeRabbit review 抓到）。計時器清掉後，
+		# 被放回藥草鋪且還有傷時，_check_herb_shop_arrival() 會重新開始治療
+		_treatment_start_minute = -1
+		_treatment_location = ""
 	elif not is_carried:
 		_is_being_carried = false
 
@@ -746,6 +754,14 @@ func _send_to_herb_shop_for_treatment() -> void:
 ## （被搬到藥草鋪，#865）共用的收尾：記錄治療開始時間、清掉昏迷狀態。抽出來是因為
 ## 後者已經人在藥草鋪，不需要瞬移那一段，但計時器與昏迷互斥這兩件事兩邊都要做
 func _begin_treatment(location: String) -> void:
+	# 死人不治療（CodeRabbit review 抓到）：_check_herb_shop_arrival() 只看
+	# injury／昏迷，不擋 is_dead——屍體被搬到藥草鋪會通過 needs_treatment 檢查
+	# 啟動治療，60 分鐘後 _complete_treatment() 把 petrified 一起清掉、恢復
+	# health／injury，等於讓死屍活過來（跟 _die()／load_save_data() 清治療欄位
+	# 防的是同一個結局）。擋在 _begin_treatment() 開頭，瞬移送醫與被搬到兩條
+	# 呼叫路徑一次保護
+	if is_dead:
+		return
 	_treatment_start_minute = GameClock.hour * 60 + GameClock.minute
 	_treatment_location = location
 
