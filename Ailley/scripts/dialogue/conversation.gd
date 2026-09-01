@@ -94,7 +94,7 @@ func _run() -> void:
 		# 意義；turn 0 的「要不要理會」已經是 next_line() 的 engage 欄位在管
 		# （見下方）。放在 speaker.next_line() 之前問，退出決定優先於等待
 		# 對方回話的逾時——聽者不想聽了就不用等 next_line() 的 provider 逾時
-		# （ai_config.gd 預設 10 秒；2026-08-30 拍板，見《99》P-31）
+		# （ai_config.gd::DEFAULT_TIMEOUT；2026-08-30 拍板，見《99》P-31）
 		if turn > 0:
 			var wants_to_continue: bool = await listener.wants_to_continue(speaker, _turns)
 			if _bail_if_finished():
