@@ -162,6 +162,26 @@ func _unhandled_input(event: InputEvent) -> void:
 			report_action_failure("attack", attack_reason)
 		return
 
+	# 送禮（issue #841）：獨立按鍵，不擠進 interact（E）那條已經很長的優先序鏈
+	# （工作／商店／搬運／復活／打賞／搭話）——give 目標判定只看「面向且在
+	# 範圍內」，跟 attack 同一套 _get_interact_candidates()["other"]，不需要
+	# 額外分流。開的是選單（選物品），不像 attack 按下去立刻執行，所以目標
+	# 找不到時直接回報失敗，找得到就交給 give_menu 自己接手後續
+	if event.is_action_pressed("give"):
+		get_viewport().set_input_as_handled()
+		var give_menu := get_tree().get_first_node_in_group("give_menu")
+		if give_menu != null and give_menu.is_open():
+			return
+		var give_target: Character = _get_interact_candidates()["other"]
+		if give_target != null and give_target.is_dead:
+			give_target = null
+		if give_target == null:
+			report_action_failure("give", Character.GIVE_TARGET_NOT_FOUND)
+			return
+		if give_menu != null:
+			give_menu.open(give_target, self)
+		return
+
 	if not event.is_action_pressed("interact"):
 		return
 
@@ -192,6 +212,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	# corpse_menu 開著時同一個理由（issue #758）
 	var corpse_menu := get_tree().get_first_node_in_group("corpse_menu")
 	if corpse_menu != null and corpse_menu.is_open():
+		return
+
+	# give_menu 開著時同一個理由（issue #841）：give_menu.gd 自己接 interact
+	# 當關閉鍵，這裡漏了 guard 的話，E 會被這裡搶先吃掉、選單關不掉
+	var give_menu_open_check := get_tree().get_first_node_in_group("give_menu")
+	if give_menu_open_check != null and give_menu_open_check.is_open():
 		return
 
 	get_viewport().set_input_as_handled()
