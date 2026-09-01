@@ -3770,7 +3770,14 @@ func _pursue_current_task() -> void:
 		return
 
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
-	if anchors == null or not anchors.has_for(self, current_place):
+	# anchors 整個還沒掛進場景樹（動態生成的 Agent 可能搶在 PlaceAnchors
+	# _ready() 之前先跑一次 _reevaluate()）跟下面「anchors 存在但查無此地」
+	# 是兩個不同階段的暫時失敗，這裡要先擋掉，不然 anchors.HOME_PLACE_NAME
+	# 會對 null 取屬性直接 crash（issue #916）。同樣不落地
+	# _pursued_place／_pursuit_done：理由見下面 has_for() 分支的說明
+	if anchors == null:
+		return
+	if not anchors.has_for(self, current_place):
 		# home_location_id 還沒指派時 has_for() 對 "home" 一定回傳 false——
 		# 動態生成的 Agent 在 CharacterStatePersistence 完成同步之前就可能
 		# 先跑一次 _reevaluate()，這是會自己好的暫時狀態，不是打錯字。不能
