@@ -1540,6 +1540,8 @@ func _run_work(workstation: Workstation, session_id: int) -> void:
 	_end_work(workstation)
 	if inventory != null:
 		inventory.add_money(WORK_PAYMENT)
+		if money_popup != null:
+			money_popup.show_change(WORK_PAYMENT)
 
 # 收尾：放掉工作站、清狀態與進度條。**撥款不在這裡**——做滿全程才給，
 # 半途放棄走的是同一條收尾路徑但沒有那一行
