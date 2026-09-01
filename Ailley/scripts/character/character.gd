@@ -82,6 +82,12 @@ const DRINK_NO_DRINK := "NO_DRINK"		# 背包裡沒有 ItemDatabase 分類為 dri
 const DRINK_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 hydration，不能先扣飲品
 const DRINK_SPOILED := "SPOILED"		# 同 EAT_SPOILED，找到的那份飲品 decay=100
 
+## medicate() 的失敗原因碼，形狀比照 EAT_*／DRINK_*（#865）
+const MEDICATE_OK := ""
+const MEDICATE_NO_INVENTORY := "NO_INVENTORY"	# 沒有背包的角色沒辦法服藥
+const MEDICATE_NO_MEDICINE := "NO_MEDICINE"	# 背包裡沒有定義 effect_injury<0 的物品
+const MEDICATE_NO_STATS := "NO_STATS"		# 沒有 Stats 的角色沒地方回復 injury，不能先扣藥品
+
 ## perform() 的失敗原因碼，形狀比照 EAT_*／DRINK_*（#575）。跟 work_at() 一樣
 ## 是多分鐘的長動作，多了一個 BUSY——已經在表演、工作或對話中不能再開始一次
 const PERFORM_OK := ""
@@ -1900,6 +1906,41 @@ func drink() -> String:
 
 	apply_personality_delta(item.get("personality_delta", {}))
 	return DRINK_OK
+
+
+# ---- 服藥 ----
+
+# 找背包裡第一筆能治傷的物品，跟 _find_food_slot()／_find_drink_slot() 同一招，
+# 但不是查 category（medicine 的 category 是 carry，跟刀子、電池同一類，
+# 分不出差別）——查 effect_injury 是不是負值，這才是「這個物品真的能治傷」
+# 的定義，未來加其他治傷道具也不用跟著改這裡
+func _find_curative_slot() -> Dictionary:
+	for entry in inventory.get_summary():
+		var item_id: String = entry["item_id"]
+		if float(ItemDatabase.get_item(item_id).get("effect_injury", 0.0)) < 0.0:
+			return entry
+	return {}
+
+# 服用背包裡的藥品治傷（#865）：跟 eat()／drink() 同一套「每個動作都要能講出
+# 為什麼失敗」規則，效果套用同樣交給 inventory.use_item()
+func medicate() -> String:
+	if inventory == null:
+		return MEDICATE_NO_INVENTORY
+
+	var slot := _find_curative_slot()
+	if slot.is_empty():
+		return MEDICATE_NO_MEDICINE
+	if stats == null:
+		return MEDICATE_NO_STATS
+
+	var item_id: String = slot["item_id"]
+	var item := ItemDatabase.get_item(item_id)
+	var use_reason := inventory.use_item(item_id, stats, item)
+	if use_reason != Inventory.USE_OK:
+		return MEDICATE_NO_MEDICINE
+
+	apply_personality_delta(item.get("personality_delta", {}))
+	return MEDICATE_OK
 
 
 # ---- 表演 ----

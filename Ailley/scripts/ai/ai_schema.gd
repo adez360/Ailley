@@ -44,6 +44,9 @@ const ALLOWED_ACTIONS := [
 	# medicine 治傷——跟 eat／drink 同一類，只是不自動找分類，由 params.item_id
 	# 指名
 	"hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink", "use_item", "work",
+	# B-1 治傷類（issue #865）：跟 eat／drink 同一種「吃掉背包裡已經有的東西」
+	# 形狀，只是查的是 effect_injury 不是 category，見 Character.medicate()
+	"medicate",
 	# C 動作與移動類。nap／rest 已併入 sleep（#771），LLM 只填 duration，
 	# 引擎依時長分級決定套用哪組回復量——見 agent.gd 的
 	# ACTION_RECOVERY／_classify_sleep_tier()
@@ -114,6 +117,12 @@ const ALLOWED_ACTIONS := [
 # drink 是 #163 接上的：跟 eat 同一套「呼叫一次就完成」模式，寫法照抄
 # _pursue_eat_task()（見 agent.gd::_pursue_drink_task()）
 #
+# medicate 是 #865 接上的：跟 eat／drink 同一套「呼叫一次就完成、吃掉背包裡
+# 已經有的東西」模式（_pursue_medicate_task()），差別是找的不是 category
+# 而是 effect_injury<0 的物品（見 Character._find_curative_slot()）——原本
+# medicine 這個道具雖然定義了 effect_injury，卻沒有任何動作會對它呼叫
+# Inventory.use_item()，玩家與 AI 角色都完全無法治傷止血
+#
 # bury 是 #380 接上的：跟 attack 同一套「目標是另一個角色、一次執行完就退出
 # 任務池」模式（_pursue_bury_task()），差別是目標必須是已死亡且尚未安葬的
 # 屍體，且雙方都要在墓園錨點附近，見 Character.bury() 的檢查順序
@@ -148,7 +157,11 @@ const ALLOWED_ACTIONS := [
 # 哪一個——原本只有玩家能透過快捷欄呼叫 Character.use_selected_item()，NPC
 # 完全沒有「使用道具」這個動作可選（例如受傷了想吃 medicine 止血），違反
 # 《00》原則五（玩家與 NPC 能力對稱）。兩邊現在共用同一個 Character.use_item(item_id)
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "wash", "idle", "eat", "drink", "use_item", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "hunt_small", "hunt_large", "gather", "follow", "perform", "work", "spit_at_stone", "worship_stone", "praise_stone", "wander"]
+#
+# medicate 是本 PR 接上的：同樣是「吃掉背包裡的東西」形狀，跟 use_item 的差別
+# 是自動找分類——只查 effect_injury（見 Character.medicate()/_find_curative_slot()），
+# 不用 params.item_id 指名
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "wash", "idle", "eat", "drink", "use_item", "medicate", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "hunt_small", "hunt_large", "gather", "follow", "perform", "work", "spit_at_stone", "worship_stone", "praise_stone", "wander"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、

@@ -40,7 +40,7 @@ const NORMAL_TINT := Color(1, 1, 1, 1)
 ## 不是空白——跟 ItemDatabase.get_display_name() 查不到退回 item_id 同一種慣例
 const ACTION_LABELS := {
 	"talk": "搭話", "persuade": "說服", "give": "送禮", "shout": "呼喊",
-	"murmur": "自語", "eat": "吃東西", "drink": "喝東西", "move_to": "移動",
+	"murmur": "自語", "eat": "吃東西", "drink": "喝東西", "medicate": "服藥", "move_to": "移動",
 	"sleep": "睡覺", "nap": "小睡", "rest": "休息", "wash": "洗漱",
 	"idle": "發呆", "attack": "攻擊", "haul": "搬運", "struggle": "掙扎",
 }

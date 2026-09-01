@@ -3323,6 +3323,13 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 		"drink":
 			if inventory == null or _find_drink_slot().is_empty():
 				return {"success": false, "reason": _no_supply_reason_text("飲品", "drink")}
+		"medicate":
+			# 失敗訊息走 _medicate_failure_reason_text()，跟 _pursue_medicate_task()
+			# 共用同一套事實句——附上由 Shop.CATALOGS × effect_injury 推導的販售
+			# 地點（見該 helper 的說明），跟 eat／drink 回 _no_supply_reason_text()
+			# 是同一種「兩條路徑講同一句事實」的立場
+			if inventory == null or _find_curative_slot().is_empty():
+				return {"success": false, "reason": _medicate_failure_reason_text(Character.MEDICATE_NO_MEDICINE)}
 		"use_item":
 			# 硬規則：背包裡真的有這個 item_id 才放行，跟 eat／drink 同一種
 			# 「目標/前提是不是真的存在」檢查（#865）。不走 _no_supply_reason_text()
@@ -3684,6 +3691,11 @@ func _pursue_current_task() -> void:
 	# drink 跟 eat 同一種「呼叫一次就完成」（#163）
 	if current_state == "drink":
 		_pursue_drink_task()
+		return
+
+	# medicate 跟 eat／drink 同一種「呼叫一次就完成」（#865）
+	if current_state == "medicate":
+		_pursue_medicate_task()
 		return
 
 	# use_item 跟 eat／drink 同一種「呼叫一次就完成」，差別是不自動找分類、
@@ -4053,6 +4065,44 @@ func _pursue_drink_task() -> void:
 	# CodeRabbit review：_request_next_decision() 只有在非同步回應回來後才會
 	# 重新仲裁，不立刻補一次 _reevaluate() 的話，等回應期間排程或 fallback
 	# 任務不會被馬上接手，得空等到下一次 GameClock time_changed（跟 murmur
+	# 那條同一個問題）
+	_reevaluate()
+
+# medicate 任務的執行（#865）：跟 _pursue_drink_task() 完全同一種形狀，只是換
+# 呼叫 medicate() 而不是 drink()、_find_curative_slot() 而不是 _find_drink_slot()
+func _pursue_medicate_task() -> void:
+	stop_moving()
+	var proceed := true
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		proceed = result["success"]
+		if not proceed:
+			_track_action_result_for_facts("medicate", false)
+
+	var medicine_item := ""
+	if proceed:
+		medicine_item = str(_find_curative_slot().get("item_id", ""))
+		var reason := medicate()
+		if reason != Character.MEDICATE_OK:
+			last_action_result = _medicate_failure_reason_text(reason)
+			push_warning("Agent %s: medicate 失敗（%s）" % [character_name, reason])
+			_mark_schedule_retry_backoff(_current_task)
+		else:
+			last_action_result = reason
+			var medicine_name := ItemDatabase.get_display_name(medicine_item)
+			_push_daily_event("你服用了%s治傷。" % medicine_name)
+		# 不分來源都記——理由同 _pursue_eat_task()
+		_track_action_result_for_facts("medicate", reason == Character.MEDICATE_OK)
+
+	if _current_task.get("source", "") == "llm":
+		_remove_task(_current_task.get("id", ""))
+	_clear_current_task(last_action_result == Character.MEDICATE_OK)
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
+	# CodeRabbit review：_request_next_decision() 只有在非同步回應回來後才會
+	# 重新仲裁，不立刻補一次 _reevaluate() 的話，等回應期間排程或 fallback
+	# 任務不會被馬上接手，得空等到下一次 GameClock time_changed（跟 drink
 	# 那條同一個問題）
 	_reevaluate()
 
@@ -4430,6 +4480,39 @@ func _use_item_failure_reason_text(reason: String) -> String:
 			return "這個道具用不成功"
 		_:
 			return "使用道具失敗（%s）" % reason
+
+# medicate() 的失敗代碼翻譯，形狀比照 _eat_failure_reason_text()／
+# _use_item_failure_reason_text()（#865）：resolve() 對 llm 來源任務會先擋掉
+# 「背包裡沒有能治傷的藥品」這條最常見的路（回中文），但 schedule 來源任務
+# 不走 resolve()，MEDICATE_NO_STATS 這種 resolve() 沒檢查的情況也一樣——不能
+# 讓原始英文代碼直接進 last_action_result（硬規定三）。「沒有能治傷的藥品」
+# 這條只陳述事實：medicate() 對「找到了但 inventory.use_item() 失敗」也回
+# NO_MEDICINE，這時「沒有藥品」是假事實——先核對 _find_curative_slot()，還
+# 找得到就只講「這份藥品用不成功」；真的沒有才補上由 Shop.CATALOGS ×
+# ItemDatabase.effect_injury 推導出哪些地點有賣治傷道具（不寫死地點名，也
+# 不給「可以去哪買」的行動建議，立場同 _no_supply_reason_text()）
+func _medicate_failure_reason_text(reason: String) -> String:
+	match reason:
+		Character.MEDICATE_NO_INVENTORY:
+			return "沒有背包，無法服藥"
+		Character.MEDICATE_NO_MEDICINE:
+			if inventory != null and not _find_curative_slot().is_empty():
+				return "這份藥品用不成功"
+			var place_facts: Array[String] = []
+			for place in Shop.CATALOGS:
+				var items: Array[String] = []
+				for item_id in Shop.CATALOGS[place]:
+					if float(ItemDatabase.get_item(item_id).get("effect_injury", 0.0)) < 0.0:
+						items.append("%s（%s）" % [item_id, ItemDatabase.get_display_name(item_id)])
+				if not items.is_empty():
+					place_facts.append("%s：%s" % [place, ", ".join(items)])
+			if place_facts.is_empty():
+				return "背包裡沒有能治傷的藥品，目前沒有地點賣治傷的藥品"
+			return "背包裡沒有能治傷的藥品。目前有賣治傷藥品的地點：%s" % "；".join(place_facts)
+		Character.MEDICATE_NO_STATS:
+			return "沒有生理數值可以恢復，無法服藥"
+		_:
+			return "服藥失敗（%s）" % reason
 
 # 「背包裡沒有 X」的訊息組裝。開口前先核對背包現況：eat()／drink() 對「找到
 # X 但 use_item() != USE_OK」也回 NO_FOOD／NO_DRINK，這時「背包裡沒有 X」是
