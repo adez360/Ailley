@@ -34,10 +34,6 @@ const MAX_RADIUS_TILES := 20
 ## 0.2 秒足以讓「轉角遇到人」看起來仍是即時的
 const CHECK_INTERVAL := 0.2
 
-## 面向判定的錐角容許值：跟面向方向的內積要 >= 這個值才算「面對著」。
-## 0.5 大約是 ±60 度的錐角——沿用 player.gd 的同一個值保持一致
-const FACING_DOT_THRESHOLD := 0.5
-
 @export var radius_tiles := 5:
 	set(value):
 		radius_tiles = clampi(value, MIN_RADIUS_TILES, MAX_RADIUS_TILES)
@@ -145,18 +141,26 @@ func _refresh_visible() -> void:
 
 	_visible = current
 
-# 目標是不是在視野錐體內。用面向方向與目標方向的點積判定
-func _is_facing(target_pos: Vector2) -> bool:
-	var to_target := target_pos - _character.get_body_position()
-	if to_target == Vector2.ZERO:
-		return true
-	return _character.get_facing_direction().dot(to_target.normalized()) >= FACING_DOT_THRESHOLD
-
+# issue #798：原本這裡先過面向錐角（點積判定）才算看得到，但角色的
+# facing 只在移動時更新（見 character.gd::update_animation()），長動作
+# 停在原地（work／sleep／idle）時 facing 會凍結在最後移動的方向，沒有
+# 任何機制會讓角色轉頭——如果唯一在附近的另一個角色剛好站在背後，會
+# 永遠偵測不到對方，context.visible 永遠是空的，talk 永遠沒有合法目標
+# 可選，是實測診斷（Test B 多角色多日測試）追出來的真實死角，不是理論
+# 疑慮。
+#
+# 拿掉面向判定，只留距離（Area2D 的 CollisionShape2D 半徑）＋視線遮擋
+# 兩個條件——人在房間裡不用正眼盯著誰，餘光／聽覺一樣知道旁邊有人，
+# 面向錐角是模擬細節，不是這個機制要保護的核心語意。這不是規格書拍板
+# 的數值（《07》§3 P-17 只拍板了半徑：視覺5/聽覺3/大叫8/天神之石6，
+# 沒有面向錐角這一項），拿掉不牴觸既有設計決策。
+#
+# player.gd 自己有一套獨立的 _is_facing()／FACING_DOT_THRESHOLD，用在
+# 玩家互動候選的排序上，跟這裡完全不共用，不受這次改動影響。
+#
 # 兩點之間有沒有牆。用碰撞圓心而不是 global_position —— 角色的 CollisionShape2D
 # 有 y 偏移，拿節點原點拉線會從腳底下穿出去，貼牆時判定會反過來
 func _has_line_of_sight(other: Character) -> bool:
-	if not _is_facing(other.get_body_position()):
-		return false
 	var params := PhysicsRayQueryParameters2D.create(
 		_character.get_body_position(), other.get_body_position(), blocker_mask
 	)

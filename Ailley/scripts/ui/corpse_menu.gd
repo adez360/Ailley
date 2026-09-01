@@ -6,8 +6,15 @@ extends CanvasLayer
 ## tip_menu.gd 同一種「開小選單」寫法：player.gd 負責開（先確認對方是屍體
 ## 才呼叫 open()），這裡自己負責關（E 再按一次或 Esc，或對方狀態變了自動關）。
 
+## 每 tick +0.7、100/0.7 換算成的「滿值需要幾個 tick」，跟
+## character.gd::_update_corpse_decay() 用同一個常數——這裡不 import 那個
+## 私有變數，直接照抄同一個數字算剩餘時間，兩邊要一起改（issue #839）
+const DECAY_PER_TICK := 0.7
+
 @onready var panel: Panel = $Panel
 @onready var title_label: Label = $Panel/VBox/TitleLabel
+@onready var decay_label: Label = $Panel/VBox/DecayLabel
+@onready var decay_bar: ProgressBar = $Panel/VBox/DecayBar
 @onready var revive_button: Button = $Panel/VBox/ReviveButton
 @onready var haul_button: Button = $Panel/VBox/HaulButton
 @onready var hint_label: Label = $Panel/VBox/HintLabel
@@ -38,6 +45,25 @@ func _process(_delta: float) -> void:
 			or not _corpse.is_dead \
 			or _actor.get_body_position().distance_to(_corpse.get_body_position()) > Character.TALK_RANGE:
 		close()
+		return
+	_refresh_decay()
+
+# 腐壞進度顯示（issue #839）：已安葬的屍體不會再自動立無名碑，顯示「還剩多久」
+# 沒有意義，改顯示「已安葬」。呈現方式（百分比＋剩餘遊戲時數）是這則決定的，
+# issue 本身刻意沒有定案要用哪種——選這個是因為玩家決定要不要現在處理，
+# 需要的是「還有多急」的感覺，單純百分比沒有時間感
+func _refresh_decay() -> void:
+	if _corpse.is_buried:
+		decay_label.text = L10n.t("UI_CORPSE_MENU_BURIED")
+		decay_bar.value = 100.0
+		return
+	decay_bar.value = _corpse.corpse_decay
+	var remaining_game_minutes := (100.0 - _corpse.corpse_decay) / DECAY_PER_TICK * GameClock.GAME_MINUTES_PER_TICK
+	var remaining_hours := int(remaining_game_minutes / 60.0)
+	decay_label.text = L10n.tf("UI_CORPSE_MENU_DECAY", {
+		"percent": int(_corpse.corpse_decay),
+		"hours": remaining_hours,
+	})
 
 func is_open() -> bool:
 	return panel.visible
