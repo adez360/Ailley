@@ -2707,7 +2707,8 @@ func _reevaluate_once() -> void:
 	# LONG_ACTION_CHECKPOINT_INTERVAL 分鐘額外問一次「繼續」或「放棄」，跟下面
 	# duration 到期的「做完了，問下一步」是兩個獨立的事件——這裡問的當下任務
 	# 還沒做完，`elapsed < duration` 排除掉終點那一刻（那一刻交給下面那個分支
-	# 處理，不重複問）。條件跟下面那個分支同一套（llm 來源、talk 任務排除），
+	# 處理，不重複問）。條件跟下面那個分支大致同一套（llm 來源、talk 任務排除；
+	# duration 完成分支另多一條 is_working() 排除，見那裡的註解），
 	# 多加 _checkpoint_decision_pending 避免自己的請求還沒回來又觸發一次。
 	# elapsed % INTERVAL == 0 不需要額外記「上次問過哪一分鐘」：_on_time_changed
 	# 每個遊戲分鐘只呼叫一次，elapsed 每次重算剛好前進 1，同一個間隔倍數只會
@@ -2741,10 +2742,21 @@ func _reevaluate_once() -> void:
 	# 發起下一次決策請求。等待期間不 return——照樣往下跑完整套仲裁流程，
 	# 從池子（schedule 任務、上一輪還沒被選中的 llm 任務）挑 fallback 頂著，
 	# 不空等、不卡頓，是《10》§5.1 講的「天然容錯」
+	# is_working() 排除（#846 第 1 輪 review major）：work 任務要先走到工作站
+	# 才 work_at()，走路吃掉大半 duration 時，elapsed 抵達門檻那一刻 _run_work()
+	# 協程可能還在跑。不排除的話這裡照樣 _remove_task()＋記 _logged=true，
+	# 之後 _consider_switch() 又因 _logged 判 current 不成立、整段跳過
+	# _is_preemptible()（含 not _working 保護）把角色中途調走——協程下一個
+	# time_changed 偵測到離開 WORK_RANGE，_end_work() 收尾但不撥款，
+	# today_log 已記 ok=true 工資卻落空。工作中的任務交給 _run_work() 自己收尾
+	# （開工後 WORK_DURATION_MINUTES 內必定結束，不會卡死），收尾沿
+	# _on_work_finished() → _reevaluate() 回到這裡，elapsed 仍過門檻、
+	# is_working() 已為 false，完成判定自然補上——_logged 只在真正做完後標記
 	if llm_decision_enabled and not _awaiting_decision \
 			and _current_task.get("source", "") == "llm" \
 			and _current_task.get("id", "") != _active_talk_task_id \
 			and not is_performing() \
+			and not is_working() \
 			and not _current_task.get("_logged", false) \
 			and now_minutes - _current_task_started_at >= int(ceil(_effective_action_duration(_current_task.get("duration", 0.0)))):
 		# 做完的那筆要先離開池子。llm 任務沒有 window，不像 schedule 靠時間窗
@@ -2926,7 +2938,19 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 	# not current_still_valid → _select() 的 outgoing_ok=true，today_log 記
 	# ok=true——跟過期／出窗同一種「自然結束」收尾，不是被搶占（ok=false）
 	# 那條；要不要為前提失效另立更細的訊號是產品決策，見《行程佇列與任務仲裁》
-	var current_still_valid := not _is_expired(_current_task, now_minutes) \
+	#
+	# _logged：llm 任務做滿 duration 後（_reevaluate_once() 的事件驅動觸發）
+	# 只 _remove_task() + 標記 _logged=true，不清空 _current_task——等待下
+	# 一次決策回覆期間，池子裡的 fallback 任務要能頂上來。但這裡原本沒把
+	# _logged 算進「這筆還算不算數」，一筆已經做完、已經離開任務池的殭屍
+	# 任務會被當成仍在進行，繼續用它原本的分數跟新候選比 HYSTERESIS——分數
+	# 通常贏（例如排進時間窗的 schedule 任務 110 分），導致往後每一輪重新
+	# 仲裁，任何比它分數低的候選永遠選不中，且因為 best 本身不為空，
+	# _reevaluate_once() 兩條 STUCK_RETRY 補漏分支（都掛在 best.is_empty()
+	# 上）完全碰不到這個情境。實測（Test B 診斷測試）踩到：一筆完成的 work
+	# 任務卡成殭屍，之後 51 遊戲天沒有任何新任務被選中，直到力竭反射介入
+	var current_still_valid := not bool(_current_task.get("_logged", false)) \
+		and not _is_expired(_current_task, now_minutes) \
 		and _in_window_or_unwindowed(_current_task, now) \
 		and _preconditions_met(_current_task)
 
