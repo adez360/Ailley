@@ -1,4 +1,4 @@
-[gd_scene load_steps=33 format=4 uid="uid://b2e0tw4w7vsnc"]
+[gd_scene load_steps=32 format=4 uid="uid://b2e0tw4w7vsnc"]
 
 [ext_resource type="Material" uid="uid://cmbcfxlkxxnwq" path="res://addons/TileMapDual/ghost_material.tres" id="1_b121j"]
 [ext_resource type="Texture2D" uid="uid://ctijta7lomsfg" path="res://assets/tiles/Sprite-0001.png" id="2_8c41q"]
@@ -8,7 +8,6 @@
 [ext_resource type="PackedScene" uid="uid://bu84ty6ven6ig" path="res://scenes/bubble.tscn" id="6_8c41q"]
 [ext_resource type="Script" uid="uid://uf54btbn8mry" path="res://scripts/ui/debug_overlay.gd" id="6_64w2a"]
 [ext_resource type="Script" uid="uid://bhds0h8vwl2g5" path="res://scripts/world/follow_camera.gd" id="7_fpun6"]
-[ext_resource type="Texture2D" uid="uid://psuc66kghr5u" path="res://assets/ui/chatbox-1.png" id="8_fpun6"]
 [ext_resource type="Script" uid="uid://ytd7qh6vh57r" path="res://scripts/world/selection.gd" id="8_wc255"]
 [ext_resource type="PackedScene" uid="uid://bcq3dot2tpwv" path="res://scenes/houses/house_002.tscn" id="10_8iemx"]
 [ext_resource type="PackedScene" uid="uid://da6s5nc2lvunj" path="res://scenes/houses/house_001.tscn" id="10_olg7q"]
@@ -199,18 +198,24 @@ script = ExtResource("5_8iemx")
 
 [node name="herb_shop" type="Area2D" parent="PlaceAnchors"]
 position = Vector2(-110, 90)
+collision_layer = 0
+monitoring = false
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="PlaceAnchors/herb_shop"]
 shape = SubResource("RectangleShape2D_ux5qa")
 
 [node name="tavern" type="Area2D" parent="PlaceAnchors"]
 position = Vector2(170, 50)
+collision_layer = 0
+monitoring = false
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="PlaceAnchors/tavern"]
 shape = SubResource("RectangleShape2D_82cfe")
 
 [node name="pavilion" type="Area2D" parent="PlaceAnchors"]
 position = Vector2(70, -110)
+collision_layer = 0
+monitoring = false
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="PlaceAnchors/pavilion"]
 shape = SubResource("RectangleShape2D_gunhw")
@@ -223,6 +228,8 @@ polygon = PackedVector2Array(-10, -10, 10, -10, 10, 10, -10, 10)
 
 [node name="god_stone" type="Area2D" parent="PlaceAnchors"]
 position = Vector2(20, 55)
+collision_layer = 0
+monitoring = false
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="PlaceAnchors/god_stone"]
 shape = SubResource("RectangleShape2D_8gofh")
@@ -237,65 +244,66 @@ polygon = PackedVector2Array(0, -6, 6, 0, 0, 6, -6, 0)
 z_index = 10
 position = Vector2(0, -10)
 
-[node name="Box" type="NinePatchRect" parent="PlaceAnchors/god_stone/DivineStone/Bubble"]
-texture = ExtResource("8_fpun6")
-region_rect = Rect2(7, 7, 37, 36)
-patch_margin_left = 10
-patch_margin_top = 9
-patch_margin_right = 11
-patch_margin_bottom = 12
-
-[node name="Label" type="Label" parent="PlaceAnchors/god_stone/DivineStone/Bubble/Box"]
-layout_mode = 0
-theme_type_variation = &"BubbleLabel"
-horizontal_alignment = 1
-autowrap_mode = 3
-clip_text = true
-
 [node name="cemetery" type="Area2D" parent="PlaceAnchors"]
 position = Vector2(176, -112)
+collision_layer = 0
+monitoring = false
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="PlaceAnchors/cemetery"]
 shape = SubResource("RectangleShape2D_h6wmr")
 
 [node name="herb_field" type="Area2D" parent="PlaceAnchors"]
 position = Vector2(240, -112)
+collision_layer = 0
+monitoring = false
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="PlaceAnchors/herb_field"]
 shape = SubResource("RectangleShape2D_pqd0y")
 
 [node name="forest" type="Area2D" parent="PlaceAnchors"]
 position = Vector2(250, -90)
+collision_layer = 0
+monitoring = false
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="PlaceAnchors/forest"]
 shape = SubResource("RectangleShape2D_5k0ak")
 
 [node name="loc_home_01" type="Area2D" parent="PlaceAnchors"]
 position = Vector2(-184, -120)
+collision_layer = 0
+monitoring = false
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="PlaceAnchors/loc_home_01"]
 shape = SubResource("RectangleShape2D_wu01b")
 
 [node name="loc_home_02" type="Area2D" parent="PlaceAnchors"]
 position = Vector2(-136, -24)
+collision_layer = 0
+monitoring = false
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="PlaceAnchors/loc_home_02"]
 shape = SubResource("RectangleShape2D_3ies3")
 
 [node name="loc_home_03" type="Area2D" parent="PlaceAnchors"]
 position = Vector2(-104, -120)
+collision_layer = 0
+monitoring = false
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="PlaceAnchors/loc_home_03"]
 shape = SubResource("RectangleShape2D_xy2fk")
 
 [node name="loc_home_04" type="Area2D" parent="PlaceAnchors"]
 position = Vector2(-184, -40)
+collision_layer = 0
+monitoring = false
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="PlaceAnchors/loc_home_04"]
 shape = SubResource("RectangleShape2D_cmcjb")
 
 [node name="loc_home_05" type="Area2D" parent="PlaceAnchors"]
 position = Vector2(-136, -72)
+collision_layer = 0
+monitoring = false
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="PlaceAnchors/loc_home_05"]
 shape = SubResource("RectangleShape2D_556r4")

@@ -16,6 +16,14 @@ extends Node2D
 ## 不會疊在正中心
 const MIN_OFFSET_FROM_CENTER := 6.0
 
+## 站位散開的最大離心距離（review round 1 major，PR #869）：雜湊點被矩形
+## clamp 之後可能貼到角落，離中心最遠 45px，超出 TALK_RANGE/WORK_RANGE/
+## BUY_RANGE 的 32px 互動半徑——buy/work 會永久判定 TOO_FAR、排程 talk
+## 配對不到。限縮在 TALK_RANGE/2（16px）以內，任意兩個站位點相距最遠 32px，
+## 三種 32px 互動檢查全部安全；跟 MIN_OFFSET_FROM_CENTER（6）一上一下，
+## 兩者不衝突
+const MAX_STANCE_DISTANCE := 16.0
+
 ## AI 決策／`current_place`／`npc_schedule.json` 看到的抽象地點名（issue #391，
 ## 《規格書07_地點/家》）。場景裡沒有一個叫這個名字的錨點——每個角色實際
 ## 分到的是 `loc_home_01`～`loc_home_05` 其中一個，has_for()／resolve_for()
@@ -76,8 +84,8 @@ func _place_hashed_point(area: Node2D, character_id: String) -> Vector2:
 		local_offset = local_offset.normalized() * MIN_OFFSET_FROM_CENTER
 	local_offset.x = clampf(local_offset.x, -half.x, half.x)
 	local_offset.y = clampf(local_offset.y, -half.y, half.y)
+	local_offset = local_offset.limit_length(MAX_STANCE_DISTANCE)
 	return area.to_global(shape_node.position + local_offset)
-
 
 ## 落點的可走性驗證（code review 抓到，PR #721）：地點區域內的落點可能落在
 ## 障礙格（例如販賣機 StaticBody2D 佔掉的格子）。落點格 solid 的話，
