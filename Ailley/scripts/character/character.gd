@@ -759,22 +759,28 @@ func _update_treatment() -> void:
 	if elapsed_minutes >= 60:
 		_complete_treatment()
 
+## 恢復某角色的生理數值到安全水平——_complete_treatment()（昏迷治療完成）與
+## revive()（復活成功）共用同一套數字，避免兩處各自維護一份清單日後 drift；
+## 目的是避免治療／復活完立刻因為某項生理數值歸零重新觸發 condition
+func _restore_stats_to_safe_levels(target: Character) -> void:
+	if target.stats == null:
+		return
+	target.stats.set_value("health", 50.0)		# 設定一個中等恢復量
+	target.stats.set_value("injury", 0.0)
+	target.stats.set_value("alcohol", 0.0)		# 清除酒精
+	target.stats.set_value("satiety", 50.0)	# 恢復飽食度
+	target.stats.set_value("hydration", 50.0)	# 恢復水分
+	target.stats.set_value("stamina", EXHAUSTION_RECOVERY_THRESHOLD + 1.0)	# 恢復體力，超過力竭恢復門檻
+	target.stats.set_value("wakefulness", 50.0)	# 恢復清醒度
+	target.stats.set_value("hygiene", 50.0)	# 恢復衛生
+
 ## 治療完成：解除所有異常狀態、恢復 health 和 injury、結束昏迷
 func _complete_treatment() -> void:
 	print_debug("Character %s 藥草鋪治療完成" % character_name)
 
-	# 恢復 health 和 injury（《99》P-27、P-28）
-	if stats != null:
-		stats.set_value("health", 50.0)		# 設定一個中等恢復量
-		stats.set_value("injury", 0.0)
-
-		# 恢復其他生理數值到安全水平，避免治療完立即重新觸發 condition
-		stats.set_value("alcohol", 0.0)		# 清除酒精
-		stats.set_value("satiety", 50.0)	# 恢復飽食度
-		stats.set_value("hydration", 50.0)	# 恢復水分
-		stats.set_value("stamina", EXHAUSTION_RECOVERY_THRESHOLD + 1.0)	# 恢復體力，超過力竭恢復門檻
-		stats.set_value("wakefulness", 50.0)	# 恢復清醒度
-		stats.set_value("hygiene", 50.0)	# 恢復衛生
+	# 恢復 health／injury（《99》P-27、P-28）與其他生理數值到安全水平，
+	# 避免治療完立即重新觸發 condition
+	_restore_stats_to_safe_levels(self)
 
 	# 清除所有異常狀態
 	conditions.clear()
@@ -1118,15 +1124,7 @@ func revive(corpse: Character) -> String:
 
 	# 恢復到安全值，跟 _complete_treatment()（昏迷治療完成）同一套「安全水平」
 	# 數字，理由見那邊：避免復活完立刻又因為某項生理數值歸零重新觸發 condition
-	if corpse.stats != null:
-		corpse.stats.set_value("health", 50.0)
-		corpse.stats.set_value("injury", 0.0)
-		corpse.stats.set_value("alcohol", 0.0)
-		corpse.stats.set_value("satiety", 50.0)
-		corpse.stats.set_value("hydration", 50.0)
-		corpse.stats.set_value("stamina", EXHAUSTION_RECOVERY_THRESHOLD + 1.0)
-		corpse.stats.set_value("wakefulness", 50.0)
-		corpse.stats.set_value("hygiene", 50.0)
+	_restore_stats_to_safe_levels(corpse)
 
 	# 事實句只有 Agent 有 AI 決策迴圈可以注入——Player 沒有 _push_daily_event()，
 	# 跟 haul()／stop_haul() 通知搬運事件同一種 is_in_group("agents") 判斷寫法
