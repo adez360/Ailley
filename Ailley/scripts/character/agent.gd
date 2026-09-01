@@ -3999,11 +3999,12 @@ func _pursue_use_item_task() -> void:
 
 	if proceed:
 		var reason := use_item(item_id)
-		last_action_result = _use_item_failure_reason_text(reason)
 		if reason != Character.USE_ITEM_OK:
+			last_action_result = _use_item_failure_reason_text(reason)
 			push_warning("Agent %s: use_item 失敗（%s）" % [character_name, reason])
 			_mark_schedule_retry_backoff(_current_task)
 		else:
+			last_action_result = reason
 			var item_name := ItemDatabase.get_display_name(item_id)
 			_push_daily_event("你使用了%s。" % item_name)
 		# 不分來源都記——理由同 _pursue_eat_task()
