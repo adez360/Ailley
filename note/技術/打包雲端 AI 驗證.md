@@ -7,7 +7,8 @@ updated: 2026-09-02
 # 打包雲端 AI 驗證
 
 匯出後的獨立執行檔（不透過編輯器）在純雲端 `RemoteLLM` 設定下的連線驗證方法與結果。
-對應 issue：#981（純雲端驗證，已完成）、#581（Local＋Cloud 兩半，Local 半仍未驗證）。
+對應 issue：#981（純雲端驗證，部分完成——GUI 主選單與真 key 對話／決策未驗）、
+#581（Local＋Cloud 兩半，Local 半仍未驗證）。
 
 ## 匯出前置：Git LFS 必須已實體化
 
@@ -75,12 +76,13 @@ godot --headless --export-release "Linux" /tmp/ailley-export/ailley.x86_64
   auth 管制的端點會得到預期失敗（curl 實測 `POST /chat/completions` →
   `401 {"error":{"message":"User not found."}}`）；`GET /models` 是公開端點、
   假 key 也回 200，所以開機探測在假 key 下就會報 ready。真 key 的完整對話／決策
-  留給 #483 那條線驗。
+  屬 #581 的 Cloud 半，等有真實 key 的環境再驗。
 - **GUI 開機到主選單**：本 session 沒有可用的顯示器存取權，以 headless 開機
   （45–50 秒穩定運行、0 ERROR、場景載入無錯）替代，未做畫面確認。
 
 ## Local 半（#581 剩下的）
 
-本機沒有 `sidecar/` 目錄（llama-server 與模型檔），且 §2.2 的執行期下載目前只有
-Windows 支援（issue #989）；Linux 的手動安裝流程也沒有隨包文件。所以「llama-server
-隨遊戲拉起」這半在打包環境下無法驗證——#581 等 §2.2／#989 落地後再補。
+本機沒有 `sidecar/` 目錄（llama-server 與模型檔）。§2.2 的執行期下載（issue #989）
+已落地，但僅支援 Windows；Linux 的手動安裝流程也沒有隨包文件。所以「llama-server
+隨遊戲拉起」這半在本 Linux 機無法驗證——Local 半待 Windows 環境或 sidecar 檔
+到位再補。
