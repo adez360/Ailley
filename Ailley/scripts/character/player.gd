@@ -369,14 +369,19 @@ func _unhandled_input(event: InputEvent) -> void:
 	# #1026 補上這條路），不是從 `other` 反推。corpse_menu 理論上一定找得到
 	# （場景裡固定掛著），跟 vending_menu／tip_menu 同一種「多防一手」寫法——
 	# 場景漏掛時退回原本「直接復活」的舊行為，不讓 E 整個沒反應。
-	# 屍體比可搭話對象遠時讓位給搭話（跟 downed 對 other 同一種距離判斷）
-	if corpse != null and candidates["to_corpse"] <= candidates["to_other"]:
+	# 屍體比可搭話對象遠時讓位給搭話（跟 downed 對 other 同一種距離判斷）。
+	# 過渡窗 fallback：死亡到下一次 _refresh_visible()（CHECK_INTERVAL 0.2s）之間
+	# 死者還在 _visible、尚未進 _corpses，corpse 候選是 null——這個窗內保留
+	# main 的 other.is_dead 判斷，按 E 照樣開屍體選單，不回歸成「搭話失敗泡泡」
+	if (corpse != null and candidates["to_corpse"] <= candidates["to_other"]) \
+			or (other != null and other.is_dead):
+		var corpse_target := corpse if corpse != null else other
 		if corpse_menu != null:
 			if TALK_DEBUG:
 				print("[talk_debug_654] 走了屍體復活／搬運選單分支（issue #758）")
-			corpse_menu.open(corpse, self)
+			corpse_menu.open(corpse_target, self)
 			return
-		var revive_reason := revive(corpse)
+		var revive_reason := revive(corpse_target)
 		if TALK_DEBUG:
 			print("[talk_debug_654] 走了直接復活分支（corpse_menu 漏掛 fallback），reason=%s" % revive_reason)
 		if revive_reason != REVIVE_OK:
