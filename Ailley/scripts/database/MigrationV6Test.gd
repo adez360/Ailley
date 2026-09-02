@@ -173,9 +173,57 @@ func _run() -> void:
 
 func _seed_legacy_schema() -> bool:
 	var statements := [
-		# 最小化父表，只給下面幾張子表滿足 FK 用，跟這次 migration 無關。
-		"CREATE TABLE npc (npc_id TEXT PRIMARY KEY);",
-		"CREATE TABLE location (location_id TEXT PRIMARY KEY);",
+		# npc 不能用一欄的最小化 stub——user_version 從 5 開始會一路套用到
+		# migration 9（「Rebuild npc/location and all their dependent tables
+		# with NOT NULL primary keys」），它跟 location 一樣是 migration 9
+		# 直接重建的目標，不是「跟這次 migration 無關」的父表。用現行
+		# NPCSchema 完整欄位、只故意省略 npc_id 的 NOT NULL，理由同 location
+		# （下面）：一欄 stub 會讓 `schemas[]` no-op、撐到 migration 9 撞形狀
+		# 檢查中止（issue #979）。
+		"""
+		CREATE TABLE npc (
+			npc_id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			age INTEGER NOT NULL DEFAULT 30,
+			gender TEXT NOT NULL DEFAULT 'other',
+			village_id TEXT NOT NULL DEFAULT 'default_village',
+			character TEXT DEFAULT '',
+			reputation INTEGER NOT NULL DEFAULT 0,
+			system_prompt TEXT DEFAULT '',
+			words_to_creator TEXT DEFAULT '',
+			is_spoken INTEGER NOT NULL DEFAULT 0,
+			generated_at TEXT,
+			spoken_at TEXT,
+			trigger TEXT,
+			home_location_id TEXT NOT NULL,
+			decision_source TEXT NOT NULL DEFAULT 'local',
+			model_name TEXT DEFAULT '',
+			is_active INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (home_location_id) REFERENCES location(location_id) ON DELETE RESTRICT
+		);
+		""",
+
+		# location 不能用一欄的最小化 stub——user_version 從 5 開始會一路套用到
+		# migration 9，它把 location 重建成凍結的「加 pos_x/pos_y 之前」形狀
+		# （見 DatabaseSchema.gd 的 _migrate_v9_create_location_without_pos()）。
+		# 這裡不手動建的話，`schemas[]` 的 LocationSchema.create() 是
+		# CREATE TABLE IF NOT EXISTS——一欄的 stub 已經存在，不會被換成完整
+		# 形狀，migration 9 拿凍結形狀重建時兩邊欄位數對不上（1 對 7），撞
+		# _migrate_rebuild_verify_column_shape() 中止（issue #979）。這裡照
+		# 凍結形狀原樣手刻，不呼叫現行 LocationSchema。
+		"""
+		CREATE TABLE location (
+			location_id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			location_type TEXT DEFAULT '',
+			capacity INTEGER NOT NULL DEFAULT 0,
+			danger INTEGER NOT NULL DEFAULT 0,
+			is_active INTEGER NOT NULL DEFAULT 1
+		);
+		""",
 
 		# --- world（舊版：world_id 缺 NOT NULL）---
 		"""
@@ -325,9 +373,10 @@ func _seed_legacy_schema() -> bool:
 			return false
 
 	if not db.query_with_bindings(
-		"INSERT INTO npc (npc_id) VALUES (?);", [NPC_A]
+		"INSERT INTO location (location_id, name) VALUES (?, ?);", [LOCATION_A, "測試地點"]
 	) or not db.query_with_bindings(
-		"INSERT INTO location (location_id) VALUES (?);", [LOCATION_A]
+		"INSERT INTO npc (npc_id, name, home_location_id) VALUES (?, ?, ?);",
+		[NPC_A, "測試甲", LOCATION_A]
 	):
 		push_error("[MigrationV6Test] seed 父表資料失敗: " + db.error_message)
 		return false
@@ -424,6 +473,12 @@ func _run_null_pk_repair_test() -> void:
 		_fail("null_pk_repair/open_db", db.error_message)
 		return
 
+	# world_character_state 一起種——它跟 world 綁在同一個
+	# _migrate_rebuild_table_group() 呼叫裡（見 migration 7），這裡若不手動建，
+	# `schemas[]` 的 WorldCharacterStateSchema.create() 會先把它建成現行完整
+	# 形狀（含 following_npc_id），migration 7 拿凍結的 v7 形狀（不含
+	# following_npc_id）重建時兩邊形狀對不上，連帶讓這個測試想驗證的 world
+	# NOT NULL 修復也跑不完（issue #979）。不需要塞資料，只要形狀跟凍結版一致。
 	if not db.query(
 		"""
 		CREATE TABLE world (
@@ -432,6 +487,18 @@ func _run_null_pk_repair_test() -> void:
 			allow_player_join INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+
+		CREATE TABLE world_character_state (
+			world_id TEXT NOT NULL,
+			npc_id TEXT NOT NULL,
+			pos_x REAL NOT NULL DEFAULT 0.0,
+			pos_y REAL NOT NULL DEFAULT 0.0,
+			current_place TEXT,
+			current_state TEXT,
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (world_id, npc_id),
+			FOREIGN KEY (world_id) REFERENCES world(world_id) ON DELETE CASCADE
 		);
 		"""
 	):

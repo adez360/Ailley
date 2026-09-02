@@ -259,7 +259,65 @@ func _run_null_pk_repair_test() -> void:
 		return
 
 	var statements := [
-		"CREATE TABLE npc (npc_id TEXT PRIMARY KEY);",
+		# npc 用現行 NPCSchema 完整欄位（只省略 npc_id 的 NOT NULL）——
+		# user_version 從 2 開始一路套用到 migration 9，它會拿現行 NPCSchema
+		# 重建 npc，一欄的 stub 會撞形狀檢查中止（issue #979，理由同上面
+		# _seed_legacy_schema() 的說明）。
+		"""
+		CREATE TABLE location (
+			location_id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			location_type TEXT DEFAULT '',
+			capacity INTEGER NOT NULL DEFAULT 0,
+			danger INTEGER NOT NULL DEFAULT 0,
+			is_active INTEGER NOT NULL DEFAULT 1
+		);
+		""",
+		"""
+		CREATE TABLE npc (
+			npc_id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			age INTEGER NOT NULL DEFAULT 30,
+			gender TEXT NOT NULL DEFAULT 'other',
+			village_id TEXT NOT NULL DEFAULT 'default_village',
+			character TEXT DEFAULT '',
+			reputation INTEGER NOT NULL DEFAULT 0,
+			system_prompt TEXT DEFAULT '',
+			words_to_creator TEXT DEFAULT '',
+			is_spoken INTEGER NOT NULL DEFAULT 0,
+			generated_at TEXT,
+			spoken_at TEXT,
+			trigger TEXT,
+			home_location_id TEXT NOT NULL,
+			decision_source TEXT NOT NULL DEFAULT 'local',
+			model_name TEXT DEFAULT '',
+			is_active INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (home_location_id) REFERENCES location(location_id) ON DELETE RESTRICT
+		);
+		""",
+
+		# world_character_state 也要種——跟 world 綁在同一個
+		# _migrate_rebuild_table_group() 呼叫裡（migration 7）。這裡若不手動建，
+		# `schemas[]` 會先把它建成現行完整形狀（含 following_npc_id），migration 7
+		# 拿凍結的 v7 形狀重建時形狀對不上，連這個測試想驗證的 memories NULL
+		# 主鍵修復也跑不完（issue #979）。不需要塞資料，只要形狀跟凍結版一致。
+		"""
+		CREATE TABLE world_character_state (
+			world_id TEXT NOT NULL,
+			npc_id TEXT NOT NULL,
+			pos_x REAL NOT NULL DEFAULT 0.0,
+			pos_y REAL NOT NULL DEFAULT 0.0,
+			current_place TEXT,
+			current_state TEXT,
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (world_id, npc_id),
+			FOREIGN KEY (npc_id) REFERENCES npc(npc_id) ON DELETE CASCADE
+		);
+		""",
+
 		"""
 		CREATE TABLE memories (
 			memory_id TEXT PRIMARY KEY,
@@ -293,7 +351,12 @@ func _run_null_pk_repair_test() -> void:
 			_fail("null_pk_repair/seed", db.error_message)
 			return
 
-	if not db.query_with_bindings("INSERT INTO npc (npc_id) VALUES (?);", [NPC_A]):
+	if not db.query_with_bindings(
+		"INSERT INTO location (location_id, name) VALUES (?, ?);", [LOCATION_A, "測試地點"]
+	) or not db.query_with_bindings(
+		"INSERT INTO npc (npc_id, name, home_location_id) VALUES (?, ?, ?);",
+		[NPC_A, "測試甲", LOCATION_A]
+	):
 		_fail("null_pk_repair/seed npc", db.error_message)
 		return
 
@@ -422,9 +485,76 @@ func _run_null_pk_reject_test() -> void:
 
 func _seed_legacy_schema() -> bool:
 	var statements := [
-		# 最小化父表，只給下面幾張子表滿足 FK 用，跟這次 migration 無關。
-		"CREATE TABLE npc (npc_id TEXT PRIMARY KEY);",
-		"CREATE TABLE location (location_id TEXT PRIMARY KEY);",
+		# npc／location 不能用一欄的最小化 stub——user_version 從 2 開始會
+		# 一路套用到 migration 9（「Rebuild npc/location and all their
+		# dependent tables with NOT NULL primary keys」），它們兩個都是
+		# migration 9 直接重建的目標，不是「跟這次 migration 無關」的父表。
+		# npc 用現行 NPCSchema 的完整欄位、只故意省略 npc_id 的 NOT NULL；
+		# location 用「加 pos_x/pos_y 之前」的凍結形狀（見 DatabaseSchema.gd
+		# 的 _migrate_v9_create_location_without_pos()）——兩者若維持一欄
+		# stub，`schemas[]` 的 CREATE TABLE IF NOT EXISTS 會因為表已存在而
+		# no-op，stub 撐到 migration 9 才被拿去跟現行/凍結形狀比對，欄位數
+		# 對不上，撞 _migrate_rebuild_verify_column_shape() 中止（issue #979）。
+		"""
+		CREATE TABLE location (
+			location_id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT DEFAULT '',
+			location_type TEXT DEFAULT '',
+			capacity INTEGER NOT NULL DEFAULT 0,
+			danger INTEGER NOT NULL DEFAULT 0,
+			is_active INTEGER NOT NULL DEFAULT 1
+		);
+		""",
+
+		"""
+		CREATE TABLE npc (
+			npc_id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			age INTEGER NOT NULL DEFAULT 30,
+			gender TEXT NOT NULL DEFAULT 'other',
+			village_id TEXT NOT NULL DEFAULT 'default_village',
+			character TEXT DEFAULT '',
+			reputation INTEGER NOT NULL DEFAULT 0,
+			system_prompt TEXT DEFAULT '',
+			words_to_creator TEXT DEFAULT '',
+			is_spoken INTEGER NOT NULL DEFAULT 0,
+			generated_at TEXT,
+			spoken_at TEXT,
+			trigger TEXT,
+			home_location_id TEXT NOT NULL,
+			decision_source TEXT NOT NULL DEFAULT 'local',
+			model_name TEXT DEFAULT '',
+			is_active INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (home_location_id) REFERENCES location(location_id) ON DELETE RESTRICT
+		);
+		""",
+
+		# world_character_state 不能不建——user_version 從 2 開始會一路套用到
+		# migration 7，它把這張表重建成凍結的 v7 形狀（不含 following_npc_id，
+		# 見 DatabaseSchema.gd 的 _WorldCharacterStateSchemaV7RebuildShape）。
+		# 這裡不手動建的話，`schemas[]` 的 WorldCharacterStateSchema.create()
+		# 會先把它建成現行完整形狀（含 following_npc_id），migration 7 拿凍結
+		# 形狀重建時兩邊欄位數對不上，撞
+		# _migrate_rebuild_verify_column_shape() 中止，migration 3 自己的斷言
+		# 完全沒機會跑（issue #979）。這裡照凍結形狀原樣手刻，不呼叫現行
+		# WorldCharacterStateSchema。
+		"""
+		CREATE TABLE world_character_state (
+			world_id TEXT NOT NULL,
+			npc_id TEXT NOT NULL,
+			pos_x REAL NOT NULL DEFAULT 0.0,
+			pos_y REAL NOT NULL DEFAULT 0.0,
+			current_place TEXT,
+			current_state TEXT,
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (world_id, npc_id),
+			FOREIGN KEY (world_id) REFERENCES world(world_id) ON DELETE CASCADE,
+			FOREIGN KEY (npc_id) REFERENCES npc(npc_id) ON DELETE CASCADE
+		);
+		""",
 
 		# item 不能用一欄的最小化 stub——user_version 從 2 開始，
 		# DatabaseSchema.initialize() 這裡會把 migration 3～6 全部套用，
@@ -548,11 +678,13 @@ func _seed_legacy_schema() -> bool:
 			return false
 
 	if not db.query_with_bindings(
-		"INSERT INTO npc (npc_id) VALUES (?);", [NPC_A]
+		"INSERT INTO location (location_id, name) VALUES (?, ?);", [LOCATION_A, "測試地點"]
 	) or not db.query_with_bindings(
-		"INSERT INTO npc (npc_id) VALUES (?);", [NPC_B]
+		"INSERT INTO npc (npc_id, name, home_location_id) VALUES (?, ?, ?);",
+		[NPC_A, "測試甲", LOCATION_A]
 	) or not db.query_with_bindings(
-		"INSERT INTO location (location_id) VALUES (?);", [LOCATION_A]
+		"INSERT INTO npc (npc_id, name, home_location_id) VALUES (?, ?, ?);",
+		[NPC_B, "測試乙", LOCATION_A]
 	) or not db.query_with_bindings(
 		"INSERT INTO item (item_id, name) VALUES (?, ?);", [ITEM_A, "測試道具"]
 	):
