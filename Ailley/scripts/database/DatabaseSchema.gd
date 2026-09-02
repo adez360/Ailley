@@ -676,7 +676,20 @@ static func _migrate_v3_rebuild_memories(db) -> bool:
 	):
 		return false
 
-	if not db.query("INSERT INTO memories SELECT * FROM memories__migrate_v3_old;"):
+	var columns := _migrate_rebuild_common_columns(db, "memories__migrate_v3_old", "memories")
+
+	if columns.is_empty():
+		push_error(
+			"[DatabaseSchema] Migration 3: memories has no columns in common with its backup — nothing to copy."
+		)
+		return false
+
+	var column_list := ", ".join(columns)
+
+	if not db.query(
+		"INSERT INTO memories (%s) SELECT %s FROM memories__migrate_v3_old;"
+		% [column_list, column_list]
+	):
 		push_error(
 			"[DatabaseSchema] Migration 3: Failed to copy data into memories: "
 			+ db.error_message
@@ -695,8 +708,21 @@ static func _migrate_v3_rebuild_memories(db) -> bool:
 	):
 		return false
 
+	columns = _migrate_rebuild_common_columns(
+		db, "memory_related_npcs__migrate_v3_old", "memory_related_npcs"
+	)
+
+	if columns.is_empty():
+		push_error(
+			"[DatabaseSchema] Migration 3: memory_related_npcs has no columns in common with its backup — nothing to copy."
+		)
+		return false
+
+	column_list = ", ".join(columns)
+
 	if not db.query(
-		"INSERT INTO memory_related_npcs SELECT * FROM memory_related_npcs__migrate_v3_old;"
+		"INSERT INTO memory_related_npcs (%s) SELECT %s FROM memory_related_npcs__migrate_v3_old;"
+		% [column_list, column_list]
 	):
 		push_error(
 			"[DatabaseSchema] Migration 3: Failed to copy data into memory_related_npcs: "
