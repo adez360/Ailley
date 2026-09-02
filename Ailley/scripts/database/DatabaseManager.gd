@@ -106,6 +106,7 @@ func _ready() -> void:
 			]
 		)
 
+		_halt_on_init_failure()
 		return
 
 
@@ -127,6 +128,7 @@ func _ready() -> void:
 
 		db.close_db()
 
+		_halt_on_init_failure()
 		return
 
 
@@ -714,6 +716,36 @@ func _table_has_column(
 
 
 	return column_name in _table_columns_cache[table]
+
+
+# =====================================================
+# Fatal Init Failure
+# =====================================================
+
+## db.open_db() 或 DatabaseSchema.initialize() 任一步失敗時呼叫。不擋在
+## 這裡的話，is_ready 卡在 false，遊戲照常繼續開機，之後場上每個角色每次
+## 重新決策都會再撞一次 _require_ready() guard、各自噴一輪 push_error——
+## issue #960 實測 200 行 log 樣本裡「Database is not ready」出現 67 次，
+## 玩家端只感覺到頻繁掉幀/沒回應，完全沒有畫面告訴他資料庫壞了。
+##
+## 專案目前沒有任何遊戲內的 toast／通知系統（見 note/技術/存檔.md「存哪」
+## 一節），OS.alert() 是不必新建 UI 就能面向玩家的一次性提示；DatabaseManager
+## 是 main scene 載入前就會跑完 _ready() 的 autoload 之一（見 project.godot [autoload] 順序），
+## alert 期間引擎會阻塞在這裡，main_menu.tscn（run/main_scene）要等所有
+## autoload 都 _ready() 完才會載入，玩家看到的只有這個提示，不會先閃過
+## 主選單。alert 關閉後立刻 quit()，遊戲不會帶著壞掉的 DB 往下開機。
+func _halt_on_init_failure() -> void:
+
+	var real_path := ProjectSettings.globalize_path(
+		DATABASE_PATH
+	)
+
+	OS.alert(
+		L10n.tf("UI_DB_INIT_FAILED_BODY", {"path": real_path}),
+		L10n.t("UI_DB_INIT_FAILED_TITLE")
+	)
+
+	get_tree().quit(1)
 
 
 # =====================================================

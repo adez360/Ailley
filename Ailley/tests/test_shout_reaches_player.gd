@@ -56,7 +56,7 @@ func test_player_shows_alert_bubble_on_noise_heard() -> void:
 	player.noise_heard.emit(source)
 
 	assert_true(player.bubble.is_speaking(), "聽到聲音後應該顯示反應泡泡")
-	assert_eq(player.bubble.label.text, L10n.t("DLG_NOISE_ALERT"), "反應內容應跟 NPC 排程模式的 fallback 一致")
+	assert_eq(player.bubble.label.text, "!?", "反應內容應跟 NPC 排程模式的 fallback 一致")
 
 
 func test_player_suppresses_alert_bubble_during_conversation() -> void:

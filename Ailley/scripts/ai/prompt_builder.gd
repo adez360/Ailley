@@ -114,8 +114,8 @@ static func _dialogue_system(is_opening: bool) -> String:
 ## （見《00》原則二：引擎只給事件，不給情緒；agent.gd 的 _need_bonus()
 ## 目前恆為 0，這裡刻意不動它，避免變成引擎替 AI 的主觀判斷預先下結論）
 ##
-## #794 review：give／bury 的 target 在 AISchema._is_valid_target() 裡
-## 早就跟 talk/persuade/follow/attack 同一套白名單，必須是 context.visible
+## #794 review：give 的 target 在 AISchema._is_valid_target() 裡跟
+## talk/persuade/follow/attack 同一套白名單，必須是 context.visible
 ## 裡的真實名字，但這段提示從沒告訴過模型這條限制——模型填了視野外的
 ## target，整包回應（含其他合法任務）會被 ERROR_BAD_SHAPE 一起丟掉。補上
 ## 跟 talk/persuade/follow 同樣的 "<exact name from context.visible>" 措辭
@@ -148,10 +148,11 @@ For "use_item", params must be {"item_id": "<an item_id already in self.inventor
 For "persuade", params must be {"target": "<exact name from context.visible>", "reason": "<why you're trying to persuade them, in your own words>"}, plus an optional "proposed_task": {"action": ..., "params": {...}, "priority": ..., "duration": ...} — a full task (same shape as an entry in your own "tasks") describing the specific thing you want them to do if they're persuaded. Omit "proposed_task" if you're only trying to change what they believe, not get them to do something specific.
 For "follow", params must be {"target": "<exact name from context.visible>"} — invite yourself along with that character, keeping pace with wherever they currently are. There's no fixed duration or distance limit: you'll keep following until your own next decision picks something else instead, so if you want to stop, just choose a different action next time.
 For "give", params must be {"target": "<exact name from context.visible>", "item_id": "<an item_id from self.inventory>", "count": <optional whole number, defaults to 1>} — hand over one of your own items to that character; they must currently be in sight.
-For "bury", params must be {"target": "<exact name from context.visible>"} — target must be someone already dead and not yet buried, and still in sight (their body hasn't been moved out of view).
+For "bury", params must be {"target": "<exact name of a corpse you have seen, taken from the fact line 「你看到 ... 的遺體」>"} — target must be someone already dead and not yet buried. "context.visible" only lists the living, so a bury target never comes from there.
 For "work", params must be {"place": "<one of context.workplaces>"} — a place with a workstation, not just anywhere. If "context.workplaces" is empty, there is nowhere to work right now, so don't pick this action.
 For "attack", params must be {"target": "<exact name from context.visible>"} as usual, or {"target": "god_stone"} to attack the divine stone landmark instead of a person — it's an inanimate object, so this doesn't hurt anyone or affect any stats，天神之石上不會留下任何痕跡，這一下只會留下一筆事件紀錄；進入廣播半徑的附近角色會各記一句目擊到的旁觀事實句。
 "spit_at_stone", "worship_stone", and "praise_stone" take no params — they're gestures aimed at the divine stone landmark, wherever it currently is.
+For "murmur", params must be {"line": "<the short thing you mutter to yourself, in your own words>"} — thinking out loud, not addressed to anyone.
 For "sleep", how deep it is depends entirely on "duration" (in game minutes): under %d minutes only lightly restores stamina, %d–%d minutes (a nap) restores stamina and some of how awake you feel, and beyond %d minutes (a real night's sleep) restores both far more. If you're seriously sleepy, don't just rest for a few minutes — commit enough duration for a real sleep."""
 
 ## update_plan 是條件式欄位（#89，《10》§5.4／《12》§2.4）：只有呼叫端判斷

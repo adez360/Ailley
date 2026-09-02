@@ -298,12 +298,14 @@ func receive_created_character(data: Dictionary) -> void:
 # 建角面板「投放」：資料先變成一筆模板（deployed=false），立刻借用
 # deploy_from_library() 生場上實體——DEPLOY_CAP／identity_assignments／
 # provider 重建那些邏輯不重寫一份。投放失敗（世界人數已滿）要把剛 append
-# 的那筆退掉，不留一筆「deployed=false 但其實使用者要投放」的孤兒模板
-func create_and_deploy_character(data: Dictionary) -> Character:
+# 的那筆退掉，不留一筆「deployed=false 但其實使用者要投放」的孤兒模板。
+# as_player=true 是建角面板化身者模式（issue #954）：直接生 player.tscn、
+# 寫入 embodied_character_id，跟左側模板列「操控」鈕（#659）同一條路徑
+func create_and_deploy_character(data: Dictionary, as_player: bool = false) -> Character:
 	var id := _append_library_entry(data)
 	if id.is_empty():
 		return null
-	var character := deploy_from_library(id)
+	var character := deploy_from_library(id, as_player)
 	if character == null:
 		remove_from_library(id)
 	return character
@@ -502,6 +504,45 @@ func deploy_from_library(id: String, as_player: bool = false) -> Character:
 		player_body_changed.emit(character)
 
 	return character
+
+
+# 收回：投放的反向操作，把場上肉體撤走、角色庫紀錄的 deployed 改回 false，
+# 釋放一個 DEPLOY_CAP 名額給其他庫存角色（issue #974）。角色庫紀錄本身不刪，
+# 靈魂還在——跟 remove_from_library() 是兩件事（那個是真的刪紀錄，只能對
+# 未投放的下手）
+#
+# 不能收回目前化身角色（embodied_character_id）：那是玩家自己正在操控的
+# 身體，收回後玩家會失去可控角色，而目前沒有任何入口能接手「變回天神」，
+# 是待規劃的另一塊（《規格書 05》§7-3「撤回」）——這裡只做 NPC 收回
+#
+# 不能收回死亡角色：MVP 只有單一世界，死亡角色依《09》死亡禁入例外規則
+# 不得再進入同一個世界，收回等於讓死掉的靈魂能在同一個世界重新投放，
+# 繞過死亡的後果
+func recall_from_library(id: String) -> bool:
+	var entry := get_library_entry(id)
+	if entry.is_empty() or not entry.get("deployed", false):
+		return false
+	if id == embodied_character_id:
+		push_warning("GameManager: %s 是目前化身角色，無法收回" % entry["character_name"])
+		return false
+
+	for node in get_tree().get_nodes_in_group("characters"):
+		var character := node as Character
+		if character != null and character.character_id == id:
+			if character.is_dead:
+				push_warning("GameManager: %s 已死亡，無法收回" % entry["character_name"])
+				return false
+			# queue_free() 把真正的釋放延到這一幀結束，節點在那之前仍然算在
+			# "characters" 分組裡——呼叫端（例如 character_sidebar.gd）常常
+			# 緊接著就重新掃一次這個分組刷新列表，太早掃會看到這具已經收回、
+			# 但還沒真的消失的肉體，UI 顯示一列多餘的殘影。先退組再
+			# queue_free()，讓「收回」在呼叫端看來是立即生效的
+			character.remove_from_group("characters")
+			character.queue_free()
+			break
+
+	entry["deployed"] = false
+	return true
 
 
 # main_scene.gd::_apply_startup_ai_state() 只在開機時跑一次，只認開機當下

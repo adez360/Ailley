@@ -3,8 +3,9 @@ extends CanvasLayer
 ## 右側角色側欄：列出地圖上所有 Character（縮圖＋名稱），底部「新增角色」開角色庫。
 ##
 ## 面板結構在 side_bar.tscn 裡排好（錨點＋ailley_theme.tres 的 SideBarButton
-## 樣式變體），清單裡的每一列是 character_row.tscn 的實例，這支腳本只接訊號、
-## 管展開/收合、刷新清單，不再用程式碼組節點。
+## 樣式變體）。清單裡每一列的縮圖＋名稱是 character_row.tscn 的實例；「收回」
+## 鈕是程式碼組的（見 _row()），跟 character_row.tscn 的 Button 包成兄弟節點
+## 而不是子節點，避免 Button 包 Button 吃掉點擊。
 ## 縮圖借用角色本身 AnimatedSprite2D 當下那一幀（character.gd 的
 ## _current_frame_texture() 同一招，但那支是私有方法，這裡自己重算一次）。
 ##
@@ -93,16 +94,35 @@ func _refresh() -> void:
 		_list.add_child(_row(character))
 
 
-## 一列就是 character_row.tscn 的實例（Button 內含縮圖＋名稱），這裡只填內容
-## 跟接 pressed。要調外觀去改那份場景，不要在這裡再寫一套組節點的程式碼
+## 一列是 character_row.tscn 的實例（Button 內含縮圖＋名稱）＋一顆「收回」鈕，
+## 包成 HBoxContainer 當兄弟節點——不要把收回鈕塞進 character_row.tscn 的
+## Button 裡面當子節點，那會撞上 character_create.gd 模板列已經踩過的坑
+## （Button 包 Button 會吃掉子按鈕的點擊，見該檔案 _template_row() 的說明）。
+## character_row.tscn 本身的內容（縮圖＋名稱）要調外觀去改那份場景，不要在
+## 這裡再寫一套組節點的程式碼
 func _row(character: Character) -> Control:
 	var row: Button = ROW_SCENE.instantiate()
 	var thumb: TextureRect = row.get_node("MarginContainer/HBoxContainer/Thumb")
 	thumb.texture = _thumbnail(character)
 	var name_label: Label = row.get_node("MarginContainer/HBoxContainer/Label")
 	name_label.text = character.character_name
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.pressed.connect(_on_row_pressed.bind(character))
-	return row
+
+	# 收回（issue #974）：目前化身角色與已死亡角色不能收回
+	# （GameManager.recall_from_library() 本來就會拒絕，這裡先 disable 讓玩家
+	# 一眼看出來，不用點了才發現失敗）
+	var recall_button := Button.new()
+	recall_button.text = "UI_CS_BTN_RECALL"
+	recall_button.focus_mode = Control.FOCUS_NONE
+	recall_button.disabled = character.is_dead or character.character_id == GameManager.embodied_character_id
+	recall_button.pressed.connect(_on_recall_pressed.bind(character))
+
+	var wrapper := HBoxContainer.new()
+	wrapper.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	wrapper.add_child(row)
+	wrapper.add_child(recall_button)
+	return wrapper
 
 
 ## 點列表裡的角色，鏡頭跟著他——走 Selection（world/selection.gd）同一套
@@ -117,6 +137,16 @@ func _on_row_pressed(character: Character) -> void:
 		push_error("CharacterSidebar: 找不到 Selection")
 		return
 	selection.select(character)
+
+
+## 收回（issue #974）：GameManager.recall_from_library() 把肉體 queue_free()、
+## 角色庫紀錄的 deployed 改回 false。成功後這個角色就從「在場角色」清單消失，
+## 靠 _refresh() 重新掃 characters 分組反映，不用自己從 _list 裡挑一列刪
+func _on_recall_pressed(character: Character) -> void:
+	if not is_instance_valid(character):
+		return
+	GameManager.recall_from_library(character.character_id)
+	_refresh()
 
 
 func _thumbnail(character: Character) -> Texture2D:

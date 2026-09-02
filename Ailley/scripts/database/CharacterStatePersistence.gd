@@ -194,8 +194,6 @@ func _sync_all_characters_periodic() -> void:
 	if characters.is_empty():
 		return
 
-	var success_count := 0
-
 	for node in characters:
 
 		var character := node as Character
@@ -203,16 +201,7 @@ func _sync_all_characters_periodic() -> void:
 		if character == null:
 			continue
 
-		if _save_character_state_only(character):
-			success_count += 1
-
-	print(
-		"[CharacterStatePersistence] 定期同步完成（僅 state/wallet）：%d / %d"
-		% [
-			success_count,
-			characters.size()
-		]
-	)
+		_save_character_state_only(character)
 
 
 func _save_character_state_only(
@@ -353,15 +342,7 @@ func _save_character_state_only(
 			state_data
 		)
 
-		if state_ok:
-
-			_log_state(
-				"INSERT",
-				character,
-				state_data
-			)
-
-		else:
+		if not state_ok:
 
 			push_error(
 				"[CharacterStatePersistence] "
@@ -381,15 +362,7 @@ func _save_character_state_only(
 			% DatabaseManager.escape_sql_string(character_id)
 		)
 
-		if state_ok:
-
-			_log_state(
-				"UPDATE",
-				character,
-				state_data
-			)
-
-		else:
+		if not state_ok:
 
 			push_error(
 				"[CharacterStatePersistence] "
@@ -412,13 +385,6 @@ func _save_character_state_only(
 		return false
 
 
-	print(
-		"[CharacterStatePersistence] "
-		+ "%s STATE = PASS"
-		% character_id
-	)
-
-
 	# -------------------------------------------------
 	# Wallet
 	# -------------------------------------------------
@@ -427,15 +393,7 @@ func _save_character_state_only(
 		character
 	)
 
-	if wallet_ok:
-
-		print(
-			"[CharacterStatePersistence] "
-			+ "%s WALLET = PASS"
-			% character_id
-		)
-
-	else:
+	if not wallet_ok:
 
 		push_error(
 			"[CharacterStatePersistence] "
@@ -606,15 +564,7 @@ func _save_character(
 			state_data
 		)
 
-		if state_ok:
-
-			_log_state(
-				"INSERT",
-				character,
-				state_data
-			)
-
-		else:
+		if not state_ok:
 
 			push_error(
 				"[CharacterStatePersistence] "
@@ -634,15 +584,7 @@ func _save_character(
 			% DatabaseManager.escape_sql_string(character_id)
 		)
 
-		if state_ok:
-
-			_log_state(
-				"UPDATE",
-				character,
-				state_data
-			)
-
-		else:
+		if not state_ok:
 
 			push_error(
 				"[CharacterStatePersistence] "
@@ -2810,57 +2752,6 @@ func _set_home_cursor(value: int) -> void:
 			{"next_index": value},
 			"id = 1"
 		)
-
-
-# =====================================================
-# Log
-# =====================================================
-
-func _log_state(
-	operation: String,
-	character: Character,
-	state_data: Dictionary
-) -> void:
-
-	var message := (
-		"[CharacterStatePersistence] %s %s | "
-		+ "satiety=%.1f hydration=%.1f stamina=%.1f "
-		+ "wakefulness=%.1f hygiene=%.1f alcohol=%.1f "
-		+ "health=%.1f injury=%.1f"
-	)
-
-
-	print(
-		message
-		% [
-			operation,
-			character.character_name,
-			float(
-				state_data["satiety"]
-			),
-			float(
-				state_data["hydration"]
-			),
-			float(
-				state_data["stamina"]
-			),
-			float(
-				state_data["wakefulness"]
-			),
-			float(
-				state_data["hygiene"]
-			),
-			float(
-				state_data["alcohol"]
-			),
-			float(
-				state_data["health"]
-			),
-			float(
-				state_data["injury"]
-			)
-		]
-	)
 
 
 # =====================================================
