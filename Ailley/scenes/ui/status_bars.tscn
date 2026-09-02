@@ -1,0 +1,131 @@
+[gd_scene load_steps=7 format=3 uid="uid://cmi20plptktnc"]
+
+[ext_resource type="Script" path="res://scripts/ui/status_bars.gd" id="1_2opd5"]
+[ext_resource type="Texture2D" uid="uid://cfisgoin75p8o" path="res://assets/icons/icons.png" id="1_r5koo"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_2opd5"]
+atlas = ExtResource("1_r5koo")
+region = Rect2(0, 0, 16, 16)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_aowdi"]
+atlas = ExtResource("1_r5koo")
+region = Rect2(0, 48, 16, 16)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_wui5h"]
+atlas = ExtResource("1_r5koo")
+region = Rect2(0, 64, 16, 16)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_nwahu"]
+atlas = ExtResource("1_r5koo")
+region = Rect2(0, 80, 16, 16)
+
+[node name="StatusBars" type="MarginContainer"]
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 8
+script = ExtResource("1_2opd5")
+
+[node name="StatusBars" type="VBoxContainer" parent="."]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="生命值" type="HBoxContainer" parent="StatusBars"]
+layout_mode = 2
+
+[node name="PanelContainer" type="PanelContainer" parent="StatusBars/生命值"]
+layout_mode = 2
+theme_type_variation = &"PanelContainer_B"
+
+[node name="TextureRect" type="TextureRect" parent="StatusBars/生命值/PanelContainer"]
+custom_minimum_size = Vector2(8, 8)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+theme_type_variation = &"ProgressBar_simple"
+texture = SubResource("AtlasTexture_2opd5")
+expand_mode = 1
+
+[node name="ProgressBar" type="ProgressBar" parent="StatusBars/生命值"]
+custom_minimum_size = Vector2(0, 6)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+theme_type_variation = &"ProgressBar_simple"
+value = 14.12
+show_percentage = false
+
+[node name="飽食度" type="HBoxContainer" parent="StatusBars"]
+layout_mode = 2
+
+[node name="PanelContainer" type="PanelContainer" parent="StatusBars/飽食度"]
+layout_mode = 2
+theme_type_variation = &"PanelContainer_B"
+
+[node name="TextureRect" type="TextureRect" parent="StatusBars/飽食度/PanelContainer"]
+custom_minimum_size = Vector2(8, 8)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+theme_type_variation = &"ProgressBar_simple"
+texture = SubResource("AtlasTexture_aowdi")
+expand_mode = 1
+
+[node name="ProgressBar" type="ProgressBar" parent="StatusBars/飽食度"]
+custom_minimum_size = Vector2(0, 6)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+theme_type_variation = &"ProgressBar_simple"
+value = 14.12
+show_percentage = false
+
+[node name="水分值" type="HBoxContainer" parent="StatusBars"]
+layout_mode = 2
+
+[node name="PanelContainer" type="PanelContainer" parent="StatusBars/水分值"]
+layout_mode = 2
+theme_type_variation = &"PanelContainer_B"
+
+[node name="TextureRect" type="TextureRect" parent="StatusBars/水分值/PanelContainer"]
+custom_minimum_size = Vector2(8, 8)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+theme_type_variation = &"ProgressBar_simple"
+texture = SubResource("AtlasTexture_wui5h")
+expand_mode = 1
+
+[node name="ProgressBar" type="ProgressBar" parent="StatusBars/水分值"]
+custom_minimum_size = Vector2(0, 6)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+theme_type_variation = &"ProgressBar_simple"
+value = 14.12
+show_percentage = false
+
+[node name="體力" type="HBoxContainer" parent="StatusBars"]
+layout_mode = 2
+
+[node name="PanelContainer" type="PanelContainer" parent="StatusBars/體力"]
+layout_mode = 2
+theme_type_variation = &"PanelContainer_B"
+
+[node name="TextureRect" type="TextureRect" parent="StatusBars/體力/PanelContainer"]
+custom_minimum_size = Vector2(8, 8)
+layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
+theme_type_variation = &"ProgressBar_simple"
+texture = SubResource("AtlasTexture_nwahu")
+expand_mode = 1
+
+[node name="ProgressBar" type="ProgressBar" parent="StatusBars/體力"]
+custom_minimum_size = Vector2(0, 6)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+theme_type_variation = &"ProgressBar_simple"
+value = 14.12
+show_percentage = false

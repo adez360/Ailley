@@ -95,3 +95,5 @@ func _buy(item_id: String) -> void:
 	var reason := _buyer.buy_from(_place, item_id)
 	if reason != Character.BUY_OK:
 		_buyer.report_action_failure("buy_from", reason)
+		
+		
