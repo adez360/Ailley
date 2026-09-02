@@ -23,7 +23,7 @@ var _character: Character
 
 
 func _process(_delta: float) -> void:
-	if not is_visible_in_tree() or not is_instance_valid(_character):
+	if not is_visible_in_tree() or not is_instance_valid(_character) or _character.stats == null:
 		return
 	_health.value = _character.stats.get_value("health")
 	_satiety.value = _character.stats.get_value("satiety")
