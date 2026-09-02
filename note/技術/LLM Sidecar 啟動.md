@@ -161,20 +161,23 @@ res://sidecar/models/<model 檔名>                檔名取 provider.model，�
 `AIConfig.update_provider_model()` 把 `local` provider 的 `model` 欄位改成
 實際抓到的檔名 → 呼叫 `LlamaSidecar.retry_launch()`，不用重開遊戲就能接上。
 
-失敗（網路錯誤、磁碟空間不足、解壓失敗、檔案大小對不上）走 `finished(false,
-reason)` 訊號，重試上限比照 `AIService.RETRY_LIMIT` 的既有慣例。磁碟空間
+失敗（網路錯誤、下載停滯超過 30 秒、磁碟空間不足、解壓失敗、檔案大小
+對不上）走 `finished(false, reason)` 訊號，重試上限比照
+`AIService.RETRY_LIMIT` 的既有慣例。磁碟空間
 檢查目前是「試寫一個小檔案」這種保守判斷，不是精確查詢剩餘容量——Godot
 沒有跨平台的容量查詢原生 API，精確查詢留給之後真的需要再做。
 
-## 尚未驗證
+## 驗證與 UI 入口現況
 
-上面「首次啟動主動下載」這段是 2026-09-02 寫的，還沒有實機跑過一次真的
-下載（`HTTPRequest` 串流寫檔、`ZIPReader` 解壓、寫回 `ai_config.json`
-這條完整鏈路）——目前只做過語法檢查（`--check-only`），沒有連進真的
-Godot editor session 驗證過執行期行為。UI 觸發入口（建角面板旁的下載
-按鈕、主選單/設定畫面的入口）也還沒做，需要連進這個 worktree 專屬的
-Godot editor 才能用 `godot-ai` MCP 建立場景，見《技術/平行 Worktree 與
-Godot MCP》。
+實機下載驗證由實測人員執行，結果補記於 PR #990——涵蓋 `HTTPRequest` 串流
+寫檔、`ZIPReader` 解壓、寫回 `ai_config.json`、`retry_launch()` 不重開遊戲
+接上本機 AI 這條完整鏈路。
+
+UI 觸發入口：建角面板的下載按鈕（`character_create.gd`，顯示條件看
+`LlamaSidecar.status`）與下載進度畫面（`model_download_overlay.gd`，純
+程式建樹不掛 `.tscn`）已實作。主選單／設定畫面的入口與 macOS／Linux 的
+手動安裝引導 UI 未做，需要連進這個 worktree 專屬的 Godot editor 才能用
+`godot-ai` MCP 建立場景，見《技術/平行 Worktree 與 Godot MCP》。
 
 ## 相關
 

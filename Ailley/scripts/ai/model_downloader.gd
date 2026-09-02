@@ -63,6 +63,10 @@ static func _compute_model_url() -> String:
 # 的既有慣例，不是新發明一套數字
 const RETRY_LIMIT := 1
 
+# 主下載請求沒有設 timeout——位元組數連續這麼久沒有進展就視同失敗，
+# 由 _process() 的停滯偵測判定
+const STALL_TIMEOUT_SEC := 30.0
+
 
 var _http: HTTPRequest
 var _cancelled := false
@@ -71,6 +75,9 @@ var _cancelled := false
 var _progress_stage: Stage = Stage.CHECKING_SPACE
 var _expected_size := 0
 var _download_dest := ""
+# 進度停滯偵測（_process()）用的狀態：上一次看到的位元組數與停滯累計秒數
+var _stall_elapsed := 0.0
+var _last_bytes := -1
 
 
 static func is_platform_supported() -> bool:
@@ -112,27 +119,43 @@ func start() -> void:
 
 func cancel() -> void:
 	_cancelled = true
+	# 取消就是結束：不管當下在下載什麼（甚至還沒開始），統一在這裡發
+	# finished，呼叫端收到就能把 UI 收掉，不用另外監聽別的狀態
+	_abort_request("已取消下載")
+
+
+## 釋放當下這顆 _http、刪掉寫到一半的檔案，並發 finished(false, reason)。
+## cancel() 與 _process() 的進度停滯判定共用同一套收尾：cancel_request()
+## 之後 request_completed 不保證會發，_download_to_file 裡的 await 不能
+## 指望自己醒來善後——直接釋放節點，協程留在掛起狀態（跟既有 cancel
+## 行為同一套）
+func _abort_request(reason: String) -> void:
 	if _http != null and is_instance_valid(_http):
 		_http.cancel_request()
-		# cancel_request() 之後 request_completed 不保證會發，不能指望
-		# _download_to_file 裡的 await 自己醒來善後——這裡直接釋放節點、
-		# 刪掉寫到一半的檔案
 		_http.queue_free()
 		_http = null
 		if not _download_dest.is_empty():
 			DirAccess.remove_absolute(_download_dest)
-	# 取消就是結束：不管當下在下載什麼（甚至還沒開始），統一在這裡發
-	# finished，呼叫端收到就能把 UI 收掉，不用另外監聽別的狀態
-	finished.emit(false, "已取消下載")
+	finished.emit(false, reason)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	# 進度輪詢放在這裡而不是下載協程裡：request() 之後主流程就停在
 	# await request_completed 上；狀態輪詢迴圈會在 DISCONNECTED 時跳出、
 	# 之後才 await 訊號，跟訊號發送時序相衝。_process 每幀照常跑，_http
-	# 還活著就回報當下位元組數
+	# 還活著就回報當下位元組數，順便做停滯偵測——主下載請求沒有設
+	# timeout，位元組數持續沒進展就視同失敗，收尾走 _abort_request()
+	# （懸掛的 await 跟 cancel() 一樣留著不醒）
 	if _http != null:
-		progress_updated.emit(_progress_stage, _http.get_downloaded_bytes(), _expected_size)
+		var bytes := _http.get_downloaded_bytes()
+		progress_updated.emit(_progress_stage, bytes, _expected_size)
+		if bytes != _last_bytes:
+			_last_bytes = bytes
+			_stall_elapsed = 0.0
+		else:
+			_stall_elapsed += delta
+			if _stall_elapsed >= STALL_TIMEOUT_SEC:
+				_abort_request("下載停滯（超過 %d 秒沒有任何進展）" % int(STALL_TIMEOUT_SEC))
 
 
 func _has_enough_free_space() -> bool:
@@ -148,10 +171,12 @@ func _has_enough_free_space() -> bool:
 	var probe := FileAccess.open(probe_path, FileAccess.WRITE)
 	if probe == null:
 		return false
-	probe.store_string("probe")
+	# store_string() 回 false 一樣是寫不進去（磁碟滿等），跟 open 失敗
+	# 同樣視為空間不足，不能默默吞掉
+	var write_ok := probe.store_string("probe")
 	probe.close()
 	DirAccess.remove_absolute(probe_path)
-	return true
+	return write_ok == OK
 
 
 ## 依序：查 Content-Length → 下載 zip → 解壓到 sidecar/<platform>/ → 刪暫存 zip。
@@ -218,11 +243,19 @@ func _download_to_file(url: String, dest_path: String, stage: Stage) -> bool:
 	_download_dest = dest_path
 	var expected_size := await _fetch_content_length(url)
 	_expected_size = expected_size
+	# cancel() 若在 HEAD 進行中打到，這個協程仍會被 HEAD 完成喚醒——
+	# 醒來後不要再開主下載，直接比照取消路徑返回（_http 還沒建立、暫存
+	# 檔還不存在，沒有東西要清；finished 由 cancel() 統一發）
+	if _cancelled:
+		return false
 
 	_http = HTTPRequest.new()
 	_http.use_threads = true
 	_http.download_file = dest_path
 	add_child(_http)
+	# 每次請求重置停滯計時，不留上一次嘗試的殘值
+	_last_bytes = -1
+	_stall_elapsed = 0.0
 
 	var err := _http.request(url)
 	if err != OK:
@@ -244,7 +277,15 @@ func _download_to_file(url: String, dest_path: String, stage: Stage) -> bool:
 		return false
 
 	if expected_size > 0:
-		var actual_size := FileAccess.get_file_as_bytes(dest_path).size()
+		# 只取長度不讀內容——get_file_as_bytes() 會把整份幾 GB 的模型
+		# 讀進記憶體，數個大小不需要這樣
+		var downloaded := FileAccess.open(dest_path, FileAccess.READ)
+		if downloaded == null:
+			# 檔案開不出來就無從確認下載完整，比照大小對不上處理
+			DirAccess.remove_absolute(dest_path)
+			return false
+		var actual_size := downloaded.get_length()
+		downloaded.close()
 		if actual_size != expected_size:
 			DirAccess.remove_absolute(dest_path)
 			return false
