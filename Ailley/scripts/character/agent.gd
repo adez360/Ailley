@@ -49,10 +49,10 @@ var _words_to_creator_spoken := false
 ## 判定是否要說出口的 AI 呼叫進行中（見 maybe_speak_to_creator() 的鎖）
 var _words_to_creator_pending := false
 
-## #381：墓碑四內容欄位其中兩個（《規格書 09》§4-2）。life_highlights 由引擎彙整
-## L4 核心記憶產出，絕不讓 LLM 潤飾——彙整函式 `Memory.get_life_highlights()`
-## 已實作（#384），但死亡流程（`Character._die()`）還沒有任何呼叫端把結果寫進
-## 這個欄位，見 [[記憶與睡眠反思]]「墓碑欄位 life_highlights」。
+## #381：墓碑內容欄位（《規格書 09》§4-2）。life_highlights 由引擎彙整
+## L4 核心記憶產出，絕不讓 LLM 潤飾——彙整函式 `Memory.get_life_highlights()`（#384）
+## 由死亡流程 `Character._die()` → 下面覆寫的 `_capture_life_highlights()`（#953）
+## 在死亡當下寫入，見 [[記憶與睡眠反思]]「墓碑欄位 life_highlights」。
 ## words_to_creator 是墓碑第三個欄位，已存在於上面（#164），不重複宣告。
 ## last_words（第二個欄位）改由 Character 基底宣告（#379，死亡狀態機落地時
 ## 才發現這裡本來就先開了欄位形狀——Godot 4.5 不允許子類別重新宣告父類別
@@ -1481,6 +1481,15 @@ func _request_last_words(cause: String) -> void:
 	if not result["ok"]:
 		return
 	last_words = result["data"]["last_words"]
+
+## 墓碑生平彙整（#384／#953，《規格書09》§4-2）。覆寫 Character 的 no-op 掛點——
+## _die() 死亡當下同步呼叫，把 L4 核心記憶彙整成 life_highlights 定格進墓碑。
+## get_life_highlights() 純資料格式化、不打 LLM，不需要 await 也不需要世代守衛。
+## #384 只做了彙整函式，這裡是把它接上死亡流程的呼叫端
+func _capture_life_highlights() -> void:
+	if memory == null:
+		return
+	life_highlights = memory.get_life_highlights()
 
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
 ## AIService、parse_completion、validate_*，任何一關失敗都靜默放棄，任務池
