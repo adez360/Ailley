@@ -572,7 +572,7 @@ func activate_llm_decision_if_ready(character: Character) -> void:
 	if not is_instance_valid(agent):
 		return
 	var provider_name := agent.get_provider_name()
-	var readiness := AIService.get_readiness(provider_name)
+	var readiness := agent.get_provider_readiness()	# #156：真人來源永遠 ready，不吃網路探測
 
 	# 第一次判定沒 ready 時不直接放棄——那份快照可能是更早一批探測留下的
 	# 過期結果（例如開機那次探測剛好撞到暫時性網路問題，之後連線其實已經
@@ -593,7 +593,7 @@ func activate_llm_decision_if_ready(character: Character) -> void:
 		await AIService.reload_config_and_wait()
 		if not is_instance_valid(agent):
 			return
-		readiness = AIService.get_readiness(provider_name)
+		readiness = agent.get_provider_readiness()
 		if not readiness.get("ready", false):
 			push_warning("GameManager: %s 的 provider「%s」未就緒，llm_decision_enabled 沒有打開（%s）" % [
 				character.character_name, provider_name, readiness.get("reason", "")
@@ -635,7 +635,7 @@ func recheck_ai_readiness() -> Dictionary:
 	for agent in not_ready_agents:
 		if not is_instance_valid(agent):
 			continue
-		var readiness := AIService.get_readiness(agent.get_provider_name())
+		var readiness := agent.get_provider_readiness()
 		if bool(readiness.get("ready", false)):
 			agent.debug_set_llm_decision(true)
 			recovered += 1
