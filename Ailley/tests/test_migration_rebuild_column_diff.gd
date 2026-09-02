@@ -64,7 +64,7 @@ func suite_name() -> String:
 func suite_setup(_ctx: Dictionary) -> void:
 	_scratch_db_path = "user://%s_%s.db" % [
 		SCRATCH_DB_NAME,
-		ProjectSettings.globalize_path("res://").sha256_text()
+		CheckoutIsolation.compute_hash()
 	]
 
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(_scratch_db_path))

@@ -57,7 +57,7 @@ func suite_setup(_ctx: Dictionary) -> void:
 
 	_scratch_db_path = "user://%s_%s.db" % [
 		SCRATCH_DB_NAME,
-		ProjectSettings.globalize_path("res://").sha256_text()
+		CheckoutIsolation.compute_hash()
 	]
 
 	_dbm = script.new()
