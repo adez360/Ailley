@@ -152,6 +152,11 @@ static func _migrate_v2_backfill_decay(db) -> bool:
 ##
 ## 不在這段 transaction 內切換 PRAGMA foreign_keys——SQLite 交易中途不接受
 ## 切換，而且這裡的重建順序（子表先於父表 DROP）本來就不需要暫時關 FK。
+##
+## 這裡每張表都只補 NOT NULL、欄位集合本身不變，全部沿用
+## _migrate_rebuild_single_table()／_migrate_rebuild_table_group() 的預設
+## expected_added／expected_removed（空陣列＝預期形狀完全不變），不需要
+## 額外宣告。
 static func _migrate_v3_notnull_primary_keys(db) -> bool:
 	var single_table_schemas := [
 		{"table": "npc_appearance", "schema": NPCAppearanceSchema},
@@ -205,15 +210,26 @@ static func _migrate_rebuild_drop_stale_indexes(db, old_table_name: String) -> b
 	return true
 
 
-## INSERT INTO x SELECT * FROM x_old 按欄位順序（不是名稱）複製。這個
-## migration 只保證修好「既有資料庫僅缺 NOT NULL、其餘欄位定義跟現在
-## 的 *Schema.gd 一致」這種情形——如果暫存表的欄位數剛好跟新表一樣，
-## 但順序或語意不同（例如更早期的 schema 版本），SELECT * 會靜默把
-## 資料複製到錯的欄位，不會報錯。INSERT 之前比對兩邊 PRAGMA table_info
-## 的欄位名稱與順序，兜不起來就直接中止（呼叫端 ROLLBACK），不嘗試猜
-## 欄位怎麼對應——這種既有資料庫已經超出這個 migration 的範圍，需要另外
-## 判斷怎麼處理。版本無關的共用工具，理由同上——migration 3 與 6 共用。
-static func _migrate_rebuild_verify_column_shape(db, old_name: String, new_name: String) -> bool:
+## INSERT 改成明確指名共同欄位（見 _migrate_rebuild_common_columns()），
+## 不再靠 SELECT * 位置對應，所以這裡不需要、也不再要求兩邊欄位順序一致——
+## 只比對欄位「名字的集合」有沒有差異。
+##
+## expected_added／expected_removed（issue #962）讓呼叫端明確宣告這次
+## migration「預期」會讓新表多出哪些欄位（new 有、old 沒有）、少掉哪些欄位
+## （old 有、new 沒有）。兩者都留空（預設）等於宣告「這次重建預期形狀完全
+## 不變」，還原成 #962 之前「一有差異就拒絕」的行為——migration 3／7 這類
+## 純補 NOT NULL、欄位集合本來就不變的呼叫端沿用預設即可。
+##
+## 只在**實際差異超出宣告範圍**時才拒絕：真的多／少了沒宣告過的欄位，代表
+## 這個既有資料庫已經超出這次 migration 打算處理的範圍，不嘗試猜欄位怎麼
+## 對應，交給呼叫端 ROLLBACK。宣告了但實際沒發生的差異不算異常（例如
+## expected_added 寫了兩個欄位、舊資料庫剛好已經有其中一個）——多宣告是
+## 安全的，只有「沒宣告到的差異」才代表真正意外。版本無關的共用工具，
+## migration 3／7／9 共用。
+static func _migrate_rebuild_verify_column_shape(
+	db, old_name: String, new_name: String,
+	expected_added: Array = [], expected_removed: Array = []
+) -> bool:
 	if not db.query("PRAGMA table_info(%s);" % old_name):
 		push_error(
 			"[DatabaseSchema] Table rebuild: Failed to read columns of %s: %s"
@@ -236,18 +252,80 @@ static func _migrate_rebuild_verify_column_shape(db, old_name: String, new_name:
 		func(row): return row.get("name", "")
 	)
 
-	if old_columns == new_columns:
+	var old_set := {}
+	for column_name in old_columns:
+		old_set[column_name] = true
+
+	var new_set := {}
+	for column_name in new_columns:
+		new_set[column_name] = true
+
+	# 實際差異：new 有 old 沒有＝實際新增；old 有 new 沒有＝實際刪除。
+	var actual_added: Array = new_columns.filter(
+		func(c): return not old_set.has(c)
+	)
+	var actual_removed: Array = old_columns.filter(
+		func(c): return not new_set.has(c)
+	)
+
+	var expected_added_set := {}
+	for column_name in expected_added:
+		expected_added_set[column_name] = true
+
+	var expected_removed_set := {}
+	for column_name in expected_removed:
+		expected_removed_set[column_name] = true
+
+	var unexpected_added: Array = actual_added.filter(
+		func(c): return not expected_added_set.has(c)
+	)
+	var unexpected_removed: Array = actual_removed.filter(
+		func(c): return not expected_removed_set.has(c)
+	)
+
+	if unexpected_added.is_empty() and unexpected_removed.is_empty():
 		return true
 
 	push_error(
 		(
-			"[DatabaseSchema] Table rebuild: %s column shape doesn't match current "
-			+ "schema (old=%s, new=%s) — refusing to copy data positionally with "
-			+ "SELECT *. This existing database predates a schema change beyond "
-			+ "the NOT NULL primary key fix this migration handles."
-		) % [old_name, old_columns, new_columns]
+			"[DatabaseSchema] Table rebuild: %s column shape doesn't match this "
+			+ "migration's declared diff (old=%s, new=%s, unexpected added=%s, "
+			+ "unexpected removed=%s) — refusing to guess how columns map. This "
+			+ "existing database predates a schema change beyond what this "
+			+ "migration declared it would handle."
+		) % [old_name, old_columns, new_columns, unexpected_added, unexpected_removed]
 	)
 	return false
+
+
+## 算出暫存表跟新表都有的欄位（依新表的欄位順序），供呼叫端組出明確指名
+## 欄位的 `INSERT INTO x (共同欄位...) SELECT 共同欄位... FROM x_old`——
+## 只在 old 有、new 也有的欄位之間搬資料，new 獨有的欄位（expected_added
+## 宣告過的新增欄位）不出現在 INSERT 的欄位清單裡，SQLite 用該欄位在
+## CREATE TABLE 裡定義的 DEFAULT（沒有 DEFAULT 則是 NULL）自動補上；old
+## 獨有的欄位（expected_removed 宣告過的刪除欄位）資料自然遺失，這是
+## 預期行為。只在 _migrate_rebuild_verify_column_shape() 通過之後呼叫，
+## 這裡不重複做欄位差異是否符合預期的檢查。
+static func _migrate_rebuild_common_columns(db, old_name: String, new_name: String) -> Array:
+	if not db.query("PRAGMA table_info(%s);" % old_name):
+		return []
+
+	var old_columns: Array = (db.query_result as Array).map(
+		func(row): return row.get("name", "")
+	)
+
+	var old_set := {}
+	for column_name in old_columns:
+		old_set[column_name] = true
+
+	if not db.query("PRAGMA table_info(%s);" % new_name):
+		return []
+
+	var new_columns: Array = (db.query_result as Array).map(
+		func(row): return row.get("name", "")
+	)
+
+	return new_columns.filter(func(c): return old_set.has(c))
 
 
 ## 查一張既有表目前是否帶某個欄位。給 migration 9 的 npc_relations entry
@@ -377,8 +455,13 @@ static func _migrate_rebuild_handle_null_primary_keys(
 ##
 ## repair_null_pk 見 _migrate_rebuild_handle_null_primary_keys() 的說明——
 ## 只有主鍵是這張表自己獨立身分（不是外鍵）時才傳 true。
+##
+## expected_added／expected_removed（issue #962）見
+## _migrate_rebuild_verify_column_shape() 的說明——留空等於宣告這次重建
+## 預期欄位形狀完全不變。
 static func _migrate_rebuild_single_table(
-	db, table_name: String, schema, repair_null_pk: bool = false
+	db, table_name: String, schema, repair_null_pk: bool = false,
+	expected_added: Array = [], expected_removed: Array = []
 ) -> bool:
 	var old_name := table_name + "__migrate_rebuild_old"
 
@@ -399,13 +482,29 @@ static func _migrate_rebuild_single_table(
 		)
 		return false
 
-	if not _migrate_rebuild_verify_column_shape(db, old_name, table_name):
+	if not _migrate_rebuild_verify_column_shape(
+		db, old_name, table_name, expected_added, expected_removed
+	):
 		return false
 
 	if not _migrate_rebuild_handle_null_primary_keys(db, old_name, table_name, repair_null_pk):
 		return false
 
-	if not db.query("INSERT INTO %s SELECT * FROM %s;" % [table_name, old_name]):
+	var columns := _migrate_rebuild_common_columns(db, old_name, table_name)
+
+	if columns.is_empty():
+		push_error(
+			"[DatabaseSchema] Table rebuild: %s has no columns in common with %s — nothing to copy."
+			% [table_name, old_name]
+		)
+		return false
+
+	var column_list := ", ".join(columns)
+
+	if not db.query(
+		"INSERT INTO %s (%s) SELECT %s FROM %s;"
+		% [table_name, column_list, column_list, old_name]
+	):
 		push_error(
 			"[DatabaseSchema] Table rebuild: Failed to copy data into %s: %s"
 			% [table_name, db.error_message]
@@ -438,6 +537,10 @@ static func _migrate_rebuild_single_table(
 ##
 ## entry 可選帶 "repair_null_pk"（預設 false），見
 ## _migrate_rebuild_handle_null_primary_keys() 的說明。
+##
+## entry 也可選帶 "expected_added"／"expected_removed"（issue #962，預設空
+## 陣列＝預期形狀完全不變），見 _migrate_rebuild_verify_column_shape() 的
+## 說明。
 ##
 ## entry 也可選帶 "create_fn"（Callable(db)->bool，預設用 entry["schema"].create）：
 ## 讓某張表用「這個 migration 當時的舊形狀」重建，而不是「現在的 *Schema.gd」——
@@ -479,7 +582,10 @@ static func _migrate_rebuild_table_group(db, entries: Array) -> bool:
 		var table_name: String = entry["table"]
 		var old_name: String = old_names[table_name]
 
-		if not _migrate_rebuild_verify_column_shape(db, old_name, table_name):
+		if not _migrate_rebuild_verify_column_shape(
+			db, old_name, table_name,
+			entry.get("expected_added", []), entry.get("expected_removed", [])
+		):
 			return false
 
 		if not _migrate_rebuild_handle_null_primary_keys(
@@ -487,7 +593,21 @@ static func _migrate_rebuild_table_group(db, entries: Array) -> bool:
 		):
 			return false
 
-		if not db.query("INSERT INTO %s SELECT * FROM %s;" % [table_name, old_name]):
+		var columns := _migrate_rebuild_common_columns(db, old_name, table_name)
+
+		if columns.is_empty():
+			push_error(
+				"[DatabaseSchema] Table rebuild: %s has no columns in common with %s — nothing to copy."
+				% [table_name, old_name]
+			)
+			return false
+
+		var column_list := ", ".join(columns)
+
+		if not db.query(
+			"INSERT INTO %s (%s) SELECT %s FROM %s;"
+			% [table_name, column_list, column_list, old_name]
+		):
 			push_error(
 				"[DatabaseSchema] Table rebuild: Failed to copy data into %s: %s"
 				% [table_name, db.error_message]
@@ -719,6 +839,10 @@ class _WorldCharacterStateSchemaV7RebuildShape:
 		return true
 
 
+## 這裡每張表也只補 NOT NULL、欄位集合本身不變（world_character_state 用
+## 凍結的 v7 形狀是因為 following_npc_id 還沒加，不是這個 migration 自己
+## 要新增／刪除欄位），全部沿用 expected_added／expected_removed 的預設值
+## （空陣列），理由同 migration 3。
 static func _migrate_v7_notnull_primary_keys(db) -> bool:
 	var single_table_schemas := [
 		{"table": "npc_state", "schema": NPCStateSchema},
@@ -1004,6 +1128,14 @@ static func _migrate_v8_add_following_npc_id(db) -> bool:
 ## npc_relations 有沒有 relations_trust 欄位動態判斷該用哪個 create：有 → 用凍結的 _migrate_v8_create_npc_relations_with_trust()
 ## 原樣重建、留給 migration 10 拿掉；沒有（新資料庫從沒真的存過這欄，或已經是
 ## #601 之後的形狀）→ 用現行 NPCRelationsSchema，跟其餘表的預設行為一致。
+## 這裡刻意不改用 expected_removed 宣告——npc_relations 走到這個 migration 時
+## relations_met_count（migration 11）也還不存在，要一次宣告「新舊各多出
+## 一個沒被對方涵蓋的欄位」，不如凍結形狀交給 migration 10／11 各自處理單一
+## 差異來得直接，跟 location 的單純新增案例（見下面 location_entry）不同。
+##
+## location 的 entry 見下面 location_entry：issue #962 之前這裡也得凍結一份
+## 沒有 pos_x／pos_y 的舊形狀，現在直接對現行 LocationSchema 宣告
+## expected_added 即可，不需要再維護一份凍結函式。
 static func _migrate_v9_notnull_primary_keys(db) -> bool:
 	var npc_relations_entry := {"table": "npc_relations", "schema": NPCRelationsSchema}
 	if _migrate_table_has_column(db, "npc_relations", "relations_trust"):
@@ -1011,19 +1143,22 @@ static func _migrate_v9_notnull_primary_keys(db) -> bool:
 			DatabaseSchema, "_migrate_v8_create_npc_relations_with_trust"
 		)
 
-	# issue #751 之後現行的 LocationSchema 多了 pos_x／pos_y；會跑到
-	# migration 9 的舊資料庫（user_version<=8）還沒有這兩欄（v12 的
-	# ALTER TABLE ADD COLUMN 才會補），照樣用現行 schema 重建會在
-	# _migrate_rebuild_verify_column_shape() 新舊欄位數對不上、驗證判定
-	# 失敗、整個 initialize() 中止（同上面 migration 7 的
-	# world_character_state 事故）。舊表還沒有 pos_x 時改用凍結形狀重建，
-	# 這兩欄唯一由 migration 12 補上（它的 ALTER TABLE 已查 PRAGMA
-	# table_info 擋重複欄位）
-	var location_entry := {"table": "location", "schema": LocationSchema, "repair_null_pk": true}
-	if not _migrate_table_has_column(db, "location", "pos_x"):
-		location_entry["create_fn"] = Callable(
-			DatabaseSchema, "_migrate_v9_create_location_without_pos"
-		)
+	# issue #751 之後現行的 LocationSchema 多了 pos_x／pos_y；會跑到 migration 9
+	# 的舊資料庫（user_version<=8）還沒有這兩欄（v12 的 ALTER TABLE ADD COLUMN
+	# 才會補）。issue #962 之前這裡得凍結一份沒有 pos 欄位的舊形狀重建，避免
+	# _migrate_rebuild_verify_column_shape() 因為新舊欄位集合對不上而中止——
+	# 現在直接對現行 LocationSchema 宣告 expected_added，讓驗證邏輯知道「new
+	# 多出 pos_x／pos_y」是這次重建預期內的差異，不需要另外維護一份凍結形狀。
+	# 兩欄本來就允許 NULL（LocationSchema.gd 沒有 DEFAULT／NOT NULL），舊資料
+	# 列補進來的欄位不在 INSERT 的明確欄位清單裡，會被 SQLite 填成 NULL——
+	# 跟 migration 12 的 ALTER TABLE ADD COLUMN（同樣沒有 DEFAULT）結果一致，
+	# migration 12 之後看到欄位已存在會直接 no-op。
+	var location_entry := {
+		"table": "location",
+		"schema": LocationSchema,
+		"repair_null_pk": true,
+		"expected_added": ["pos_x", "pos_y"]
+	}
 
 	return _migrate_rebuild_table_group(db, [
 		location_entry,
@@ -1055,47 +1190,6 @@ static func _migrate_v9_notnull_primary_keys(db) -> bool:
 		{"table": "npc_wallet", "schema": NPCWalletSchema},
 		{"table": "world_character_state", "schema": WorldCharacterStateSchema}
 	])
-
-
-## Migration 9 當年重建 location 時的表結構凍結版（CodeRabbit review 抓到，
-## 同上面 migration 7 的 world_character_state 事故）：issue #751 之後現行
-## 的 LocationSchema 多了 pos_x／pos_y，用「現在的形狀」去對 user_version<=8、
-## 還沒有這兩欄的舊資料庫做 _migrate_rebuild_verify_column_shape()，新舊
-## 欄位數對不上，驗證判定失敗、migration 9 中止，migration 12 永遠跑不到。
-## 這裡凍結 pos 欄位出現之前的表形狀；這兩欄唯一由 migration 12 的
-## ALTER TABLE ADD COLUMN 補上。只在 _migrate_v9_notnull_primary_keys()
-## 判定舊表沒有 pos_x 時才被指定成 create_fn 呼叫
-static func _migrate_v9_create_location_without_pos(db) -> bool:
-	var sql := """
-	CREATE TABLE IF NOT EXISTS location (
-
-		location_id TEXT NOT NULL PRIMARY KEY,
-
-		name TEXT NOT NULL,
-
-		description TEXT DEFAULT '',
-
-		location_type TEXT DEFAULT '',
-
-		capacity INTEGER NOT NULL DEFAULT 0
-			CHECK (capacity >= 0),
-
-		danger INTEGER NOT NULL DEFAULT 0
-			CHECK (danger BETWEEN 0 AND 100),
-
-		is_active INTEGER NOT NULL DEFAULT 1
-			CHECK (is_active IN (0, 1))
-	);
-	"""
-
-	if not db.query(sql):
-		push_error(
-			"[DatabaseSchema] Migration 9: Failed to recreate location (frozen shape without pos columns): "
-			+ db.error_message
-		)
-		return false
-
-	return true
 
 
 ## npc_relations 在 migration 9 當下（issue #561；原訂版號 8，見上面 Migration 9
