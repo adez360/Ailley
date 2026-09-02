@@ -25,7 +25,13 @@ static func create(db) -> bool:
 			CHECK (danger BETWEEN 0 AND 100),
 
 		is_active INTEGER NOT NULL DEFAULT 1
-			CHECK (is_active IN (0, 1))
+			CHECK (is_active IN (0, 1)),
+
+		-- 動態生成的家（issue #751）專用，允許 NULL：座標的單一事實來源仍是
+		-- 場景裡的 Marker2D（見 places.gd），靜態地點不寫這兩欄。動態生成的
+		-- 家沒有隨場景檔存在的節點，讀檔重建時要靠這裡記住上次的位置
+		pos_x REAL,
+		pos_y REAL
 	);
 	"""
 

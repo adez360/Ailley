@@ -1,0 +1,16 @@
+[gd_scene load_steps=3 format=3 uid="uid://ejx8bm6jnjed"]
+
+[ext_resource type="Texture2D" uid="uid://c4hsqmjtq64fg" path="res://assets/tiles/Wooden_House.png" id="1_d7po0"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_qtlar"]
+size = Vector2(112, 80)
+
+[node name="House" type="Node2D"]
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+texture = ExtResource("1_d7po0")
+
+[node name="StaticBody2D" type="StaticBody2D" parent="."]
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="StaticBody2D"]
+shape = SubResource("RectangleShape2D_qtlar")

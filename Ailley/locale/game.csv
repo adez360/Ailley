@@ -146,6 +146,8 @@ UI_CC_DESC_HINT,"寫外表、口癖、過去經歷、他最在乎什麼都可以
 UI_CC_BTN_RANDOM,"隨機範例","Randomize"
 UI_CC_BTN_CANCEL,"取消","Cancel"
 UI_CC_BTN_SAVE,"保存到模板","Save to Template"
+UI_CC_MODE_AI,"AI 角色","AI villager"
+UI_CC_MODE_EMBODY,"由我操控","I'll play this one"
 UI_CC_NAME,"姓名","Name"
 UI_CC_AGE,"年齡","Age"
 UI_CC_GENDER,"性別","Gender"

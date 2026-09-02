@@ -46,10 +46,10 @@ var _words_to_creator_spoken := false
 ## 判定是否要說出口的 AI 呼叫進行中（見 maybe_speak_to_creator() 的鎖）
 var _words_to_creator_pending := false
 
-## #381：墓碑四內容欄位其中兩個（《規格書 09》§4-2）。life_highlights 由引擎彙整
-## L4 核心記憶產出，絕不讓 LLM 潤飾——彙整函式 `Memory.get_life_highlights()`
-## 已實作（#384），但死亡流程（`Character._die()`）還沒有任何呼叫端把結果寫進
-## 這個欄位，見 [[記憶與睡眠反思]]「墓碑欄位 life_highlights」。
+## #381：墓碑內容欄位（《規格書 09》§4-2）。life_highlights 由引擎彙整
+## L4 核心記憶產出，絕不讓 LLM 潤飾——彙整函式 `Memory.get_life_highlights()`（#384）
+## 由死亡流程 `Character._die()` → 下面覆寫的 `_capture_life_highlights()`（#953）
+## 在死亡當下寫入，見 [[記憶與睡眠反思]]「墓碑欄位 life_highlights」。
 ## words_to_creator 是墓碑第三個欄位，已存在於上面（#164），不重複宣告。
 ## last_words（第二個欄位）改由 Character 基底宣告（#379，死亡狀態機落地時
 ## 才發現這裡本來就先開了欄位形狀——Godot 4.5 不允許子類別重新宣告父類別
@@ -220,6 +220,19 @@ var _buy_pursuit_target := Vector2.ZERO
 # work）留下的 _pursued_place 也可能剛好等於這筆的 place，導致誤判成
 # 「已經處理過」而整個跳過 move_to()（CodeRabbit review 抓到）
 var _buy_pursuit_task_id := ""
+
+# 因 work_at() 回 TOO_FAR 退回工作站本體座標重試移動的目標（issue #925）：
+# 地點雜湊站位（PlaceAnchors.resolve_for()）跟工作站實際座標不保證對齊，
+# 兩者疊加可能超出 WORK_RANGE，_pursue_work_task() 到站後 work_at() 因此
+# 失敗。這個欄位非零時代表正在做這個重試，_pursue_work_task() 直接跳過
+# 「走去地點站位」那一段、改處理「走去工作站本體」。Vector2.ZERO 當「目前
+# 沒有在重試」的哨兵值，跟上面 _buy_pursuit_target 同一個慣例——工作站
+# 本體不會真的座落在世界原點
+var _work_pursuit_target := Vector2.ZERO
+
+# 上面那個重試目標對應的工作站節點，重新呼叫 work_at() 要用。移動期間
+# 工作站可能被移除，_pursue_work_too_far_retry() 用 is_instance_valid() 檢查
+var _work_pursuit_workstation: Workstation = null
 
 # talk 任務用的卡住偵測（#90）。目標是會動的角色，每次重算都要重新
 # move_to()，不能沿用上面 _pursued_place／_pursuit_done 那套「地點沒換就不
@@ -565,6 +578,11 @@ func _clear_current_task(ok: bool, target_override: String = "") -> void:
 	_current_task = {}
 	current_place = ""
 	current_state = "idle"
+	# work TOO_FAR 重試狀態不會自己過期（issue #925）：這筆任務結束時若還
+	# 沒清掉，下一筆全新的 work 任務被選中時 _pursue_work_task() 會誤把
+	# 這個舊工作站當成「還在重試中」直接跳過走去新地點站位那一段
+	_work_pursuit_target = Vector2.ZERO
+	_work_pursuit_workstation = null
 
 ## 實際寫 today_log 的地方。_clear_current_task() 用在「換成空」的收尾，
 ## _select() 用在「換成另一筆」——後者不會經過 _clear_current_task()（它
@@ -586,12 +604,27 @@ func _log_task_ended(task: Dictionary, ok: bool, target_override: String = "") -
 
 ## ---- 事實句機制（#338，《01-3》§3）----
 ##
-## 1 tick = 10 遊戲分鐘（《02》§1-4／《01-3》§3 三處門檻互相驗證過），下面
-## 門檻常數統一換算成遊戲分鐘，跟 _now_minutes() 同一個時間基準
+## 1 tick = 10 遊戲分鐘（《02》§1-4）。事實句門檻的單位看常數名後綴：`_TICK`
+## 以 tick 為單位（跟生理 drift 的單位相同，見 stats.gd 的 SPEC 註解），比較時
+## 才乘 GameClock.GAME_MINUTES_PER_TICK 換算回遊戲分鐘；`_MIN` 以遊戲分鐘為
+## 單位，跟 _now_minutes() 同一個時間基準。#797 曾把 tick 當成遊戲分鐘換算出
+## 10 倍誤差，把單位寫進常數名就是為了杜絕再犯
 
-const FACT_SOCIAL_SILENCE_3H_MIN := 180		# 18 tick
-const FACT_SOCIAL_SILENCE_HALF_DAY_MIN := 360	# 36 tick
-const FACT_SOCIAL_SILENCE_1_DAY_MIN := 1440	# 144 tick
+## #797：社交沉默三級門檻全部落在最早的生理危機「之前」。#731 調慢 drift 後，
+## 四項生理數值從出生值自然衰減到 CRITICAL(30)（stats.gd）需要的 tick 數：
+##   stamina      (80−30)/0.35   ≈ 143 tick
+##   wakefulness  (90−30)/0.42   ≈ 143 tick
+##   hydration    (80−30)/0.278  ≈ 180 tick
+##   satiety      (100−30)/0.278 ≈ 252 tick
+## 本 PR 先前的 1440 遊戲分鐘（= 144 tick）跟 stamina/wakefulness 的 143 tick
+## 只差 1 tick，正是要避開的撞點。改成 30/60/120 tick（5/10/20 遊戲小時），
+## 最後一級比最早的危機早約 23 tick，三級敘事層次在角色還能自由行動時完整
+## 走完，不會跟任何生理危機重疊；代價是沉默句最早 5 遊戲小時就會出現（另一
+## 個方向是全部放到危機之後，取捨見 PR #943 的代修留言）。數值是代修者的
+## 判斷，原作者可再調整
+const FACT_SOCIAL_SILENCE_30_TICK := 30		# 300 遊戲分鐘（5 小時）
+const FACT_SOCIAL_SILENCE_60_TICK := 60		# 600 遊戲分鐘（10 小時）
+const FACT_SOCIAL_SILENCE_120_TICK := 120	# 1200 遊戲分鐘（20 小時）
 const FACT_GOAL_STALE_MIN := 360				# 36 tick
 const FACT_CONSECUTIVE_FAILURE_THRESHOLD := 3
 
@@ -871,6 +904,11 @@ func _on_move_finished(_reached: bool) -> void:
 func _is_own_pursuit_target(world_position: Vector2) -> bool:
 	if current_state == "buy" and world_position.distance_to(_buy_pursuit_target) <= ARRIVE_DISTANCE:
 		return true
+	# work TOO_FAR 重試中：移動目標是工作站本體座標，不是 current_place
+	# 對應的地點錨點，要另外比對，理由同上面 buy 那條（issue #925）
+	if current_state == "work" and _work_pursuit_target != Vector2.ZERO \
+			and world_position.distance_to(_work_pursuit_target) <= ARRIVE_DISTANCE:
+		return true
 	if current_place.is_empty():
 		return false
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
@@ -1023,41 +1061,66 @@ func _is_preemptible() -> bool:
 # 任務。憑當下的 _current_task 判斷會有兩種撲空：真正該清的那筆任務已經
 # 不是 _current_task、清不到；或是被別人搭話時，自己另一筆不相干的待辦
 # talk 任務剛好是 _current_task，被誤刪
+## 對話結束時記進 _daily_events 的客觀事實句措辭（issue #950）。抽成純函式
+## 方便測試：把「哪種結束原因對應哪句事實」跟 exit_conversation() 其餘要碰
+## 場景樹／autoload 的部分拆開。措辭只陳述發生了什麼，不定性「被冷落」
+## 「聊得不愉快」——那是 AI 睡前反思自己判斷的事（《00》原則二）。
+## is_initiator 只在 REASON_IGNORED 分兩種說法時用到。
+static func _conversation_end_fact(reason: String, other_name: String, had_exchange: bool, is_initiator: bool) -> String:
+	match reason:
+		Conversation.REASON_IGNORED:
+			# 對方一句話沒說就不理會（複審 PR #667）：兩邊各給誠實的說法
+			return (
+				"%s 不理你的搭話，沒有回應" % other_name if is_initiator
+				else "你不理會 %s 的搭話" % other_name
+			)
+		Conversation.REASON_NO_RESPONSE:
+			# 引擎要不到台詞（LLM 停用／逾時，見 conversation.gd 的
+			# _finish_with_fallback()），不是任何人選擇不理會——兩邊都只能
+			# 誠實記「沒有回應」，不能寫成誰「不理會」誰
+			return (
+				"%s 沒有回應你的搭話" % other_name if is_initiator
+				else "你沒有回應 %s 的搭話" % other_name
+			)
+		Conversation.REASON_TOO_FAR, Conversation.REASON_INTERRUPTED:
+			# 距離拉開／被打斷而中止。玩家按 E 搭話後、在對方還沒開口
+			# （turn 0 等 LLM）時就走開也走這條——沒交換過任何一句，
+			# 記「講完話了」是假事實
+			return (
+				"你和 %s 的對話中途中斷了" % other_name if had_exchange
+				else "你和 %s 的對話還沒開始就中斷了" % other_name
+			)
+		_:
+			return "你跟 %s 講完話了" % other_name
+
+
 func exit_conversation(reason: String = "") -> void:
 	# 事件事實句要在 super() 把 _conversation 清成 null 之前先讀——這裡只記
-	# 客觀事實（跟誰講完話／被不理會），不記對話內容好壞，那是睡前反思時 LLM
-	# 自己判斷的事
+	# 客觀事實（跟誰講完話／被不理會／對話中斷），不記對話內容好壞，那是睡前
+	# 反思時 LLM 自己判斷的事。措辭見 _conversation_end_fact()（issue #950）
 	#
-	# REASON_IGNORED（複審 PR #667 抓到）：對方一句話沒說就不理會，「你跟 X
-	# 講完話了」是假話，兩邊要分別給誠實的說法——被搭話的一方看到的是自己
-	# 選擇不理會，發起搭話的一方看到的是對方沒有回應。REASON_NO_RESPONSE
-	# 同理（引擎要不到台詞，見 conversation.gd 的 _finish_with_fallback()），
-	# 但誰都沒有「選擇」，兩邊都只能記「沒有回應」
+	# REASON_NO_RESPONSE（引擎要不到台詞，見 conversation.gd 的
+	# _finish_with_fallback()）：不是任何人選擇不理會，兩邊都只能記「沒有回應」
 	if _conversation != null:
 		var other: Character = _conversation.target if _conversation.initiator == self else _conversation.initiator
 		if other != null:
+			var had_exchange: bool = _conversation.turn_count() > 0
+			var event_text := _conversation_end_fact(
+				reason, other.character_name, had_exchange, self == _conversation.initiator
+			)
 			# #426：current_place 對指名對話（direct-target talk）從頭到尾是
 			# 空字串（沒有 place 可言），這裡改用即時座標反查——對話結束當下
 			# 兩人就站在彼此旁邊，位置是準的
-			var event_text: String
-			if reason == Conversation.REASON_NO_RESPONSE:
-				# 引擎要不到台詞（LLM 停用/逾時，見 conversation.gd 的
-				# _finish_with_fallback()），不是任何人選擇不理會——兩邊都只能
-				# 誠實記「沒有回應」，不能寫成誰「不理會」誰
-				event_text = (
-					"%s 沒有回應你的搭話" % other.character_name if self == _conversation.initiator
-					else "你沒有回應 %s 的搭話" % other.character_name
-				)
-			elif reason == Conversation.REASON_IGNORED:
-				event_text = (
-					"%s 不理你的搭話，沒有回應" % other.character_name if self == _conversation.initiator
-					else "你不理會 %s 的搭話" % other.character_name
-				)
-			else:
-				event_text = "你跟 %s 講完話了" % other.character_name
+
 			_push_daily_event(event_text, [other.character_id], _resolve_actual_place())
-			# 「多久沒說話」事實句的計時基準（#338）
-			_last_social_minute = _now_minutes()
+			# 「多久沒說話」事實句的計時基準（#338）：一句話都沒交換的中斷
+			# （距離拉開／被打斷、turn 0 就散）不算「講到話」，不重設計時基準
+			var contactless_break := (
+				(reason == Conversation.REASON_TOO_FAR or reason == Conversation.REASON_INTERRUPTED)
+				and not had_exchange
+			)
+			if not contactless_break:
+				_last_social_minute = _now_minutes()
 
 	super(reason)
 
@@ -1065,14 +1128,21 @@ func exit_conversation(reason: String = "") -> void:
 		var was_llm := _active_talk_task_source == "llm"
 
 		# talk_to() 剛送出時只知道對話物件建立成功，對方 turn 0 要不要理還沒
-		# 問——真正的結果要等這裡知道 reason 才算數，被無視（REASON_IGNORED）
-		# 或要不到回應（REASON_NO_RESPONSE）都算失敗，這樣連續失敗計數才會如實
-		# 累積，下輪決策才有機會避開同一個一再不理自己的對象（複審 PR #667
-		# 抓到，原本在 _pursue_talk_task() 送出當下就搶先記成功）
-		_track_action_result_for_facts(
-			"talk",
-			reason != Conversation.REASON_IGNORED and reason != Conversation.REASON_NO_RESPONSE,
-		)
+		# 問——真正的結果要等這裡知道 reason 才算數（複審 PR #667 抓到，原本在
+		# _pursue_talk_task() 送出當下就搶先記成功）：
+		#   REASON_IGNORED：被無視，算失敗，連續失敗計數如實累積，下輪決策才
+		#     有機會避開一再不理自己的對象。
+		#   REASON_NO_RESPONSE：引擎要不到回應（非對方選擇），同樣算失敗。
+		#   REASON_TOO_FAR／REASON_INTERRUPTED：距離拉開或被打斷而中止，既沒
+		#     完成也不是被拒絕——不動連續失敗計數，不誤導下輪決策（issue #950）。
+		#   其餘（正常講完／聽者收尾）：算成功。
+		match reason:
+			Conversation.REASON_IGNORED, Conversation.REASON_NO_RESPONSE:
+				_track_action_result_for_facts("talk", false)
+			Conversation.REASON_TOO_FAR, Conversation.REASON_INTERRUPTED:
+				pass
+			_:
+				_track_action_result_for_facts("talk", true)
 
 		_remove_task(_active_talk_task_id)
 		if _current_task.get("id", "") == _active_talk_task_id:
@@ -1448,6 +1518,15 @@ func _request_last_words(cause: String) -> void:
 	if not result["ok"]:
 		return
 	last_words = result["data"]["last_words"]
+
+## 墓碑生平彙整（#384／#953，《規格書09》§4-2）。覆寫 Character 的 no-op 掛點——
+## _die() 死亡當下同步呼叫，把 L4 核心記憶彙整成 life_highlights 定格進墓碑。
+## get_life_highlights() 純資料格式化、不打 LLM，不需要 await 也不需要世代守衛。
+## #384 只做了彙整函式，這裡是把它接上死亡流程的呼叫端
+func _capture_life_highlights() -> void:
+	if memory == null:
+		return
+	life_highlights = memory.get_life_highlights()
 
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
 ## AIService、parse_completion、validate_*，任何一關失敗都靜默放棄，任務池
@@ -3465,6 +3544,13 @@ func _select(task: Dictionary, now_minutes: int, outgoing_ok: bool = true) -> vo
 	# 先變成 {}），但一樣算「做過的事」，這裡補記一筆（#172）
 	_log_task_ended(_current_task, outgoing_ok)
 
+	# work TOO_FAR 重試狀態同理不會自己過期（issue #925，見
+	# _clear_current_task() 那邊同樣的說明）：這裡是換成別筆任務、不經過
+	# _clear_current_task() 的另一個入口，換成新的 work 任務時若沒清掉，
+	# _pursue_work_task() 會誤把舊工作站當成這筆新任務還在重試中
+	_work_pursuit_target = Vector2.ZERO
+	_work_pursuit_workstation = null
+
 	_current_task = task
 	# CodeRabbit review（#366）：schedule 任務的 Dictionary 跨時間窗、跨日重用，
 	# 不像 llm 任務每次決策都是新的 Dictionary——"_logged" 記在上一次執行留下
@@ -3704,7 +3790,14 @@ func _pursue_current_task() -> void:
 		return
 
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
-	if anchors == null or not anchors.has_for(self, current_place):
+	# anchors 整個還沒掛進場景樹（動態生成的 Agent 可能搶在 PlaceAnchors
+	# _ready() 之前先跑一次 _reevaluate()）跟下面「anchors 存在但查無此地」
+	# 是兩個不同階段的暫時失敗，這裡要先擋掉，不然 anchors.HOME_PLACE_NAME
+	# 會對 null 取屬性直接 crash（issue #916）。同樣不落地
+	# _pursued_place／_pursuit_done：理由見下面 has_for() 分支的說明
+	if anchors == null:
+		return
+	if not anchors.has_for(self, current_place):
 		# home_location_id 還沒指派時 has_for() 對 "home" 一定回傳 false——
 		# 動態生成的 Agent 在 CharacterStatePersistence 完成同步之前就可能
 		# 先跑一次 _reevaluate()，這是會自己好的暫時狀態，不是打錯字。不能
@@ -4122,6 +4215,8 @@ func _pursue_work_task() -> void:
 		# 完整重設追逐狀態，不然下一筆任務可能沿用舊路徑，或被追逐節流
 		# 誤判成已經處理過（CodeRabbit review 抓到）
 		stop_moving()
+		_work_pursuit_target = Vector2.ZERO
+		_work_pursuit_workstation = null
 		_pursued_place = ""
 		_pursuit_done = false
 		# schedule 來源沒有 _remove_task() 這條退路，任務會留在池子裡——跟
@@ -4132,6 +4227,13 @@ func _pursue_work_task() -> void:
 		# today_log（_log_task_ended() 沒被呼叫），這筆 work 不會出現在
 		# 每日摘要（CodeRabbit review 抓到）
 		_clear_current_task(false)
+		return
+
+	# 已經因為 work_at() 回 TOO_FAR 改追工作站本體座標（issue #925）：跳過
+	# 下面「走去地點站位」那一段，改處理「走去工作站本體」重試，避免兩段
+	# 移動邏輯互相打架（見 _pursue_work_too_far_retry() 開頭的說明）
+	if _work_pursuit_target != Vector2.ZERO:
+		_pursue_work_too_far_retry()
 		return
 
 	var target: Vector2 = anchors.resolve_for(self, current_place)
@@ -4182,22 +4284,109 @@ func _pursue_work_task() -> void:
 	last_action_result = reason
 
 	if reason == Character.WORK_OCCUPIED:
-		# 工作站已被佔用：保留目前的 schedule work 任務，不清掉也不呼叫 _reevaluate()。
-		# 讓下一個時間事件觸發重試，避免頻繁的同步重評估導致遊戲無回應
+		# 工作站被佔用：先原地重試（名額通常很快釋出，不急著放棄），但要記進
+		# 跨任務失敗計數（issue #868）——不然這個分支會變成全檔案唯一「失敗
+		# 但什麼都不記錄」的路徑，AI 永遠不會被告知它其實一直失敗。
 		push_warning("Agent %s: work_at 失敗（工作站被佔用）" % [character_name])
+		_track_action_result_for_facts("work", false)
+		if _consecutive_failure_count >= FACT_CONSECUTIVE_FAILURE_THRESHOLD:
+			# 連續 3 次還是佔用中：退避／放棄，別再每個遊戲分鐘原地重試。
+			# schedule 來源退避到這個 window 結束（同 eat/drink 那套機制）；
+			# llm 來源沒有 window 可退，直接離開任務池（同 eat/drink 對 llm
+			# 失敗的既有處理）
+			_pursued_place = ""
+			_pursuit_done = false
+			_mark_schedule_retry_backoff(_current_task)
+			if _current_task.get("source", "") != "schedule":
+				_remove_task(_current_task.get("id", ""))
+			_clear_current_task(false)
+			if llm_decision_enabled and not _awaiting_decision:
+				_request_next_decision(_today_plan_needs_new_goal())
+		return
+
+	# TOO_FAR 且真的找得到工作站：地點雜湊站位（PlaceAnchors.MAX_STANCE_DISTANCE）
+	# 不保證跟工作站本體座標對齊，兩者疊加可能超出 WORK_RANGE。原本這裡直接
+	# 判失敗、永久放棄——但雜湊站位是固定值，同一個角色下次排到同一地點還是
+	# 會落在同一點，等於這個角色在這個地點的 work 永久壞掉，不會自己修正
+	# （issue #925）。退回工作站本體座標當移動目標，走近一點再試一次
+	if reason == Character.WORK_TOO_FAR and nearest_workstation != null:
+		push_warning("Agent %s: work_at 失敗（TOO_FAR），改追工作站本體座標重試" % [character_name])
+		_work_pursuit_target = nearest_workstation.global_position
+		_work_pursuit_workstation = nearest_workstation
+		_pursuit_done = false
+		if not move_to(_work_pursuit_target):
+			push_warning("Agent %s: 走不到工作站本體" % [character_name])
+			_fail_work_task()
 		return
 
 	if reason != Character.WORK_OK:
 		push_warning("Agent %s: work_at 失敗（%s）" % [character_name, reason])
 		# 其他失敗原因：清掉任務、重置 pursuit state 並等待決策。同上改用
 		# _clear_current_task()，避免漏記 today_log；失敗也一併設退避，理由
-		# 同上一條路徑（CodeRabbit review 抓到）
-		_pursued_place = ""
-		_pursuit_done = false
-		_mark_schedule_retry_backoff(_current_task)
-		_clear_current_task(false)
-		if llm_decision_enabled and not _awaiting_decision:
-			_request_next_decision(_today_plan_needs_new_goal())
+		# 同上一條路徑（CodeRabbit review 抓到）。失敗收尾——含跨任務失敗計數
+		# （issue #868 發現這個分支原本沒記）與 llm 來源的任務池清除——統一
+		# 收進 _fail_work_task()（沒有清除那行，llm 來源的失敗任務會留在池子
+		# 裡，下一次重算原地選回來）
+		_fail_work_task()
+		return
+
+	# work_at() 成功卡位（不代表已做滿撥款，撥款另由 _run_work() 協程完成）。
+	# 一併記成功，才能把連續失敗計數歸零——不然這裡若漏記，一次成功卡位
+	# 之後的下一次失敗會延續上一輪沒被清掉的計數，門檻提早觸發
+	_track_action_result_for_facts("work", true)
+
+# TOO_FAR 重試專用的第二段追逐（issue #925）：目標是工作站本體座標，不是
+# 地點站位，跟上面「走去地點站位」那段分開處理——退回工作站座標後角色會
+# 離雜湊站位更遠，若共用同一段 _has_arrived_at(地點站位) 判斷，下一個 tick
+# 會判定「還沒到地點站位」又把角色拉回去，兩段邏輯互相打架
+func _pursue_work_too_far_retry() -> void:
+	if not is_instance_valid(_work_pursuit_workstation):
+		push_warning("Agent %s: 重試移動途中工作站被移除" % [character_name])
+		_fail_work_task()
+		return
+
+	if not _has_arrived_at(_work_pursuit_target):
+		if is_moving() or _pursuit_done:
+			return
+		# move_to() 已經有結論（含失敗）但沒到——走不到，放棄這次重試
+		push_warning("Agent %s: 走不到工作站本體" % [character_name])
+		_fail_work_task()
+		return
+
+	stop_moving()
+	var workstation := _work_pursuit_workstation
+	_work_pursuit_target = Vector2.ZERO
+	_work_pursuit_workstation = null
+	_pursuit_done = true
+
+	var reason := work_at(workstation)
+	last_action_result = reason
+
+	if reason == Character.WORK_OCCUPIED:
+		push_warning("Agent %s: work_at 重試失敗（工作站被佔用）" % [character_name])
+		return
+
+	if reason != Character.WORK_OK:
+		push_warning("Agent %s: work_at 重試失敗（%s）" % [character_name, reason])
+		_fail_work_task()
+
+# work 任務失敗時的共用收尾。原本只有一個失敗分支，issue #925 加了 TOO_FAR
+# 重試之後同一段收尾邏輯出現三次（一般失敗／重試移動失敗／重試 work_at()
+# 仍失敗），抽出來避免重複；跨任務失敗計數（issue #868）與 llm 來源的任務
+# 池清除（沒有這行，llm 來源的失敗任務會留在池子裡，下一次重算原地選回來）
+# 也在這裡統一處理
+func _fail_work_task() -> void:
+	_pursued_place = ""
+	_pursuit_done = false
+	_work_pursuit_target = Vector2.ZERO
+	_work_pursuit_workstation = null
+	_mark_schedule_retry_backoff(_current_task)
+	if _current_task.get("source", "") == "llm":
+		_remove_task(_current_task.get("id", ""))
+	_track_action_result_for_facts("work", false)
+	_clear_current_task(false)
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
 
 # perform 任務的執行（#575）：跟 eat／drink 一樣先用 resolve() 判定（perform
 # 在 SUCCESS_PARAMS 上，這裡才是真正擲骰的那一刻，只呼叫一次，不是每個
@@ -5455,13 +5644,12 @@ func _fact_lines_summary() -> Array[String]:
 
 	# 社交沉默：三級距取最長那條符合的，不三句一起塞（#338 建議做法）
 	var since_social := _now_minutes() - _last_social_minute
-	if since_social >= FACT_SOCIAL_SILENCE_1_DAY_MIN:
-		lines.append("你整整一天沒有和任何人說過話。")
-	elif since_social >= FACT_SOCIAL_SILENCE_HALF_DAY_MIN:
+	if since_social >= FACT_SOCIAL_SILENCE_120_TICK * GameClock.GAME_MINUTES_PER_TICK:
+		lines.append("你快一整天沒有和任何人說過話了。")
+	elif since_social >= FACT_SOCIAL_SILENCE_60_TICK * GameClock.GAME_MINUTES_PER_TICK:
 		lines.append("你已經大半天沒和任何人說過話了。")
-	elif since_social >= FACT_SOCIAL_SILENCE_3H_MIN:
-		lines.append("你已經三個小時沒和任何人說過話了。")
-
+	elif since_social >= FACT_SOCIAL_SILENCE_30_TICK * GameClock.GAME_MINUTES_PER_TICK:
+		lines.append("你已經五個小時沒和任何人說過話了。")
 	# 目標拖延：只有真的設過 current_goal（_goal_set_minute >= 0）才判斷，
 	# 沒設過目標不該無中生有講「你想做的那件事拖很久」
 	if _goal_set_minute >= 0 and _now_minutes() - _goal_set_minute >= FACT_GOAL_STALE_MIN:

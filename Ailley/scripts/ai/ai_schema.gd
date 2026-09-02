@@ -750,7 +750,7 @@ static func _validate_tip(data: Variant) -> Dictionary:
 # persuade 專屬的 params 驗證（#227）：target／reason 必填非空字串，
 # proposed_task 選填——有填就重用 _validate_task_shape() 驗證它的形狀
 # （跟一般任務同一套邊界），不驗證內容合理性。reason 是說服的理由，自由
-# 文字、不驗證、不二次判定——跟 believed／persuaded 同一套「不驗證心智
+# 文字、不驗證、不二次判定——跟 persuaded 同一套「不驗證心智
 # 判斷內容」的原則，這裡只驗證格式，不驗證說服的理由站不站得住腳。
 # 刻意擋掉 proposed_task.action == "persuade"：巢狀說服（說服對方去說服
 # 別人）語意混亂，不是這個機制要支援的情境
@@ -950,7 +950,7 @@ static func validate_tasks(
 	# 個欄位。省略 persuaded 視同「不被說動」；importance／valence 只在
 	# 純思想說服被接受時才有意義，省略時呼叫端會退回預設值，這裡不用管
 	# 「這次用不用得到」，只驗證型別／範圍——內容本身（信不信、重不重要）
-	# 不驗證、不二次判定，跟 believed 同一個原則
+	# 不驗證、不二次判定，跟 persuaded 同一個原則
 	var persuaded := false
 	if data.has("persuaded"):
 		if not data["persuaded"] is bool:

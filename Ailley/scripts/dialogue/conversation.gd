@@ -59,6 +59,13 @@ var _turns: Array[Dictionary] = []
 var _finished := false
 
 
+## 這場對話目前已經講出口的句數（含 fallback 補的那句）。
+## agent.gd::exit_conversation() 用它判斷中斷（TOO_FAR／INTERRUPTED）時
+## 到底有沒有真的交談過——一句都沒有就不能記成「講完話了」（issue #950）
+func turn_count() -> int:
+	return _turns.size()
+
+
 func _ready() -> void:
 	initiator.enter_conversation(self)
 	target.enter_conversation(self)
