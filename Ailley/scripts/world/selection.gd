@@ -16,6 +16,9 @@ const RIPPLE_END_RADIUS := 12.0
 const RIPPLE_COLOR := Color(1.0, 1.0, 1.0, 0.9)
 const RIPPLE_SEGMENTS := 24
 
+## 選取對象變了（select／deselect 都會發，deselect 傳 null）——給常駐 UI 用，
+## 例如 StatusPanel2 狀態列的快照與名字要跟著當前選取目標走
+signal selection_changed(character: Character)
 var _hovered: Character = null
 var _selected: Character = null
 # 每筆 {position: Vector2, elapsed: float}，播完自己消失
@@ -50,10 +53,12 @@ func _unhandled_input(event: InputEvent) -> void:
 func select(character: Character) -> void:
 	_selected = character
 	_camera_follow(character)
+	selection_changed.emit(character)
 
 # 取消選取，鏡頭移回玩家身上
 func deselect() -> void:
 	_selected = null
+	selection_changed.emit(null)
 
 	var camera := _find_camera()
 	if camera != null:

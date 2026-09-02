@@ -12,12 +12,16 @@ const MAIN_MENU_SCENE := "res://scenes/main_menu.tscn"
 @onready var _pause: Pause = get_parent() as Pause
 @onready var resume_button: Button = $MarginContainer/VBoxContainer/Resume
 @onready var exit_button: Button = $MarginContainer/VBoxContainer/Exit
+@onready var ai_recheck_button: Button = $MarginContainer/VBoxContainer/AiRecheck
+@onready var ai_recheck_status_label: Label = $MarginContainer/VBoxContainer/AiRecheckStatus
 
 
 func _ready() -> void:
 	resume_button.pressed.connect(_on_resume_pressed)
 	exit_button.pressed.connect(_on_exit_pressed)
+	ai_recheck_button.pressed.connect(_on_ai_recheck_pressed)
 	_pause.visibility_changed.connect(_on_pause_visibility_changed)
+	ai_recheck_status_label.text = ""
 
 
 func _on_resume_pressed() -> void:
@@ -62,3 +66,39 @@ func _on_exit_pressed() -> void:
 		return
 	get_tree().paused = false
 	get_tree().change_scene_to_file(MAIN_MENU_SCENE)
+
+
+## 手動重新探測 AI 連線（issue #824「建議」的第一個選項）：正式版玩家除了
+## 每遊戲日一次的低頻背景重試（見 game_manager.gd::recheck_ai_readiness()），
+## 也能主動觸發。跟 _on_exit_pressed() 同一種旗標＋停用按鈕擋重入寫法——
+## await 期間連點會疊出多個探測流程
+var _ai_recheck_in_flight := false
+
+
+func _on_ai_recheck_pressed() -> void:
+	if _ai_recheck_in_flight:
+		return
+	_ai_recheck_in_flight = true
+	ai_recheck_button.disabled = true
+	ai_recheck_status_label.text = L10n.t("UI_AI_RECHECK_CHECKING")
+
+	var result: Dictionary = await GameManager.recheck_ai_readiness()
+
+	# await 期間玩家可能已經關閉選單／離開場景（跟 _apply_startup_ai_state()
+	# 的 is_inside_tree() 防呆同一個理由）
+	if not is_inside_tree():
+		return
+	_ai_recheck_in_flight = false
+	ai_recheck_button.disabled = false
+
+	var checked: int = result.get("checked", 0)
+	if checked == 0:
+		ai_recheck_status_label.text = L10n.t("UI_AI_RECHECK_NONE")
+		return
+	var recovered: int = result.get("recovered", 0)
+	if recovered == checked:
+		ai_recheck_status_label.text = L10n.tf("UI_AI_RECHECK_RECOVERED", {"recovered": recovered, "checked": checked})
+	elif recovered > 0:
+		ai_recheck_status_label.text = L10n.tf("UI_AI_RECHECK_PARTIAL", {"recovered": recovered, "checked": checked})
+	else:
+		ai_recheck_status_label.text = L10n.t("UI_AI_RECHECK_FAILED")

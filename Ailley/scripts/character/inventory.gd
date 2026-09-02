@@ -62,6 +62,15 @@ const USE_NOT_CONSUMABLE := "NOT_CONSUMABLE"
 const USE_INVALID_STATS := "INVALID_STATS"
 const USE_INVALID_EFFECT := "INVALID_EFFECT"
 const USE_REMOVE_FAILED := "REMOVE_FAILED"
+const USE_SPOILED := "SPOILED"		# decay 已達 100，《規格書08》§6-1「不可食用」
+
+## §6-1 腐壞區間對 health 的懲罰：40–79 不新鮮 -3，80–99 快壞了 -10，
+## 0–39 新鮮無懲罰。100（USE_SPOILED）在呼叫端就擋下，不會走到這裡算
+const DECAY_PENALTY_ROTTEN := -10.0		# decay 80–99
+const DECAY_PENALTY_STALE := -3.0		# decay 40–79
+const DECAY_ROTTEN_THRESHOLD := 80.0
+const DECAY_STALE_THRESHOLD := 40.0
+const DECAY_SPOILED_THRESHOLD := 100.0
 
 ## 開局身上有多少錢。規格書 01 §3-3
 const DEFAULT_MONEY := 300
@@ -262,6 +271,25 @@ func _remove_item_detailed(item_id: String, count: int, notify: bool = true) -> 
 
 # ---- 使用 ----
 
+# 該 item_id 第一個相符格子的索引，跟 _remove_item_detailed() 完全同一個掃描
+# 順序（by index 由小到大）——use_item() 要在真的扣掉之前先看一眼這一格的
+# decay，兩邊挑到同一格才算數，沒有相容的原子讀寫可以保證，只能靠掃描順序
+# 一致這件事本身（GDScript 單執行緒，兩次呼叫之間不會被插入別的異動）
+func _find_item_slot_index(item_id: String) -> int:
+	for i in SIZE:
+		if not slots[i].is_empty() and slots[i]["item_id"] == item_id:
+			return i
+	return -1
+
+# 《規格書08》§6-1 腐壞區間換算 health 懲罰。decay=100（USE_SPOILED）由
+# use_item() 自己先擋下，不會傳進來
+func _decay_health_penalty(decay: float) -> float:
+	if decay >= DECAY_ROTTEN_THRESHOLD:
+		return DECAY_PENALTY_ROTTEN
+	if decay >= DECAY_STALE_THRESHOLD:
+		return DECAY_PENALTY_STALE
+	return 0.0
+
 # 使用一個消耗品。effects 格式（通常直接整包傳 ItemDatabase.get_item() 的結果）：
 # {"effect_satiety": 40, "effect_hydration": 20, ...}，key 是 "effect_" + Stats.SPEC
 # 的欄位名，8 項都能寫、沒寫的視為 0。Stats.add() 會負責將數值限制在 0~100。
@@ -280,6 +308,14 @@ func use_item(item_id: String, stats: Stats, effects: Dictionary, is_consumable:
 		push_warning("[Inventory] %s 不是可消耗物品。" % item_id)
 		return USE_NOT_CONSUMABLE
 
+	# 腐壞判定（《規格書08》§6-1）：carry 類（durability 追蹤）的格子 decay
+	# 恆為 0，這裡的門檻永遠不會誤觸——不用另外查分類白名單
+	var slot_index := _find_item_slot_index(item_id)
+	var decay := float(slots[slot_index]["decay"]) if slot_index != -1 else 0.0
+	if decay >= DECAY_SPOILED_THRESHOLD:
+		push_warning("[Inventory] 使用物品失敗：%s 已經腐壞。" % item_id)
+		return USE_SPOILED
+
 	var deltas := {}
 	for key in Stats.SPEC:
 		var value := float(effects.get("effect_%s" % key, 0.0))
@@ -288,6 +324,10 @@ func use_item(item_id: String, stats: Stats, effects: Dictionary, is_consumable:
 			return USE_INVALID_EFFECT
 		if value != 0.0:
 			deltas[key] = value
+
+	var decay_penalty := _decay_health_penalty(decay)
+	if decay_penalty != 0.0:
+		deltas["health"] = deltas.get("health", 0.0) + decay_penalty
 
 	for key in deltas:
 		stats.add(key, deltas[key])
@@ -302,6 +342,36 @@ func use_item(item_id: String, stats: Stats, effects: Dictionary, is_consumable:
 		log_parts.append("%s=%+.1f" % [key, deltas[key]])
 	print("[Inventory] 使用物品：%s | %s" % [item_id, " ".join(log_parts)])
 	return USE_OK
+
+
+# ---- 腐壞 ----
+
+# 每 tick（呼叫端保證是《規格書08》§6-1 定義的那個 tick 邊界，見
+# character.gd::_on_game_minute()）幫每一格 decay 類物品累加腐壞值。
+# rates 是 {item_id: 腐壞速率}，由呼叫端傳入（ItemDatabase.get_decay_rates()）
+# ——Inventory 本身不查物品定義檔，跟 use_item() 的 effects 參數同一個理由
+# （見檔案開頭說明）。查不到 rate 或 rate <= 0（water、spirit【待填】、
+# carry 類都沒有這個欄位）視為不會腐壞，直接跳過。
+#
+# decay 用 float 就地累加，不像 add_item() 那樣把它截成 int——0.3／tick
+# 這種速率，每 tick 用 int() 截斷寫回的話恆等於 0，物品永遠腐壞不了
+# （跟 character.gd 的 corpse_decay 是同一種寫法：那邊本來就用 float，
+# 只在真的要比大小／顯示時才轉 int）。carry 類（durability >= 0）的格子
+# 一律跳過——那類物品用耐久，不追蹤腐壞
+func tick_decay(rates: Dictionary) -> void:
+	var changed_any := false
+	for slot in slots:
+		if slot.is_empty() or int(slot.get("durability", -1)) >= 0:
+			continue
+		var rate: float = rates.get(slot["item_id"], 0.0)
+		if rate <= 0.0:
+			continue
+		var new_decay: float = clampf(float(slot["decay"]) + rate, 0.0, 100.0)
+		if new_decay != float(slot["decay"]):
+			slot["decay"] = new_decay
+			changed_any = true
+	if changed_any:
+		changed.emit()
 
 
 # ---- 搬移 ----

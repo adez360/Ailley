@@ -40,8 +40,13 @@ extends RefCounted
 const ALLOWED_ACTIONS := [
 	# A 溝通類
 	"talk", "persuade", "give", "report", "shout", "perform", "murmur",
-	# B 工作與消費類
-	"hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink", "work",
+	# B 工作與消費類。use_item（#865）是背包裡食物/飲品以外的道具，例如
+	# medicine 治傷——跟 eat／drink 同一類，只是不自動找分類，由 params.item_id
+	# 指名
+	"hunt_small", "hunt_large", "gather", "fish", "buy", "sell", "eat", "drink", "use_item", "work",
+	# B-1 治傷類（issue #865）：跟 eat／drink 同一種「吃掉背包裡已經有的東西」
+	# 形狀，只是查的是 effect_injury 不是 category，見 Character.medicate()
+	"medicate",
 	# C 動作與移動類。nap／rest 已併入 sleep（#771），LLM 只填 duration，
 	# 引擎依時長分級決定套用哪組回復量——見 agent.gd 的
 	# ACTION_RECOVERY／_classify_sleep_tier()
@@ -112,6 +117,12 @@ const ALLOWED_ACTIONS := [
 # drink 是 #163 接上的：跟 eat 同一套「呼叫一次就完成」模式，寫法照抄
 # _pursue_eat_task()（見 agent.gd::_pursue_drink_task()）
 #
+# medicate 是 #865 接上的：跟 eat／drink 同一套「呼叫一次就完成、吃掉背包裡
+# 已經有的東西」模式（_pursue_medicate_task()），差別是找的不是 category
+# 而是 effect_injury<0 的物品（見 Character._find_curative_slot()）——原本
+# medicine 這個道具雖然定義了 effect_injury，卻沒有任何動作會對它呼叫
+# Inventory.use_item()，玩家與 AI 角色都完全無法治傷止血
+#
 # bury 是 #380 接上的：跟 attack 同一套「目標是另一個角色、一次執行完就退出
 # 任務池」模式（_pursue_bury_task()），差別是目標必須是已死亡且尚未安葬的
 # 屍體，且雙方都要在墓園錨點附近，見 Character.bury() 的檢查順序
@@ -140,7 +151,17 @@ const ALLOWED_ACTIONS := [
 # 這次只是把它跟 buy／gather 一樣開放給 LLM 選。跟 gather 同一套「先走到地點
 # 才執行」模式，差別是地點錯了（沒有工作站）時失敗原因是 WORK_TARGET_NOT_FOUND
 # 而不是專屬的地點名檢查——見 agent.gd::_pursue_work_task() 的說明
-const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "wash", "idle", "eat", "drink", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "hunt_small", "hunt_large", "gather", "follow", "perform", "work", "spit_at_stone", "worship_stone", "praise_stone", "wander"]
+#
+# use_item 是 #865 接上的：跟 eat／drink 同一套「呼叫一次就完成」模式
+# （_pursue_use_item_task()），差別是不自動找分類、由 params.item_id 指名要用
+# 哪一個——原本只有玩家能透過快捷欄呼叫 Character.use_selected_item()，NPC
+# 完全沒有「使用道具」這個動作可選（例如受傷了想吃 medicine 止血），違反
+# 《00》原則五（玩家與 NPC 能力對稱）。兩邊現在共用同一個 Character.use_item(item_id)
+#
+# medicate 是本 PR 接上的：同樣是「吃掉背包裡的東西」形狀，跟 use_item 的差別
+# 是自動找分類——只查 effect_injury（見 Character.medicate()/_find_curative_slot()），
+# 不用 params.item_id 指名
+const IMPLEMENTED_ACTIONS := ["move_to", "talk", "sleep", "wash", "idle", "eat", "drink", "use_item", "medicate", "buy", "murmur", "give", "shout", "haul", "struggle", "attack", "persuade", "bury", "hunt_small", "hunt_large", "gather", "follow", "perform", "work", "spit_at_stone", "worship_stone", "praise_stone", "wander"]
 
 # 一次決策回應最多能塞幾筆任務。逼 LLM 一次只回真的要排的那幾件，不是把整個
 # 任務池灌爆——池子總量上限（見 agent.gd 的 LLM_TASK_POOL_CAP）是另一道、
@@ -377,6 +398,37 @@ static func validate_dialogue_open(data: Dictionary, now_minutes: int) -> Dictio
 static func _is_literal_context_reference(value: String) -> bool:
 	return value.contains("context.")
 
+# issue #794：上面的 _is_literal_context_reference() 只抓模型照抄 schema
+# 措辭本身當成值那種字面案例（#766），抓不到自由幻覺出來的名字（「路人」、
+# 「村民」、憑空捏造的角色名）——這種字串語法上合法、非空、也不含
+# "context." 字面片段，會被舊版驗證直接放行，一路帶到 resolve() 才因為
+# 找不到這個角色而失敗，保證失敗的任務卻要浪費一整輪決策才會被發現。
+#
+# 這裡改成直接跟呼叫端傳入的 visible_names（組 envelope 當下 context.visible
+# 的真實名字清單）做白名單比對，不管字串「看起來」合不合理，一律
+# fail-closed：不在清單裡就不是合法目標，不逐一列舉幻覺的各種可能寫法。
+# attack 額外允許 "god_stone" 這個非角色的特例目標（見該動作原本的說明）。
+#
+# visible_names 用 null 代表呼叫端沒有清單可比對（例如 validate_dialogue()
+# 內嵌的承諾任務——對話當下沒有重新組一次完整 envelope，沒有現成清單），
+# 這時只做字面抄襲檢查、不做白名單，避免因為沒有清單就把所有目標都判定
+# 不合法。
+#
+# 這裡刻意不用「空陣列代表沒有清單」——空陣列本身是合法值：單人場景／
+# 當下真的沒有人在視野內時，呼叫端傳的就是空陣列，這時「沒有清單」跟
+# 「清單裡沒有半個人」語意完全相反，混用同一個空陣列會讓後者被誤判成前者，
+# 使白名單在最需要擋幻覺的情境（context.visible 真的是空的）形同虛設
+# （實測 Test B 診斷測試踩到：單人測試裡 LLM 選 talk 目標「村民」，這種
+# 情境仍被當成「沒有清單」放行）
+static func _is_valid_target(target_name: String, action: String, visible_names: Variant) -> bool:
+	if _is_literal_context_reference(target_name):
+		return false
+	if visible_names == null:
+		return true
+	if action == "attack" and target_name == "god_stone":
+		return true
+	return (visible_names as PackedStringArray).has(target_name)
+
 # 單筆任務的通用邊界檢查：action 白名單、params 型別、talk/attack/give 的
 # 逐欄位檢查、expires_in_minutes 換算、priority／duration 範圍。從
 # validate_tasks() 的逐筆迴圈裡抽出來，讓 persuade 的 proposed_task
@@ -387,7 +439,9 @@ static func _is_literal_context_reference(value: String) -> bool:
 # 絕對 expires_at 要吃呼叫當下的時間——proposed_task 換算時用的是「發起者
 # 這次決策」的 now_minutes，不是被接受那一刻的；agent.gd::
 # _resolve_pending_persuade() 推進任務池前會重設這個值，見那邊的說明
-static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictionary:
+static func _validate_task_shape(
+	task: Dictionary, now_minutes: int, visible_names: Variant = null
+) -> Dictionary:
 	if not task.has("action") or not task["action"] is String:
 		return _fail(ERROR_BAD_SHAPE)
 
@@ -414,7 +468,7 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 		if not target is String or (target as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
 		var target_name: String = (target as String).strip_edges()
-		if _is_literal_context_reference(target_name):
+		if not _is_valid_target(target_name, action, visible_names):
 			return _fail(ERROR_BAD_SHAPE)
 		# 存回去的是修剪過的值——_find_character_by_name() 用精確比對，
 		# LLM 輸出偶爾帶前後空白的話，不修剪會讓合法目標在執行層被誤判成
@@ -431,7 +485,7 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 		var give_target: Variant = give_params.get("target")
 		if not give_target is String or (give_target as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
-		if _is_literal_context_reference((give_target as String).strip_edges()):
+		if not _is_valid_target((give_target as String).strip_edges(), action, visible_names):
 			return _fail(ERROR_BAD_SHAPE)
 
 		if give_params.has("count"):
@@ -466,6 +520,16 @@ static func _validate_task_shape(task: Dictionary, now_minutes: int) -> Dictiona
 		if not place is String or (place as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
 		buy_params["place"] = (place as String).strip_edges()
+
+	# use_item 動作的 params 驗證（#865）：item_id 是必填字串，跟 buy 的
+	# item_id 驗證同一套，只是沒有 place——use_item 是對自己使用背包裡已有
+	# 的東西，原地執行，不像 buy 要指定去哪買
+	if action == "use_item":
+		var use_item_params: Dictionary = task.get("params", {})
+		var use_item_id: Variant = use_item_params.get("item_id")
+		if not use_item_id is String or (use_item_id as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+		use_item_params["item_id"] = (use_item_id as String).strip_edges()
 
 	# move_to 動作的 params 驗證：跟 buy／gather 同一套「place 是必填
 	# 字串」——這個動作原本完全沒有逐欄位驗證，缺 place 或給空字串會直接
@@ -672,11 +736,13 @@ static func _validate_tip(data: Variant) -> Dictionary:
 # persuade 專屬的 params 驗證（#227）：target／reason 必填非空字串，
 # proposed_task 選填——有填就重用 _validate_task_shape() 驗證它的形狀
 # （跟一般任務同一套邊界），不驗證內容合理性。reason 是說服的理由，自由
-# 文字、不驗證、不二次判定——跟 believed／persuaded 同一套「不驗證心智
+# 文字、不驗證、不二次判定——跟 persuaded 同一套「不驗證心智
 # 判斷內容」的原則，這裡只驗證格式，不驗證說服的理由站不站得住腳。
 # 刻意擋掉 proposed_task.action == "persuade"：巢狀說服（說服對方去說服
 # 別人）語意混亂，不是這個機制要支援的情境
-static func _validate_persuade_params(params: Variant, now_minutes: int) -> Dictionary:
+static func _validate_persuade_params(
+	params: Variant, now_minutes: int, visible_names: Variant = null
+) -> Dictionary:
 	if not params is Dictionary:
 		return _fail(ERROR_BAD_SHAPE)
 	var persuade_params := params as Dictionary
@@ -685,7 +751,7 @@ static func _validate_persuade_params(params: Variant, now_minutes: int) -> Dict
 	if not target is String or (target as String).strip_edges().is_empty():
 		return _fail(ERROR_BAD_SHAPE)
 	var target_name: String = (target as String).strip_edges()
-	if _is_literal_context_reference(target_name):
+	if not _is_valid_target(target_name, "persuade", visible_names):
 		return _fail(ERROR_BAD_SHAPE)
 
 	var reason: Variant = persuade_params.get("reason")
@@ -712,7 +778,7 @@ static func _validate_persuade_params(params: Variant, now_minutes: int) -> Dict
 		var proposed_task := proposed as Dictionary
 		if proposed_task.get("action") == "persuade":
 			return _fail(ERROR_BAD_SHAPE)
-		var proposed_result := _validate_task_shape(proposed_task, now_minutes)
+		var proposed_result := _validate_task_shape(proposed_task, now_minutes, visible_names)
 		if not proposed_result["ok"]:
 			return _fail(proposed_result["error"])
 		normalized["proposed_task"] = proposed_result["data"]
@@ -744,7 +810,7 @@ static func _validate_persuade_params(params: Variant, now_minutes: int) -> Dict
 # 的參數後面不能接沒預設值的，allow_update_plan 只好跟著一起拿掉預設值）
 static func validate_tasks(
 	data: Dictionary, allow_update_plan: bool, now_minutes: int, allow_appointment: bool = false,
-	allow_perform_tip: bool = false
+	allow_perform_tip: bool = false, visible_names: Variant = null
 ) -> Dictionary:
 	if not data.has("tasks") or not data["tasks"] is Array:
 		return _fail(ERROR_BAD_SHAPE)
@@ -765,13 +831,13 @@ static func validate_tasks(
 		# 共用邊界檢查與最後 append 進 tasks[] 的是同一份乾淨資料，不是模型
 		# 的原始輸入
 		if task.get("action") == "persuade":
-			var persuade_result := _validate_persuade_params(task.get("params"), now_minutes)
+			var persuade_result := _validate_persuade_params(task.get("params"), now_minutes, visible_names)
 			if not persuade_result["ok"]:
 				return _fail(persuade_result["error"])
 			task = task.duplicate()
 			task["params"] = persuade_result["data"]
 
-		var shape_result := _validate_task_shape(task, now_minutes)
+		var shape_result := _validate_task_shape(task, now_minutes, visible_names)
 		if not shape_result["ok"]:
 			return _fail(shape_result["error"])
 		tasks.append(shape_result["data"])
@@ -870,7 +936,7 @@ static func validate_tasks(
 	# 個欄位。省略 persuaded 視同「不被說動」；importance／valence 只在
 	# 純思想說服被接受時才有意義，省略時呼叫端會退回預設值，這裡不用管
 	# 「這次用不用得到」，只驗證型別／範圍——內容本身（信不信、重不重要）
-	# 不驗證、不二次判定，跟 believed 同一個原則
+	# 不驗證、不二次判定，跟 persuaded 同一個原則
 	var persuaded := false
 	if data.has("persuaded"):
 		if not data["persuaded"] is bool:

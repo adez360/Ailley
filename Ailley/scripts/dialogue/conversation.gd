@@ -94,7 +94,7 @@ func _run() -> void:
 		# 意義；turn 0 的「要不要理會」已經是 next_line() 的 engage 欄位在管
 		# （見下方）。放在 speaker.next_line() 之前問，退出決定優先於等待
 		# 對方回話的逾時——聽者不想聽了就不用等 next_line() 的 provider 逾時
-		# （ai_config.gd 預設 10 秒；2026-08-30 拍板，見《99》P-31）
+		# （ai_config.gd::DEFAULT_TIMEOUT；2026-08-30 拍板，見《99》P-31）
 		if turn > 0:
 			var wants_to_continue: bool = await listener.wants_to_continue(speaker, _turns)
 			if _bail_if_finished():
@@ -126,11 +126,14 @@ func _run() -> void:
 			return
 
 		# 被搭話的一方選擇不理會（issue #630）：只有 turn 0 才可能出現，之後
-		# 已經在聊，不會再有「要不要理」這個選項——安靜結束，沒有台詞可顯示，
-		# 把 next_line() 開頭顯示的「…」收掉
+		# 已經在聊，不會再有「要不要理」這個選項。原本直接 bubble.clear() 收掉
+		# next_line() 開頭顯示的「…」、什麼都不顯示——玩家分不出這跟「LLM 還在
+		# 想」的空窗期有什麼差別。改顯示一句能看出來的提示，不算真的說了話，
+		# broadcast=false 跟 AI_THINKING_TEXT 同一個理由（不該讓鄰近角色把它
+		# 當事實句聽見）
 		if turn == 0 and not result.get("engage", true):
 			if speaker.bubble != null:
-				speaker.bubble.clear()
+				speaker.say(L10n.t("DLG_IGNORED"), true, false)
 			_finish(REASON_IGNORED)
 			queue_free()
 			return

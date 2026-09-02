@@ -38,6 +38,9 @@ func _ready() -> void:
 			# 抓到：原本這裡沒有提前 return，_apply_startup_ai_state() 還是會
 			# 對已經要被丟棄的場景做 get_nodes_in_group("agents") 之類的操作）
 			return
+	else:
+		# issue #585：新手引導只在新遊戲開場顯示一次，讀檔（繼續遊戲）不顯示
+		add_child(OnboardingHint.new())
 
 	_apply_startup_ai_state()
 

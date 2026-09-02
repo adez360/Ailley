@@ -1,9 +1,11 @@
-[gd_scene load_steps=7 format=3 uid="uid://bianwxowjctjk"]
+[gd_scene load_steps=9 format=3 uid="uid://bianwxowjctjk"]
 
 [ext_resource type="PackedScene" uid="uid://v21qv1icuh5m" path="res://scenes/player.tscn" id="1_ljsu2"]
 [ext_resource type="Script" uid="uid://bxtstp8huotpd" path="res://scripts/core/main_scene.gd" id="1_o6xl0"]
 [ext_resource type="PackedScene" uid="uid://b2e0tw4w7vsnc" path="res://scenes/level.tscn" id="1_tefeu"]
 [ext_resource type="PackedScene" uid="uid://cyoefve2fc6lb" path="res://scenes/ui/vending_menu.tscn" id="6_tefeu"]
+[ext_resource type="PackedScene" uid="uid://dbcfofyr1gv4j" path="res://scenes/ui/status_panel.tscn" id="7_o6xl0"]
+[ext_resource type="PackedScene" uid="uid://bdwnpstjspc4m" path="res://scenes/ui/give_menu.tscn" id="8_tipki"]
 [ext_resource type="PackedScene" uid="uid://c5fffesir3r4v" path="res://scenes/workstation.tscn" id="12_0ld40"]
 [ext_resource type="PackedScene" uid="uid://wo0a0v2y4gj1" path="res://scenes/hud.tscn" id="13_trceg"]
 
@@ -25,3 +27,7 @@ position = Vector2(-88, 88)
 [node name="PersistentUI" parent="." instance=ExtResource("13_trceg")]
 
 [node name="VendingMenu" parent="PersistentUI" instance=ExtResource("6_tefeu")]
+
+[node name="StatusPanel2" parent="PersistentUI" instance=ExtResource("7_o6xl0")]
+
+[node name="GiveMenu" parent="PersistentUI" instance=ExtResource("8_tipki")]

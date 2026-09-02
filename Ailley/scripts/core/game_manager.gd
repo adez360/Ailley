@@ -1,5 +1,13 @@
 extends Node
 
+## deploy_from_library(as_player=true) 換掉場上 "player" 分組成員（換身、
+## 讀檔還原化身）時發出，帶新的化身節點。UI 端（hotbar.gd／inventory_panel.gd
+## 底下的 InventorySlotButton）靠這個重新把 Inventory.changed 接到新節點的
+## Inventory 上——舊節點被 deploy_from_library() queue_free() 掉，訂在舊
+## Inventory 上的連線跟著消失，不會自己搬到新節點（bug 現象：換角後快捷欄
+## 卡著舊角色的背包內容，新角色買東西也不會刷新畫面）
+signal player_body_changed(new_player: Character)
+
 ## 目前只有一個世界，MVP 沒有建立/選擇世界的流程，先固定一個 id 頂著——
 ## 真的要支援多世界時，這裡才需要變成可選清單
 const DEFAULT_WORLD_ID := "world_001"
@@ -90,6 +98,8 @@ func _ready():
 	load_character_templates()
 	# 跨遊戲日自動存檔（#359），見下方 _on_day_changed_autosave() 的時序說明
 	GameClock.day_changed.connect(_on_day_changed_autosave)
+	# 低頻背景重試 AI 就緒狀態（#824），見下方 recheck_ai_readiness() 的說明
+	GameClock.day_changed.connect(_on_day_changed_ai_readiness_recheck)
 
 # 讀取NPC行程
 func load_npc_data():
@@ -201,6 +211,19 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 		character.character_id = identity["character_id"]
 	if identity.has("character_name"):
 		character.character_name = identity["character_name"]
+	# age 是 Character 基底欄位（Player 也有，跟 decision_source／model_name
+	# 那種 Agent 專屬欄位不同），走跟 character_name 一樣的識別資料管線即可
+	# （issue #837）。範圍驗證（16–70，《規格書01》§1-1）在這個唯一的寫入點
+	# 做一次就夠，呼叫端（deploy_from_library()／_respawn_character()）不用
+	# 各自重複驗證——角色庫資料若因手改／損毀存檔帶著界外值，落到 30（跟
+	# 角色庫本身 entry.get("age", 30) 的既有預設一致），不會把壞資料直接
+	# 顯示在狀態面板上（CodeRabbit review 抓到，PR #845）
+	if identity.has("age"):
+		var raw_age: Variant = identity["age"]
+		# 只有數字才吃（JSON.parse_string() 回 float，int/float 都收）；字串等
+		# 非數值 Variant 不吃 int() 的隱式轉型，直接落到 30 預設（跟資料契約一致）
+		var age_value: int = int(raw_age) if raw_age is int or raw_age is float else 30
+		character.age = age_value if age_value >= 16 and age_value <= 70 else 30
 
 	# words_to_creator 只有角色庫投放這條路徑會給（那份是建角當下就生成好、
 	# 可能已人工檢閱過的內容）。要在 add_child() 觸發 _ready() 之前設好——
@@ -456,6 +479,7 @@ func deploy_from_library(id: String, as_player: bool = false) -> Character:
 		"character_id": entry["id"],
 		"character_name": entry["character_name"],
 		"words_to_creator": entry.get("words_to_creator", ""),
+		"age": entry.get("age", 30),
 	})
 
 	# decision_source／model_name 是 agent.gd 的 @export 欄位，player.gd 沒有
@@ -473,6 +497,9 @@ func deploy_from_library(id: String, as_player: bool = false) -> Character:
 
 	entry["deployed"] = true
 	activate_llm_decision_if_ready(character)
+
+	if as_player:
+		player_body_changed.emit(character)
 
 	return character
 
@@ -538,6 +565,50 @@ func activate_llm_decision_if_ready(character: Character) -> void:
 	# （Policy.SCHEDULED）是各自獨立的冷卻池，不用像 issue #682 之前那樣
 	# 等一輪冷卻才能開決策
 	agent.debug_set_llm_decision(true)
+
+
+## #824：對場上所有 `not llm_decision_enabled` 的既有 Agent 補打一次就緒探測。
+## `_apply_startup_ai_state()`（main_scene.gd）跟 `activate_llm_decision_if_ready()`
+## 都只在各自的觸發時機（開場／單一角色投放）補打一次，救不了「已經在場上、
+## 早就被判定失敗」的既有角色——這個函式是給遊戲執行期間任何時候呼叫的第三個
+## 入口，同一套「readiness 快照可能過期，補打一次 reload_config_and_wait()
+## 再重判」邏輯（issue #728），批次套用在整批既有 Agent 上。
+##
+## 沒有任何角色卡在未就緒時直接回傳、完全不打網路——這是低頻背景重試
+## （`_on_day_changed_ai_readiness_recheck()`）不會造成不必要網路負載的關鍵：
+## 每遊戲日觸發一次，但只有真的有角色卡住時才會真的送出探測請求。
+func recheck_ai_readiness() -> Dictionary:
+	var not_ready_agents: Array[Agent] = []
+	for node in get_tree().get_nodes_in_group("agents"):
+		var agent := node as Agent
+		if agent != null and not agent.llm_decision_enabled:
+			not_ready_agents.append(agent)
+
+	if not_ready_agents.is_empty():
+		return {"checked": 0, "recovered": 0, "reasons": {}}
+
+	await AIService.reload_config_and_wait()
+
+	var recovered := 0
+	var reasons := {}
+	for agent in not_ready_agents:
+		if not is_instance_valid(agent):
+			continue
+		var readiness := AIService.get_readiness(agent.get_provider_name())
+		if bool(readiness.get("ready", false)):
+			agent.debug_set_llm_decision(true)
+			recovered += 1
+		else:
+			reasons[str(readiness.get("reason", ""))] = true
+
+	return {"checked": not_ready_agents.size(), "recovered": recovered, "reasons": reasons}
+
+
+## 低頻背景重試（issue #824「建議」的第二個選項）：跨遊戲日觸發，不是 tick
+## 輪詢。跟 `_on_day_changed_autosave()` 同一個理由用 call_deferred()——訊號
+## 處理當下不適合直接跑非同步流程
+func _on_day_changed_ai_readiness_recheck(_day: int) -> void:
+	call_deferred("recheck_ai_readiness")
 
 
 # ---- 存檔 ----
@@ -641,7 +712,7 @@ func _on_day_changed_autosave(_day: int) -> void:
 # #468：30 秒是抓寬的 best-effort 窗口，不是精確算出的完整最壞情況上限——
 # AIService.RETRY_LIMIT（1 次重試）只套用在逾時以外的可重試錯誤，逾時本身
 # 不重試（見 ai_service.gd::_interpret()）；provider.timeout 可能被設定檔
-# 覆寫，不保證等於 AIConfig.DEFAULT_TIMEOUT（10 秒）；_decide_with_retry() 的驗證
+# 覆寫，不保證等於 AIConfig.DEFAULT_TIMEOUT；_decide_with_retry() 的驗證
 # 重試（provider.max_validation_retries()）與撞期補跑
 # （_sleep_reflection_pending）都可能讓實際等待時間超過這個窗口。這裡不
 # 無限等——逾時就放棄等待、照樣存檔：存到的是反思套用前的狀態，跟完全不等
@@ -721,6 +792,27 @@ func save_before_leaving() -> bool:
 	if not result["world_ok"]:
 		push_error("離開遊戲存檔失敗：世界 %s" % DEFAULT_WORLD_ID)
 	return result["world_ok"] and result["character_failures"].is_empty()
+
+# 重置執行期會殘留的世界層欄位（issue #875）：GameManager 是 autoload，整個
+# process 存活期間都不會自動重新初始化，identity_assignments 開場由
+# load_npc_data() 從 npc_schedule.json 載入、執行期由 deploy_from_library()／
+# _respawn_character() 附加投放角色的身分；character_library 開場為空、
+# 執行期由建角流程 _append_library_entry() 附加、deploy_from_library() 改寫
+# deployed 旗標；embodied_character_id 由 deploy_from_library(as_player=true)
+# 寫入；allow_player_join 則只有「繼續遊戲」的 apply_world_save_data() 會
+# 蓋寫。同一次執行裡玩過一次「繼續遊戲」之後再按
+# 「開始新遊戲」，這些欄位不會自己變回全新狀態——main_menu.gd::
+# _on_start_pressed() 呼叫這個函式補上這條路徑，跟同一個函式已經在呼叫的
+# GameClock.reset_to_new_game_start()（#606）是同一個根因、同一種修法。
+# identity_assignments 不是清成空表，而是重呼 load_npc_data() 回到開機載入後
+# 的狀態（行為等冪，npc_data／schedule_assignments 一併重載）；它不動
+# character_library 等其他欄位，重置邏輯互不干擾
+func reset_for_new_game() -> void:
+	character_library.clear()
+	embodied_character_id = ""
+	allow_player_join = true
+	load_npc_data()
+
 
 # data 缺欄位一律用預設值補，不當成錯誤（跟 character.gd 同一條規則）。
 # 場景裡目前找到的角色直接套用；存檔裡有記載但場景沒有的角色會被重新生成
@@ -933,6 +1025,7 @@ func _respawn_character(character_id: String, entry: Dictionary) -> void:
 		"character_id": character_id,
 		"character_name": library_entry.get("character_name", ""),
 		"words_to_creator": library_entry.get("words_to_creator", ""),
+		"age": library_entry.get("age", 30),
 	})
 
 	# decision_source／model_name 是投放後不可改的欄位（《06》），還原時要跟著

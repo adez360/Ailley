@@ -136,7 +136,7 @@ llama-server、`openrouter` 打雲端），每個各自有 `base_url` / `api_key
 	"enabled": true,
 	"default_provider": "local",
 	"providers": {
-		"local":      {"base_url": "http://127.0.0.1:8080/v1", "api_key": "", "model": "qwen2.5-7b-instruct", "timeout": 10.0, "format_guaranteed": true},
+		"local":      {"base_url": "http://127.0.0.1:8080/v1", "api_key": "", "model": "qwen2.5-7b-instruct", "timeout": 20.0, "format_guaranteed": true},
 		"openrouter": {"base_url": "https://openrouter.ai/api/v1", "api_key": "sk-or-v1-…", "model": "openai/gpt-4o-mini", "timeout": 10.0}
 	},
 	"embedding": {"base_url": "http://127.0.0.1:8081/v1", "model": "bge-small-zh-v1.5-q8_0.gguf", "timeout": 10.0},
@@ -1036,6 +1036,55 @@ resolve 的呼叫（例如 `debug_set_llm_decision()` 本身回傳的就是 awai
 不存在的位址），補打的那次探測也失敗，`llm_decision_enabled` 維持
 `false`，且遊戲 log 印出 `GameManager: <角色名> 的 provider「<name>」未就緒，
 llm_decision_enabled 沒有打開（<原因>）`。
+
+## 正式版玩家的第三個補救入口：手動按鈕＋跨日背景重試（issue #824，2026-08-31 實測）
+
+上一節的兩個補打入口（`activate_llm_decision_if_ready()`／
+`_apply_startup_ai_state()`）都只在各自的觸發時機（單一角色投放、場景
+開場）補打一次，救不了「已經在場上、早就被判定失敗」的既有角色——如果
+玩家在開場那一刻本機 LLM 還沒下載完、之後才補好設定，場上既有角色會
+卡在排程模式一整局，唯一的補救指令 `debug` 主控台的 `ai_decision` 在正式
+建置整個關閉（issue #356）。
+
+**`GameManager.recheck_ai_readiness() -> Dictionary`**：第三個補打入口，
+遊戲執行期間任何時候都能呼叫。收集場上所有 `not llm_decision_enabled` 的
+Agent；一個都沒有時直接回傳、完全不打網路（低頻背景重試不會造成不必要
+網路負載的關鍵）；否則整批共用一次 `AIService.reload_config_and_wait()`
+再逐一重判，就緒的呼叫 `debug_set_llm_decision(true)`，仍未就緒的把
+`reason` 收進去重後的字典。回傳 `{checked, recovered, reasons}` 給呼叫端
+組訊息。
+
+兩個呼叫端：
+
+- **手動**：Esc 選單新增「重新檢查 AI 連線」按鈕（`esc_menu.gd`），按下呼叫
+  這個函式，依 `checked`／`recovered` 組一句狀態文字顯示在按鈕下方
+  （沒有卡住的角色／N／M 位已恢復／仍未就緒），跟 `_on_exit_pressed()`
+  同一種旗標＋停用按鈕擋重入寫法。
+- **背景**：`GameManager._ready()` 訂閱 `GameClock.day_changed`，每遊戲日
+  觸發一次 `call_deferred("recheck_ai_readiness")`——跟既有的
+  `_on_day_changed_autosave()` 同一個 `call_deferred` 寫法。
+
+實測方法：`project_run` + `game_eval` 對 `main.tscn` 活場景驗證。本機沒有
+llama-server 在跑，`local` provider 的探測固定逾時（約 10 秒，
+`http://127.0.0.1:8080/v1/models` 逾時連不上），三種情境都在這個「仍未
+就緒」的真實條件下驗證：
+
+- 場上沒有卡住的 Agent 時，`recheck_ai_readiness()` 立即回傳
+  `{checked:0, recovered:0, reasons:{}}`，不觸發任何網路探測。
+- 兩隻 Agent 同時卡在 `llm_decision_enabled=false` 時，批次呼叫回傳
+  `{checked:2, recovered:0, reasons:{"逾時連不上…":true}}`，去重後的
+  `reasons` 字典正確。
+- Esc 選單按鈕實際點擊（`editor_screenshot(source="game")` 截圖確認排版：
+  選單自動撐開容納新按鈕與狀態文字，沒有裁切），驗證過「沒有卡住角色」
+  與「仍未就緒」兩種狀態文字都正確顯示。
+- 手動推進 `GameClock` 跨過午夜觸發 `day_changed`：`AIService._readiness_generation`
+  在每次跨日時遞增（證實真的又打了一輪網路探測，不是掛著沒動），
+  探測結束後 `_pending_readiness_count` 歸零、遊戲沒有卡進 debugger break。
+
+「連線恢復後 `llm_decision_enabled` 正確變 `true`」這條路徑沒有另外重測——
+`recheck_ai_readiness()` 呼叫的 `reload_config_and_wait()` → `get_readiness()`
+→ `debug_set_llm_decision(true)` 序列跟 `activate_llm_decision_if_ready()`
+逐字元相同，上一節已經用真實可連的 provider 驗證過這段序列本身是對的。
 
 ## 兩隻 AI 同場互看：機制上通，但沒觀察到真的互相搭話（2026-08-28 實測）
 

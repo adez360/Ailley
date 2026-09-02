@@ -6,7 +6,7 @@
 			"base_url": "http://127.0.0.1:8080/v1",
 			"api_key": "",
 			"model": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
-			"timeout": 10.0,
+			"timeout": 20.0,
 			"supports_json_schema": true,
 			"format_guaranteed": true
 		},
