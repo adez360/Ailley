@@ -1011,8 +1011,22 @@ static func _migrate_v9_notnull_primary_keys(db) -> bool:
 			DatabaseSchema, "_migrate_v8_create_npc_relations_with_trust"
 		)
 
+	# issue #751 之後現行的 LocationSchema 多了 pos_x／pos_y；會跑到
+	# migration 9 的舊資料庫（user_version<=8）還沒有這兩欄（v12 的
+	# ALTER TABLE ADD COLUMN 才會補），照樣用現行 schema 重建會在
+	# _migrate_rebuild_verify_column_shape() 新舊欄位數對不上、驗證判定
+	# 失敗、整個 initialize() 中止（同上面 migration 7 的
+	# world_character_state 事故）。舊表還沒有 pos_x 時改用凍結形狀重建，
+	# 這兩欄唯一由 migration 12 補上（它的 ALTER TABLE 已查 PRAGMA
+	# table_info 擋重複欄位）
+	var location_entry := {"table": "location", "schema": LocationSchema, "repair_null_pk": true}
+	if not _migrate_table_has_column(db, "location", "pos_x"):
+		location_entry["create_fn"] = Callable(
+			DatabaseSchema, "_migrate_v9_create_location_without_pos"
+		)
+
 	return _migrate_rebuild_table_group(db, [
-		{"table": "location", "schema": LocationSchema, "repair_null_pk": true},
+		location_entry,
 		{"table": "npc", "schema": NPCSchema, "repair_null_pk": true},
 		{"table": "grave", "schema": GraveSchema},
 		{"table": "memories", "schema": MemorySchema},
@@ -1041,6 +1055,47 @@ static func _migrate_v9_notnull_primary_keys(db) -> bool:
 		{"table": "npc_wallet", "schema": NPCWalletSchema},
 		{"table": "world_character_state", "schema": WorldCharacterStateSchema}
 	])
+
+
+## Migration 9 當年重建 location 時的表結構凍結版（CodeRabbit review 抓到，
+## 同上面 migration 7 的 world_character_state 事故）：issue #751 之後現行
+## 的 LocationSchema 多了 pos_x／pos_y，用「現在的形狀」去對 user_version<=8、
+## 還沒有這兩欄的舊資料庫做 _migrate_rebuild_verify_column_shape()，新舊
+## 欄位數對不上，驗證判定失敗、migration 9 中止，migration 12 永遠跑不到。
+## 這裡凍結 pos 欄位出現之前的表形狀；這兩欄唯一由 migration 12 的
+## ALTER TABLE ADD COLUMN 補上。只在 _migrate_v9_notnull_primary_keys()
+## 判定舊表沒有 pos_x 時才被指定成 create_fn 呼叫
+static func _migrate_v9_create_location_without_pos(db) -> bool:
+	var sql := """
+	CREATE TABLE IF NOT EXISTS location (
+
+		location_id TEXT NOT NULL PRIMARY KEY,
+
+		name TEXT NOT NULL,
+
+		description TEXT DEFAULT '',
+
+		location_type TEXT DEFAULT '',
+
+		capacity INTEGER NOT NULL DEFAULT 0
+			CHECK (capacity >= 0),
+
+		danger INTEGER NOT NULL DEFAULT 0
+			CHECK (danger BETWEEN 0 AND 100),
+
+		is_active INTEGER NOT NULL DEFAULT 1
+			CHECK (is_active IN (0, 1))
+	);
+	"""
+
+	if not db.query(sql):
+		push_error(
+			"[DatabaseSchema] Migration 9: Failed to recreate location (frozen shape without pos columns): "
+			+ db.error_message
+		)
+		return false
+
+	return true
 
 
 ## npc_relations 在 migration 9 當下（issue #561；原訂版號 8，見上面 Migration 9

@@ -181,6 +181,7 @@ func test_nonexistent_value_is_reassigned() -> void:
 		"loc_home_09", TEST_NPC_PREFIX + "a", {}
 	)
 
+	assert_ne(home, "loc_home_09", "不存在的 location 不可被直接沿用")
 	assert_true(
 		_persistence._is_valid_home_location_id(home),
 		"loc_home_09 在 DB 沒有這一列，應被重分配，實際拿到 %s" % home

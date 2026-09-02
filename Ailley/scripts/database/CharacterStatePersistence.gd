@@ -2140,7 +2140,8 @@ func _resolve_home_location_for(
 	)
 
 
-	# 值本身也要驗證是這一批 loc_home_01～loc_home_05 命名，不能只驗證
+	# 值本身也要驗證是 loc_home_NN（正整數編號，動態成長後沒有固定上限）
+	# 命名，不能只驗證
 	# location 表裡「有沒有這一列」——舊 fallback（issue #391 之前）寫的
 	# home_001 那類值在 location 表裡也確實有一列，會通過純存在性檢查，
 	# 但場景裡沒有同名錨點，has_for()/resolve_for() 永遠解析不到、每次都
@@ -2332,7 +2333,20 @@ func _grow_home_supply() -> String:
 		push_error("[CharacterStatePersistence] 一間家都沒有、也找不到新落點，無法分配。")
 		return ""
 
-	_create_or_reactivate_home(location_id, position)
+	if not _create_or_reactivate_home(location_id, position):
+		# DB 寫入失敗：不能回傳 location 表裡不存在的 id——npc.home_location_id
+		# 的 FK 會擋下整筆角色同步（CodeRabbit review on #825）。退回共用現有
+		# 的 active 家，跟上面找不到落點的溢出共用同一個「不能讓整套同步卡死」
+		# 的理由
+		var fallback_ids := _active_home_location_ids()
+		if not fallback_ids.is_empty():
+			push_warning(
+				"[CharacterStatePersistence] 動態家 %s 建立／復活失敗，%s 溢出共用。"
+								% [location_id, fallback_ids[0]]
+			)
+			return fallback_ids[0]
+		push_error("[CharacterStatePersistence] 動態家建立失敗且沒有任何現成的家可共用，無法分配。")
+		return ""
 	return location_id
 
 
@@ -2482,8 +2496,10 @@ func _existing_home_positions() -> Array:
 ## 建立或復活一筆動態家的 DB 資料列＋場景節點。靜態 5 間永遠 active，
 ## _grow_home_supply() 只會在它們全部被占用之後才呼叫到這裡，理論上
 ## location_id 一定落在動態範圍，但仍防呆判斷一次（見 _spawn_home_scene()），
-## 避免誤觸 level.tscn 裡的永久節點
-func _create_or_reactivate_home(location_id: String, position: Vector2) -> void:
+## 避免誤觸 level.tscn 裡的永久節點。回傳成敗：DB 寫入失敗時呼叫端不能拿著
+## 一個 location 表裡不存在的 id 去寫 npc.home_location_id（FK 會擋下整筆
+## 角色同步），要退回共用現有的家
+func _create_or_reactivate_home(location_id: String, position: Vector2) -> bool:
 
 	var existing := DatabaseManager.select_where(
 		"location", "location_id = ?", [location_id], ["location_id"]
@@ -2506,7 +2522,7 @@ func _create_or_reactivate_home(location_id: String, position: Vector2) -> void:
 				"[CharacterStatePersistence] 動態家 %s 建立失敗 | DB=%s"
 				% [location_id, DatabaseManager.db.error_message]
 			)
-			return
+			return false
 
 	else:
 
@@ -2519,9 +2535,10 @@ func _create_or_reactivate_home(location_id: String, position: Vector2) -> void:
 				"[CharacterStatePersistence] 動態家 %s 復活失敗 | DB=%s"
 				% [location_id, DatabaseManager.db.error_message]
 			)
-			return
+			return false
 
 	_spawn_home_scene(location_id, position)
+	return true
 
 
 ## 動態家的場景表現：house.tscn 掛在 world 群組底下（跟 GameManager.
