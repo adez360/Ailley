@@ -273,7 +273,9 @@ func test_load_save_data_with_missing_entries_key_results_in_empty() -> void:
 
 ## issue #953：get_life_highlights()（#384）原本沒有呼叫端把結果寫進墓碑欄位，
 ## Agent._capture_life_highlights() 是死亡流程（_die() 死亡當下）新接上的掛點。
-## 直接測掛點本身，繞過 _die() 對 GameClock 的依賴（見套件頂端說明）
+## 直接測掛點本身，繞過 _die() 對 GameClock 的依賴（見套件頂端說明）；
+## _die() 的接線（character.gd）由 project_run＋game_eval 冒煙驗證
+## （test_run 的 GameClock 限制，同 test_revive.gd）。
 func test_capture_life_highlights_populates_field_from_l4() -> void:
 	var agent := track(Agent.new()) as Agent
 	agent.memory = track(Memory.new()) as Memory
