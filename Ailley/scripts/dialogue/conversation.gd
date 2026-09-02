@@ -43,6 +43,11 @@ const REASON_INTERRUPTED := "INTERRUPTED"
 ## （複審 PR #667 抓到：原本兩者共用同一個 reason，誤觸發 note_meeting()）
 const REASON_IGNORED := "IGNORED"
 
+## fallback 收尾時（LLM 停用/逾時/驗證失敗，見 _finish_with_fallback()）連第一句
+## 都還沒講的結束原因：跟 REASON_IGNORED 分開——「引擎要不到台詞」不是任何
+## 一方選擇不理會，事實句不該寫成誰「不理會」誰（見 agent.gd::exit_conversation()）
+const REASON_NO_RESPONSE := "NO_RESPONSE"
+
 ## 聽者主動決定不再繼續聽（issue #691，《99》P-31）：跟 REASON_ENDED_BY_SPEAKER
 ## 分開，因為結束的決定權在聽者，不是講話那一方
 const REASON_ENDED_BY_LISTENER := "ENDED_BY_LISTENER"
@@ -183,13 +188,14 @@ func _speak(speaker: Character, line: String, interrupt: bool = false) -> void:
 # （agent.gd::exit_conversation()），要不要在意、下一輪要不要再找對方，
 # 交給 AI 自己判斷。
 #
-# is_opening=true（turn 0 就失敗，連第一句都還沒講）走 REASON_IGNORED：跟
-# 對方選擇不理會（engage=false）同一條靜默路徑，不觸發 _apply_rewards() 的
+# is_opening=true（turn 0 就失敗，連第一句都還沒講）走 REASON_NO_RESPONSE：
+# 引擎要不到台詞不是任何一方選擇不理會，跟 engage=false 的 REASON_IGNORED
+# 分開（見 REASON_NO_RESPONSE 的說明）；兩者都不觸發 _apply_rewards() 的
 # note_meeting()——一句話都沒交換不能算「認識」。
 # 非 is_opening（已經聊了幾輪才失敗）走 REASON_ENDED_BY_LISTENER：確實談過，
 # note_meeting() 照記，只是收尾早了幾輪、沒有道別。
 func _finish_with_fallback(_speaker: Character, _listener: Character, is_opening: bool = false) -> void:
-	_finish(REASON_IGNORED if is_opening else REASON_ENDED_BY_LISTENER)
+	_finish(REASON_NO_RESPONSE if is_opening else REASON_ENDED_BY_LISTENER)
 	queue_free()
 
 # 被外部打斷（例如玩家走開、角色要去做別的事）

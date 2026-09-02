@@ -1030,7 +1030,9 @@ func exit_conversation(reason: String = "") -> void:
 	#
 	# REASON_IGNORED（複審 PR #667 抓到）：對方一句話沒說就不理會，「你跟 X
 	# 講完話了」是假話，兩邊要分別給誠實的說法——被搭話的一方看到的是自己
-	# 選擇不理會，發起搭話的一方看到的是對方沒有回應
+	# 選擇不理會，發起搭話的一方看到的是對方沒有回應。REASON_NO_RESPONSE
+	# 同理（引擎要不到台詞，見 conversation.gd 的 _finish_with_fallback()），
+	# 但誰都沒有「選擇」，兩邊都只能記「沒有回應」
 	if _conversation != null:
 		var other: Character = _conversation.target if _conversation.initiator == self else _conversation.initiator
 		if other != null:
@@ -1038,7 +1040,15 @@ func exit_conversation(reason: String = "") -> void:
 			# 空字串（沒有 place 可言），這裡改用即時座標反查——對話結束當下
 			# 兩人就站在彼此旁邊，位置是準的
 			var event_text: String
-			if reason == Conversation.REASON_IGNORED:
+			if reason == Conversation.REASON_NO_RESPONSE:
+				# 引擎要不到台詞（LLM 停用/逾時，見 conversation.gd 的
+				# _finish_with_fallback()），不是任何人選擇不理會——兩邊都只能
+				# 誠實記「沒有回應」，不能寫成誰「不理會」誰
+				event_text = (
+					"%s 沒有回應你的搭話" % other.character_name if self == _conversation.initiator
+					else "你沒有回應 %s 的搭話" % other.character_name
+				)
+			elif reason == Conversation.REASON_IGNORED:
 				event_text = (
 					"%s 不理你的搭話，沒有回應" % other.character_name if self == _conversation.initiator
 					else "你不理會 %s 的搭話" % other.character_name
@@ -1056,10 +1066,13 @@ func exit_conversation(reason: String = "") -> void:
 
 		# talk_to() 剛送出時只知道對話物件建立成功，對方 turn 0 要不要理還沒
 		# 問——真正的結果要等這裡知道 reason 才算數，被無視（REASON_IGNORED）
-		# 算失敗，這樣連續失敗計數才會如實累積，下輪決策才有機會避開同一個
-		# 一再不理自己的對象（複審 PR #667 抓到，原本在 _pursue_talk_task()
-		# 送出當下就搶先記成功）
-		_track_action_result_for_facts("talk", reason != Conversation.REASON_IGNORED)
+		# 或要不到回應（REASON_NO_RESPONSE）都算失敗，這樣連續失敗計數才會如實
+		# 累積，下輪決策才有機會避開同一個一再不理自己的對象（複審 PR #667
+		# 抓到，原本在 _pursue_talk_task() 送出當下就搶先記成功）
+		_track_action_result_for_facts(
+			"talk",
+			reason != Conversation.REASON_IGNORED and reason != Conversation.REASON_NO_RESPONSE,
+		)
 
 		_remove_task(_active_talk_task_id)
 		if _current_task.get("id", "") == _active_talk_task_id:
@@ -2441,7 +2454,7 @@ func _on_speech_heard(source: Character, line: String) -> void:
 		_queue_reaction_fact_line("你聽到附近的 %s 說：『%s』，要不要有反應由你自己決定" % [source.character_name, line])
 		await _request_next_decision()
 	else:
-		_push_daily_event("你聽到附近的 %s 說：『%s』" % [source.character_name, line])
+		_push_daily_event("你聽到附近的 %s 說：『%s』" % [source.character_name, line], [source.character_id])
 
 # 把一次性事件（看到陌生人、聽到聲音）排進下一次決策的事實句佇列
 # （#402／#407）。見 _pending_reaction_lines 的欄位說明

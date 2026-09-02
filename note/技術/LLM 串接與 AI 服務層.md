@@ -332,8 +332,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 > [!success] 已定案 —— 拿掉 `MAX_TURNS`，改由 Agent 判斷
 > 原本「講滿 6 輪就散」不是人類行為，是計時器。改成每一輪的回傳多一個
 > `end` 欄位，由說話的一方自己決定要不要收尾：`{"line": "那我先去忙了，改天聊", "end": true}`。
-> `end` 省略視為 `false`。收尾語就是它自己那句話，`DialogueLines.closing()`
-> 不再參與正常流程，只留給 fallback。
+> `end` 省略視為 `false`。收尾語就是它自己那句話。
 >
 > **正常結束 ＝ 有人決定結束**（`ENDED_BY_SPEAKER`），`TOO_FAR` / `INTERRUPTED`
 > 維持原樣仍是「沒好好講完」——這條原則跟 [[talk 動作設計]] 原本的
@@ -449,9 +448,8 @@ max_dialogue_calls_per_game_day`，不是 `>`——跟既有
 `count > max` 會讓計數剛好等於上限那一次仍被放行），達到就回傳跟現有
 冷卻／配額檢查一樣的 `{"ok": false, ...}`。**沒有額外的降級邏輯**：
 `next_line()` 收到 `ok=false` 走既有路徑，
-`conversation.gd::_finish_with_fallback()` 自動說一句
-`DialogueLines.closing()` 收尾，跟現有 LLM 失敗／逾時的降級一模一樣，
-玩家體感上看不出差異，只是提早收尾。
+`conversation.gd::_finish_with_fallback()` 靜默結束、不補台詞（issue #949），
+跟現有 LLM 失敗／逾時的降級一模一樣，只是提早收尾。
 >
 > [!important] 這個旋鈕只在 `dialogue_exempt=true` 時才有意義（CodeRabbit review 抓到）
 > `_is_exempt(policy)` 只有 `policy == CONVERSATION and dialogue_exempt` 才成立；
@@ -494,8 +492,8 @@ LLM 之後（issue #630／《99》P-67），這個扣減不再成立，同一份
 驗證失敗重試的發生率，這三項都還沒有數據支持目前 150 這個預設值。
 
 > [!important] 但 fallback 一定要能終止
-> LLM 失敗／逾時時走 `DialogueLines`，而它**沒有 `end` 訊號**——不特別處理就會
-> 無限吐模板句。fallback 要直接說一句 `DialogueLines.closing()` 並結束對話。
+> LLM 失敗／逾時時 `conversation.gd::_finish_with_fallback()` 直接靜默結束、
+> 不補台詞（issue #949），不會有「拿不到 `end` 訊號就無限吐台詞」的循環。
 
 ### 台詞來源抽象
 
@@ -662,13 +660,13 @@ autoload 已註冊，主控台加了 `ai` 指令。
 ### Step 1 — 對話 ✅ 完成
 
 `PromptBuilder.build_dialogue_envelope()` 組信封，`Agent.next_line()` 打
-`AIService`，`conversation.gd` 改成非同步、等台詞時掛「…」氣泡、拿不到就退回
-`DialogueLines`。`MAX_TURNS` 換成 `SAFETY_MAX_TURNS`（純保險，收尾由 `end` 欄位決定），
+`AIService`，`conversation.gd` 改成非同步、等台詞時掛「…」氣泡、拿不到就靜默
+結束（issue #949）。`MAX_TURNS` 換成 `SAFETY_MAX_TURNS`（純保險，收尾由 `end` 欄位決定），
 `character.gd` 有 `signal spoke`，玩家在對話中打的字也送得進上下文。
 
 開場白（turn 0，被搭話的一方）也一律過 LLM（issue #630／《99》P-67），多開放
-一個 `engage` 欄位，可以選擇不理會這次搭話；`DialogueLines.opening()` 只在
-turn 0 的 LLM 呼叫失敗時當 fallback 使用，跟 `closing()` 是同一種定位。
+一個 `engage` 欄位，可以選擇不理會這次搭話；LLM 呼叫失敗時靜默結束、不補
+台詞（issue #949）。
 
 ### Step 2 — 任務池與仲裁器 ✅ 完成
 

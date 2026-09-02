@@ -1503,7 +1503,8 @@ func is_offline_kick_eligible() -> bool:
 ## 鄰近的 LLM 角色會把它當成一句話排進自己的事實句佇列、觸發一次決策，
 ## 在 3 格範圍內連環擴散成一波決策請求風暴（CodeRabbit review 抓到，PR #674）。
 ## 感測不到 LLM 回應時引擎不再冒寫死反應（issue #949），所以這類呼叫端已大幅
-## 減少；剩下的系統指示泡泡呼叫端都要傳 false，見 conversation.gd 的 DLG_IGNORED
+## 減少；剩下的系統指示泡泡呼叫端都要傳 false：player.gd 的 _on_noise_heard、
+## chat_input.gd、conversation.gd 的 DLG_IGNORED
 func say(line: String, interrupt: bool = false, broadcast: bool = true) -> void:
 	if bubble == null:
 		return

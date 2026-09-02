@@ -58,7 +58,7 @@ Ailley/            Godot 專案根
     core/          autoload：GameClock、GameManager
     character/     Character 基底、Player/Agent、Stats/Relationships/Vision
     world/         NavGrid（A*）、FollowCamera
-    dialogue/      Conversation 狀態機、DialogueLines
+    dialogue/      Conversation 狀態機
     ai/            LLM 服務層 —— 全專案唯一碰網路的地方
     ui/            氣泡、聊天框、除錯主控台與疊圖、時鐘
   data/            NPC 排程、地點、AI 設定範本

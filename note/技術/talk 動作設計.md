@@ -25,7 +25,7 @@ updated: 2026-08-31
 | --- | --- | --- | --- |
 | 發起 | 誰能跟誰講、距離、可否打斷 | `character.gd` | 不變 |
 | 會話 | 狀態機、輪次、結束條件 | `conversation.gd` | 不變 |
-| 內容 | 講什麼 | `dialogue_lines.gd` 依角色狀態組模板句 | 換掉這一個檔 |
+| 內容 | 講什麼 | LLM 逐輪生成（`next_line()`，issue #630） | 已接上 |
 | 呈現 | 氣泡 | `bubble.gd` + `bubble.tscn` | 不變 |
 | 後果 | 數值回補、記憶 | social / mood / note_meeting | 加記憶寫入 |
 
@@ -264,7 +264,7 @@ review 抓到：「髒兮兮」「乾淨多了」「傷已經好了」這幾種�
 | 互動鍵 | `E` | |
 | 被搭話者的行程 | 暫停後重算 | 不是接續原路 |
 | 回補 | social +25、mood +5 | 只有正常講完才發；關係只記 `note_meeting()`，不寫入任何評價數值 |
-| 等待對方回話逾時 | provider 逾時（`ai_config.gd` 預設 20 秒） | 沒有對話專屬的獨立逾時常數——`next_line()` 走 `AIService` 的 provider timeout，provider 設定檔可覆蓋、缺值退回 `ai_config.gd::DEFAULT_TIMEOUT`（20 秒），見《04》§6。逾時走 fallback（`DialogueLines.closing()`）。真人玩家的回話等待秒數留到 MVP-2 玩家加入後再定——現在真人不參與 `talk`，不急 |
+| 等待對方回話逾時 | provider 逾時（`ai_config.gd` 預設 20 秒） | 沒有對話專屬的獨立逾時常數——`next_line()` 走 `AIService` 的 provider timeout，provider 設定檔可覆蓋、缺值退回 `ai_config.gd::DEFAULT_TIMEOUT`（20 秒），見《04》§6。逾時走 fallback（靜默結束、不補台詞，issue #949）。真人玩家的回話等待秒數留到 MVP-2 玩家加入後再定——現在真人不參與 `talk`，不急 |
 
 ## 呈現層的坑
 
