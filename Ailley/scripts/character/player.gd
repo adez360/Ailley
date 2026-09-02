@@ -179,11 +179,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 
 	# 休息（issue #926）：獨立按鍵，跟 make_noise／use_item／attack／give 同一種
-	# 「不擠進 interact 優先序鏈」的頂層檢查，按下去立刻切換開始/結束，不用先
-	# 找互動候選
+	# 「不擠進 interact 優先序鏈」的頂層檢查，不用先找互動候選。契約是「按住
+	# 休息」（PR 描述與《玩家休息機制》都寫按住）：按住 Z 休息、放開就停，
+	# 單點一下不會留下沒人按著還在回復的休息狀態（CodeRabbit review 抓到；
+	# 按下時還在休息就收掉，是放開事件被別的 UI 吃掉時的保險）
 	if event.is_action_pressed("rest"):
 		get_viewport().set_input_as_handled()
 		_toggle_resting()
+		return
+	if event.is_action_released("rest") and _is_resting:
+		get_viewport().set_input_as_handled()
+		_stop_resting()
 		return
 
 	# 送禮（issue #841）：獨立按鍵，不擠進 interact（E）那條已經很長的優先序鏈
@@ -695,6 +701,16 @@ func _stop_resting() -> void:
 	if bubble != null:
 		bubble.release_hold()
 
+## 休息中的每幀重查：被擋狀態（對話開始、開工、被搬運、昏迷……）出現的當下
+## 就把休息收掉，不等下一個遊戲分鐘 `_on_game_minute()` 的重查——中途進出
+## 一場對話再回來，回復不該在沒有重新按住 Z 的情況下續攤（CodeRabbit review
+## 抓到）。`_is_resting_blocked()` 的每個條件都是持續性狀態，休息中不會一幀
+## 真一幀假，每幀檢查不會誤殺正常休息
+func _physics_process(delta: float) -> void:
+	if _is_resting and _is_resting_blocked():
+		_stop_resting()
+	super(delta)
+
 ## Character._ready() 已經把 GameClock.time_changed 接到這個函式（見該檔
 ## _ready()），這裡覆寫並呼叫 super() 保留昏迷／治療／exhausted 檢查，不是
 ## 另開一條獨立連線——跟 agent.gd 的 _apply_action_recovery() 同一種「掛在
@@ -714,6 +730,12 @@ func _on_game_minute(hour: int, minute: int) -> void:
 		tier = "nap"
 	for recovery in Agent.ACTION_RECOVERY.get(tier, []):
 		stats.add(recovery["stat"], recovery["amount"])
+		# stamina 回來了要即時同步 exhausted——super() 開頭的
+		# _update_exhausted_condition() 跑在回復「之前」，這裡不同步的話，
+		# exhausted 會多掛一個遊戲分鐘才解除（比照 agent.gd
+		# ::_apply_action_recovery() 的即時同步做法，CodeRabbit review 抓到）
+		if recovery.get("stat") == "stamina":
+			_update_exhausted_condition()
 
 # 玩家的下一句話就是玩家打的字。
 #
