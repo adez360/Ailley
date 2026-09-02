@@ -298,12 +298,14 @@ func receive_created_character(data: Dictionary) -> void:
 # 建角面板「投放」：資料先變成一筆模板（deployed=false），立刻借用
 # deploy_from_library() 生場上實體——DEPLOY_CAP／identity_assignments／
 # provider 重建那些邏輯不重寫一份。投放失敗（世界人數已滿）要把剛 append
-# 的那筆退掉，不留一筆「deployed=false 但其實使用者要投放」的孤兒模板
-func create_and_deploy_character(data: Dictionary) -> Character:
+# 的那筆退掉，不留一筆「deployed=false 但其實使用者要投放」的孤兒模板。
+# as_player=true 是建角面板化身者模式（issue #954）：直接生 player.tscn、
+# 寫入 embodied_character_id，跟左側模板列「操控」鈕（#659）同一條路徑
+func create_and_deploy_character(data: Dictionary, as_player: bool = false) -> Character:
 	var id := _append_library_entry(data)
 	if id.is_empty():
 		return null
-	var character := deploy_from_library(id)
+	var character := deploy_from_library(id, as_player)
 	if character == null:
 		remove_from_library(id)
 	return character
