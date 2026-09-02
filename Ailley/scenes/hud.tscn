@@ -177,29 +177,6 @@ horizontal_alignment = 1
 vertical_alignment = 1
 clip_text = true
 
-[node name="StatusTab" type="VBoxContainer" parent="StatusPanel/Panel"]
-layout_mode = 0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = 10.0
-offset_top = 58.0
-offset_right = -10.0
-offset_bottom = -29.0
-mouse_filter = 2
-theme_override_constants/separation = 4
-
-[node name="AgeLabel" type="Label" parent="StatusPanel/Panel/StatusTab"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
-
-[node name="MoneyLabel" type="Label" parent="StatusPanel/Panel/StatusTab"]
-layout_mode = 2
-theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
-
-[node name="StatsBox" type="VBoxContainer" parent="StatusPanel/Panel/StatusTab"]
-layout_mode = 2
-theme_override_constants/separation = 2
-
 [node name="HintLabel" type="Label" parent="StatusPanel/Panel"]
 layout_mode = 0
 offset_left = 10.0
@@ -285,12 +262,41 @@ theme_override_constants/separation = 4
 [node name="EmotionLabel" type="Label" parent="StatusPanel/Panel/InnerTab"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+autowrap_mode = 3
 
 [node name="ConditionsHeader" type="Label" parent="StatusPanel/Panel/InnerTab"]
 layout_mode = 2
 text = "UI_STATUS_CONDITIONS_HEADER"
 
 [node name="ConditionsBox" type="VBoxContainer" parent="StatusPanel/Panel/InnerTab"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="StatusTab" type="ScrollContainer" parent="StatusPanel/Panel"]
+layout_mode = 0
+offset_left = 10.0
+offset_top = 58.0
+offset_right = 270.0
+offset_bottom = 179.0
+horizontal_scroll_mode = 0
+
+[node name="StatusVBox" type="VBoxContainer" parent="StatusPanel/Panel/StatusTab"]
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 2
+theme_override_constants/separation = 4
+
+[node name="AgeLabel" type="Label" parent="StatusPanel/Panel/StatusTab/StatusVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+autowrap_mode = 3
+
+[node name="MoneyLabel" type="Label" parent="StatusPanel/Panel/StatusTab/StatusVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
+autowrap_mode = 3
+
+[node name="StatsBox" type="VBoxContainer" parent="StatusPanel/Panel/StatusTab/StatusVBox"]
 layout_mode = 2
 theme_override_constants/separation = 2
 

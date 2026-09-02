@@ -21,7 +21,9 @@ extends CanvasLayer
 ##     Panel（280x208，Setting menu.png 帶標題列那格）
 ##       TitleBg／TitleLabel（角色名字）
 ##       TabBar（HBoxContainer，StatusTabButton／TodayTabButton／ItemsTabButton／InnerTabButton）
-##       StatusTab（VBox：AgeLabel／MoneyLabel／StatsBox）
+##       StatusTab（ScrollContainer > StatusVBox：AgeLabel／MoneyLabel／StatsBox，
+##         #959：10 條 Stats.SPEC + 年齡/金錢共 12 行會超出 208px 面板高度，
+##         比照 TodayTab 包一層 ScrollContainer 往下捲動，不是放大面板）
 ##       TodayTab（ScrollContainer > TodayVBox：PlanHeader／PlanList／LogHeader／LogList）
 ##       ItemsTab（GridContainer 9 欄，空的，本腳本長出 36 個唯讀格子）
 ##       InnerTab（VBox：EmotionLabel／ConditionsHeader／ConditionsBox）
@@ -60,10 +62,10 @@ const EMOTION_LABELS := {
 @onready var today_tab_button: Button = $Panel/TabBar/TodayTabButton
 @onready var items_tab_button: Button = $Panel/TabBar/ItemsTabButton
 @onready var inner_tab_button: Button = $Panel/TabBar/InnerTabButton
-@onready var status_tab: VBoxContainer = $Panel/StatusTab
-@onready var age_label: Label = $Panel/StatusTab/AgeLabel
-@onready var money_label: Label = $Panel/StatusTab/MoneyLabel
-@onready var stats_box: VBoxContainer = $Panel/StatusTab/StatsBox
+@onready var status_tab: ScrollContainer = $Panel/StatusTab
+@onready var age_label: Label = $Panel/StatusTab/StatusVBox/AgeLabel
+@onready var money_label: Label = $Panel/StatusTab/StatusVBox/MoneyLabel
+@onready var stats_box: VBoxContainer = $Panel/StatusTab/StatusVBox/StatsBox
 @onready var today_tab: ScrollContainer = $Panel/TodayTab
 @onready var plan_list: VBoxContainer = $Panel/TodayTab/TodayVBox/PlanList
 @onready var log_list: VBoxContainer = $Panel/TodayTab/TodayVBox/LogList
@@ -97,6 +99,7 @@ func _ready() -> void:
 	for key in Stats.SPEC:
 		var label := Label.new()
 		label.add_theme_color_override("font_color", BARK)
+		label.autowrap_mode = TextServer.AUTOWRAP_WORD
 		stats_box.add_child(label)
 		_stat_labels[key] = label
 
@@ -301,6 +304,7 @@ func _add_log_line(entry: Dictionary) -> void:
 
 	label.text = line
 	label.add_theme_color_override("font_color", BARK)
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD
 	log_list.add_child(label)
 
 func _clear_children(container: Node) -> void:
@@ -353,6 +357,7 @@ func _refresh_inner_tab() -> void:
 			var label := Label.new()
 			label.text = _character._get_condition_display_name(condition.get("type", ""))
 			label.add_theme_color_override("font_color", BARK)
+			label.autowrap_mode = TextServer.AUTOWRAP_WORD
 			conditions_box.add_child(label)
 
 func _line(label_key: String, value: String) -> String:
