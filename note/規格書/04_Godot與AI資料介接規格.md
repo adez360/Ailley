@@ -81,7 +81,7 @@ updated: 2026-09-01
 
 事件驅動架構下，決策請求以**單一角色**為單位發起，不再是每 tick 批次送出全體 NPC（見《10》§5.1、《12》§5.1）。
 
-**這些不是獨立行程的網路端點**——`AIService` 一律打同一個 `LocalLLM`／`RemoteLLM` 的 `/v1/chat/completions`。`AIService` 內部維護一個 `POOL_SIZE := 3` 的 `HTTPRequest` 節點池（跟 llama-server 的 `--parallel 3` 對齊），佇列依**優先序**分派給空閒節點：`CONVERSATION` 類請求先出隊，其餘照進來的順序（#492），可以同時有 3 筆在飛。差別只在 `PromptBuilder` 組出來的 `envelope.payload.type`（決定 system prompt、要不要帶 `response_format`），不是不同 URL——下表沿用「訊息類型」只是方便對照「這次呼叫要做什麼」，實際 wire format 見《技術/LLM 串接與 AI 服務層》與 `Ailley/scripts/ai/prompt_builder.gd`。
+**這些不是獨立行程的網路端點**——`AIService` 一律打同一個 `LocalLLM`／`RemoteLLM` 的 `/v1/chat/completions`。`AIService` 內部維護一個 `HTTPRequest` 節點池，池大小由 `ai_config.json` 的 `pool_size` 定義（預設 3，全域一份不分 provider；節點池在 `AIService._ready()` 建立一次，開機生效、不隨 `reload_config()` 熱重載，要讀實際池大小一律經 `AIService.active_pool_size()`），llama-server 啟動參數 `--parallel` 對齊同一份 `pool_size`；佇列依**優先序**分派給空閒節點：`CONVERSATION` 類請求先出隊，其餘照進來的順序（#492），可以同時有 `pool_size` 筆在飛。llama-server 的 context 大小（啟動參數 `-c`）由 `ai_config.json` 的 `sidecar.context_size` 定義（預設 16000，開機生效）。差別只在 `PromptBuilder` 組出來的 `envelope.payload.type`（決定 system prompt、要不要帶 `response_format`），不是不同 URL——下表沿用「訊息類型」只是方便對照「這次呼叫要做什麼」，實際 wire format 見《技術/LLM 串接與 AI 服務層》與 `Ailley/scripts/ai/prompt_builder.gd`。
 
 啟動就緒檢查也不是獨立端點：`AIService._probe_models()` 打 provider 標準的 `GET {base_url}/models`（OpenAI 相容 API 既有端點，順便驗證 API 金鑰是否有效），不是下面曾經設想過的 `/health`——`ai_service.gd`／`ai_config.gd` 的註解都明講「刻意不用《04》§4-1 想像的 `/health`，那是沒有的」。
 

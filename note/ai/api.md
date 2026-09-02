@@ -837,7 +837,7 @@ func interrupt() -> void
 ## AIService — scripts/ai/ai_service.gd · autoload · Node
 
 ```gdscript
-const POOL_SIZE := 3                         # HTTPRequest 節點數
+func active_pool_size() -> int              # HTTPRequest 節點池大小，開機時由 ai_config.json 的 pool_size（預設 3）決定，不熱重載
 enum Policy { SCHEDULED, CONVERSATION, CREATION }  # SCHEDULED 吃冷卻/配額；CONVERSATION/CREATION 豁免但照樣計數
 const RETRY_LIMIT := 1
 const MAX_ERROR_CHARS := 200
