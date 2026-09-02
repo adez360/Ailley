@@ -230,6 +230,12 @@ const CONDITION_FILTHY := "filthy"
 ## MVP 新機制：昏迷狀態（#160，《99》P-27）
 const CONDITION_INCAPACITATED := "incapacitated"
 
+## 昏迷→死亡的倒數上限（遊戲分鐘；《規格書09》§1「昏迷逾時未獲救治→死亡」，
+## 目前仍是 #368 拍板設計裡的固定值，依傷勢動態計算留給後續 issue）。倒數 UI
+## 與 prompt 事實句都經 get_incapacitation_remaining_minutes() 換算，數值只在
+## 這裡定義一處
+const INCAPACITATION_DEATH_LIMIT_MIN := 30
+
 ## 死亡後的石化狀態（#379，《規格書09》§1）。跟其餘 8 種生理衍生 condition
 ## 不同，不是「門檻自動」——只在 _die() 寫入一次，之後不會被 _update_conditions()
 ## 移除（死亡是終局狀態，沒有恢復路徑）
@@ -447,6 +453,14 @@ func _ready() -> void:
 	# 漂移不會走到這裡（stats.gd::add() 只在 announce=true 時發訊號）
 	if stats != null and money_popup != null:
 		stats.stat_changed.connect(_on_stat_changed)
+
+	# 昏迷倒數的頭上提示（issue #803）。輪詢型：IncapacitationCountdown 自己訂閱
+	# GameClock.time_changed 重讀宿主的昏迷狀態（含 load_save_data() 還原的昏迷，
+	# 那條路徑不會經過 _start_incapacitation()），這裡只負責把節點掛到場景既有的
+	# UI 節點下——測試等沒有 UI 節點的輕量實例安靜跳過
+	var ui_root := get_node_or_null("UI")
+	if ui_root != null:
+		ui_root.add_child(IncapacitationCountdown.new())
 
 # 隨機的 UUID v4。刻意不帶任何語意 —— 擁有者、名字、行程都不編進去，
 # 那些各自是欄位。把 owner 寫進 id 的話，帳號系統一改就得替所有存檔寫遷移
@@ -714,11 +728,23 @@ func _update_incapacitation() -> void:
 	var current_minute := GameClock.hour * 60 + GameClock.minute
 	var elapsed_minutes := (current_minute - _incapacitation_start_minute) % (24 * 60)
 
-	# 30 分鐘無人搬走時轉入死亡流程
-	if elapsed_minutes >= 30:
+	# 昏迷達倒數上限（INCAPACITATION_DEATH_LIMIT_MIN）仍無人搬走時轉入死亡流程
+	if elapsed_minutes >= INCAPACITATION_DEATH_LIMIT_MIN:
 		_die("傷重昏迷，始終無人相救")
 
-## 結束昏迷（被搬走時觸發，#161 負責調用）
+## 昏迷倒數剩餘的遊戲分鐘數（issue #803）。未昏迷回 -1；昏迷中回
+## INCAPACITATION_DEATH_LIMIT_MIN − 已昏迷分鐘（1~30，逾時那一分鐘之前
+## 就會被 _update_incapacitation() 轉入死亡流程，0 只是防禦值）。prompt 事實句
+## （agent.gd::_fact_lines_summary()）與倒數 UI（IncapacitationCountdown／
+## IncapacitationAlert）共用這個換算，避免各處各自算一份 elapsed
+func get_incapacitation_remaining_minutes() -> int:
+	if not has_condition(CONDITION_INCAPACITATED):
+		return -1
+	var current_minute := GameClock.hour * 60 + GameClock.minute
+	var elapsed_minutes := (current_minute - _incapacitation_start_minute) % (24 * 60)
+	return maxi(INCAPACITATION_DEATH_LIMIT_MIN - elapsed_minutes, 0)
+
+
 func _end_incapacitation() -> void:
 	_set_condition(CONDITION_INCAPACITATED, false)
 	_incapacitation_start_minute = -1

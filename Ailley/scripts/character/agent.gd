@@ -5742,6 +5742,18 @@ func _fact_lines_summary() -> Array[String]:
 			else:
 				lines.append("你正在跟著 %s，他現在在「%s」。" % [follow_target.character_name, follow_place])
 
+	# 昏迷倒數（issue #803）：跟跟隨狀態同一種「條件持續成立就持續注入」，
+	# 但只報客觀事實——現狀（昏迷、失去行動能力）跟剩餘遊戲分鐘（
+	# get_incapacitation_remaining_minutes()，逾時即轉入《規格書09》§1 死亡流程）。
+	# 急迫感不由引擎代答：措辭不寫「危急」「絕望」這類定性，倒數數字自己會隨
+	# 時間逼近 0，該多急是模型依人設判斷的事（《00》原則二）。發生當下那句
+	# 「你開始昏迷。」一次性通知走 _set_condition() 的既有事件路徑，這裡只補
+	# 「還剩多久」的持續狀態
+	if has_condition(CONDITION_INCAPACITATED):
+		var remaining := get_incapacitation_remaining_minutes()
+		if remaining > 0:
+			lines.append("你已經陷入昏迷，失去行動能力。若 %d 遊戲分鐘內沒有獲得救助（被搬離或治療），你將死亡。" % remaining)
+
 	return lines
 
 # 把 proposed_task 的 action／params 組成一句人看得懂的意圖描述，給
