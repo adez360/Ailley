@@ -1042,7 +1042,7 @@ llm_decision_enabled 沒有打開（<原因>）`。
 開場）補打一次，救不了「已經在場上、早就被判定失敗」的既有角色——如果
 玩家在開場那一刻本機 LLM 還沒下載完、之後才補好設定，場上既有角色會
 卡在排程模式一整局，唯一的補救指令 `debug` 主控台的 `ai_decision` 在正式
-建置整個關閉（issue #356）。
+建置整個關閉（正式版玩家可見的 AI 狀態呈現方式待 issue #1020 落地）。
 
 **`GameManager.recheck_ai_readiness() -> Dictionary`**：第三個補打入口，
 遊戲執行期間任何時候都能呼叫。收集場上所有 `not llm_decision_enabled` 的
