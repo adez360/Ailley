@@ -14,7 +14,12 @@ extends McpTestSuite
 ##
 ## issue #825 後地圖上沒有畫死的家，loc_home_* 也不再被開機 seed——這套件
 ## 每個測試自己在 setup() 塞 loc_home_01~05 當 active fixture、teardown()
-## 還原成 is_active=0（migration 13 之後的常態）。
+## 只還原 fixture 動過的列。
+##
+## 例外：同幀「拆家→復活」的回歸測試（CodeRabbit review on #995）需要活的
+## 場景樹——測試內自掛一個 Level＋PlaceAnchors（place_anchors 群組）假世界，
+## 整棵交給 track() 讓 runner 在測試後收掉；真實世界的 NavGrid 落點搜尋
+## 仍不在涵蓋範圍。
 ##
 ## 不在本套件涵蓋範圍：需要真場景的部分——loc_home_* 錨點、has_for()/
 ## resolve_for() 的 home 轉譯、_world_character_ids() 對 characters 群組的
@@ -33,6 +38,9 @@ var _created_location_ids: Array[String] = []
 # 不能用「一律 UPDATE ... is_active=0 WHERE location_type='home'」收尾，那會把
 # 實機玩出來、跟這個 suite 無關的動態家也一起關掉（CodeRabbit review on #995）
 var _fixture_prior_active: Dictionary = {}
+# 同 frame 拆家測試動過 pos_x/pos_y 的既有列，記下原本座標好在 teardown
+# 還原——同一批「只還原 fixture 動過的列」原則
+var _fixture_prior_pos: Dictionary = {}
 
 
 func suite_name() -> String:
@@ -100,6 +108,15 @@ func teardown() -> void:
 			"location_id = '%s'" % location_id
 		)
 	_fixture_prior_active.clear()
+
+	# 同 frame 拆家測試動過座標的既有列還原 pos_x/pos_y——一樣只碰記錄過
+	# 的那幾列
+	for location_id in _fixture_prior_pos:
+		DatabaseManager.update(
+			"location", _fixture_prior_pos[location_id],
+			"location_id = '%s'" % location_id
+		)
+	_fixture_prior_pos.clear()
 
 	if _saved_cursor >= 0:
 		_persistence._set_home_cursor(_saved_cursor)
@@ -361,4 +378,123 @@ func test_reactivatable_home_prefers_existing_inactive() -> void:
 	assert_eq(
 		_persistence._reactivatable_home_location_id(), _home_id(6),
 		"應該挑到既有的 is_active=0 的 loc_home_06 來復活"
+	)
+
+
+## 同一幀內「離場拆家 → 進場復活同一個 location_id」的回歸測試（CodeRabbit
+## review on #995）：_demolish_home_scene() 用 queue_free()，節點要幀末才真正
+## 離樹；拆完同幀內 _reactivatable_home_location_id() 就會挑回剛拆的 id，
+## _create_or_reactivate_home() 把 DB 列標回 is_active=1 並呼叫
+## _spawn_home_scene()。guard 若只看 has_node()，會撞到「還在樹上但已排刪除」
+## 的舊節點提前 return——幀末殘骸釋放後，active 列就沒有任何對應的執行期
+## 節點。重建出來的錨點跟房屋必須是活的（未排刪除）新節點。
+func test_same_frame_demolish_then_reactivate_rebuilds_live_nodes() -> void:
+	var tree := _persistence.get_tree()
+	if tree == null:
+		skip("測試環境沒有場景樹，無法驗證節點重建")
+		return
+	if tree.get_first_node_in_group("place_anchors") != null:
+		skip("測試環境已有 place_anchors 節點，無法安全掛測試用假世界")
+		return
+
+	var location_id := _home_id(6)
+	var house_name := "DynamicHome_%s" % location_id
+
+	# fixture：共用 DB 可能已有實機玩出來的 loc_home_06——沒有就建一筆
+	#（teardown 刪掉），有就記下原值（teardown 還原），不假設它不存在
+	var rows := DatabaseManager.select(
+		"location", "location_id = '%s'" % location_id, ["is_active", "pos_x", "pos_y"]
+	)
+	if rows.is_empty():
+		assert_true(
+			DatabaseManager.insert("location", {
+				"location_id": location_id,
+				"name": location_id,
+				"description": "",
+				"location_type": "home",
+				"capacity": 1,
+				"danger": 0,
+				"is_active": 0,
+			}),
+			"測試前置：建立已拆除（is_active=0）的 %s" % location_id
+		)
+		_created_location_ids.append(location_id)
+	else:
+		_fixture_prior_active[location_id] = int(rows[0].get("is_active", 0))
+		_fixture_prior_pos[location_id] = {
+			"pos_x": rows[0].get("pos_x", 0.0),
+			"pos_y": rows[0].get("pos_y", 0.0),
+		}
+
+	# 假世界：比照 level.tscn 的父子結構——Level 底下掛 PlaceAnchors
+	#（place_anchors 群組）；_spawn_home_scene() 靠 anchors.get_parent() 找
+	# Level 掛房屋
+	var level := Node2D.new()
+	level.name = "TestLevel995"
+	var anchors := Node2D.new()
+	anchors.name = "PlaceAnchors"
+	anchors.add_to_group("place_anchors")
+	level.add_child(anchors)
+	tree.root.add_child(level)
+	track(level)
+
+	# 前置：這間家上一輪還在場上——先造出錨點＋房屋（_spawn_home_scene()
+	# 只管場景表現，不看 DB 的 is_active）
+	_persistence._spawn_home_scene(location_id, Vector2(100.0, 100.0))
+	var house_before := level.get_node_or_null(NodePath(house_name))
+	assert_true(
+		house_before != null and not house_before.is_queued_for_deletion(),
+		"測試前置：%s 應是樹上的活節點" % house_name
+	)
+	assert_true(
+		anchors.has_node(NodePath(location_id)),
+		"測試前置：PlaceAnchors 底下應有 %s 錨點" % location_id
+	)
+
+	# 離場拆家：queue_free() 之後節點要幀末才離樹，同一幀內仍在樹上——
+	# 這正是 bug 的重現前提
+	_persistence._demolish_home_scene(location_id)
+	assert_true(
+		house_before != null and house_before.is_queued_for_deletion(),
+		"拆家後房屋節點應已排刪除（幀末才真正離樹）"
+	)
+	assert_true(
+		level.has_node(NodePath(house_name)),
+		"同一幀內已排刪除的節點仍在樹上（bug 重現前提）"
+	)
+
+	# 進場復活：全滿時 _grow_home_supply() 優先復活剛拆的 id——這裡直接走
+	# 復活兩步，不經 _grow_home_supply()（它要 NavGrid 找落點，測試環境沒有，
+	# 會提前落到溢出共用分支）
+	assert_eq(
+		_persistence._reactivatable_home_location_id(), location_id,
+		"同幀內復活應挑回剛拆的 %s" % location_id
+	)
+	assert_true(
+		_persistence._create_or_reactivate_home(location_id, Vector2(120.0, 100.0)),
+		"復活 %s 應成功" % location_id
+	)
+
+	# 重建後：level 底下要有活的 DynamicHome_<id>（未排刪除的新節點），
+	# PlaceAnchors 底下要有同名錨點，DB 列標回 is_active=1
+	var house_after := level.get_node_or_null(NodePath(house_name))
+	assert_true(
+		house_after != null and not house_after.is_queued_for_deletion(),
+		"重建後 level 底下應有活的 %s（不是排刪除的殘骸）" % house_name
+	)
+	assert_ne(
+		house_after, house_before,
+		"重建的應是新節點，不是摘出樹前的舊殘骸"
+	)
+	var anchor_after := anchors.get_node_or_null(NodePath(location_id))
+	assert_true(
+		anchor_after != null and not anchor_after.is_queued_for_deletion(),
+		"重建後 PlaceAnchors 底下應有活的 %s 錨點" % location_id
+	)
+	var rows_after := DatabaseManager.select(
+		"location", "location_id = '%s'" % location_id, ["is_active"]
+	)
+	assert_true(
+		not rows_after.is_empty() and int(rows_after[0].get("is_active", 0)) == 1,
+		"復活後 %s 應標回 is_active=1" % location_id
 	)

@@ -2463,7 +2463,8 @@ func _create_or_reactivate_home(location_id: String, position: Vector2) -> bool:
 ## PlaceAnchors 底下加一個同名 Area2D 錨點——resolve()／has() 靠 PlaceAnchors
 ## 底下的同名子節點查，resolve_from_position() 反查則要錨點底下有
 ## CollisionShape2D（靜態家當初也是 Area2D+Shape，死在家裡才能反查出
-## loc_home_NN）。兩邊都先檢查存不存在才建立，讀檔重建
+## loc_home_NN）。兩邊都先檢查存不存在（同幀已排刪除的殘骸不算，見底下
+## guard）才建立，讀檔重建
 ##（_rebuild_dynamic_homes()）跟成長路徑可能對同一個 location_id 各呼叫
 ## 一次，不該疊出兩份
 ##
@@ -2485,7 +2486,17 @@ func _spawn_home_scene(location_id: String, position: Vector2) -> void:
 		push_error("[CharacterStatePersistence] 場景沒有 place_anchors 群組節點，%s 沒有座標可用" % location_id)
 		return
 
-	if not anchors.has_node(NodePath(location_id)):
+	var existing_anchor := anchors.get_node_or_null(NodePath(location_id))
+	# 同一幀內「拆了又蓋」（CodeRabbit review on #995）：_demolish_home_scene()
+	# 用 queue_free()，同名節點要幀末才真正離樹。已排刪除的舊錨點先摘出樹，
+	# 讓名字立刻讓出來——不解開的話底下 add_child() 撞名會被 Godot 自動改名
+	#（結尾加 @2），之後 resolve()／has_node() 都查不到正名節點；節點本身
+	# 不用另外 free()，幀末仍會被 queue_free 回收
+	if existing_anchor != null and existing_anchor.is_queued_for_deletion():
+		anchors.remove_child(existing_anchor)
+		existing_anchor = null
+
+	if existing_anchor == null:
 		var anchor := Area2D.new()
 		anchor.name = location_id
 		anchor.position = position
@@ -2506,8 +2517,18 @@ func _spawn_home_scene(location_id: String, position: Vector2) -> void:
 		return
 
 	var house_name := "DynamicHome_%s" % location_id
-	if level.has_node(NodePath(house_name)):
+	var existing_house := level.get_node_or_null(NodePath(house_name))
+	if existing_house != null and not existing_house.is_queued_for_deletion():
 		return
+
+	# 同一幀內「拆了又蓋」（CodeRabbit review on #995）：_demolish_home_scene()
+	# 用 queue_free()，舊房屋要幀末才真正離樹——guard 若只看 has_node() 會把
+	# 它當成現役節點提前 return，幀末殘骸釋放後，剛標回 is_active=1 的列就
+	# 沒有任何對應節點。已排刪除的先摘出樹讓名字讓出來（底下 add_child() 才
+	# 不會撞名被自動改名成 @2 後綴，之後 has_node()／resolve() 查不到正名
+	# 節點）；節點本身幀末仍會被 queue_free 回收，不用另外 free()
+	if existing_house != null:
+		level.remove_child(existing_house)
 
 	var house_scene: PackedScene = load(_home_scene_path(location_id))
 	if house_scene == null:
