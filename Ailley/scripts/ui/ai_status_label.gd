@@ -6,7 +6,7 @@ extends Label
 ## 套用結果後呼叫 set_status() 寫一次，之後不會再變（provider 就緒狀態
 ## 只在開場探測一次，不做背景輪詢，見 AIService.get_readiness() 的說明）。
 ##
-## 這是開發期介面，正式版收起交給 #356 統一處理，這裡不自己另立
+## 這是開發期介面，正式版收起交給 #1020 統一處理，這裡不自己另立
 ## 一套建置判斷。
 
 const COLOR_READY := Color(0.4, 1.0, 0.4)
@@ -14,7 +14,8 @@ const COLOR_PARTIAL := Color(1.0, 0.55, 0.2)
 const COLOR_SCHEDULE := Color(1.0, 0.8, 0.3)
 
 
-# 正式建置隱藏（issue #356 拍板：跟主控台走同一套 OS.is_debug_build() 判斷）。
+# 正式建置隱藏（跟主控台走同一套 OS.is_debug_build() 判斷；正式版玩家可見的
+# AI 狀態呈現方式待 issue #1020 落地）。
 # main_scene.gd 照舊會呼叫 set_status()，只是寫在一個看不見的 Label 上，
 # 不用另外去改呼叫端
 func _ready() -> void:
