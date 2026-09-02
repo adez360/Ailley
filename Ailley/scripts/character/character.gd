@@ -1498,13 +1498,12 @@ func is_offline_kick_eligible() -> bool:
 ## 定義的「聽覺（一般說話）3 格」是物理上聽不聽得到，不分是哪種介面講出來的
 ## （issue #669）。
 ##
-## broadcast=false：內部系統 fallback 泡泡（`!?`／`！` 這類感測不到 LLM
-## 回應時的寫死反應）不是「這個角色真的說了什麼」，不該算進《07》§3 的
-## 「聽得到的對話」——放行的話，鄰近的 LLM 角色會把這句 `!?` 當成一句話
-## 排進自己的事實句佇列、觸發一次決策，決策若同樣問不到結果又冒出自己的
-## `!?`，在 3 格範圍內連環擴散成一波決策請求風暴（CodeRabbit review 抓到，
-## PR #674）。所有這類 fallback 泡泡呼叫端都要傳 false，見 agent.gd／player.gd
-## 的 _on_noise_heard()／_on_speech_heard()／_react_to_spotted_fallback()
+## broadcast=false：系統狀態指示（對話中「不理會」這種提示泡泡）不是
+## 「這個角色真的說了什麼」，不該算進《07》§3 的「聽得到的對話」——放行的話，
+## 鄰近的 LLM 角色會把它當成一句話排進自己的事實句佇列、觸發一次決策，
+## 在 3 格範圍內連環擴散成一波決策請求風暴（CodeRabbit review 抓到，PR #674）。
+## 感測不到 LLM 回應時引擎不再冒寫死反應（issue #949），所以這類呼叫端已大幅
+## 減少；剩下的系統指示泡泡呼叫端都要傳 false，見 conversation.gd 的 DLG_IGNORED
 func say(line: String, interrupt: bool = false, broadcast: bool = true) -> void:
 	if bubble == null:
 		return

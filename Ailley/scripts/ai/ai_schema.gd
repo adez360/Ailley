@@ -564,6 +564,20 @@ static func _validate_task_shape(
 			return _fail(ERROR_BAD_SHAPE)
 		work_params["place"] = (work_place as String).strip_edges()
 
+	# murmur 動作的 params 驗證（issue #949）：line 是必填字串，內容由模型自己給
+	# ——引擎不再用 DialogueLines.murmur() 依數值挑一句寫死的模板句塞進角色嘴裡。
+	# 比照對話的 line 欄位（見上方 validate_dialogue()）：空字串擋掉，過長截斷
+	# 而不是整包拒絕（自語內容不是安全關鍵，寧可留半句也別丟掉整筆決策）
+	if action == "murmur":
+		var murmur_params: Dictionary = task.get("params", {})
+		var murmur_line: Variant = murmur_params.get("line")
+		if not murmur_line is String or (murmur_line as String).strip_edges().is_empty():
+			return _fail(ERROR_BAD_SHAPE)
+		var trimmed_murmur: String = (murmur_line as String).strip_edges()
+		if trimmed_murmur.length() > MAX_LINE_CHARS:
+			trimmed_murmur = trimmed_murmur.substr(0, MAX_LINE_CHARS)
+		murmur_params["line"] = trimmed_murmur
+
 	# #268／#290：expires_in_minutes（模型填的相對時長）現在有跟
 	# priority/duration 同一套量級上限，不再只有 is_finite()——
 	# is_finite(1e300) 一樣是 true，擋不住一個實質上永遠不會過期的任務

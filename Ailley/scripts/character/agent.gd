@@ -17,9 +17,6 @@ extends Character
 ## 誰用哪份行程是資料，寫在資料檔裡才有辦法逐隻不同。
 @export var schedule_template := ""
 
-## 看到陌生人之後愣住多久（現實秒）
-const NOTICE_PAUSE := 2.0
-
 ## 決策迴圈開關（#88）：開啟後 LLM 任務完成時會觸發下一次決策請求，
 ## 經 AISchema 驗證後推進 _tasks，跟仲裁器裡其他來源的任務公平競爭。
 ##
@@ -303,11 +300,6 @@ var _pending_persuade: Dictionary = {}
 # 這裡不需要模型回覆特定欄位表態，_fact_lines_summary() 讀到的當下
 # 就直接消化清空，不留到下一輪、也不用等回應來解析
 var _pending_reaction_lines: Array[String] = []
-
-# 正在對陌生人做「！」反應。那 2 秒刻意站著不動，期間不重新起步——
-# GameClock 一個遊戲分鐘就是 1 現實秒，不擋的話 1 秒後就被送回路上，
-# 2 秒的愣住實際上只有 1 秒
-var _reacting := false
 
 # 目前有沒有一份決策請求還沒回來。_reevaluate() 靠它避免同一份請求還在飛時
 # 又觸發第二份（同一個 LLM 任務完成的當下可能被重算好幾次），
@@ -2365,39 +2357,15 @@ func _on_spotted(other: Character) -> void:
 
 	_push_daily_event("你第一次注意到 %s" % other.character_name, [other.character_id])
 
+	# 引擎不替角色決定反應（issue #949／《00》原則二）：事件已經記進
+	# _daily_events，要不要停下來、要不要說話交給模型的 tasks[] 決定。
+	# 排程模式（沒有 LLM 可問）＝ 就是沒有立即反應，事件仍留著等下次反思——
+	# 不冒寫死的「！」，那是引擎指定的反應
 	if llm_decision_enabled:
 		_queue_reaction_fact_line(
 			"你第一次注意到 %s，要不要停下來、要不要說些什麼，由你自己決定" % other.character_name
 		)
-		var result := await _request_next_decision()
-		if is_dead:
-			return
-		if result.get("triggered", false) and not result.get("ok", false):
-			await _react_to_spotted_fallback()
-		return
-
-	await _react_to_spotted_fallback()
-
-# 陌生人反應的寫死版本，兩種情況共用：排程模式（沒有 LLM 可問）、以及
-# llm_decision_enabled 開著但這次決策問不到結果
-func _react_to_spotted_fallback() -> void:
-	# broadcast=false：這是系統 fallback 泡泡，不是角色真的說了什麼，不該被
-	# 3 格內的人當成「聽到的對話」——同 _on_noise_heard()／_on_speech_heard()
-	# 的理由，見 character.gd::say() 的說明（CodeRabbit review 抓到，PR #674）
-	say(L10n.t("DLG_SURPRISE"), false, false)
-	stop_moving()
-
-	# _reacting 期間 _pursue_current_task() 不重新起步。少了它，1 秒後
-	# GameClock 的重算就會把角色送回路上，NOTICE_PAUSE 訂 2 秒實際上只有 1 秒
-	_reacting = true
-	await get_tree().create_timer(NOTICE_PAUSE).timeout
-	_reacting = false
-
-	# 愣完重算行程而不是接回原本那條路：這 2 秒可能已經跨過行程的整點，
-	# 與 exit_conversation() 同一個理由。剛剛的 stop_moving() 已經把路徑清掉，
-	# 這次重算會重新起步
-	if not is_in_conversation():
-		_reevaluate()
+		await _request_next_decision()
 
 # 視野裡跟丟某個人（issue #405）。
 #
@@ -2434,13 +2402,15 @@ func _on_lost(other: Character) -> void:
 	_queue_reaction_fact_line("你看不到 %s 了，要不要有反應由你自己決定" % other.character_name)
 	await _request_next_decision()
 
-# 範圍內有人發出聲音（見 character.gd 的 make_noise()）。
+# 範圍內有人發出聲音（見 character.gd 的 make_noise()／shout）。
 # 跟 _on_spotted 不同，這裡不記錄「已經反應過」——聲音是一次性事件，
-# 每次都該有反應，不是像陌生人那樣「見過一次就不再驚訝」
+# 每次都該有反應，不是像陌生人那樣「見過一次就不再驚訝」。
 #
-# llm_decision_enabled 開著時（#407）：同 _on_spotted() 的做法，事實句
-# 排隊＋立刻問一次模型，不寫死冒 !?——問不到結果時一樣退回寫死反應，
-# 理由跟 _on_spotted() 的說明相同
+# 引擎不替角色決定反應（issue #949／《00》原則二）：事件記進 _daily_events
+# 留給睡前反思，llm_decision_enabled 開著時再多排一次立即決策——要不要有
+# 反應、冒不冒驚呼由模型的 tasks[] 決定。問不到結果（逾時／驗證失敗）時
+# 不再退回寫死的「!?」，事件已經留在 _daily_events 裡。noise（make_noise／
+# shout）本來就低頻，記進 _daily_events 不會洗版
 func _on_noise_heard(_source: Character) -> void:
 	# 死屍不反應（CodeRabbit review 抓到），同 _on_spotted() 的理由——這是
 	# character.gd::make_noise() 直接觸發的外部事件回呼，_on_time_changed()
@@ -2448,45 +2418,30 @@ func _on_noise_heard(_source: Character) -> void:
 	if is_dead or is_in_conversation():
 		return
 
+	_push_daily_event("你聽到附近傳來一個聲音")
+
 	if llm_decision_enabled:
 		_queue_reaction_fact_line("你聽到一個聲音，要不要有反應由你自己決定")
-		var result := await _request_next_decision()
-		if is_dead:
-			return
-		if result.get("triggered", false) and not result.get("ok", false):
-			say(L10n.t("DLG_NOISE_ALERT"), false, false)
-		return
-
-	# fallback（排程模式，沒有 LLM 可問）：維持原本寫死的 !? 反應
-	say(L10n.t("DLG_NOISE_ALERT"), false, false)
+		await _request_next_decision()
 
 # 範圍內有人說話（一般聊天輸入框或 talk_to() 對話，見 character.gd::say()
 # 的廣播，issue #669）。跟 _on_noise_heard() 同一種感測/反應分離，差別是
 # 這裡帶了實際講的內容——《07》§3「聽覺（一般說話）3 格」定義的本來就是
-# 「聽得到的對話」，內容是客觀事實，要不要反應交給模型自己判斷
+# 「聽得到的對話」，內容是客觀事實，要不要反應交給模型自己判斷。
 #
-# 排程模式（llm_decision_enabled 關著）刻意不冒 !?，跟 _on_noise_heard() 不同：
-# 一般說話遠比 make_noise()／shout 頻繁（玩家聊天、talk_to() 每一句都算），
-# 排程模式又沒有決策迴圈會消費 _pending_reaction_lines，硬套 noise 那套寫死
-# 反應只會讓排程模式的 NPC 對著每一句路過的對話狂冒 !?。這只是排程模式下
-# 沒有「決策者」時的視覺呈現選擇，不影響 llm_decision_enabled 開著時送給
-# 模型的事實內容（下面完整保留），跟原則二要保護的「事件有沒有讓 AI 知道」
-# 是兩回事；llm_decision_enabled 開著但這次問不到結果（逾時／驗證失敗）時，
-# 仍比照 _on_noise_heard() 退回寫死反應，不能讓角色看起來完全沒反應
+# 引擎不替角色決定反應（issue #949）：問不到結果時不再冒寫死的「!?」。
+# llm_decision_enabled 開著時走既有的「事實句排隊＋立即決策」；關著時（排程
+# 模式）一般說話遠比 make_noise()／shout 頻繁，只記進 _daily_events（cap 30、
+# pop_front，記憶體有界）留給之後的睡前反思，不即時觸發任何東西
 func _on_speech_heard(source: Character, line: String) -> void:
 	if is_dead or is_in_conversation():
 		return
 
 	if llm_decision_enabled:
 		_queue_reaction_fact_line("你聽到附近的 %s 說：『%s』，要不要有反應由你自己決定" % [source.character_name, line])
-		var result := await _request_next_decision()
-		# await 期間對方可能已經走 talk_to() 建立了新對話（見 character.gd
-		# 該函式），這裡的 fallback 不能無條件冒 !?，會插進正在顯示的
-		# 對話泡泡（CodeRabbit review 抓到，PR #674）
-		if is_dead or is_in_conversation():
-			return
-		if result.get("triggered", false) and not result.get("ok", false):
-			say(L10n.t("DLG_NOISE_ALERT"), false, false)
+		await _request_next_decision()
+	else:
+		_push_daily_event("你聽到附近的 %s 說：『%s』" % [source.character_name, line])
 
 # 把一次性事件（看到陌生人、聽到聲音）排進下一次決策的事實句佇列
 # （#402／#407）。見 _pending_reaction_lines 的欄位說明
@@ -3626,10 +3581,6 @@ func _pursue_current_task() -> void:
 	# 表演中同理：_run_perform() 自己跑完 PERFORM_DURATION_MINUTES 才收尾，
 	# 這裡不該在協程進行中又重新選一次任務把它打斷
 	if is_performing():
-		return
-
-	# 對陌生人「！」的那 2 秒刻意站著不動
-	if _reacting:
 		return
 
 	# murmur 沒有目標、也不用移動——講給自己聽當下就結束，不屬於「走到某個
@@ -4818,11 +4769,14 @@ func _pursue_murmur_task() -> void:
 		# murmur 沒有追逐、每筆任務只跑這裡一次，resolve() 的結果就是終局結果
 		# （不像 talk／give／attack 之後還有一次真正執行可能失敗）
 
-	# 內容層跟 talk 同一套「模板先頂著，LLM 版之後再換」的分工（見
-	# note/技術/talk 動作設計.md）：murmur 沒有聽者，講的是給自己聽的話，
-	# 不能沿用 DialogueLines.reply() 那組面向對話對象的句子
-	if should_speak and stats != null:
-		say(DialogueLines.murmur(stats))
+	# 內容由模型自己給（issue #949）：murmur 動作帶 line 欄位，跟 talk 的回應
+	# 內容同一套。引擎不再用 DialogueLines.murmur() 依 get_lowest_need()／
+	# CRITICAL 門檻挑一句寫死的模板句塞進角色嘴裡——那是引擎替角色決定他此刻
+	# 在想什麼（《00》原則二）。line 缺失時（驗證層已要求非空，這裡只是防呆）
+	# 只消化任務、不出聲
+	var murmur_line: String = str(_current_task.get("params", {}).get("line", "")).strip_edges()
+	if should_speak and not murmur_line.is_empty():
+		say(murmur_line)
 
 	# 連續失敗事實句涵蓋所有實際執行的動作，不分來源——跟 eat/drink/talk
 	# 既有規則一致（CodeRabbit review 抓到：原本只計 llm 來源，schedule 來源
