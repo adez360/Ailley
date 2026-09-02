@@ -72,13 +72,15 @@ func _unhandled_input(event: InputEvent) -> void:
 ## 玩家按下繼續遊戲之後，main_scene.gd 轉場套用時才發現存檔消失或讀不出來
 ## ——這時 list_world_ids()/is_world_data_valid() 現在重新檢查會查到「不存在」，
 ## 跟「本來就沒存過」是同一個結果，沒有這個旗標會誤判成後者、悄悄只顯示
-## StartButton。優先權比下面兩個檢查高，且是一次性的，讀過一次要立刻清掉
+## StartButton。優先權比下面的掃描高，且是一次性的，讀過一次要立刻清掉。
+## 多槽位之後這個旗標只代表「玩家剛選中的那個槽位」讀不出來，其他槽位
+## 可能還好好的——所以顯示 load_error_label 之後照常掃描，有任一有效世界
+## 就照樣給 ContinueButton（玩家可以挑別的槽位），全無才只留錯誤訊息
 func _refresh_continue_button() -> void:
-	if GameManager.continue_load_failed:
-		GameManager.continue_load_failed = false
-		continue_button.hide()
+	var load_failed := GameManager.continue_load_failed
+	GameManager.continue_load_failed = false
+	if load_failed:
 		load_error_label.show()
-		return
 
 	var world_ids := SaveService.list_world_ids()
 	for id in world_ids:
@@ -86,12 +88,9 @@ func _refresh_continue_button() -> void:
 			continue_button.show()
 			return
 
-	if world_ids.is_empty():
-		continue_button.hide()
-		return
-
+	if not world_ids.is_empty():
+		load_error_label.show()
 	continue_button.hide()
-	load_error_label.show()
 
 
 func _on_continue_pressed() -> void:
@@ -120,7 +119,10 @@ func _on_quit_pressed() -> void:
 
 
 func _on_credits_pressed() -> void:
-	_open_overlay(credits_button)
+	# 銘謝顯示的是場景檔既有的 CreditsPanel，不走執行期面板——with_panel
+	# 預設 true 是給世界選擇／新槽位面板用的，銘謝這裡再 _ensure_overlay_panel()
+	# 會多造出一個空的置中面板疊在 CreditsPanel 上面
+	_open_overlay(credits_button, false)
 
 
 # Scrim 蓋滿全螢幕，CreditsPanel 疊在它上面。CreditsPanel 底下的 TitleBg 有
@@ -151,9 +153,17 @@ func _close_overlay() -> void:
 # 樣式沿用同一張 Setting menu.png 九宮格（main_menu.tscn 的
 # StyleBoxTexture_wu84c 參數）。點擊行為一致：PanelContainer 預設 STOP
 # 吃掉面板上的點擊，點到 Scrim（面板外）走上面的 _on_scrim_gui_input()
-func _open_overlay(origin: Button) -> void:
+func _open_overlay(origin: Button, with_panel := true) -> void:
 	_overlay_origin = origin
-	_ensure_overlay_panel()
+	# with_panel=false（銘謝）不建立執行期面板，只顯示場景既有的 CreditsPanel；
+	# 若執行期面板之前開過（世界選擇／新槽位），先收起來。反向亦然：下一次
+	# with_panel=true 的開啟要把它重新顯示。_close_overlay() 不用知道差異，
+	# 它只管 scrim 和焦點
+	if with_panel:
+		_ensure_overlay_panel()
+		_overlay_panel.show()
+	elif _overlay_panel != null:
+		_overlay_panel.hide()
 	scrim.show()
 	# 銘謝面板同款焦點處理（原本寫在 _on_credits_pressed）：面板開著時把
 	# ButtonsBox 的按鈕摘出焦點鏈，純鍵盤玩家按 Tab／Enter 才不會在面板
@@ -268,6 +278,9 @@ func _open_new_slot_panel() -> void:
 
 func _on_new_slot_selected(world_id: String) -> void:
 	GameManager.active_world_id = world_id
+	# 新遊戲不能被上一輪殘留的旗標誤判成「繼續遊戲」（main_scene.gd 依它
+	# 決定走 _apply_continue()）——比照原 _on_start_pressed() 進場前重置
+	GameManager.continue_requested = false
 	# 跟 _on_start_pressed() 原本的三步順序一致：時間重置（#606）→
 	# 殘留欄位重置（#875）→ 進場
 	GameClock.reset_to_new_game_start()
