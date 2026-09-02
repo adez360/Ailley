@@ -11,7 +11,7 @@ extends CanvasLayer
 ##
 ## 沒有數字鍵快捷選——`hotbar.gd` 的 hotbar_1-9 也在監聽同一批數字鍵，
 ## 兩邊都用 _unhandled_input 搶同一個按鍵，誰先誰後不保證，容易「買東西
-## 的同時把快捷欄也選到同一格」。純滑鼠點擊，商品數量目前也就 4 個，
+## 的同時把快捷欄也選到同一格」。純滑鼠點擊，商品項數本來就不固定，
 ## 不差這個快捷鍵。
 ##
 ## 開關的職責切法：player.gd 負責「開」（先確認附近有商店地點才呼叫
@@ -22,7 +22,7 @@ extends CanvasLayer
 
 @onready var panel: Panel = $Panel
 @onready var title_label: Label = $Panel/VBox/TitleLabel
-@onready var item_list: VBoxContainer = $Panel/VBox/ItemList
+@onready var item_list: VBoxContainer = $Panel/VBox/ItemScroll/ItemList
 @onready var hint_label: Label = $Panel/VBox/HintLabel
 
 var _place := ""
@@ -66,8 +66,8 @@ func open(place: String, buyer: Character) -> void:
 	title_label.text = anchors.display_name(place) if anchors != null else place
 
 	# 先 remove_child() 再 queue_free()：queue_free() 是幀末才真的刪，光是
-	# queue_free() 的話重開選單的那一幀 item_list 同時掛著 4 個舊按鈕與 4 個
-	# 新按鈕，VBox 排 8 列會撐破固定 130×134 的面板
+	# queue_free() 的話重開選單的那一幀 item_list 會同時掛著舊按鈕與新按鈕，
+	# 兩批一起顯示一幀
 	for child in item_list.get_children():
 		item_list.remove_child(child)
 		child.queue_free()
@@ -76,6 +76,11 @@ func open(place: String, buyer: Character) -> void:
 		var button := Button.new()
 		button.text = "%s　%d" % [ItemDatabase.get_display_name(item_id), Shop.get_price(place, item_id)]
 		button.focus_mode = Control.FOCUS_NONE		# 理由跟 hotbar.gd 的格子按鈕同一段註解
+		# #1032：品項名稱／價格位數沒有上限，clip_text 開 overrun 判定、
+		# text_overrun_behavior 用省略號收尾（不是逐像素硬切，不會切到中文字
+		# 中間），按鈕跟著 ItemList 的固定寬度截斷，不再無限撐開 Panel
+		button.clip_text = true
+		button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		button.pressed.connect(_buy.bind(item_id))
 		item_list.add_child(button)
 
