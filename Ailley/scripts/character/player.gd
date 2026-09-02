@@ -306,6 +306,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			and candidates["to_work"] <= candidates["to_other"]:
 		var work_reason := work_at(workstation)
 		if work_reason == WORK_OK:
+			# 開工成功就立刻收掉休息——不等的話要到下一個遊戲分鐘
+			# _on_game_minute() 才會靠 _is_resting_blocked()（含 is_working()）把
+			# 休息收掉，這中間 💤 會跟工作進度條並存一段（CodeRabbit review 抓到）
+			if _is_resting:
+				_stop_resting()
 			if TALK_DEBUG:
 				print("[talk_debug_654] 走了 work_at 分支（成功），work_reason=%s" % work_reason)
 			return
@@ -663,9 +668,11 @@ var _rest_elapsed_minutes := 0
 
 ## 開始休息前擋掉的狀態，跟 NPC 那邊「入眠中不能再入眠」同一類防呆：死亡／
 ## 昏迷／治療中／被天神召喚中（_is_movement_locked() 涵蓋後三者）、對話中、
-## 搬運屍體、被搬運中，這些狀態下休息沒有意義或會跟既有機制衝突
+## 工作中、搬運屍體、被搬運中，這些狀態下休息沒有意義或會跟既有機制衝突。
+## is_working() 也擋住反方向：休息中被要求開工（work_at() 不查休息狀態）時，
+## _on_game_minute() 靠同一個檢查把休息狀態收掉，兩邊不能並行
 func _is_resting_blocked() -> bool:
-	return is_dead or _is_movement_locked() or is_in_conversation() or is_hauling() or is_being_hauled()
+	return is_dead or _is_movement_locked() or is_in_conversation() or is_working() or is_hauling() or is_being_hauled()
 
 ## 按下休息鍵：已經在休息就結束，否則檢查能不能開始。失敗原因統一用共用
 ## 詞彙表的 "BUSY"（FAILURE_MESSAGE_KEYS 已有對應），不用為這個動作另開新碼
