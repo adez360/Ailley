@@ -138,18 +138,21 @@ func _row(character: Character) -> Control:
 ## 展開高度直接讀 Expand（status_bars.tscn 實例）排版後的最小高度，不在這裡
 ## 另外寫一份數字跟場景重複
 func _on_row_toggled(pressed: bool, character: Character, row: Button, expand: Control) -> void:
-	if not is_instance_valid(character):
-		return
+	# 展開卡顯示與列高還原只動 row 自己（expand 是 row 的子節點），不需要有效
+	# 角色——角色被 free 後收合也要能收，不然展開卡卡在畫面上、列高回不去。
+	# guard 只保護下面走 Selection 的路徑
 	expand.visible = pressed
 	if pressed:
 		row.custom_minimum_size.y = expand.position.y + expand.get_combined_minimum_size().y
-		var selection := get_tree().get_first_node_in_group("selection") as Selection
-		if selection == null:
-			push_error("CharacterSidebar: 找不到 Selection")
-		else:
-			selection.select(character)
 	else:
 		row.custom_minimum_size.y = _row_collapsed_height
+	if not is_instance_valid(character):
+		return
+	var selection := get_tree().get_first_node_in_group("selection") as Selection
+	if selection == null:
+		push_error("CharacterSidebar: 找不到 Selection")
+	else:
+		selection.select(character)
 
 
 ## 收回（issue #974）：GameManager.recall_from_library() 把肉體 queue_free()、
