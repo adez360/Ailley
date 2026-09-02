@@ -244,7 +244,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		# 昏迷但還活著的目標不是屍體，bury() 一定回傳 BURY_TARGET_NOT_DEAD——
 		# 這種情況沒有「安葬」可言，直接當放下處理（issue #958）
 		if not haul_target.is_dead:
-			stop_haul()
+			# 玩家主動放下，不冒「掙脫」假事實（原則二）：引擎側釋放應傳 notify_target=false
+			stop_haul(false)
 			return
 		var bury_reason := bury(haul_target)
 		if bury_reason == BURY_OK:
