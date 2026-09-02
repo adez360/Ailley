@@ -138,11 +138,10 @@ func _run() -> void:
 			return
 
 		# 被搭話的一方選擇不理會（issue #630）：只有 turn 0 才可能出現，之後
-		# 已經在聊，不會再有「要不要理」這個選項。原本直接 bubble.clear() 收掉
-		# next_line() 開頭顯示的「…」、什麼都不顯示——玩家分不出這跟「LLM 還在
-		# 想」的空窗期有什麼差別。改顯示一句能看出來的提示，不算真的說了話，
-		# broadcast=false 跟 AI_THINKING_TEXT 同一個理由（不該讓鄰近角色把它
-		# 當事實句聽見）
+		# 已經在聊，不會再有「要不要理」這個選項。只收掉思考中指示、什麼都不
+		# 顯示的話，玩家分不出這跟「LLM 還在想」有什麼差別——顯示一句能看出來
+		# 的提示（say() 會先收掉思考中指示）。不算真的說了話，broadcast=false
+		# 跟思考中指示同一個理由（不該讓鄰近角色把它當事實句聽見）
 		if turn == 0 and not result.get("engage", true):
 			if speaker.bubble != null:
 				speaker.say(L10n.t("DLG_IGNORED"), true, false)

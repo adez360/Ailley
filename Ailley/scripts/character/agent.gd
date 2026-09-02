@@ -354,6 +354,12 @@ var _sleep_reflection_pending := false
 func is_decision_in_flight() -> bool:
 	return _awaiting_decision
 
+## character.gd::say() 的指示收點用（R1 review minor）：決策等待中的系統反應
+## 泡泡（say(..., false, false)）不該把「思考中」指示收掉——LLM 決策還在飛，
+## 提前收掉就又變成「看起來沒反應」的死寂空窗。走公開的存取器，不直接摸旗標
+func _is_awaiting_decision() -> bool:
+	return is_decision_in_flight()
+
 ## 給 game_manager.gd 的跨日自動存檔（#468）判斷要不要等這隻角色。回傳 false
 ## 代表反思還在飛（_sleep_reflection_in_flight），或雖然剛做完但撞期時記了一次
 ## 補跑（_sleep_reflection_pending，見 _finish_sleep_reflection_request()）——
@@ -1177,7 +1183,6 @@ func exit_conversation(reason: String = "") -> void:
 ## 讓額度重算。ok=false 涵蓋 AI 未啟用/逾時/驗證失敗全部情況，呼叫端
 ## （conversation.gd）一律轉去 fallback，不細分是哪一種——細分沒有意義，
 ## 三種都是「這次要不到台詞」，處理方式完全一樣
-const AI_THINKING_TEXT := "…"
 
 ## 呼叫 provider 決策並驗證內容，失敗時依 provider.max_validation_retries() 重試（#152）。
 ## 只有「拿到回應但內容不合格式」才重試（parse_completion／validate 失敗）；AIService
@@ -1280,23 +1285,17 @@ func _run_decide_into_state(
 
 
 func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) -> Dictionary:
-	# 立刻蓋掉正在顯示的東西，讓玩家知道「這個角色在想」，不是卡住。
+	# 立刻顯示「思考中」指示，讓玩家知道「這個角色在想」，不是卡住。
 	# AIService.request() 還沒送出就已經先顯示——冷卻/配額檢查也算在等待時間裡，
-	# 玩家看到「…」的時間可能比實際打網路的時間長，這是刻意的：早一點給回饋
+	# 玩家看到指示的時間可能比實際打網路的時間長，這是刻意的：早一點給回饋
 	# 比精準對齊網路延遲更重要。
 	#
-	# 直接呼叫 bubble.hold()，不走 say()：say() 排隊顯示的秒數是依文字長度算的
-	# （bubble.gd 的 SECONDS_PER_CHAR），「…」只有 1 個字元會被夾到下限 1.2 秒，
-	# 但 LLM 常常等超過 1.2 秒（ai_config.gd 預設逾時 10 秒）——泡泡提早消失、
-	# 答案還沒回來，畫面上會有一段看起來像「他不理你」的空窗，玩家分不出
-	# 「還在等」跟「他不想理你」。改用 hold() 撐到明確收掉為止：拿到台詞或
-	# fallback 時，_speak()／_finish_with_fallback() 呼叫 say(interrupt=true)
-	# 會先 bubble.clear() 換成真正的台詞；對話中途被打斷（走遠/角色離場）時
-	# exit_conversation() 統一 release_hold()（見 character.gd）。hold() 本來
-	# 就不會觸發 speech_heard 廣播，不用像 say() 那樣額外傳 broadcast=false
-	# （CodeRabbit review PR #674 的顧慮在這裡改用 hold() 就不成立了）
-	if bubble != null:
-		bubble.hold(AI_THINKING_TEXT)
+	# 這是 thinking_indicator（頭上的動畫圖示），不是塞進對話氣泡的「…」——
+	# 系統狀態指示跟角色說的話要看得出來不一樣（issue #949 B 類）。收掉的時機：
+	# 拿到台詞時 _speak() 呼叫 say()，say() 開頭會 hide_indicator()；對話結束/
+	# 被打斷時 exit_conversation() 統一 hide_indicator()（見 character.gd）
+	if thinking_indicator != null:
+		thinking_indicator.show_indicator()
 
 	# turns 空陣列＝被搭話的第一輪，還沒人開口——這輪多開放 engage 欄位，
 	# 讓對象可以選擇不理會這次搭話（issue #630）。之後的輪次已經在聊，
@@ -1563,15 +1562,13 @@ func _request_next_decision(
 	_awaiting_decision = true
 
 	# 行程決策（plan）沒有像對話那樣「答案自己就是要顯示的內容」，等待期間
-	# 畫面上完全沒有回饋——套用 next_line() 已經在用的同一招：先蓋一顆「…」
-	# 氣泡讓玩家知道角色在想，不是卡住。interrupt=true 理由跟 next_line() 相同
-	# （見那裡的註解）；bubble.say() 自己的計時器到了就會自動收掉，這裡不用
-	# 另外在決策結束時清除（issue #480）。broadcast=false：跟 next_line() 同一個
-	# 理由（issue #674）——這是內部狀態泡泡，不是角色真的說了什麼，廣播出去
-	# 會讓 3 格內每個 llm_decision_enabled 的鄰居把「…」當事實句排進決策佇列、
-	# 各自觸發一次決策，決策若同樣問不到結果又冒出自己的「…」，連環擴散成
-	# 決策請求風暴（code review 抓到）
-	say(AI_THINKING_TEXT, true, false)
+	# 畫面上完全沒有回饋——套用 next_line() 同一招：顯示 thinking_indicator
+	# 讓玩家知道角色在想，不是卡住。收掉的時機在下面 _awaiting_decision = false
+	# 之後統一 hide_indicator()；指示自己也有 MAX_VISIBLE_SECONDS 安全上限。
+	# 這是頭上的動畫圖示、不是氣泡台詞，本來就不會廣播 speech_heard，不用像
+	# 舊的 say("…") 那樣顧慮鄰居把「…」當事實句排進決策佇列（issue #949 B 類）
+	if thinking_indicator != null:
+		thinking_indicator.show_indicator()
 
 	var my_generation := _decision_generation
 
@@ -1638,6 +1635,10 @@ func _request_next_decision(
 
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	_awaiting_decision = false
+	# 決策回來了（不管成不成）——收掉「思考中」指示（issue #949 B 類）。
+	# next_line() 的對話思考不走這裡，它靠 say() 收（見那邊註解）
+	if thinking_indicator != null:
+		thinking_indicator.hide_indicator()
 
 	var final_result: Dictionary
 

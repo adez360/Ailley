@@ -921,22 +921,22 @@ poc 輸出裡有、《06》沒提到的欄位：`reasoning`／`inner_monologue`�
 沒有回饋、3 秒後突然講話/移動的話體感會很差。正式線接對話與行程時會碰到
 同一個數量級。
 
-**體感層面的解法（#480，2026-08-27 落地）**：`Agent._request_next_decision()`
-在確定要送出請求、真正打網路之前，套用跟 `next_line()`（Step 1 對話）
-完全同一招——`say(AI_THINKING_TEXT, true, false)` 立刻蓋一顆「…」氣泡，
-`interrupt=true` 蓋掉正在顯示的舊訊息。不縮短延遲本身，只讓觸發當下不是
-死寂一片。
+**體感層面的解法（#480，2026-08-27 落地；#949 B 類改呈現方式）**：
+`Agent._request_next_decision()` 在確定要送出請求、真正打網路之前，套用跟
+`next_line()`（Step 1 對話）完全同一招——`thinking_indicator.show_indicator()`
+在角色頭上冒 dots 動畫。不縮短延遲本身，只讓觸發當下不是死寂一片。決策回來
+（`_awaiting_decision = false` 之後）呼叫 `hide_indicator()` 收掉。
 
-> [!note] 「…」氣泡撐不滿整段等待，是刻意接受的取捨
-> `bubble.gd::say()` 的顯示時長跟著文字長度算（`MIN_DURATION` 1.2 秒），
-> 「…」只有一個字，1.2 秒後就自動收掉——比 2.5-4 秒的實測延遲短，決策
-> 真正回來前氣泡多半已經消失。`next_line()` 的既有取捨是「早一點給回饋
-> 比精準對齊網路延遲更重要」，這裡沿用同一個立場，沒有另外做「撐滿整段
-> 等待」的機制（例如改用不會自動收掉的 `hold()`）。用 `game_eval` 直接呼叫
-> `_request_next_decision()` 白箱驗證過：`spoke` 訊號確實以 `"…"` 觸發、
-> 氣泡當下 `visible=true`、且會蓋掉呼叫當下正在顯示的舊訊息。角色停下腳步
-> 做「在想事情」小動作是筆記原本提過的替代方案，#480 沒有採用，兩案只能
-> 二選一時選了跟對話一致、成本較低的氣泡方案。
+> [!note] 指示的收掉時機
+> `thinking_indicator` 有 `MAX_VISIBLE_SECONDS` 安全上限自己收——數值從
+> `AIConfig.DEFAULT_TIMEOUT` 推導：最壞情況是 provider 逾時（20 秒，#852）後
+> 驗證失敗重試最多 2 次（`remote_llm_provider.gd::max_validation_retries()`），
+> 1＋2 次都吃滿逾時再加 5 秒 margin，合計 65 秒。
+> 正常情況下決策回來（`_awaiting_decision = false`）就主動 `hide_indicator()`，
+> 撐得滿 2.5-4 秒的實測延遲。`next_line()`（對話思考）不走這個收掉點，靠
+> `say()` 收——拿到台詞開口說話就是「思考結束」最準的訊號。詳見
+> [[talk 動作設計]]「系統正在等的指示不塞在對話氣泡裡」。角色停下腳步做
+> 「在想事情」小動作是筆記原本提過的替代方案，沒有採用。
 
 **縮短延遲本身的槓桿（另一方向，尚未實作）**：`REASONING_INSTRUCTION` 的
 100 字上限是延遲/品質的直接槓桿，往下砍會更快但決策品質會掉；其他槓桿是模型
