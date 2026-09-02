@@ -192,7 +192,7 @@ get_state_snapshot() -> {
 func get_input_direction() -> Vector2        # WASD 正規化
 func get_facing_direction() -> Vector2       # Character 基底，facing/flip_h 重建方向向量
 func _get_interact_candidates() -> Dictionary  # {workstation, shop_place, other, to_work, to_shop, to_other}
-func _nearest_shop_place() -> String          # SHOP_PLACES 裡距離+面向都合格的地點名，找不到回 ""
+func _nearest_shop_place() -> String          # SHOP_PLACES 裡站進地點 Area2D 範圍的地點名，找不到回 ""
 ```
 
 ```text
@@ -206,21 +206,22 @@ interact(E)：對話中→leave_conversation()；否則呼叫 _get_interact_cand
   talk_to(other)；shop 贏了只是開商品選單，不算「完成互動」
 _process()：每幀重算 _get_interact_candidates()，跟 E 會打到誰同一套判斷，
   更新 Workstation 的 Highlight 節點與 Character.set_interact_highlighted()——
-  商店贏了沒有節點可以描邊，直接 pass 跳過 other 的高亮，玩家走進 BUY_RANGE
-  面向商店就能按 E，沒有額外視覺提示（issue #81 的即時高亮只服務 workstation）
+  商店贏了沒有節點可以描邊，直接 pass 跳過 other 的高亮，玩家站進商店地點的
+  Area2D 範圍就能按 E，沒有額外視覺提示（issue #81 的即時高亮只服務 workstation）
 make_noise(F)：呼叫基底 make_noise()，玩家自己不接 noise_heard，不會冒 !?
 Player 不接 speech_heard（issue #669）：說話的人本來就會冒對話泡泡，真人玩家
   看畫面就知道附近有人在講什麼，不需要引擎再曝光一次（跟 noise_heard 不同——
   聲音本身沒有畫面呈現，才需要 !? 曝光感測結果）
 † gui_get_focus_owner() != null 時 get_input_direction() 回 ZERO
   Input.get_axis() 讀全域狀態，LineEdit 攔不住
-† 候選先被 _is_facing()（cone 判定）篩過一輪，沒被玩家面向的直接不算候選——
-  即使範圍內只有它一個、沒有別的候選能比，沒面向就是選不到。to_work/to_shop/
-  to_other 是通過面向篩選後剩下候選的原始距離
+† workstation／character 候選先被 _is_facing()（cone 判定）篩過一輪，沒被玩家
+  面向的直接不算候選——即使範圍內只有它一個、沒有別的候選能比，沒面向就是
+  選不到（商店候選不篩面向，是站進判斷，見下一條）。to_work/to_shop/to_other
+  是通過篩選後剩下候選的原始距離
 † workstation 候選來自 InteractArea（Area2D，collision layer "interactable"，
-  半徑 maxf(WORK_RANGE, TALK_RANGE, BUY_RANGE)）；shop_place 候選直接對
-  SHOP_PLACES（["tavern","herb_shop"]）逐一比 PlaceAnchors 錨點距離，不經過
-  Area2D——商店不是場上物件（issue #572）；character 候選直接濾
+  半徑 maxf(WORK_RANGE, TALK_RANGE, BUY_RANGE)）；shop_place 候選對
+  SHOP_PLACES（["tavern","herb_shop"]）逐一用 PlaceAnchors.is_within() 判斷
+  是否站進地點的 Area2D 矩形（issue #1022，不要求面向）；character 候選直接濾
   vision.get_visible_characters()，也不另開 Area2D（issue #109）
 ⚠ 純比距離會讓工作站永遠打不到——桌子很容易落在地點錨點的互動半徑內，
   agent 行程正好把人帶去那個錨點，NPC 幾乎必然比物件更近
@@ -668,7 +669,7 @@ func close() -> void
 ```text
 group "vending_menu"（唯一一個）。開：player.gd 判斷附近有商店才呼叫 open()；
 關：自己的 _unhandled_input 收 interact/ui_cancel，或 _process() 偵測買方走出
-Character.BUY_RANGE 自動關閉——選單不擋移動，這段收尾邏輯獨立於玩家輸入
+地點的 Area2D 範圍自動關閉——選單不擋移動，這段收尾邏輯獨立於玩家輸入
 → 技術/販賣機
 ```
 
