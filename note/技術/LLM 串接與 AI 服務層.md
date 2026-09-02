@@ -1093,7 +1093,8 @@ llama-server 在跑，`local` provider 的探測固定逾時（約 10 秒，
 
 - `AIService` 的用量統計（`calls_today`／`cooldown_left`／配額）是逐
   `requester_id`（`character_id`）分開算的，兩隻角色同時打不會互相污染
-  彼此的冷卻或配額，`POOL_SIZE=3` 的節點池在這個規模下沒有觀察到排隊卡住
+  彼此的冷卻或配額。`POOL_SIZE=3` 的節點池排隊行為見下一節（issue #867，
+  2 隻角色的規模不足以撞到 3 個節點的上限，沒測到東西不代表沒有風險）
 - `context.visible` 確實會把另一隻看得到的 NPC 列進去，`talk`／`give`／
   `persuade`／`attack` 這幾個需要 `target` 的動作理論上都能選到對方
   （不是只能選玩家）
@@ -1101,6 +1102,46 @@ llama-server 在跑，`local` provider 的探測固定逾時（約 10 秒，
   觀察到 NPC 對 NPC 的 `talk`/`give`/`persuade`/`attack` 真的被選中執行
   ——這條路徑機制上打得通，但端到端沒有被這次測試驗證到，需要更長的
   觀察窗（或用 `debug_push_task()` 強制塞一筆去驗執行層）才能確認
+
+## POOL_SIZE=3 在併發下確實會排隊，但目前 5 隻村民的規模不需要調高（issue #867，2026-09-02 實測）
+
+- 用 `game_eval` 直接對 `AIService.request()` 發 5 筆併發 `SCHEDULED` 請求
+  （跳過角色投放與 `debug_set_llm_decision()` 的 readiness 關卡，直接測
+  `AIService` 自己的池子邏輯——這條路徑跟真正角色的決策請求完全共用同一個
+  `request()`/`_pump()`/`_queue`，測起來等價，而且不用等真的 LLM 伺服器）：
+  `_busy` 立刻頂到 3（`POOL_SIZE` 上限），剩下 2 筆進 `_queue` 排隊——
+  `get_usage()` 回傳的 `in_flight`/`queued` 精確反映這個狀態，跟設計文件
+  （見 `main_scene.gd::_apply_startup_ai_state()` 的註解）描述的機制一致。
+- 逾時（`RESULT_TIMEOUT`）確認不會在 `AIService` 這層重試（`_interpret()`
+  明寫理由：已經燒掉一整個 timeout，重試等於讓呼叫端等兩倍），所以每個
+  卡住的請求只佔用節點池一次 timeout 的時間，不會因為內部重試被拉更長。
+- 目前場上固定村民只有 5 隻（`npc001`／`npc002`／`npc003`／`npc004`／
+  `npc006`），只有開場那一刻全部一起補打第一次決策時才可能同時逼近 5 個
+  並發（`main_scene.gd` 的補打迴圈刻意不逐隻 `await`，就是為了讓池子／
+  佇列自己排，見它自己的註解）；遊戲中途的排程觸發是事件驅動、不是固定
+  tick，天生會錯開，正常遊玩幾乎不會有 5 隻同時打。結論：以目前的角色
+  規模，`POOL_SIZE=3` 最壞情況只會讓 2 隻角色的第一次決策多等一輪
+  （timeout 從 10 秒調到 20 秒之後，這個「多等一輪」的代價也從約 10 秒
+  變約 20 秒——這是 #866 調高 timeout 帶來的真實副作用，量級不大但存在），
+  不到需要調高 `POOL_SIZE` 的程度；角色數量之後如果明顯超過 5，這個結論
+  要重新評估。
+
+### 測試環境的連線逾時雜訊（跟上面同一批測試，不是 AIService 的問題）
+
+刻意讓 `local` provider 連不上（不啟動 llama-server）來製造保證逾時的請求時，
+觀察到 `HTTPRequest` 實際耗時遠超過設定的 `timeout`（例如把 timeout 設成
+3 秒，實測要 9-10 秒才真的 `RESULT_TIMEOUT`；預設 20 秒的話超過 60 秒還
+沒逾時）。用 PowerShell `Test-NetConnection 127.0.0.1:8080` 直接測純 OS
+層級的 TCP 連線，同樣要 18 秒才回報連不上，證實這是**這台測試機的網路
+堆疊**本身回應 ECONNREFUSED 就慢，不是 Godot `HTTPRequest.timeout` 或
+`AIService` 沒有正確設定逾時。有沒有讓遊戲視窗拿到 focus 對這個延遲沒有
+影響（兩種都測過），排除了《Ailley/CLAUDE.md》「headless 環境 HTTPRequest
+較慢」那條警告的適用範圍——這次是在編輯器 Play 模式測的，一樣慢。
+
+對上面 `POOL_SIZE` 的結論沒有影響——池子／佇列機制本身測得到、行為正確；
+這裡只是誠實記錄「本機連不上時卡住多久」這個秒數在這台機器上量不準，
+換一台機器實測可能更接近設定值。真正會影響玩家的情境（本機模型真的在
+跑、只是回應慢）沒有這層環境雜訊，`timeout` 秒數本身仍然可信。
 
 ## 投放位置沒有邏輯，落在跟玩家無關的世界原點（issue #685，已修，PR 待開）
 
