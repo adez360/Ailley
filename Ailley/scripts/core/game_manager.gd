@@ -388,6 +388,24 @@ func get_library_entry(id: String) -> Dictionary:
 	return {}
 
 
+# 場上「characters」分組裡找出某個 character_id 對應的節點——
+# recall_from_library() 跟 remove_from_library() 的已葬判斷共用同一種查法
+func _find_scene_character(id: String) -> Character:
+	for node in get_tree().get_nodes_in_group("characters"):
+		var character := node as Character
+		if character != null and character.character_id == id:
+			return character
+	return null
+
+
+# 這筆角色庫紀錄的場上肉體是否為已下葬的屍體（issue #999）——建角面板的
+# 模板清單靠這個判斷要不要為它多列一列「永久移除」。紀錄已投放但場上查不到
+# 節點（讀檔還原的空窗）時視為否，寧可少列也不誤刪
+func is_library_entry_buried(id: String) -> bool:
+	var character := _find_scene_character(id)
+	return character != null and character.is_dead and character.is_buried
+
+
 # deploy_from_library() 直接索引 id／character_name／hexaco／character／
 # decision_source／model_name，缺欄位或型別不對的紀錄留到投放當下才炸，
 # 不如讀檔時就跳過——這幾個欄位跟其他「缺了用預設值補」的欄位不同，
@@ -420,13 +438,32 @@ func _is_valid_library_entry(entry) -> bool:
 # 紀錄指向它），deploy_from_library() 的 deployed_count 也只掃
 # character_library，刪掉之後計數會下降，變成可以無視 DEPLOY_CAP 重複投放
 # （CodeRabbit review 抓到）。要收回一隻已投放角色，先做的是撤回（見《05》
-# §7-3，這則不含撤回機制的實作），不是直接刪角色庫紀錄
+# §7-3），不是直接刪角色庫紀錄
+#
+# 例外（issue #999）：已下葬的屍體允許直接刪——玩家確定不付費復活時，這具
+# 屍體會永久卡住一個 DEPLOY_CAP 名額、沒有任何操作能釋放。刪除時把場上屍體
+# 節點一起收掉（搬運關係不用另外解，`character.gd::_exit_tree()` 已經雙向
+# 釋放，跟 recall_from_library() 同一套），不會留下孤兒節點、deployed_count
+# 也隨紀錄整筆移除而下降，兩邊一致——不做「留靈魂在同一世界重新投放」
+# （《05》§7-3 死亡禁入）。未下葬的屍體、還活著的場上角色、目前化身角色仍然
+# 拒絕
 func remove_from_library(id: String) -> bool:
 	for i in character_library.size():
 		if character_library[i]["id"] == id:
 			if character_library[i].get("deployed", false):
-				push_warning("GameManager: %s 已投放，先收回才能刪除" % character_library[i]["character_name"])
-				return false
+				if id == embodied_character_id:
+					push_warning("GameManager: %s 是目前化身角色，無法刪除" % character_library[i]["character_name"])
+					return false
+				var corpse := _find_scene_character(id)
+				if corpse == null or not corpse.is_dead or not corpse.is_buried:
+					push_warning("GameManager: %s 已投放，先收回才能刪除" % character_library[i]["character_name"])
+					return false
+				# queue_free() 前先退組，讓緊接著重新掃「characters」分組的
+				# 呼叫端（character_create.gd／character_sidebar.gd）不會看到
+				# 一具已經刪掉、但這一幀還沒真的消失的殘影——recall_from_library()
+				# 同一個坑
+				corpse.remove_from_group("characters")
+				corpse.queue_free()
 			identity_assignments.erase(id)
 			character_library.remove_at(i)
 			return true
