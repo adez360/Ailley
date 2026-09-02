@@ -1,0 +1,330 @@
+class_name ModelDownloader
+extends Node
+
+## 首次啟動主動下載本機 AI 執行檔／模型（issue #989）。推翻《16 打包與發布
+## 規格書》§1 B3——原決策是「全部塞進安裝包，不做首次啟動另外下載」，理由是
+## 走 Steam depot；B7（Steamworks 帳號）短期不可行，2026-09-02 拍板改成遊戲
+## 本體自己偵測＋下載。
+##
+## 不是 autoload——玩家按下「下載本機 AI 模型」才由呼叫端 `ModelDownloader.new()`
+## 生一個、`add_child()`、接上 `progress_updated`／`finished` 訊號、呼叫
+## `start()`。下載目標路徑沿用 `LlamaSidecar` 已經在用的慣例（`get_sidecar_dir()`
+## 等公開介面，這裡不重寫一套路徑邏輯，見 llama_sidecar.gd）。
+##
+## 下載完成後呼叫 LlamaSidecar.retry_launch()，不用重開遊戲就能接上。
+##
+## ⚠️ 目前只支援 Windows 自動下載執行檔——llama.cpp release 的 macOS／Linux
+## 組建是 .tar.gz，Godot 沒有原生 tar/gzip 解壓能力（ZIPReader 只認 .zip）。
+## macOS／Linux 這次先不做自動解壓，is_platform_supported() 會回 false，UI
+## 端要顯示「請手動下載安裝」之類的引導，不是這裡的責任。
+
+signal progress_updated(stage: Stage, bytes_downloaded: int, bytes_total: int)
+signal finished(ok: bool, reason: String)
+
+enum Stage {
+	CHECKING_SPACE,
+	DOWNLOADING_BINARY,
+	EXTRACTING_BINARY,
+	DOWNLOADING_MODEL,
+}
+
+# llama.cpp 官方 release（MIT），2026-09-02 查證存在、Windows CPU x64 有對應
+# asset。之後升版只需要改這個 tag，不用動下載/解壓邏輯
+const LLAMA_CPP_RELEASE_TAG := "b10752"
+# GDScript 的 const 只接受編譯期常數表達式，字串 % 格式化（即使兩個運算元
+# 都是 const）不算——跟 AIConfig.CONFIG_PATH 用 static var 接 _compute_
+# config_path() 同一個理由，這裡也改用 static var 接一個小函式
+static var _WINDOWS_BINARY_URL := _compute_windows_binary_url()
+
+
+static func _compute_windows_binary_url() -> String:
+	return (
+		"https://github.com/ggml-org/llama.cpp/releases/download/%s/llama-%s-bin-win-cpu-x64.zip"
+		% [LLAMA_CPP_RELEASE_TAG, LLAMA_CPP_RELEASE_TAG]
+	)
+
+# Qwen2.5-7B-Instruct-GGUF（HuggingFace，Apache-2.0）。2026-09-02 查證：
+# Q4_K_M 以上量化版全部是分割檔（-00001-of-0000N.gguf），目前 bundle 的
+# llama-server 版本支不支援分割檔直讀還沒測過（見 issue #989）；q3_k_m 是
+# 單一檔案，避開這個不確定性，先用它當 v1 的自動下載預設值。之後真的驗證過
+# 分割檔可用、且想換更高量化版時，只需要改這裡跟 AIConfig._DEFAULT_LOCAL_MODEL
+# 兩個常數，其餘邏輯不用動
+const MODEL_FILENAME := "qwen2.5-7b-instruct-q3_k_m.gguf"
+static var _MODEL_URL := _compute_model_url()  # 同上，% 格式化不算 const 表達式
+
+
+static func _compute_model_url() -> String:
+	return (
+		"https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/%s?download=true"
+		% MODEL_FILENAME
+	)
+
+# 下載失敗（大小對不上／request 失敗）重試上限，比照 AIService.RETRY_LIMIT
+# 的既有慣例，不是新發明一套數字
+const RETRY_LIMIT := 1
+
+# 下載前的最低可用空間門檻，抓寬一點（模型＋執行檔本身，加上解壓過程需要
+# 的暫存空間）——精確估計留給實作時對著真實檔案大小算，這裡先用一個粗略
+# 但夠用的門檻，防的是「連下載都下不完就先把磁碟塞爆」這種最壞情況
+const MIN_FREE_SPACE_BYTES := 8 * 1024 * 1024 * 1024  # 8 GB
+
+var _http: HTTPRequest
+var _cancelled := false
+
+
+static func is_platform_supported() -> bool:
+	# 只有 Windows 的 release asset 是 .zip；macOS／Linux 是 .tar.gz，Godot
+	# 的 ZIPReader 解不開，見檔頭說明
+	return OS.get_name() == "Windows"
+
+
+func start() -> void:
+	_cancelled = false
+
+	if not is_platform_supported():
+		finished.emit(false, "此平台目前不支援自動下載，需要手動安裝")
+		return
+
+	progress_updated.emit(Stage.CHECKING_SPACE, 0, 0)
+	if not _has_enough_free_space():
+		finished.emit(
+			false,
+			"磁碟空間不足，至少需要 %.1f GB 可用空間" % (MIN_FREE_SPACE_BYTES / 1073741824.0)
+		)
+		return
+
+	var binary_ok := await _download_binary()
+	if _cancelled:
+		return
+	if not binary_ok:
+		return  # _download_binary() 已經自己 emit 過 finished
+
+	var model_ok := await _download_model()
+	if _cancelled:
+		return
+	if not model_ok:
+		return  # _download_model() 已經自己 emit 過 finished
+
+	_write_model_into_config()
+	LlamaSidecar.retry_launch()
+	finished.emit(true, "")
+
+
+func cancel() -> void:
+	_cancelled = true
+	if _http != null and is_instance_valid(_http):
+		_http.cancel_request()
+
+
+func _has_enough_free_space() -> bool:
+	# Godot 沒有跨平台的「查剩餘磁碟空間」原生 API（DirAccess 只能查檔案
+	# 存不存在、目錄底下有什麼，查不到容量）。這裡用「試寫一個小檔案，寫得
+	# 進去就當作空間夠」這種保守判斷，不是精確的容量檢查——真的要精確查，
+	# Windows 得走 OS.execute() 呼叫 `wmic`/`fsutil` 之類的外部指令，
+	# 跨平台一致性差，這次先不做，留給之後真的有人反映「明明有空間卻擋下」
+	# 或「空間不夠卻沒擋」再處理
+	var sidecar_dir := LlamaSidecar.get_sidecar_dir()
+	DirAccess.make_dir_recursive_absolute(sidecar_dir)
+	var probe_path := sidecar_dir.path_join(".space_probe")
+	var probe := FileAccess.open(probe_path, FileAccess.WRITE)
+	if probe == null:
+		return false
+	probe.store_string("probe")
+	probe.close()
+	DirAccess.remove_absolute(probe_path)
+	return true
+
+
+## 依序：查 Content-Length → 下載 zip → 解壓到 sidecar/<platform>/ → 刪暫存 zip。
+## 回傳 false 時已經自己 emit 過 finished，呼叫端不用重複處理
+func _download_binary() -> bool:
+	var target_dir := LlamaSidecar.get_sidecar_dir().path_join(LlamaSidecar.get_platform_subdir())
+	var zip_path := target_dir.path_join("_download.zip")
+	DirAccess.make_dir_recursive_absolute(target_dir)
+
+	var attempt := 0
+	while attempt <= RETRY_LIMIT:
+		attempt += 1
+		var ok := await _download_to_file(
+			_WINDOWS_BINARY_URL, zip_path, Stage.DOWNLOADING_BINARY
+		)
+		if _cancelled:
+			return false
+		if ok:
+			break
+		if attempt > RETRY_LIMIT:
+			finished.emit(false, "下載 llama-server 執行檔失敗（已重試 %d 次）" % RETRY_LIMIT)
+			return false
+
+	progress_updated.emit(Stage.EXTRACTING_BINARY, 0, 0)
+	var extract_ok := _extract_zip(zip_path, target_dir)
+	DirAccess.remove_absolute(zip_path)
+	if not extract_ok:
+		finished.emit(false, "解壓 llama-server 執行檔失敗")
+		return false
+
+	if not FileAccess.file_exists(target_dir.path_join(LlamaSidecar.get_binary_name())):
+		finished.emit(false, "解壓完成，但找不到 llama-server 執行檔本身")
+		return false
+
+	return true
+
+
+func _download_model() -> bool:
+	var model_dir := LlamaSidecar.get_sidecar_dir().path_join("models")
+	var model_path := model_dir.path_join(MODEL_FILENAME)
+	DirAccess.make_dir_recursive_absolute(model_dir)
+
+	var attempt := 0
+	while attempt <= RETRY_LIMIT:
+		attempt += 1
+		var ok := await _download_to_file(_MODEL_URL, model_path, Stage.DOWNLOADING_MODEL)
+		if _cancelled:
+			return false
+		if ok:
+			return true
+		if attempt > RETRY_LIMIT:
+			finished.emit(false, "下載模型檔失敗（已重試 %d 次）" % RETRY_LIMIT)
+			return false
+	return false
+
+
+## 通用下載：先 HEAD 查 Content-Length（沒查到就跳過大小核對，不當硬錯誤），
+## 再用 download_file 直接串流寫檔，_process() 期間輪詢位元組數發 progress_updated。
+## 完成後比對實際檔案大小跟 Content-Length，對不上視為下載不完整
+func _download_to_file(url: String, dest_path: String, stage: Stage) -> bool:
+	var expected_size := await _fetch_content_length(url)
+
+	_http = HTTPRequest.new()
+	_http.use_threads = true
+	_http.download_file = dest_path
+	add_child(_http)
+
+	var err := _http.request(url)
+	if err != OK:
+		_http.queue_free()
+		_http = null
+		return false
+
+	while _http.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+		if _cancelled:
+			return false
+		progress_updated.emit(stage, _http.get_downloaded_bytes(), expected_size)
+		await get_tree().process_frame
+
+	var response: Array = await _http.request_completed
+	var result: int = response[0]
+	var response_code: int = response[1]
+	_http.queue_free()
+	_http = null
+
+	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
+		DirAccess.remove_absolute(dest_path)
+		return false
+
+	if expected_size > 0:
+		var actual_size := FileAccess.get_file_as_bytes(dest_path).size()
+		if actual_size != expected_size:
+			DirAccess.remove_absolute(dest_path)
+			return false
+
+	return true
+
+
+## 輕量 HEAD 請求查 Content-Length，查不到（逾時／伺服器不支援 HEAD）回 -1，
+## 呼叫端當「不核對大小」處理，不當成下載失敗——核對是額外的保險，不是
+## 下載能不能進行的必要條件
+func _fetch_content_length(url: String) -> int:
+	var head := HTTPRequest.new()
+	head.use_threads = true
+	head.timeout = 10.0
+	add_child(head)
+
+	var err := head.request(url, PackedStringArray(), HTTPClient.METHOD_HEAD)
+	if err != OK:
+		head.queue_free()
+		return -1
+
+	var response: Array = await head.request_completed
+	head.queue_free()
+
+	if int(response[0]) != HTTPRequest.RESULT_SUCCESS:
+		return -1
+
+	var headers: PackedStringArray = response[2]
+	for header in headers:
+		if header.to_lower().begins_with("content-length:"):
+			var value := header.split(":", true, 1)[1].strip_edges()
+			if value.is_valid_int():
+				return int(value)
+	return -1
+
+
+## 把 zip 裡的每個檔案原樣放進 target_dir——llama.cpp release zip 目前是
+## 檔案直接在根目錄、沒有多包一層資料夾（2026-09-02 對照本機一份手動下載的
+## 同款 zip 內容確認過），這裡防呆一下：如果所有項目確實共用同一個最外層
+## 資料夾名稱，先扒掉那層再落地，避免哪天上游改了打包方式就整層資料夾錯位
+func _extract_zip(zip_path: String, target_dir: String) -> bool:
+	var reader := ZIPReader.new()
+	if reader.open(zip_path) != OK:
+		return false
+
+	var paths := reader.get_files()
+	if paths.is_empty():
+		reader.close()
+		return false
+
+	var common_prefix := _common_top_level_folder(paths)
+
+	for path in paths:
+		if path.ends_with("/"):
+			continue  # 目錄項目，不用手動建立，下面用檔案路徑自動建立父層
+		var relative := path.substr(common_prefix.length()) if not common_prefix.is_empty() else path
+		if relative.is_empty():
+			continue
+		var out_path := target_dir.path_join(relative)
+		DirAccess.make_dir_recursive_absolute(out_path.get_base_dir())
+		var out_file := FileAccess.open(out_path, FileAccess.WRITE)
+		if out_file == null:
+			reader.close()
+			return false
+		out_file.store_buffer(reader.read_file(path))
+		out_file.close()
+
+	reader.close()
+	return true
+
+
+## 所有項目是不是都共用同一個最外層資料夾（例如 "llama-b10752/xxx.exe"）——
+## 是的話回傳那個資料夾名稱＋"/"，之後解壓時扒掉；不是（檔案直接在根目錄）
+## 就回傳空字串
+func _common_top_level_folder(paths: PackedStringArray) -> String:
+	if paths.is_empty():
+		return ""
+	var first_slash := paths[0].find("/")
+	if first_slash == -1:
+		return ""
+	var candidate := paths[0].substr(0, first_slash + 1)
+	for path in paths:
+		if not path.begins_with(candidate):
+			return ""
+	return candidate
+
+
+## 下載成功後，把 ai_config.json 的 local provider 指到剛落地的檔名——玩家
+## 不用自己編輯 JSON。沿用 AIConfig 既有的讀寫介面，不直接戳 FileAccess
+## 重寫一套
+func _write_model_into_config() -> void:
+	var config := AIConfig.load_from_user()
+	var local_provider: AIConfig.Provider = config.get_local_provider()
+	if local_provider == null:
+		# 沒有本機 provider 可寫（例如玩家的 ai_config.json 被手動改壞、拿掉
+		# 了 local 這個 key）——下載本身還是成功的，只是接不回設定檔，
+		# push_warning 記下來，不當成整個下載流程失敗
+		push_warning(
+			"ModelDownloader: 下載成功，但 ai_config.json 裡沒有本機 provider 可以寫入，"
+			+ "需要手動設定"
+		)
+		return
+	if not AIConfig.update_provider_model(local_provider.name, MODEL_FILENAME):
+		push_warning("ModelDownloader: 下載成功，但寫回 ai_config.json 失敗")

@@ -59,6 +59,28 @@ func _ready() -> void:
 	_maybe_launch()
 
 
+## 下載完成後（見 ModelDownloader，issue #989）呼叫這個，不用重開整個遊戲——
+## 直接重跑一次 _maybe_launch()，跟開機那次是同一段邏輯，會重新探測缺檔案的
+## 狀態、找到剛落地的執行檔／模型檔就直接拉起
+func retry_launch() -> void:
+	_maybe_launch()
+
+
+## 給 ModelDownloader 算下載目標路徑用，不重寫一套路徑邏輯（issue #989 的
+## 規劃書要求「沿用 LlamaSidecar 已有的路徑慣例」）。三個都是原本就有的私有
+## 路徑函式，這裡開公開介面，本體邏輯不動
+func get_sidecar_dir() -> String:
+	return _sidecar_dir()
+
+
+func get_platform_subdir() -> String:
+	return _platform_subdir()
+
+
+func get_binary_name() -> String:
+	return _binary_name()
+
+
 # GameManager 收到 WM_CLOSE_REQUEST 負責存檔與 get_tree().quit()，await 期間
 # 控制權交回樹上，可能長達數十秒（等的是還在飛的睡眠反思請求，見
 # game_manager.gd::_wait_for_sleep_reflections_to_settle()）——autoload 順序

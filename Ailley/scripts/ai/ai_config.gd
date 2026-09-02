@@ -196,7 +196,12 @@ var embedding_timeout := DEFAULT_EMBEDDING_TIMEOUT
 # 同時示範 openrouter 這個玩家要自己填金鑰的 provider，不能整包照抄當預設值，
 # 這裡只需要「local」那一段
 const _DEFAULT_LOCAL_BASE_URL := "http://127.0.0.1:8080/v1"
-const _DEFAULT_LOCAL_MODEL := "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+# 跟 ModelDownloader.MODEL_FILENAME（issue #989）是同一個檔名，兩邊要一起
+# 改——這裡不 import 那個常數，`AIConfig` 是比較底層的共用模組，不該反過來
+# 依賴一個新功能腳本。首次啟動自動產生的設定檔先假設玩家會下載這個檔名，
+# 真的下載完成後 ModelDownloader.update_provider_model() 還是會覆寫成
+# 它實際抓到的檔名，這裡只是讓兩者預設情況下一致，不是唯一真相來源
+const _DEFAULT_LOCAL_MODEL := "qwen2.5-7b-instruct-q3_k_m.gguf"
 
 
 # 首次啟動、`user://` 還沒有設定檔時自動寫一份指向內建 sidecar 的預設值
@@ -284,6 +289,43 @@ static func load_from_user() -> AIConfig:
 
 	config._apply(json.data as Dictionary)
 	return config
+
+
+## `ModelDownloader`（issue #989）下載完模型後，把實際落地的檔名寫回設定檔，
+## 玩家不用自己編輯 JSON。走原始 Dictionary 往返（讀 → 只改
+## `providers.<name>.model` 這一個鍵 → 寫回），不透過 `_apply()`／`Provider`
+## 那條解析路徑——`Provider` 只塞它自己認得的欄位，來回一趟會把設定檔裡它
+## 不認得的欄位（例如玩家自己加的備註用鍵）弄丟。找不到檔案／JSON 壞掉／
+## 指定的 provider 不存在都回傳 false，呼叫端自行決定要不要 push_warning，
+## 這裡不擅自吵
+static func update_provider_model(provider_name: String, model: String) -> bool:
+	if not FileAccess.file_exists(CONFIG_PATH):
+		return false
+
+	var file := FileAccess.open(CONFIG_PATH, FileAccess.READ)
+	if file == null:
+		return false
+	var text := file.get_as_text()
+	file.close()
+
+	var json := JSON.new()
+	if json.parse(text) != OK or not json.data is Dictionary:
+		return false
+
+	var data: Dictionary = json.data
+	var providers: Dictionary = data.get("providers", {})
+	if not providers.has(provider_name) or not providers[provider_name] is Dictionary:
+		return false
+
+	(providers[provider_name] as Dictionary)["model"] = model
+	data["providers"] = providers
+
+	var out := FileAccess.open(CONFIG_PATH, FileAccess.WRITE)
+	if out == null:
+		return false
+	var write_ok := out.store_string(JSON.stringify(data, "\t"))
+	out.close()
+	return write_ok
 
 
 # 分開成一個方法是為了讓測試與未來的「設定 UI」能餵 Dictionary 進來，不必落地成檔案
