@@ -77,7 +77,6 @@ const HONEY := Color("F0A94E")
 @onready var _decision_source_container: Control = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock
 @onready var _local_button: Button = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock/SourceButtonsRow/LocalButton
 @onready var _cloud_button: Button = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock/SourceButtonsRow/CloudButton
-@onready var _human_button: Button = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock/SourceButtonsRow/HumanButton
 @onready var _model_dropdown: OptionButton = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock/ModelDropdown
 @onready var _model_hint: Label = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock/ModelHint
 # issue #989：沒有本機 provider 時，旁邊補一個下載入口，不只是叫玩家自己
@@ -142,7 +141,11 @@ const HONEY := Color("F0A94E")
 @onready var _personality_random_row: Control = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabPersonality/RandomRow
 
 var _gender_selected := "other"
-var _decision_source := "human"
+## 決策來源：MVP 只提供 "local" / "cloud"（建角面板的兩顆按鈕）。"human"
+## 這個值仍是《06》的合法欄位值，保留給《12》HumanInput 決策面板（issue #156）
+## 落地時再把「真人」按鈕加回來——在那之前面板不提供這個選項。真正的
+## 「玩家親自操控」走面板頂端「由我操控」toggle（_embodiment_mode）
+var _decision_source := "local"
 var _model_name := ""
 
 ## true 時面板走化身者模式：決策來源、六維人格滑桿對玩家都沒有意義，一併
@@ -188,7 +191,9 @@ func _unhandled_input(event: InputEvent) -> void:
 ## 沒有意義，_refresh_all() 會把那個區塊藏起來
 func open(as_player: bool = false) -> void:
 	_reset_fields()
-	_embodiment_mode = as_player
+	# 一世界一個「由我操控」角色（issue #1024）：場上已有化身角色時，就算
+	# 帶 as_player=true 進來也退回 AI 模式；_refresh_all() 會把 toggle disable
+	_embodiment_mode = as_player and GameManager.embodied_character_id.is_empty()
 	_refresh_all()
 	_refresh_template_list()
 	visible = true
@@ -250,7 +255,6 @@ func _wire_signals() -> void:
 
 	_local_button.pressed.connect(_on_source_pressed.bind("local"))
 	_cloud_button.pressed.connect(_on_source_pressed.bind("cloud"))
-	_human_button.pressed.connect(_on_source_pressed.bind("human"))
 	_model_dropdown.item_selected.connect(_on_model_selected)
 	_download_model_button.pressed.connect(_on_download_model_pressed)
 
@@ -298,17 +302,21 @@ func _load_entry(entry: Dictionary) -> void:
 	# appearance[] 內容本來就是空的（P-38 待填），沒有索引可以還原選中哪一格——
 	# 套用模板時強制重選，不是這裡少寫了什麼
 	_style_selected = -1
-	_decision_source = str(entry.get("decision_source", "human"))
+	# 面板只認得 local / cloud（issue #1024）；模板存的是 "human" 或其他舊值
+	# 時一律當 local，讓下拉／驗證有個合法起點，不是黑洞
+	var src := str(entry.get("decision_source", "local"))
+	_decision_source = src if src in ["local", "cloud"] else "local"
 	_model_name = str(entry.get("model_name", ""))
 
 ## 決策來源預設值（規格書 05 §3-1）：有可用的本機 provider 就預選本機
 ## （優先 AIConfig.default_provider 指到的那個，不是本機或不可用就退回本機
-## 清單第一個）；否則退到真人——不退到雲端，那會變成預設幫玩家選一個
-## 會產生帳單的選項
+## 清單第一個）；沒有可用本機 provider 就停在 local（按鈕 disabled），由
+## ModelHint／缺欄提示引導玩家去下載模型或設定雲端（issue #1024：不再退到
+## 已移除的「真人」）——不預選 cloud，那會變成預設幫玩家選一個會產生帳單的選項
 func _apply_default_decision_source() -> void:
 	var locals := _providers_by_locality(true)
 	if locals.is_empty():
-		_decision_source = "human"
+		_decision_source = "local"
 		_model_name = ""
 		return
 
@@ -461,7 +469,10 @@ func _missing_items() -> Array[String]:
 			items.append(L10n.tf("UI_CC_MISSING_EXTREME_HIGH", {"n": n - EXTREME_MAX}))
 	if _style_selected < 0:
 		items.append(L10n.t("UI_CC_MISSING_STYLE"))
-	if _decision_source in ["local", "cloud"] and _model_name.is_empty():
+	# 化身者模式決策來源整段隱藏，型號對玩家操控的角色沒有意義——跟極端項
+	# 門檻同一個理由跳過（issue #1024：移除「真人」後 _decision_source 一定是
+	# local／cloud，沒有 fallback 到不需型號的來源可以自然免掉這關）
+	if not _embodiment_mode and _model_name.is_empty():
 		items.append(L10n.t("UI_CC_MISSING_MODEL"))
 	return items
 
@@ -487,6 +498,10 @@ func _refresh_all() -> void:
 	# _on_mode_pressed() 接的是 pressed，不會被自己回呼觸發
 	_mode_ai_button.button_pressed = not _embodiment_mode
 	_mode_embody_button.button_pressed = _embodiment_mode
+	# 一世界一個「由我操控」角色（issue #1024，使用者 point 2）：場上已有化身
+	# 角色時停用 toggle，只能建 AI 角色。已在化身模式編輯（尚未投放）時
+	# embodied_character_id 仍是空的，不會誤鎖自己
+	_mode_embody_button.disabled = not GameManager.embodied_character_id.is_empty()
 	# footer「投放」在化身模式改叫「操控」，跟左側模板列的操控鈕同一個字串
 	_deploy_button.text = "UI_CL_BTN_EMBODY" if _embodiment_mode else "UI_CL_BTN_DEPLOY"
 
@@ -553,17 +568,12 @@ func _refresh_source_buttons() -> void:
 	_cloud_button.disabled = clouds.is_empty()
 	_local_button.button_pressed = (_decision_source == "local")
 	_cloud_button.button_pressed = (_decision_source == "cloud")
-	_human_button.button_pressed = (_decision_source == "human")
 
 func _refresh_model_dropdown() -> void:
 	_model_dropdown.clear()
-	_model_dropdown.visible = _decision_source != "human"
+	_model_dropdown.visible = true
 	_model_hint.visible = false
 	_download_model_button.visible = false
-
-	if _decision_source == "human":
-		_model_name = ""
-		return
 
 	# 下載按鈕看的是 LlamaSidecar.status，不是「provider 存不存在」——
 	# ai_config.json 首次啟動會自動寫一份指到 127.0.0.1:8080 的 local

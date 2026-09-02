@@ -338,13 +338,6 @@ toggle_mode = true
 button_group = ExtResource("4_xcdvd")
 text = "UI_CC_SOURCE_CLOUD"
 
-[node name="HumanButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock/SourceButtonsRow"]
-layout_mode = 2
-focus_mode = 0
-toggle_mode = true
-button_group = ExtResource("4_xcdvd")
-text = "UI_CC_SOURCE_HUMAN"
-
 [node name="ModelDropdown" type="OptionButton" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock"]
 layout_mode = 2
 
