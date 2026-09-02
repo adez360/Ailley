@@ -1563,6 +1563,15 @@ func _request_next_decision(
 	var fact_lines_sent_count := _pending_fact_lines.size()
 
 	var visible: Array[Character] = vision.get_visible_characters() if vision != null else []
+	# bury 白名單的屍體來源（PR #992 review）：屍體不在 context.visible 裡
+	# （issue #986），模型從「你看到 ○○ 的遺體」事實句得知名字。死亡角色
+	# 不會被移除節點（見 character.gd::_cemetery_grave_count() 的同一個
+	# 理由），直接掃 characters group 過濾「已死亡未安葬」就是即時正確答案
+	var corpse_names := PackedStringArray()
+	for node in get_tree().get_nodes_in_group("characters"):
+		var corpse := node as Character
+		if corpse != null and corpse.is_dead and not corpse.is_buried:
+			corpse_names.append(corpse.character_name)
 	var envelope := PromptBuilder.build_plan_envelope(
 		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan,
 		_fact_lines_summary(), had_pending_persuade, current_place, allow_appointment,
@@ -1578,7 +1587,7 @@ func _request_next_decision(
 	var validator := func(data: Dictionary) -> Dictionary:
 		return AISchema.validate_tasks(
 			data, effective_allow_update_plan, now_minutes, allow_appointment, allow_perform_tip,
-			visible_names
+			visible_names, corpse_names
 		)
 
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
@@ -2379,6 +2388,15 @@ func _on_spotted(other: Character) -> void:
 	# 訊號直接觸發的外部事件回呼，死屍仍會被場上其他角色「第一次注意到」，
 	# 沒擋的話會 say() 台詞、甚至問一次 LLM 決策
 	if is_dead or is_in_conversation():
+		return
+
+	# 看到遺體（PR #992 review）：死人不進 context.visible（issue #986，見
+	# vision.gd 的排除），但「看到屍體」是該讓 Agent 知道的事實——排一筆
+	# 事實句給下一次決策，要不要在意、要不要安葬交給模型自己判斷（《00》
+	# 原則二）。vision.gd 只在屍體進入視野那一刻發 spotted（邊緣觸發），
+	# 持續在視野不會重複發
+	if other.is_dead:
+		_pending_fact_lines.append("你看到 %s 的遺體。" % other.character_name)
 		return
 
 	# 《03》§7 觸發時機表「遇到未在 L1 出現過的角色」（issue #571）：故意放在
@@ -3476,8 +3494,12 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			# following_id 其實還能找到同一個人。id 是唯一值，不會撞名，
 			# 不需要另外的歧義檢查
 			var follow_target := _find_character_by_id(following_id)
-			if follow_target == null or follow_target.is_dead:
+			if follow_target == null:
 				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
+			# 目標死亡跟「找不到」分開回報（PR #992 review）：跟丟文案會讓模型
+			# 以為人還在別處可找，事實是對方已經死了
+			if follow_target.is_dead:
+				return {"success": false, "reason": "%s 已經死了" % follow_target.character_name}
 			return {"success": true, "reason": ""}
 		"perform":
 			# perform 在 SUCCESS_PARAMS 上（見那張表），會落進下面的 _roll_success()

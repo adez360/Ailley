@@ -388,8 +388,9 @@ static func validate_dialogue_open(data: Dictionary, now_minutes: int) -> Dictio
 		validated["data"]["engage"] = true
 	return validated
 
-# talk/attack/bury/follow/give/persuade 的 target 措辭都要求「context.visible
-# 裡的真實名字」，模型偶爾照抄措辭本身當成值（例如 "context.visible[0]"、
+# talk/attack/follow/give/persuade 的 target 措辭都要求「context.visible
+# 裡的真實名字」（bury 的 target 是遺體，名字來自「你看到 ○○ 的遺體」事實句，
+# 見 _is_valid_target() 的說明），模型偶爾照抄措辭本身當成值（例如 "context.visible[0]"、
 # "<exact name from context.visible>"）而不是代入真正的名字（#766）。這種
 # 字串語法上合法、非空，舊版驗證會直接放行，一路帶到 resolve() 才因為
 # 找不到這個角色而失敗——保證失敗的任務卻要浪費一整輪決策才會被發現。
@@ -408,6 +409,9 @@ static func _is_literal_context_reference(value: String) -> bool:
 # 的真實名字清單）做白名單比對，不管字串「看起來」合不合理，一律
 # fail-closed：不在清單裡就不是合法目標，不逐一列舉幻覺的各種可能寫法。
 # attack 額外允許 "god_stone" 這個非角色的特例目標（見該動作原本的說明）。
+# bury 額外接受 corpse_names 裡的屍體名（場上已死亡未安葬，PR #992 review）——
+# 屍體不在 context.visible 裡（issue #986），模型是從「你看到 ○○ 的遺體」
+# 事實句得知名字的。
 #
 # visible_names 用 null 代表呼叫端沒有清單可比對（例如 validate_dialogue()
 # 內嵌的承諾任務——對話當下沒有重新組一次完整 envelope，沒有現成清單），
@@ -420,13 +424,21 @@ static func _is_literal_context_reference(value: String) -> bool:
 # 使白名單在最需要擋幻覺的情境（context.visible 真的是空的）形同虛設
 # （實測 Test B 診斷測試踩到：單人測試裡 LLM 選 talk 目標「村民」，這種
 # 情境仍被當成「沒有清單」放行）
-static func _is_valid_target(target_name: String, action: String, visible_names: Variant) -> bool:
+static func _is_valid_target(
+		target_name: String, action: String, visible_names: Variant, corpse_names: Variant = null
+) -> bool:
 	if _is_literal_context_reference(target_name):
 		return false
 	if visible_names == null:
 		return true
 	if action == "attack" and target_name == "god_stone":
 		return true
+	# corpse_names 用 null 代表呼叫端沒有屍體清單可比對（例如 validate_dialogue()
+	# 內嵌的承諾任務），這時 bury 退回只比對 visible_names，跟其他動作同一套
+	# 行為——不會因為少了清單就把所有 bury 目標都判定不合法
+	if action == "bury" and corpse_names != null:
+		if (corpse_names as PackedStringArray).has(target_name):
+			return true
 	return (visible_names as PackedStringArray).has(target_name)
 
 # 單筆任務的通用邊界檢查：action 白名單、params 型別、talk/attack/give 的
@@ -440,7 +452,8 @@ static func _is_valid_target(target_name: String, action: String, visible_names:
 # 這次決策」的 now_minutes，不是被接受那一刻的；agent.gd::
 # _resolve_pending_persuade() 推進任務池前會重設這個值，見那邊的說明
 static func _validate_task_shape(
-	task: Dictionary, now_minutes: int, visible_names: Variant = null
+	task: Dictionary, now_minutes: int, visible_names: Variant = null,
+	corpse_names: Variant = null
 ) -> Dictionary:
 	if not task.has("action") or not task["action"] is String:
 		return _fail(ERROR_BAD_SHAPE)
@@ -457,7 +470,8 @@ static func _validate_task_shape(
 	# 沒有 target 的任務會被各自的 _pursue_*_task() 誤判成「目標不存在」
 	# 一路帶進任務池才發現，不如在這一層就擋掉，跟這個檔案「外來內容一律
 	# 不信任」的原則一致，不等到執行層才發現資料是空的。bury 的 target 是
-	# 要安葬的屍體、follow 的 target 是要跟隨的對象（都是另一個角色的
+	# 要安葬的屍體（已死亡未安葬，名字來自遺體事實句，不在 context.visible）、
+	# follow 的 target 是要跟隨的對象（都是另一個角色的
 	# 名字），跟 attack 同一種「單純一個 target 字串」形狀，不需要
 	# 像 give 那樣多驗 count。give 的 target 檢查獨立成下面一段，
 	# 因為它還要多驗 count 的範圍，跟 talk／attack／bury／follow 共用的
@@ -468,7 +482,7 @@ static func _validate_task_shape(
 		if not target is String or (target as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
 		var target_name: String = (target as String).strip_edges()
-		if not _is_valid_target(target_name, action, visible_names):
+		if not _is_valid_target(target_name, action, visible_names, corpse_names):
 			return _fail(ERROR_BAD_SHAPE)
 		# 存回去的是修剪過的值——_find_character_by_name() 用精確比對，
 		# LLM 輸出偶爾帶前後空白的話，不修剪會讓合法目標在執行層被誤判成
@@ -485,7 +499,7 @@ static func _validate_task_shape(
 		var give_target: Variant = give_params.get("target")
 		if not give_target is String or (give_target as String).strip_edges().is_empty():
 			return _fail(ERROR_BAD_SHAPE)
-		if not _is_valid_target((give_target as String).strip_edges(), action, visible_names):
+		if not _is_valid_target((give_target as String).strip_edges(), action, visible_names, corpse_names):
 			return _fail(ERROR_BAD_SHAPE)
 
 		if give_params.has("count"):
@@ -810,7 +824,7 @@ static func _validate_persuade_params(
 # 的參數後面不能接沒預設值的，allow_update_plan 只好跟著一起拿掉預設值）
 static func validate_tasks(
 	data: Dictionary, allow_update_plan: bool, now_minutes: int, allow_appointment: bool = false,
-	allow_perform_tip: bool = false, visible_names: Variant = null
+	allow_perform_tip: bool = false, visible_names: Variant = null, corpse_names: Variant = null
 ) -> Dictionary:
 	if not data.has("tasks") or not data["tasks"] is Array:
 		return _fail(ERROR_BAD_SHAPE)
@@ -837,7 +851,7 @@ static func validate_tasks(
 			task = task.duplicate()
 			task["params"] = persuade_result["data"]
 
-		var shape_result := _validate_task_shape(task, now_minutes, visible_names)
+		var shape_result := _validate_task_shape(task, now_minutes, visible_names, corpse_names)
 		if not shape_result["ok"]:
 			return _fail(shape_result["error"])
 		tasks.append(shape_result["data"])
