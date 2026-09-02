@@ -519,7 +519,7 @@ func _refresh_model_dropdown() -> void:
 	var pool := _providers_by_locality(_decision_source == "local")
 	if pool.is_empty():
 		_model_name = ""
-		_model_hint.text = L10n.t("UI_CC_SOURCE_NO_PROVIDER")
+		_model_hint.text = L10n.tf("UI_CC_SOURCE_NO_PROVIDER", {"path": AIConfig.CONFIG_PATH, "example": AIConfig.EXAMPLE_PATH})
 		_model_hint.visible = true
 		return
 
