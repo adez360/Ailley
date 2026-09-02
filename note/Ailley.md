@@ -75,6 +75,8 @@ Ailley 是由 LLM 驅動的 2D 像素村莊（Godot 4.5.1）。
 - [[changelog]] —— 被推翻的決定與被否決的方案。**筆記庫裡唯一可以寫「原本是什麼」的地方**
 - [[schema-gbnf-vs-prompt-reliability-log]] —— GBNF 強制 vs 純 prompt 約束可靠度測試的歷史彙總報告，供《12》§7.3 引用
 - [[reasoning_cap_experiment/報告]] —— `reasoning` 欄位 100 字 vs 200 字上限對照實驗，單一 500 輪軌跡實測重複率差 6.6 個百分點（描述性觀察，非統計顯著），支持維持 `MAX_REASONING_CHARS=100`
+- [[test_a_runs/分析]] —— Test A 三輪單角色決策軌跡診斷，社交敘事蓋過生理危機的最初觀察
+- [[test_b_multiday_run1/分析]] —— Test B 多角色多日全滅診斷，三角色死因五層拆解、對應 issue #802/#803/#804/#805/#807
 - [[決策紀錄]] —— 《99》拍板後的完整決策帳本（append-only），2026-08-25 從《99》搬出；《99》保留未拍板項目的完整背景與選項，已拍板項目保留簡短結論與本帳本索引
 
 ### 規格書
