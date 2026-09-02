@@ -130,6 +130,10 @@ func cancel() -> void:
 ## 指望自己醒來善後——直接釋放節點，協程留在掛起狀態（跟既有 cancel
 ## 行為同一套）
 func _abort_request(reason: String) -> void:
+	# 設上終止旗標：cancel_request()/queue_free() 之後 request_completed
+	# 仍可能 deferred 發出，掛起的協程醒來時靠底下各處既有的
+	# if _cancelled 防護直接退出，不會背著終態重跑下載或二次 emit finished
+	_cancelled = true
 	if _http != null and is_instance_valid(_http):
 		_http.cancel_request()
 		_http.queue_free()
@@ -171,12 +175,12 @@ func _has_enough_free_space() -> bool:
 	var probe := FileAccess.open(probe_path, FileAccess.WRITE)
 	if probe == null:
 		return false
-	# store_string() 回 false 一樣是寫不進去（磁碟滿等），跟 open 失敗
-	# 同樣視為空間不足，不能默默吞掉
+	# Godot 4.4+ 的 store_string() 回傳 bool：寫入成功 true、失敗（磁碟滿等）
+	# false。直接回傳該結果，false 跟 open 失敗一樣視為空間不足，不能默默吞掉
 	var write_ok := probe.store_string("probe")
 	probe.close()
 	DirAccess.remove_absolute(probe_path)
-	return write_ok == OK
+	return write_ok
 
 
 ## 依序：查 Content-Length → 下載 zip → 解壓到 sidecar/<platform>/ → 刪暫存 zip。
