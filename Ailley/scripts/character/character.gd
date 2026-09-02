@@ -29,6 +29,10 @@ const TALK_TOO_FAR := "TOO_FAR"
 const TALK_TARGET_BUSY := "TARGET_BUSY"
 const TALK_TARGET_UNINTERRUPTIBLE := "TARGET_UNINTERRUPTIBLE"
 const TALK_TARGET_NOT_VISIBLE := "TARGET_NOT_VISIBLE"
+## 對象是 AI 角色但它的決策 provider 沒就緒（本機模型沒下載／雲端沒設定）：
+## 直接擋在建立 Conversation 之前，不讓玩家盯著「思考中」等 watchdog 逾時，
+## 也不讓 NPC 白打一次注定 turn 0 失敗的請求（issue #1028）
+const TALK_AI_OFFLINE := "AI_OFFLINE"
 
 ## 搭話的視線遮蔽判定用哪個 physics layer 擋。跟 vision.gd 的 blocker_mask
 ## 同一個值（1 = terrain）——搭話比照視覺判定，人不是牆，不會互相擋視線
@@ -178,6 +182,7 @@ const FAILURE_MESSAGE_KEYS := {
 	"TARGET_BUSY": "FAIL_TARGET_BUSY",
 	"TARGET_UNINTERRUPTIBLE": "FAIL_TARGET_UNINTERRUPTIBLE",
 	"TARGET_NOT_VISIBLE": "FAIL_TARGET_NOT_VISIBLE",
+	"AI_OFFLINE": "FAIL_AI_OFFLINE",
 	"OCCUPIED": "FAIL_OCCUPIED",
 	"BUSY": "FAIL_BUSY",
 	"ITEM_NOT_FOUND": "FAIL_ITEM_NOT_FOUND",
@@ -1436,6 +1441,15 @@ func talk_to(other: Character) -> String:
 		return TALK_TARGET_NOT_VISIBLE
 	if not other.is_talk_interruptible():
 		return TALK_TARGET_UNINTERRUPTIBLE
+
+	# AI 角色但決策 provider 沒就緒：turn 0（對方開口）注定失敗，直接擋在這裡
+	# （issue #1028）。玩家不用盯著「思考中」等 _decide_with_retry() 的 watchdog
+	# 逾時，NPC 也不會白打一次請求。get_readiness() 是純字典查詢、不打網路。
+	# 只認 "agents" 分組——Player 當對象（NPC 對玩家搭話）沒有 provider 可查，
+	# 純觀察者模式也不會有玩家角色被搭話
+	if other.is_in_group("agents") \
+			and not AIService.get_readiness((other as Agent).get_provider_name()).get("ready", false):
+		return TALK_AI_OFFLINE
 
 	# 用 load 而不是 preload：conversation.gd 反過來也要 Character 型別，
 	# preload 會變成靜態循環相依
