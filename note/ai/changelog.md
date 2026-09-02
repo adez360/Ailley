@@ -2,7 +2,7 @@
 tags:
   - ai
 status: 參考
-updated: 2026-09-01
+updated: 2026-09-02
 ---
 
 # changelog
@@ -26,6 +26,25 @@ AI 專用。**筆記庫裡唯一可以寫「原本是什麼」的地方。**
 一則就是一個決定的來歷，日期倒序。**不要寫成每日工作日誌。**
 
 ---
+
+## 2026-09-02
+
+### 家的供給：「5 間靜態家 + 動態溢出」→「完全動態、每人一間」
+
+- **原本（issue #391 + #751/#825 初版）**：`level.tscn` 裡永久畫好 5 間靜態家
+  （`loc_home_01`~`05` 的 `Area2D` 錨點 + 2 棟 tileset 房屋 `House-001`/`House_002`），
+  5 間全被占用才觸發 `_grow_home_supply()` 動態長第 6 間起，動態家用佔位美術
+  `scenes/house.tscn`（`Sprite2D` + `Wooden_House.png`）。
+- **現在（issue #825 重做）**：`level.tscn` 裡沒有任何畫死的家。每個進場角色一律
+  由引擎動態長一間、離場拆掉，房屋用正式的 `scenes/houses/house_001.tscn` /
+  `house_002.tscn` 依編號奇偶交替。錨點也是執行期建的 `Area2D`+`CollisionShape2D`。
+  第一間家的落點從涼亭錨點起算（角色本來就都投放在涼亭）。
+- **為什麼換**：使用者回報「要人數放滿才會出現、而且生成的房子很奇怪」——溢出安全閥
+  當常規供給用不直覺，佔位美術也醜。改成一開始就每人一間、複製現有正式房屋。
+- **`scenes/house.tscn` 佔位美術已廢棄**（沒有呼叫端）。`STATIC_HOME_ANCHOR_COUNT`
+  常數、`_ensure_home_locations_seeded()` 一併移除。
+- **migration 13**：舊 DB 的 home 列（seed 的 01~05 + 舊佔位動態家）全部標
+  `is_active = 0`，進場後由新流程用正式房屋重長，舊編號從 01 復用。
 
 ## 2026-09-01
 

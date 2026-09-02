@@ -34,7 +34,7 @@ extends RefCounted
 ## CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
-const CURRENT_VERSION := 12
+const CURRENT_VERSION := 13
 
 
 ## 版本落後時依序套用的變更，每個 entry：
@@ -102,6 +102,11 @@ const MIGRATIONS: Array[Dictionary] = [
 		"version": 12,
 		"name": "Add location.pos_x/pos_y for dynamically-created homes (issue #751)",
 		"apply": Callable(DatabaseSchema, "_migrate_v12_add_location_position")
+	},
+	{
+		"version": 13,
+		"name": "Deactivate legacy home locations for fully-dynamic home supply (issue #825)",
+		"apply": Callable(DatabaseSchema, "_migrate_v13_deactivate_legacy_homes")
 	}
 ]
 
@@ -1027,6 +1032,25 @@ static func _migrate_v12_add_location_position(db) -> bool:
 				+ db.error_message
 			)
 			return false
+
+	return true
+
+
+## Migration 13：家的供給改成完全動態（issue #825）。舊 DB 裡殘留兩種
+## home 列——issue #391 seed 的 loc_home_01~05（沒有 pos_x，場景裡的錨點
+## 已被 level.tscn 拔掉）、以及 #825 前期用佔位 house.tscn 生成的動態家
+##（pos_x 有值但房屋場景已換）。兩種都全部標 is_active=0：進世界後
+## _rebuild_dynamic_homes() 查不到就不重建，角色同步時 _grow_home_supply()
+## 會用新的 house_001/002 交替重長，舊編號經 _reactivatable_home_location_id()
+## 從 01 開始復用。不能 DELETE——npc.home_location_id 的 FK 是 ON DELETE
+## RESTRICT，離場角色的舊值還指著這些列
+static func _migrate_v13_deactivate_legacy_homes(db) -> bool:
+	if not db.query("UPDATE location SET is_active = 0 WHERE location_type = 'home';"):
+		push_error(
+			"[DatabaseSchema] Migration 13: Failed to deactivate legacy home locations: "
+			+ db.error_message
+		)
+		return false
 
 	return true
 

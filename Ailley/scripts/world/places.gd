@@ -26,13 +26,15 @@ const MAX_STANCE_DISTANCE := 16.0
 
 ## AI 決策／`current_place`／`npc_schedule.json` 看到的抽象地點名（issue #391，
 ## 《規格書07_地點/家》）。場景裡沒有一個叫這個名字的錨點——每個角色實際
-## 分到的是 `loc_home_01`～`loc_home_05` 其中一個，has_for()／resolve_for()
-## 依角色的 home_location_id 轉譯這個抽象名，has()／resolve() 本身不認得它
+## 分到的是 `loc_home_NN` 其中一個（issue #825 起完全動態、編號無上限），
+## has_for()／resolve_for() 依角色的 home_location_id 轉譯這個抽象名，
+## has()／resolve() 本身不認得它
 const HOME_PLACE_NAME := "home"
 
-## 5 間家在 PlaceAnchors 底下的節點名稱字首（跟 CharacterStatePersistence.gd
-## 的 location_id 前綴刻意同一個字串，直接拿來當 Marker2D 名稱查）。
-## list() 用它把這 5 個物理錨點從列表濾掉——見 list() 的說明
+## 家在 PlaceAnchors 底下的錨點節點名稱字首（跟 CharacterStatePersistence.gd
+## 的 location_id 前綴刻意同一個字串，直接拿來當錨點名稱查）。錨點是
+## CharacterStatePersistence 在角色進場時動態建立的 Area2D（issue #825）。
+## list() 用它把這些私人錨點從公用地點列表濾掉——見 list() 的說明
 const HOME_LOCATION_PREFIX := "loc_home_"
 
 
@@ -149,7 +151,7 @@ func resolve_for(character: Character, place_name: String) -> Vector2:
 
 
 ## resolve_from_position() 回傳的是物理錨點名稱；current_place／AI 看到的
-## 是抽象詞彙集合，兩者在「家」這裡不對稱（5 個 loc_home_0N 收斂成 1 個
+## 是抽象詞彙集合，兩者在「家」這裡不對稱（每個 loc_home_NN 都收斂成同一個
 ## HOME_PLACE_NAME）。事實句要秀給 AI 看、或拿來跟 current_place 比對是否
 ## 同地點（例如約定機制判斷「人到了沒」、L3 記憶用地點篩選相關記憶）的
 ## 呼叫端，一律用這個把物理名稱收斂回抽象值，不要直接用 resolve_from_position()
@@ -202,7 +204,7 @@ func resolve_from_position(position: Vector2) -> String:
 
 # 給主控台指令與 LLM prompt 列可用地點名稱用。目前唯一的呼叫端是「約定」
 # 功能（agent.gd _normalize_place()／prompt_builder.gd 的約定地點清單，
-# issue #479）：5 間 loc_home_0N 是每個角色各自的私人地點，兩個角色互相
+# issue #479）：loc_home_NN 是每個角色各自的私人地點，兩個角色互相
 # 「約在家見」在物理上兜不起來（各自解析到不同座標），issue #391 把每人
 # 一間家落地時故意把它們從這份清單濾掉，不讓 AI 選它當約定地點——不是
 # 遺漏，見 note/技術/村莊地圖.md

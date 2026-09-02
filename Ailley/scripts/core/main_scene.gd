@@ -21,8 +21,8 @@ func _ready() -> void:
 	# （GameManager 是 autoload），不收掉的話這次對局單一角色退場時，
 	# CharacterStatePersistence._release_home_if_dynamic() 會誤跳過拆除
 	GameManager._world_unloading = false
-	# 動態家重建：level.tscn 只烘焙了 5 個靜態錨點，DB 裡 is_active=1 的
-	# 動態家每次進世界都要重新 instantiate——autoload 開機那次 deferred 呼叫
+	# 動態家重建：level.tscn 裡沒有任何畫死的家（issue #825），DB 裡
+	# is_active=1 的家每次進世界都要重新 instantiate——autoload 開機那次 deferred 呼叫
 	# 撞的是主選單場景（沒有 place_anchors／world，_rebuild_dynamic_homes()
 	# 會直接跳過），進世界後唯一的重建入口就是這裡，新遊戲／繼續／回選單
 	# 再進都會跑到（CodeRabbit review on #825）。DatabaseManager 建這個子
