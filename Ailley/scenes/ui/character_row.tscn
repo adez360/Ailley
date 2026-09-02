@@ -1,12 +1,15 @@
-[gd_scene format=3 uid="uid://b1t135d5cx3af"]
+[gd_scene load_steps=2 format=3 uid="uid://b1t135d5cx3af"]
+
+[ext_resource type="PackedScene" uid="uid://c5ru5e0khgjrn" path="res://scenes/ui/status_bars.tscn" id="1_rhvjb"]
 
 [node name="CharacterRow" type="Button"]
 custom_minimum_size = Vector2(0, 30)
+toggle_mode = true
 
 [node name="MarginContainer" type="MarginContainer" parent="."]
 layout_mode = 0
 anchor_right = 1.0
-anchor_bottom = 1.0
+offset_bottom = 30.0
 theme_override_constants/margin_left = 7
 theme_override_constants/margin_bottom = 6
 
@@ -27,3 +30,10 @@ auto_translate_mode = 2
 layout_mode = 2
 theme_override_colors/font_color = Color(0.18431373, 0.14509805, 0.13333334, 1)
 text = "Name"
+
+[node name="Expand" parent="." instance=ExtResource("1_rhvjb")]
+visible = false
+layout_mode = 0
+anchor_right = 1.0
+offset_top = 34.0
+offset_bottom = 122.0
