@@ -165,19 +165,27 @@ func test_demote_oldest_l4_if_full_noop_when_not_full() -> void:
 	assert_eq(memory.get_by_level(4).size(), 1, "未滿額時不該降級任何一筆")
 
 
-func test_get_save_data_keeps_only_l2_and_l4() -> void:
+## L3 現在會被 search_l3() 檢索（issue #571），跟 L2／L4 一樣要存——不是
+##「level 2／4 才存，3 不存」，那是 L3 語意檢索接上之前的舊行為。這裡改成
+## 驗證「合法的三種 level 都存、非法 level 會被排除」，後者用直接塞進
+## memory.entries 的方式模擬（正常只會透過 add_candidate() 產生，不會出現
+## 非法 level，這裡純粹測 get_save_data() 自己的防禦性過濾）
+func test_get_save_data_keeps_only_valid_levels() -> void:
 	var memory := track(Memory.new()) as Memory
 	memory.entries.append(_make_entry(2))
 	memory.entries.append(_make_entry(3))
 	memory.entries.append(_make_entry(4))
+	var bogus := _make_entry(2)
+	bogus["level"] = 99
+	memory.entries.append(bogus)
 
 	var saved := memory.get_save_data()
 
-	assert_eq(saved["entries"].size(), 2, "只有 level 2／4 應被存檔，level 3 不存")
+	assert_eq(saved["entries"].size(), 3, "level 2／3／4 都應被存檔，非法 level 應被排除")
 	var saved_levels: Array[int] = []
 	for saved_entry in saved["entries"]:
 		saved_levels.append(saved_entry["level"])
-	assert_true(saved_levels.has(2) and saved_levels.has(4), "存檔應保留 level 2 與 level 4，而不是巧合湊出同樣的筆數")
+	assert_true(saved_levels.has(2) and saved_levels.has(3) and saved_levels.has(4), "存檔應保留 level 2、3、4 這三種合法等級")
 
 
 func test_load_save_data_restores_l2_and_l4_and_clears_l1() -> void:
@@ -196,22 +204,62 @@ func test_load_save_data_restores_l2_and_l4_and_clears_l1() -> void:
 	assert_eq(memory._next_id, 10, "_next_id 應同步成存檔裡最大的 id")
 
 
-## production 的 load_save_data() 只驗兩件事：raw_entry 是不是 Dictionary、
-## level 是不是 2 或 4——不驗其餘欄位（valence／decay_value／content...）是否
-## 齊全。測試名稱照這個實際驗證範圍命名，不要叫「malformed」暗示連缺欄位的
-## entry 也會被擋下（那個情境目前不會被跳過，之後若真的碰到存檔缺欄位的
-## entry，decay_all() 等函式讀不到欄位會噴 Invalid access——這是 production
-## 驗證邊界，不是本測試的涵蓋範圍，見 issue #664）
 func test_load_save_data_skips_wrong_level_and_non_dict_entries() -> void:
 	var memory := track(Memory.new()) as Memory
 	var valid := _make_entry(2)
 	valid["id"] = 1
-	var wrong_level := _make_entry(3)  # level 3 不合法，該被跳過
+	var wrong_level := _make_entry(99)  # 不是 2/3/4，該被跳過
 
 	memory.load_save_data({"entries": [valid, wrong_level, "not_a_dict"]})
 
-	assert_eq(memory.entries.size(), 1, "level 不是 2/4 或不是 Dictionary 的項目應被跳過")
+	assert_eq(memory.entries.size(), 1, "level 不是 2/3/4 或不是 Dictionary 的項目應被跳過")
 	assert_eq(memory.entries[0]["id"], 1, "留下的應是那筆合法的 level 2 記憶，不是跳過後恰好剩一筆")
+
+
+## issue #664：load_save_data() 原本只驗 level，不驗 content／valence／
+## decay_value／created_day 是否存在——缺欄位但 level 合法的 entry（例如手改
+## 過或版本升級留下的 {"level": 2}）會被原樣收進 entries，讀檔當下不報錯，
+## 要等到下一次 decay_all()／_demote_oldest_l4_if_full()／get_life_highlights()
+## 這些直接方括號索引讀欄位的地方才噴 Invalid access。這裡驗證這四個欄位
+## 缺任何一個都會讓整筆在讀檔當下就被跳過，不會留到之後才炸
+func test_load_save_data_skips_entries_missing_required_fields() -> void:
+	var memory := track(Memory.new()) as Memory
+	var valid := _make_entry(2)
+	valid["id"] = 1
+	var missing_valence := _make_entry(2)
+	missing_valence["id"] = 2
+	missing_valence.erase("valence")
+	var missing_decay := _make_entry(2)
+	missing_decay["id"] = 3
+	missing_decay.erase("decay_value")
+	var missing_content := _make_entry(2)
+	missing_content["id"] = 4
+	missing_content.erase("content")
+	var missing_created_day := _make_entry(2)
+	missing_created_day["id"] = 5
+	missing_created_day.erase("created_day")
+
+	memory.load_save_data({
+		"entries": [valid, missing_valence, missing_decay, missing_content, missing_created_day],
+	})
+
+	assert_eq(memory.entries.size(), 1, "缺 valence／decay_value／content／created_day 任一欄位的 entry 都應被跳過")
+	assert_eq(memory.entries[0]["id"], 1, "留下的應是那筆欄位齊全的合法記憶")
+
+
+## decay_value／created_day 存檔後經 JSON 讀回來是 float，不是原本寫入時的
+## int（同一個病根見 issue #857／#861）——這裡確保這個型別轉換不會被
+## _has_required_fields() 誤判成「缺欄位」而整筆跳過
+func test_load_save_data_accepts_float_decay_value_and_created_day() -> void:
+	var memory := track(Memory.new()) as Memory
+	var entry := _make_entry(2)
+	entry["id"] = 1
+	entry["decay_value"] = 97.5
+	entry["created_day"] = 3.0
+
+	memory.load_save_data({"entries": [entry]})
+
+	assert_eq(memory.entries.size(), 1, "decay_value／created_day 是 float 時不該被當成缺欄位跳過")
 
 
 func test_load_save_data_with_missing_entries_key_results_in_empty() -> void:
@@ -221,3 +269,29 @@ func test_load_save_data_with_missing_entries_key_results_in_empty() -> void:
 	memory.load_save_data({})
 
 	assert_eq(memory.entries.size(), 0, "缺 entries 欄位應視為空存檔，清空現有記憶")
+
+
+## issue #953：get_life_highlights()（#384）原本沒有呼叫端把結果寫進墓碑欄位，
+## Agent._capture_life_highlights() 是死亡流程（_die() 死亡當下）新接上的掛點。
+## 直接測掛點本身，繞過 _die() 對 GameClock 的依賴（見套件頂端說明）；
+## _die() 的接線（character.gd）由 project_run＋game_eval 冒煙驗證
+## （test_run 的 GameClock 限制，同 test_revive.gd）。
+func test_capture_life_highlights_populates_field_from_l4() -> void:
+	var agent := track(Agent.new()) as Agent
+	agent.memory = track(Memory.new()) as Memory
+	agent.memory.entries.append(_make_entry(4, "neutral", 100.0, 41))
+	agent.memory.entries.append(_make_entry(4, "neutral", 100.0, 12))
+
+	agent._capture_life_highlights()
+
+	assert_eq(agent.life_highlights.size(), 2, "兩筆 L4 核心記憶應各彙整成一行生平")
+	assert_true(agent.life_highlights[0].begins_with("第 12 天"), "應依 created_day 由舊到新排序")
+
+
+func test_capture_life_highlights_without_memory_is_noop() -> void:
+	var agent := track(Agent.new()) as Agent
+	agent.memory = null
+
+	agent._capture_life_highlights()
+
+	assert_eq(agent.life_highlights.size(), 0, "沒有 memory 時應安全略過，不噴錯")

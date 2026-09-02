@@ -197,10 +197,11 @@ func _run() -> void:
 # 舊版 schema（缺 NOT NULL 主鍵）＋ 種子資料
 # =====================================================
 
-## 完整比照 LocationSchema.gd 目前的欄位（順序也要一致），只把主鍵的
-## NOT NULL 拿掉——_migrate_rebuild_verify_column_shape() 用欄位名稱與
-## 順序比對新舊表，缺欄位或順序不同會被當成「這個既有資料庫超出這個
-## migration 的範圍」直接中止，不是這次要測的情境。
+## 刻意種一份 issue #751 之前的舊形狀：沒有 pos_x/pos_y，主鍵也還沒有
+## NOT NULL。migration 9 的 location entry 會以 expected_added=["pos_x","pos_y"]
+## 宣告 pos 欄位的差異，並用現行 LocationSchema 重建——這裡實際驗證的就是
+## 這條宣告差異的端到端路徑；_migrate_rebuild_verify_column_shape() 現在
+## 只比欄位名稱集合，不再比順序。
 func _legacy_location_sql() -> String:
 	return """
 	CREATE TABLE location (
@@ -215,8 +216,8 @@ func _legacy_location_sql() -> String:
 	"""
 
 
-## 完整比照 NPCSchema.gd 目前的欄位（順序也要一致），只把主鍵的 NOT NULL
-## 拿掉，理由同 _legacy_location_sql()。
+## 完整比照 NPCSchema.gd 目前的欄位，只把主鍵的 NOT NULL 拿掉，理由同
+## _legacy_location_sql()。
 func _legacy_npc_sql() -> String:
 	return """
 	CREATE TABLE npc (
@@ -246,7 +247,7 @@ func _legacy_npc_sql() -> String:
 	"""
 
 
-## 完整比照 NPCStateSchema.gd 目前的欄位（順序也要一致），只把主鍵的
+## 完整比照 NPCStateSchema.gd 目前的欄位，只把主鍵的
 ## NOT NULL 拿掉——npc_state 本身在 migration 7 已經修過 NOT NULL，這裡
 ## 刻意重現「修過之前」的舊形狀，只用來驗證 migration 8 對它的
 ## repair_null_pk=false（預設）defensive 判斷本身是正確的，不代表這個

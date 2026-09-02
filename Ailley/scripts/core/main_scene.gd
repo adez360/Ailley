@@ -17,6 +17,19 @@ const MAIN_MENU_SCENE := "res://scenes/main_menu.tscn"
 
 
 func _ready() -> void:
+	# 進場重置：離開流程立起的 GameManager._world_unloading 不會自己消退
+	# （GameManager 是 autoload），不收掉的話這次對局單一角色退場時，
+	# CharacterStatePersistence._release_home_if_dynamic() 會誤跳過拆除
+	GameManager._world_unloading = false
+	# 動態家重建：level.tscn 只烘焙了 5 個靜態錨點，DB 裡 is_active=1 的
+	# 動態家每次進世界都要重新 instantiate——autoload 開機那次 deferred 呼叫
+	# 撞的是主選單場景（沒有 place_anchors／world，_rebuild_dynamic_homes()
+	# 會直接跳過），進世界後唯一的重建入口就是這裡，新遊戲／繼續／回選單
+	# 再進都會跑到（CodeRabbit review on #825）。DatabaseManager 建這個子
+	# 節點也是用 call_deferred()，deferred 一拍讓建立先跑完，這裡才拿得到它
+	call_deferred("_rebuild_dynamic_homes_once")
+
+
 	if GameManager.continue_requested:
 		GameManager.continue_requested = false
 		if not _apply_continue():
@@ -30,6 +43,13 @@ func _ready() -> void:
 		add_child(OnboardingHint.new())
 
 	_apply_startup_ai_state()
+
+
+## 進場重建動態家（見 _ready() 的說明）
+func _rebuild_dynamic_homes_once() -> void:
+	var persistence := DatabaseManager.get_node_or_null("CharacterStatePersistence")
+	if persistence != null:
+		persistence._rebuild_dynamic_homes()
 
 
 ## #357：開場依 AIService 就緒狀態決定要不要自動打開場上 Agent 的

@@ -7,6 +7,7 @@ Assignee 設自己，主審是 `coderabbitai`（CI 自動 request；額度用完
 
 - [ ] Assignee 已設為自己
 - [ ] Reviewer 已 request `coderabbitai`（robot-ru 僅在其沒審到時補位）
+- [ ] 此 PR 沒有使任何規格書（`note/規格書/`）的現況描述過期——有動到 `IMPLEMENTED_ACTIONS` 白名單、行為可用性、機制取代（如某拍板取代舊機制）時，同一 PR 內修改對應規格書章節
 
 ## 對應 issue
 

@@ -181,10 +181,21 @@ no-op），`_ensure_unique_id()` 換掉 `character_id` 後呼叫它；`player.gd
 > 維護成本卻翻倍。
 
 > [!important] 地點座標用場景錨點
-> 在 `Node2D/PlaceAnchors`（group `place_anchors`）底下放與地點同名的 Marker2D，
+> 在 `Node2D/PlaceAnchors`（group `place_anchors`）底下放與地點同名的錨點，
 > 那是座標的唯一事實來源：`agent.gd` 只認錨點，沒有就 `push_error` 且不動身。
 >
 > 這也是多場景（家園／交誼區）本來就需要的：全域絕對座標在多張地圖下必然是錯的。
+
+> [!warning] `place_anchors` 節點本身可能還沒掛進場景樹，跟「查無此地」是兩層不同的失敗
+> `get_tree().get_first_node_in_group("place_anchors")` 在動態生成的 Agent
+> 搶在 `PlaceAnchors._ready()` 之前先跑一次 `_reevaluate()` 時會拿到 `null`——
+> 這跟「`PlaceAnchors` 存在但查無此地」（`has_for()` 回傳 false）是兩個階段的
+> 暫時失敗，都會自己好，但**不能共用同一個 if 分支**：分支內部只要有任何一行
+> 讀 `anchors` 的屬性或呼叫它的方法（例如 `anchors.HOME_PLACE_NAME`），
+> 就得先擋掉 `anchors == null` 這條路徑再進去，不然會對 null 取屬性直接 crash
+> 把遊戲卡進 debugger break（issue #916）。`_pursue_current_task()` 已修好；
+> 這個檔案裡其他 `anchors == null or not anchors.has_for(...)` 守門式只要
+> 分支內部沒有再碰 `anchors`，就不受影響，不用比照修改。
 
 > [!warning] 抵達判定要同時看距離與格
 > `ARRIVE_DISTANCE` 是 2px，但尋徑以 16px 的格為單位 ——
@@ -336,6 +347,16 @@ Agent/Agent2 是場景裡的靜態節點，`_ready()` 時自己查表更貼近�
 > `Character._update_conditions()` 每次檢查完就把這個 bool 設成
 > `has_condition("bleeding")` 的目前值，`Stats._process()` 只在這個 key 上多一行
 > `continue`。真的出現第二個需要暫停 drift 的欄位時再抽成通用機制。
+>
+> 這個旗標是純執行期 derived 狀態，不會隨存檔走（`Stats.get_save_data()`
+> 只存 `values`），所以除了 `_update_conditions()` 的 10 分鐘一次 tick，
+> 另外兩個會讓 injury 瞬間跨過門檻、不能等下個 tick 的地方也各自立即重算
+> 一次：`attack()` 命中瞬間（#821/#851 一併立即同步昏迷）、
+> `Character.load_save_data()` 套用完 `stats.load_save_data()` 之後
+> （#923，讀檔到下個 tick 之間的空窗期原本會讓已經在流血的角色悄悄止血）。
+> 三處都只重算 `CONDITION_BLEEDING` 與 `injury_decay_paused` 這一組，
+> 不呼叫整個 `_update_conditions()`——那個函式會連同 bleeding 的 `-1.5`
+> health 直接效果一起重跑，在非 tick 邊界的時間點多套用一次不該發生的傷害。
 
 ## 未做
 

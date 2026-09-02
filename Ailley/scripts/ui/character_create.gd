@@ -67,6 +67,13 @@ const HONEY := Color("F0A94E")
 @onready var _female_button: Button = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/GenderRow/FemaleButton
 @onready var _other_button: Button = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/GenderRow/OtherButton
 
+## 化身者模式切換（issue #954）：面板頂端一排兩顆 toggle 鈕，共用
+## character_create_mode_group.tres（跟性別／決策來源／造型格同一種 ButtonGroup
+## 做法）。切「由我操控」→ _embodiment_mode 打開，_refresh_all() 把決策來源／
+## 六維滑桿藏掉、footer「投放」變「操控」
+@onready var _mode_ai_button: Button = $Scrim/Center/Row/Panel/MarginContainer/Col/ModeRow/AiModeButton
+@onready var _mode_embody_button: Button = $Scrim/Center/Row/Panel/MarginContainer/Col/ModeRow/EmbodyModeButton
+
 @onready var _decision_source_container: Control = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock
 @onready var _local_button: Button = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock/SourceButtonsRow/LocalButton
 @onready var _cloud_button: Button = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock/SourceButtonsRow/CloudButton
@@ -140,8 +147,9 @@ var _model_name := ""
 ## 決策來源，也不需要靠六維滑桿描述「這個角色的個性」，那是給 AI 讀的行為
 ## 準則來源。隱藏的同時 _missing_items() 也要跳過極端項門檻（見那邊的說明），
 ## 不然滑桿摸不到、門檻卻還在擋，會變成存不了檔。
-## 目前唯一的入口是 open(as_player=true)，還沒有任何按鈕會傳這個值——
-## UI 上「由我操控」的選項本身待後續視覺任務接上（issue #371）
+## 入口：面板頂端「AI 角色／由我操控」toggle（issue #954，_on_mode_pressed()），
+## 或 open(as_player=true) 帶初始值；_on_deploy_pressed() 依這個旗標決定投放
+## agent 還是 player
 var _embodiment_mode := false
 
 var _style_selected := -1
@@ -256,6 +264,9 @@ func _wire_signals() -> void:
 	_cancel_button.pressed.connect(_on_cancel_pressed)
 	_save_template_button.pressed.connect(_on_save_pressed)
 	_deploy_button.pressed.connect(_on_deploy_pressed)
+
+	_mode_ai_button.pressed.connect(_on_mode_pressed.bind(false))
+	_mode_embody_button.pressed.connect(_on_mode_pressed.bind(true))
 
 
 func _reset_fields() -> void:
@@ -385,10 +396,22 @@ func _on_save_pressed() -> void:
 func _on_deploy_pressed() -> void:
 	if not _can_save():
 		return
-	var character := GameManager.create_and_deploy_character(collect())
+	# 化身模式投放為 player.tscn 並寫入 embodied_character_id（issue #954），
+	# 走 GameManager 同一條路徑，只多帶一個 as_player 旗標
+	var character := GameManager.create_and_deploy_character(collect(), _embodiment_mode)
 	if character == null:
 		return
 	close()
+
+## 化身者模式切換（issue #954）。open() 的 as_player 是初始值，這裡是面板開著
+## 時玩家改主意——跟 _on_source_pressed() 同一種「改一個狀態欄位＋_refresh_all()
+## 重畫」寫法。apply_template() 一律強制切回 AI 模式（套用既有模板走的一定是
+## AI 角色），_refresh_all() 會把兩顆按鈕的選中狀態同步回 _embodiment_mode
+func _on_mode_pressed(as_player: bool) -> void:
+	if _embodiment_mode == as_player:
+		return
+	_embodiment_mode = as_player
+	_refresh_all()
 
 
 func _extreme_count() -> int:
@@ -442,6 +465,14 @@ func _refresh_all() -> void:
 	# 個性強度／footer 提示放最後：_refresh_model_dropdown() 會補上自動選中的
 	# 型號，先算的話提示會停在「還缺 AI 型號」
 	_refresh_strength()
+	# 設 button_pressed 才會通知 ButtonGroup 取消另一顆（set_pressed_no_signal
+	# 會跳過群組通知，兩顆會同時亮）。這裡設 property 只發 toggled、不發 pressed，
+	# _on_mode_pressed() 接的是 pressed，不會被自己回呼觸發
+	_mode_ai_button.button_pressed = not _embodiment_mode
+	_mode_embody_button.button_pressed = _embodiment_mode
+	# footer「投放」在化身模式改叫「操控」，跟左側模板列的操控鈕同一個字串
+	_deploy_button.text = "UI_CL_BTN_EMBODY" if _embodiment_mode else "UI_CL_BTN_DEPLOY"
+
 	_decision_source_container.visible = not _embodiment_mode
 	_slider_block_container.visible = not _embodiment_mode
 	_strength_block_container.visible = not _embodiment_mode
