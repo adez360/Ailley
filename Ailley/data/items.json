@@ -1,19 +1,19 @@
 {
-	"bread": { "display_name": "麵包", "category": "food", "icon": null, "effect_satiety": 25.0 },
-	"cooked_meat": { "display_name": "烤肉", "category": "food", "icon": null, "effect_satiety": 40.0 },
-	"fish_dish": { "display_name": "魚料理", "category": "food", "icon": null, "effect_satiety": 35.0 },
-	"herb_soup": { "display_name": "藥草湯", "category": "food", "icon": null, "effect_satiety": 20.0 },
+	"bread": { "display_name": "麵包", "category": "food", "icon": null, "effect_satiety": 25.0, "effect_stamina": 5.0, "decay_rate": 0.3 },
+	"cooked_meat": { "display_name": "烤肉", "category": "food", "icon": null, "effect_satiety": 40.0, "effect_stamina": 10.0, "decay_rate": 0.5 },
+	"fish_dish": { "display_name": "魚料理", "category": "food", "icon": null, "effect_satiety": 35.0, "effect_stamina": 8.0, "decay_rate": 0.5 },
+	"herb_soup": { "display_name": "藥草湯", "category": "food", "icon": null, "effect_satiety": 20.0, "effect_stamina": 5.0, "decay_rate": 0.8 },
 
 	"water": { "display_name": "水", "category": "drink", "icon": null, "effect_hydration": 40.0 },
-	"ale": { "display_name": "麥酒", "category": "drink", "icon": null, "effect_hydration": 20.0, "effect_alcohol": 25.0, "effect_wakefulness": -8.0 },
+	"ale": { "display_name": "麥酒", "category": "drink", "icon": null, "effect_hydration": 20.0, "effect_alcohol": 25.0, "effect_wakefulness": -8.0, "decay_rate": 0.3 },
 	"spirit": { "display_name": "烈酒", "category": "drink", "icon": null, "effect_hydration": 10.0, "effect_alcohol": 45.0, "effect_wakefulness": -15.0 },
 
-	"small_game": { "display_name": "小型獵物", "category": "small_game", "icon": null },
-	"large_game": { "display_name": "大型獵物", "category": "large_game", "icon": null },
-	"fish": { "display_name": "魚", "category": "seafood", "icon": null },
+	"small_game": { "display_name": "小型獵物", "category": "small_game", "icon": null, "decay_rate": 0.8 },
+	"large_game": { "display_name": "大型獵物", "category": "large_game", "icon": null, "decay_rate": 0.6 },
+	"fish": { "display_name": "魚", "category": "seafood", "icon": null, "decay_rate": 1.0 },
 
-	"herb": { "display_name": "藥草", "category": "gathered", "icon": null },
-	"wild_fruit": { "display_name": "野果", "category": "gathered", "icon": null },
+	"herb": { "display_name": "藥草", "category": "gathered", "icon": null, "decay_rate": 0.4 },
+	"wild_fruit": { "display_name": "野果", "category": "gathered", "icon": null, "decay_rate": 0.9 },
 
 	"knife": { "display_name": "刀", "category": "carry", "icon": null },
 	"good_knife": { "display_name": "好刀", "category": "carry", "icon": null },

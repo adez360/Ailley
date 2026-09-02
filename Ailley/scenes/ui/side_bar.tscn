@@ -69,3 +69,5 @@ theme_override_constants/separation = 2
 layout_mode = 2
 focus_mode = 0
 text = "UI_CS_BTN_ADD"
+
+[connection signal="button_down" from="Control/HBoxContainer/Button" to="." method="_on_button_button_down"]

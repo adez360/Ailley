@@ -1,7 +1,7 @@
 ---
 tags: [規格書, 架構]
 status: 大致定案
-updated: 2026-08-31
+updated: 2026-09-01
 ---
 
 # 04_Godot與AI資料介接規格
@@ -168,6 +168,8 @@ updated: 2026-08-31
 沒有本文件先前設想的 `available_actions` 陣列、`present_npcs` 的 `appearance_text`、`location.desc`——可選動作清單是寫死在 system prompt 文字裡的 `AISchema.IMPLEMENTED_ACTIONS`（`Ailley/scripts/ai/ai_schema.gd`，由 `PromptBuilder._plan_system()` 動態組進提示詞），不是每次動態依前提條件過濾出來的陣列。
 
 《07 地點與行動》§5 描述的「Godot 端依地點／角色狀態／持有物過濾 `available_actions`」是還沒落地的目標設計，不是文件寫錯——issue #477（`Task.preconditions` 評估）就是在追蹤這個缺口，目前 `Task.preconditions` 一律通過，過濾這一層完全沒做。兩份文件不衝突：《07》講的是設計終點，這裡講的是現在打出去的請求實際長什麼樣，#477 落地前不要照《07》的措辭去對接實作。
+
+《01-3》Tier 1 表與《06》L2 對 `relations.*.appearance_cache`「隨 Tier 1 帶出對方外觀快取」的描述同樣是目標設計，不是文件寫錯——`context.visible` 目前只送 `name`／`met_count`，初次相遇存下的外觀快取並沒有跟著帶出，缺口由 issue #498 追蹤。兩份文件不衝突：《01-3》／《06》講的是設計終點，這裡講的是現在打出去的請求實際長什麼樣，#498 落地前不要照「隨 Tier 1 帶出外觀」的措辭去對接實作。
 
 > ⚠️ **每次決策只讀請求發起當下的快照**。套用階段在房主機序列處理，避免 race condition（見《00》§7）。
 
@@ -428,8 +430,8 @@ Godot 操控層                房主機                    llama-server
 | `no_requester_id` | 呼叫端沒給 `requester_id` |
 | `no_provider` | 指定的 provider 不存在或設定不完整（`has_valid_provider()` 不成立） |
 | `rate_limited` | 撞到 `min_interval_sec`（同角色冷卻，30 秒）——`_check_rate_limit()` 唯一回這個 identifier 的分支 |
-| `daily_quota` | 撞到每日額度：一般呼叫撞 `max_calls_per_game_day`（每日 20 次），`dialogue` 呼叫豁免冷卻與這條、改撞自己專用的 `max_dialogue_calls_per_game_day`（每日 150 次）——兩種額度都回 `daily_quota`，不是 `rate_limited`（`ai_service.gd::_check_rate_limit()`） |
-| `timeout` | `HTTPRequest` 逾時——`ai_config.gd::DEFAULT_TIMEOUT`（10 秒）是沒設定或設定非正值時的預設／後備值，provider 設定檔給的正值 `timeout` 會覆蓋它（`_parse_provider()`／`ai_service.gd::_send()`）；不是《99》P-11 舊決定寫的 LocalLLM 5 秒／RemoteLLM 15 秒／event 8 秒各自寫死，那組數字已被現況取代，見《99》P-11 |
+| `daily_quota` | 撞到每日額度：一般呼叫撞 `max_calls_per_game_day`（每日 20 次）。三種 policy 豁免冷卻與這條（見《13》§5），豁免中撞到各自的專用上限一樣回 `daily_quota`、不是 `rate_limited`（`ai_service.gd::_check_rate_limit()`）：`dialogue` 走獨立計數、改撞 `max_dialogue_calls_per_game_day`（每日 150 次）；`creation` 同樣走獨立計數、改撞 `max_creation_calls_per_game_day`（0＝不限）；`listener` 無條件豁免且完全不計帳 |
+| `timeout` | `HTTPRequest` 逾時——`ai_config.gd::DEFAULT_TIMEOUT`（20 秒）是沒設定或設定非正值時的預設／後備值，provider 設定檔給的正值 `timeout` 會覆蓋它（`_parse_provider()`／`ai_service.gd::_send()`）；不是《99》P-11 舊決定寫的 LocalLLM 5 秒／RemoteLLM 15 秒／event 8 秒各自寫死，那組數字已被現況取代，見《99》P-11 |
 | `network` | `HTTPRequest` 本身失敗（DNS／連線層錯誤） |
 | `http` | HTTP 狀態碼非 2xx（格式 `http_<code> <回應內容前 200 字>`） |
 | `bad_json` | provider 回應不是合法 JSON——**不重試**（`_interpret()` 回 `retryable=false`：HTTP 200 卻不是 JSON 通常是代理伺服器插進來的頁面，重試沒有意義）；會自動重試 1 次（`RETRY_LIMIT := 1`）的是 `network`（連線層失敗）與 HTTP **5xx** 的 `http`（4xx 不重試），且與下面 AISchema 層依 `provider.max_validation_retries()` 的驗證重試是兩個獨立計數器，不共用次數 |

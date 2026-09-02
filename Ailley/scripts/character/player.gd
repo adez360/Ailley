@@ -25,11 +25,27 @@ signal turn_resolved(text: String, ok: bool)
 ## 跟 agent.gd::AI_THINKING_TEXT（"…"）同一種處理，不走 L10n
 const WAITING_FOR_PLAYER_TEXT := "？"
 
+## 玩家頭上「休息中」的常駐提示符號（issue #926），跟 WAITING_FOR_PLAYER_TEXT
+## 同一種「純符號不走 L10n」處理
+const RESTING_TEXT := "💤"
+
 ## 玩家提早打字（還沒真的輪到自己）時暫存的話，見 _on_line_submitted()
 ## 與 next_line() 開頭的緩衝檢查（#207）。FIFO 佇列而不是單一欄位——
 ## 單一欄位在玩家提交兩次時，較晚的那句會直接覆蓋掉還沒被 next_line()
 ## 取用的前一句，前一句就這樣靜默消失（CodeRabbit review 抓到）
 var _pending_lines: Array[String] = []
+
+## _pending_lines 上限（issue #843）：原本無上限，玩家可以趁 NPC／LLM 還沒
+## 回應時連續打好幾句排隊，體驗上會跟對話實際節奏脫節——打的話已經不是在
+## 回應剛剛聽到的內容。滿了之後 chat_input.gd 鎖住輸入框，不讓玩家再開
+## 新的一句，等 next_line() 消化掉排隊的句子、緩衝區空出位置才解鎖
+const MAX_PENDING_LINES := 3
+
+## chat_input.gd 開啟輸入框前呼叫，判斷要不要鎖住（issue #843）。真的輪到
+## 玩家（_turn_waiting）時永遠放行——那是 next_line() 直接在等的那一句，
+## 跟排隊無關；不是輪到玩家時才看緩衝區還有沒有位置
+func can_queue_line() -> bool:
+	return _turn_waiting or _pending_lines.size() < MAX_PENDING_LINES
 
 ## next_line() 正在 await turn_resolved 的期間才是 true——_on_line_submitted()
 ## 與 exit_conversation() 靠這個判斷「現在直接 emit 給正在等的 next_line()」
@@ -162,6 +178,40 @@ func _unhandled_input(event: InputEvent) -> void:
 			report_action_failure("attack", attack_reason)
 		return
 
+	# 休息（issue #926）：獨立按鍵，跟 make_noise／use_item／attack／give 同一種
+	# 「不擠進 interact 優先序鏈」的頂層檢查，不用先找互動候選。契約是「按住
+	# 休息」（PR 描述與《玩家休息機制》都寫按住）：按住 Z 休息、放開就停，
+	# 單點一下不會留下沒人按著還在回復的休息狀態（CodeRabbit review 抓到；
+	# 按下時還在休息就收掉，是放開事件被別的 UI 吃掉時的保險）
+	if event.is_action_pressed("rest"):
+		get_viewport().set_input_as_handled()
+		_toggle_resting()
+		return
+	if event.is_action_released("rest") and _is_resting:
+		get_viewport().set_input_as_handled()
+		_stop_resting()
+		return
+
+	# 送禮（issue #841）：獨立按鍵，不擠進 interact（E）那條已經很長的優先序鏈
+	# （工作／商店／搬運／復活／打賞／搭話）——give 目標判定只看「面向且在
+	# 範圍內」，跟 attack 同一套 _get_interact_candidates()["other"]，不需要
+	# 額外分流。開的是選單（選物品），不像 attack 按下去立刻執行，所以目標
+	# 找不到時直接回報失敗，找得到就交給 give_menu 自己接手後續
+	if event.is_action_pressed("give"):
+		get_viewport().set_input_as_handled()
+		var give_menu := get_tree().get_first_node_in_group("give_menu")
+		if give_menu != null and give_menu.is_open():
+			return
+		var give_target: Character = _get_interact_candidates()["other"]
+		if give_target != null and give_target.is_dead:
+			give_target = null
+		if give_target == null:
+			report_action_failure("give", Character.GIVE_TARGET_NOT_FOUND)
+			return
+		if give_menu != null:
+			give_menu.open(give_target, self)
+		return
+
 	if not event.is_action_pressed("interact"):
 		return
 
@@ -192,6 +242,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	# corpse_menu 開著時同一個理由（issue #758）
 	var corpse_menu := get_tree().get_first_node_in_group("corpse_menu")
 	if corpse_menu != null and corpse_menu.is_open():
+		return
+
+	# give_menu 開著時同一個理由（issue #841）：give_menu.gd 自己接 interact
+	# 當關閉鍵，這裡漏了 guard 的話，E 會被這裡搶先吃掉、選單關不掉
+	var give_menu_open_check := get_tree().get_first_node_in_group("give_menu")
+	if give_menu_open_check != null and give_menu_open_check.is_open():
 		return
 
 	get_viewport().set_input_as_handled()
@@ -256,6 +312,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			and candidates["to_work"] <= candidates["to_other"]:
 		var work_reason := work_at(workstation)
 		if work_reason == WORK_OK:
+			# 開工成功就立刻收掉休息——不等的話要到下一個遊戲分鐘
+			# _on_game_minute() 才會靠 _is_resting_blocked()（含 is_working()）把
+			# 休息收掉，這中間 💤 會跟工作進度條並存一段（CodeRabbit review 抓到）
+			if _is_resting:
+				_stop_resting()
 			if TALK_DEBUG:
 				print("[talk_debug_654] 走了 work_at 分支（成功），work_reason=%s" % work_reason)
 			return
@@ -383,15 +444,15 @@ func _is_facing(target: Vector2) -> bool:
 ##
 ## 昏迷角色（`downed`）跟可搭話對象（`other`）從同一份 vision 清單分流、互斥——
 ## 昏迷者不進 `other`：talk_to() 沒有擋昏迷目標（is_talk_interruptible() 只看
-## _working／is_dead），兩邊都收會讓同一個人同時是搭話候選又是搬運候選，
-## 距離又剛好一樣（HAUL_RANGE == TALK_RANGE），還得另外決哪個優先。分流後
-## 兩邊各自呼叫一次 _nearest_facing()，跟 workstation 同一種寫法（issue #637）
+## _working／is_dead／is_offline_asleep），兩邊都收會讓同一個人同時是搭話候選
+## 又是搬運候選，距離又剛好一樣（HAUL_RANGE == TALK_RANGE），還得另外決哪個優先。
+## 分流後兩邊各自呼叫一次 _nearest_facing()，跟 workstation 同一種寫法（issue #637）
 func _get_interact_candidates() -> Dictionary:
 	var workstation := _nearest_facing(_nearby_group("workstations"), WORK_RANGE, func(n): return n.global_position) as Workstation
 	var shop_place := _nearest_shop_place()
 	var visible_characters: Array = vision.get_visible_characters() if vision != null else []
 	var downed_characters := visible_characters.filter(func(n): return (n as Character).has_condition(CONDITION_INCAPACITATED))
-	var talkable_characters := visible_characters.filter(func(n): return not (n as Character).has_condition(CONDITION_INCAPACITATED))
+	var talkable_characters := visible_characters.filter(func(n): return not (n as Character).has_condition(CONDITION_INCAPACITATED) and not (n as Character).is_offline_asleep)
 	var downed := _nearest_facing(downed_characters, HAUL_RANGE, func(n): return (n as Character).get_body_position()) as Character
 	var other := _nearest_facing(talkable_characters, TALK_RANGE, func(n): return (n as Character).get_body_position()) as Character
 
@@ -589,11 +650,92 @@ func _decide_velocity() -> Vector2:
 	# 搬運屍體時要吃到 _speed_multiplier 減速，跟 _follow_hauler() 用的
 	# 是同一個倍率，玩家跟被搬運目標才會同速（issue #822）
 	if input_dir != Vector2.ZERO:
+		# 移動輸入立即取消休息——玩家按方向鍵顯然是想走了，不用另外按一次休息鍵
+		# 才能離開這個狀態（issue #926）
+		if _is_resting:
+			_stop_resting()
 		if is_moving():
 			stop_moving()
 		return input_dir * effective_speed()
 
 	return super()
+
+## 玩家專屬體力／清醒度回復機制（issue #926）。玩家沒有 Agent 的 LLM 決策
+## 迴圈，沒辦法比照 NPC 那樣「先講好要睡多久」再一次套用整段回復量，改成
+## 「按住休息鍵、依累積已休息的時長重新分級」——每經過一個遊戲分鐘依
+## Agent.SLEEP_TIER_NAP_MIN_MINUTES／SLEEP_TIER_SLEEP_MIN_MINUTES 兩個門檻
+## 重新分級一次、查 Agent.ACTION_RECOVERY 套用對應那格的回復量。三者都是
+## Agent 的公開成員（class_name 靜態存取，不需要繼承關係），跟 NPC 共用
+## 同一張已校調過的表，不重複一份數字；分級判斷本身很單純，直接在這裡
+## 重寫兩行，不去呼叫 Agent 命名帶底線、語意上屬於內部實作的
+## _classify_sleep_tier()（見 note/技術/進食與飲用.md）
+var _is_resting := false
+var _rest_elapsed_minutes := 0
+
+## 開始休息前擋掉的狀態，跟 NPC 那邊「入眠中不能再入眠」同一類防呆：死亡／
+## 昏迷／治療中／被天神召喚中（_is_movement_locked() 涵蓋後三者）、對話中、
+## 工作中、搬運屍體、被搬運中，這些狀態下休息沒有意義或會跟既有機制衝突。
+## is_working() 也擋住反方向：休息中被要求開工（work_at() 不查休息狀態）時，
+## _on_game_minute() 靠同一個檢查把休息狀態收掉，兩邊不能並行
+func _is_resting_blocked() -> bool:
+	return is_dead or _is_movement_locked() or is_in_conversation() or is_working() or is_hauling() or is_being_hauled()
+
+## 按下休息鍵：已經在休息就結束，否則檢查能不能開始。失敗原因統一用共用
+## 詞彙表的 "BUSY"（FAILURE_MESSAGE_KEYS 已有對應），不用為這個動作另開新碼
+func _toggle_resting() -> void:
+	if _is_resting:
+		_stop_resting()
+		return
+	if _is_resting_blocked():
+		report_action_failure("rest", "BUSY")
+		return
+	_is_resting = true
+	_rest_elapsed_minutes = 0
+	if bubble != null:
+		bubble.hold(RESTING_TEXT)
+
+func _stop_resting() -> void:
+	if not _is_resting:
+		return
+	_is_resting = false
+	if bubble != null:
+		bubble.release_hold()
+
+## 休息中的每幀重查：被擋狀態（對話開始、開工、被搬運、昏迷……）出現的當下
+## 就把休息收掉，不等下一個遊戲分鐘 `_on_game_minute()` 的重查——中途進出
+## 一場對話再回來，回復不該在沒有重新按住 Z 的情況下續攤（CodeRabbit review
+## 抓到）。`_is_resting_blocked()` 的每個條件都是持續性狀態，休息中不會一幀
+## 真一幀假，每幀檢查不會誤殺正常休息
+func _physics_process(delta: float) -> void:
+	if _is_resting and _is_resting_blocked():
+		_stop_resting()
+	super(delta)
+
+## Character._ready() 已經把 GameClock.time_changed 接到這個函式（見該檔
+## _ready()），這裡覆寫並呼叫 super() 保留昏迷／治療／exhausted 檢查，不是
+## 另開一條獨立連線——跟 agent.gd 的 _apply_action_recovery() 同一種「掛在
+## 既有的每遊戲分鐘訊號上」的作法
+func _on_game_minute(hour: int, minute: int) -> void:
+	super(hour, minute)
+	if not _is_resting:
+		return
+	if stats == null or _is_resting_blocked():
+		_stop_resting()
+		return
+	_rest_elapsed_minutes += 1
+	var tier := "rest"
+	if _rest_elapsed_minutes >= Agent.SLEEP_TIER_SLEEP_MIN_MINUTES:
+		tier = "sleep"
+	elif _rest_elapsed_minutes >= Agent.SLEEP_TIER_NAP_MIN_MINUTES:
+		tier = "nap"
+	for recovery in Agent.ACTION_RECOVERY.get(tier, []):
+		stats.add(recovery["stat"], recovery["amount"])
+		# stamina 回來了要即時同步 exhausted——super() 開頭的
+		# _update_exhausted_condition() 跑在回復「之前」，這裡不同步的話，
+		# exhausted 會多掛一個遊戲分鐘才解除（比照 agent.gd
+		# ::_apply_action_recovery() 的即時同步做法，CodeRabbit review 抓到）
+		if recovery.get("stat") == "stamina":
+			_update_exhausted_condition()
 
 # 玩家的下一句話就是玩家打的字。
 #

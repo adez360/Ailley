@@ -53,7 +53,14 @@ func _on_exit_pressed() -> void:
 		return
 	_exit_in_flight = true
 	exit_button.disabled = true
+	# 離開流程起點：下面 change_scene_to_file() 的整樹拆除會讓每個角色
+	# tree_exited，跟「單一角色被移除」無法從訊號分辨——先把 GameManager
+	# ._world_unloading 立起來，CharacterStatePersistence 才不會把所有動態家
+	# 標成 is_active=0（CodeRabbit review on #825 抓到）。存檔失敗會留在原地，
+	# 旗標要在那條路徑復原回 false
+	GameManager._world_unloading = true
 	if not await GameManager.save_before_leaving():
+		GameManager._world_unloading = false
 		_exit_in_flight = false
 		exit_button.disabled = false
 		return

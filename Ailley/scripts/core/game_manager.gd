@@ -33,6 +33,16 @@ var continue_requested := false
 ## 就要重設回 false（見 main_scene.gd::_apply_continue()）
 var continue_load_failed := false
 
+## 整個世界正在卸載中（Esc 選單「回主選單」／關閉視窗，兩條離開流程的起點設
+## true，見 esc_menu.gd::_on_exit_pressed() 與下方 _notification()）。
+## change_scene_to_file()／quit() 的整樹拆除也會讓場上每個角色 tree_exited，
+## 跟「單一角色被從世界中移除」在訊號層面無法分辨——CharacterStatePersistence
+## ._release_home_if_dynamic() 靠這個旗標分辨：卸載中不拆除動態家，否則每次
+## 離開世界，所有動態家都會被標 is_active=0，下次進場 _rebuild_dynamic_homes()
+## 查不到任何可重建的列，「讀檔原樣重建」變死碼（CodeRabbit review on #825）。
+## 進場（main_scene.gd::_ready()）與 deploy_from_library() 重置回 false
+var _world_unloading := false
+
 ## 目前被玩家操控的 character_id，跟 allow_player_join 同一層世界存檔資料
 ## （見 note/技術/存檔.md、issue #373）。這裡是「玩家化過身沒」的唯一即時來源：
 ## deploy_from_library() 以 as_player=true 投放時寫入，讀檔時由
@@ -201,6 +211,19 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 		character.character_id = identity["character_id"]
 	if identity.has("character_name"):
 		character.character_name = identity["character_name"]
+	# age 是 Character 基底欄位（Player 也有，跟 decision_source／model_name
+	# 那種 Agent 專屬欄位不同），走跟 character_name 一樣的識別資料管線即可
+	# （issue #837）。範圍驗證（16–70，《規格書01》§1-1）在這個唯一的寫入點
+	# 做一次就夠，呼叫端（deploy_from_library()／_respawn_character()）不用
+	# 各自重複驗證——角色庫資料若因手改／損毀存檔帶著界外值，落到 30（跟
+	# 角色庫本身 entry.get("age", 30) 的既有預設一致），不會把壞資料直接
+	# 顯示在狀態面板上（CodeRabbit review 抓到，PR #845）
+	if identity.has("age"):
+		var raw_age: Variant = identity["age"]
+		# 只有數字才吃（JSON.parse_string() 回 float，int/float 都收）；字串等
+		# 非數值 Variant 不吃 int() 的隱式轉型，直接落到 30 預設（跟資料契約一致）
+		var age_value: int = int(raw_age) if raw_age is int or raw_age is float else 30
+		character.age = age_value if age_value >= 16 and age_value <= 70 else 30
 
 	# words_to_creator 只有角色庫投放這條路徑會給（那份是建角當下就生成好、
 	# 可能已人工檢閱過的內容）。要在 add_child() 觸發 _ready() 之前設好——
@@ -405,6 +428,9 @@ func remove_from_library(id: String) -> bool:
 # 不能重複投放——一份靈魂同時只該有一具肉體，是《05》§7-1「已投放的角色
 # 不可編輯」規則的自然延伸
 func deploy_from_library(id: String, as_player: bool = false) -> Character:
+	# 投放代表世界是活的（主選單開著時不會投角色）——上一輪離開流程殘留的
+	# _world_unloading 在這裡收掉，單一角色退場的拆除才不會被誤跳過
+	_world_unloading = false
 	var entry := get_library_entry(id)
 	if entry.is_empty() or entry.get("deployed", false):
 		return null
@@ -453,6 +479,7 @@ func deploy_from_library(id: String, as_player: bool = false) -> Character:
 		"character_id": entry["id"],
 		"character_name": entry["character_name"],
 		"words_to_creator": entry.get("words_to_creator", ""),
+		"age": entry.get("age", 30),
 	})
 
 	# decision_source／model_name 是 agent.gd 的 @export 欄位，player.gd 沒有
@@ -685,7 +712,7 @@ func _on_day_changed_autosave(_day: int) -> void:
 # #468：30 秒是抓寬的 best-effort 窗口，不是精確算出的完整最壞情況上限——
 # AIService.RETRY_LIMIT（1 次重試）只套用在逾時以外的可重試錯誤，逾時本身
 # 不重試（見 ai_service.gd::_interpret()）；provider.timeout 可能被設定檔
-# 覆寫，不保證等於 AIConfig.DEFAULT_TIMEOUT（10 秒）；_decide_with_retry() 的驗證
+# 覆寫，不保證等於 AIConfig.DEFAULT_TIMEOUT；_decide_with_retry() 的驗證
 # 重試（provider.max_validation_retries()）與撞期補跑
 # （_sleep_reflection_pending）都可能讓實際等待時間超過這個窗口。這裡不
 # 無限等——逾時就放棄等待、照樣存檔：存到的是反思套用前的狀態，跟完全不等
@@ -737,6 +764,10 @@ func _wait_for_sleep_reflections_to_settle() -> void:
 func _notification(what: int) -> void:
 	if what != NOTIFICATION_WM_CLOSE_REQUEST:
 		return
+	# 整樹拆除（quit()）也會讓每個角色 tree_exited，先立起 _world_unloading
+	# 讓 _release_home_if_dynamic() 跳過拆除——存檔成敗都不影響接下來的整樹
+	# 拆除，沒有「留在遊戲裡」的路徑，不需要復原
+	_world_unloading = true
 	await save_before_leaving()
 	get_tree().quit()
 
@@ -761,6 +792,27 @@ func save_before_leaving() -> bool:
 	if not result["world_ok"]:
 		push_error("離開遊戲存檔失敗：世界 %s" % DEFAULT_WORLD_ID)
 	return result["world_ok"] and result["character_failures"].is_empty()
+
+# 重置執行期會殘留的世界層欄位（issue #875）：GameManager 是 autoload，整個
+# process 存活期間都不會自動重新初始化，identity_assignments 開場由
+# load_npc_data() 從 npc_schedule.json 載入、執行期由 deploy_from_library()／
+# _respawn_character() 附加投放角色的身分；character_library 開場為空、
+# 執行期由建角流程 _append_library_entry() 附加、deploy_from_library() 改寫
+# deployed 旗標；embodied_character_id 由 deploy_from_library(as_player=true)
+# 寫入；allow_player_join 則只有「繼續遊戲」的 apply_world_save_data() 會
+# 蓋寫。同一次執行裡玩過一次「繼續遊戲」之後再按
+# 「開始新遊戲」，這些欄位不會自己變回全新狀態——main_menu.gd::
+# _on_start_pressed() 呼叫這個函式補上這條路徑，跟同一個函式已經在呼叫的
+# GameClock.reset_to_new_game_start()（#606）是同一個根因、同一種修法。
+# identity_assignments 不是清成空表，而是重呼 load_npc_data() 回到開機載入後
+# 的狀態（行為等冪，npc_data／schedule_assignments 一併重載）；它不動
+# character_library 等其他欄位，重置邏輯互不干擾
+func reset_for_new_game() -> void:
+	character_library.clear()
+	embodied_character_id = ""
+	allow_player_join = true
+	load_npc_data()
+
 
 # data 缺欄位一律用預設值補，不當成錯誤（跟 character.gd 同一條規則）。
 # 場景裡目前找到的角色直接套用；存檔裡有記載但場景沒有的角色會被重新生成
@@ -973,6 +1025,7 @@ func _respawn_character(character_id: String, entry: Dictionary) -> void:
 		"character_id": character_id,
 		"character_name": library_entry.get("character_name", ""),
 		"words_to_creator": library_entry.get("words_to_creator", ""),
+		"age": library_entry.get("age", 30),
 	})
 
 	# decision_source／model_name 是投放後不可改的欄位（《06》），還原時要跟著
