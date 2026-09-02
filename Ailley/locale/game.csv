@@ -57,6 +57,7 @@ UI_ONBOARDING_INTERACT,"E　互動（工作／購買／搬運等）","E to inter
 UI_ONBOARDING_TALK,"Enter　跟角色說話","Enter to talk to a character"
 UI_ONBOARDING_SELECT,"滑鼠左鍵　點選角色查看狀態","Left-click a character to see their status"
 UI_ONBOARDING_ATTACK,"滑鼠右鍵　攻擊","Right-click to attack"
+UI_ONBOARDING_GIVE,"G　送禮","G to give a gift"
 UI_ONBOARDING_INVENTORY,"Tab　開關背包，數字鍵切換快捷欄","Tab to open your inventory, number keys to switch hotbar slot"
 UI_CREDITS_QWEN,"Qwen2.5（Apache-2.0）","Qwen2.5 (Apache-2.0)"
 UI_CREDITS_LLAMACPP,"llama.cpp（MIT）","llama.cpp (MIT)"
