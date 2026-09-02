@@ -17,6 +17,7 @@ extends RefCounted
 const PATH := "res://data/items.json"
 
 static var _items: Dictionary = {}
+static var _decay_rates: Dictionary = {}
 static var _loaded := false
 
 
@@ -42,6 +43,15 @@ static func _ensure_loaded() -> void:
 
 	_items = json.data as Dictionary
 
+	# 只收有填 decay_rate 且 > 0 的項目（《規格書08》§3-1～§3-4）——water、
+	# spirit【待填】、carry 類（用 durability 不用 decay）都沒有這個欄位，
+	# tick_decay() 查不到就當非易腐直接跳過，不用另外查 category 白名單
+	_decay_rates = {}
+	for id in _items:
+		var rate := float(_items[id].get("decay_rate", 0.0))
+		if rate > 0.0:
+			_decay_rates[id] = rate
+
 
 ## 查不到回空字典，呼叫端用 is_empty() 判斷——跟 Inventory.get_slot() 的
 ## 空格慣例一致，顯示端不用另外分兩套「找不到」的判斷方式
@@ -53,6 +63,14 @@ static func get_item(item_id: String) -> Dictionary:
 static func has_item(item_id: String) -> bool:
 	_ensure_loaded()
 	return _items.has(item_id)
+
+
+## item_id → 每 tick 腐壞速率（《規格書08》§6-1），只收 decay_rate > 0 的項目。
+## `Inventory.tick_decay()` 拿這份表用，Inventory 本身不查這份定義檔（見上方
+## 檔案說明），呼叫端（`character.gd`）負責把這份表傳進去
+static func get_decay_rates() -> Dictionary:
+	_ensure_loaded()
+	return _decay_rates
 
 
 ## 查不到定義檔就退回 item_id 本身，不是空字串——顯示端至少還看得出是什麼，

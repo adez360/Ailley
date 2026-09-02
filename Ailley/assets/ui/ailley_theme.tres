@@ -1,7 +1,6 @@
-[gd_resource type="Theme" load_steps=115 format=3 uid="uid://dktke2k785jv0"]
+[gd_resource type="Theme" load_steps=129 format=3 uid="uid://dktke2k785jv0"]
 
 [ext_resource type="Texture2D" uid="uid://bo16nnwfc1tma" path="res://assets/ui/buttons.png" id="1_5ivoa"]
-[ext_resource type="Texture2D" uid="uid://bayao7pw4ppnl" path="res://assets/ui/Sprite sheet for Basic Pack.png" id="1_tgcn8"]
 [ext_resource type="Texture2D" uid="uid://bel6rpfbkbxmg" path="res://assets/ui/text_box.png" id="3_id50s"]
 [ext_resource type="FontFile" uid="uid://cld7er2yc7isn" path="res://assets/fonts/Cubic_11.ttf" id="4_60kxs"]
 [ext_resource type="Texture2D" uid="uid://loh8kgucviuh" path="res://assets/ui/panels.png" id="5_ie1ck"]
@@ -267,15 +266,29 @@ texture_margin_right = 5.0
 texture_margin_bottom = 5.0
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_vofe6"]
-atlas = ExtResource("1_tgcn8")
-region = Rect2(201, 105, 30, 30)
+atlas = ExtResource("5_ie1ck")
+region = Rect2(3, 35, 26, 26)
 
 [sub_resource type="StyleBoxTexture" id="StyleBoxTexture_060gm"]
 texture = SubResource("AtlasTexture_vofe6")
-texture_margin_left = 7.0
-texture_margin_top = 7.0
-texture_margin_right = 7.0
-texture_margin_bottom = 7.0
+texture_margin_left = 4.0
+texture_margin_top = 4.0
+texture_margin_right = 4.0
+texture_margin_bottom = 4.0
+
+[sub_resource type="CompressedTexture2D" id="CompressedTexture2D_vofe6"]
+load_path = "res://.godot/imported/panels.png-bc3425372da39bd8c14f553ea4c354b6.ctex"
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_554ep"]
+atlas = SubResource("CompressedTexture2D_vofe6")
+region = Rect2(3, 67, 26, 26)
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_ulc6y"]
+texture = SubResource("AtlasTexture_554ep")
+texture_margin_left = 2.0
+texture_margin_top = 2.0
+texture_margin_right = 2.0
+texture_margin_bottom = 2.0
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_ar72y"]
 atlas = ExtResource("1_5ivoa")
@@ -302,7 +315,43 @@ texture_margin_top = 2.0
 texture_margin_right = 2.0
 texture_margin_bottom = 3.0
 
-[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_i72qb"]
+[sub_resource type="AtlasTexture" id="AtlasTexture_ulc6y"]
+atlas = ExtResource("1_5ivoa")
+region = Rect2(259, 119, 10, 4)
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_keadf"]
+texture = SubResource("AtlasTexture_ulc6y")
+texture_margin_left = 1.0
+texture_margin_top = 2.0
+texture_margin_right = 1.0
+texture_margin_bottom = 3.0
+
+[sub_resource type="CompressedTexture2D" id="CompressedTexture2D_h575o"]
+load_path = "res://.godot/imported/buttons.png-12fe8cd646fbf8701fc35ae7af4f992b.ctex"
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_rmt7i"]
+atlas = SubResource("CompressedTexture2D_h575o")
+region = Rect2(259, 103, 10, 4)
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_4wgkr"]
+texture = SubResource("AtlasTexture_rmt7i")
+texture_margin_left = 1.0
+texture_margin_top = 2.0
+texture_margin_right = 1.0
+texture_margin_bottom = 3.0
+region_rect = Rect2(0, 0, 10, 4)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_krpf0"]
+atlas = ExtResource("3_id50s")
+region = Rect2(3, 68, 90, 25)
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_2ygc1"]
+texture = SubResource("AtlasTexture_krpf0")
+texture_margin_left = 5.0
+texture_margin_top = 5.0
+texture_margin_right = 5.0
+texture_margin_bottom = 5.0
+region_rect = Rect2(0, 0, 90, 25)
 
 [sub_resource type="CompressedTexture2D" id="CompressedTexture2D_s6qld"]
 load_path = "res://.godot/imported/buttons.png-12fe8cd646fbf8701fc35ae7af4f992b.ctex"
@@ -349,6 +398,29 @@ texture = SubResource("AtlasTexture_tk0nj")
 expand_margin_right = 2.0
 axis_stretch_horizontal = 1
 axis_stretch_vertical = 1
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_2ygc1"]
+atlas = ExtResource("1_5ivoa")
+region = Rect2(215, 53, 16, 40)
+filter_clip = true
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_5xyt4"]
+texture = SubResource("AtlasTexture_2ygc1")
+texture_margin_top = 13.0
+texture_margin_bottom = 16.0
+
+[sub_resource type="CompressedTexture2D" id="CompressedTexture2D_ge280"]
+load_path = "res://.godot/imported/buttons.png-12fe8cd646fbf8701fc35ae7af4f992b.ctex"
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_5xyt4"]
+atlas = SubResource("CompressedTexture2D_ge280")
+region = Rect2(272, 53, 16, 40)
+filter_clip = true
+
+[sub_resource type="StyleBoxTexture" id="StyleBoxTexture_554ep"]
+texture = SubResource("AtlasTexture_5xyt4")
+texture_margin_top = 13.0
+texture_margin_bottom = 16.0
 
 [sub_resource type="DPITexture" id="DPITexture_f4m0v"]
 _source = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"32\"><path fill=\"#d3d3d3\" d=\"m5 1h6v30h-6z\"/></svg>
@@ -525,6 +597,10 @@ border_width_right = 1
 border_width_bottom = 1
 border_color = Color(0.184, 0.145, 0.133, 1)
 
+[sub_resource type="StyleBoxLine" id="StyleBoxLine_5xyt4"]
+color = Color(0.6666667, 0.4745098, 0.34901962, 1)
+vertical = true
+
 [resource]
 BubbleLabel/base_type = &"Label"
 BubbleLabel/colors/font_color = Color(0.13333334, 0.13333334, 0.13333334, 1)
@@ -576,15 +652,21 @@ HSlider/styles/slider = SubResource("StyleBoxTexture_1uaci")
 HUDLabel/base_type = &"Label"
 HUDLabel/colors/font_outline_color = Color(0, 0, 0, 1)
 HUDLabel/constants/outline_size = 4
+Label/colors/font_outline_color = Color(0, 0, 0, 0.3529412)
+Label/colors/font_shadow_color = Color(0, 0, 0, 0.23137255)
+Label/constants/line_spacing = 3
+Label/constants/shadow_offset_x = 0
+Label/constants/shadow_offset_y = 0
+Label/constants/shadow_outline_size = 0
 Label/font_sizes/font_size = 12
 LineEdit/font_sizes/font_size = 11
 LineEdit/styles/focus = SubResource("StyleBoxTexture_ai1xu")
 LineEdit/styles/normal = SubResource("StyleBoxTexture_ar72y")
 LineEdit/styles/read_only = SubResource("StyleBoxTexture_ulnss")
-MarginContainer/constants/margin_bottom = 5
-MarginContainer/constants/margin_left = 5
-MarginContainer/constants/margin_right = 5
-MarginContainer/constants/margin_top = 5
+MarginContainer/constants/margin_bottom = 4
+MarginContainer/constants/margin_left = 4
+MarginContainer/constants/margin_right = 4
+MarginContainer/constants/margin_top = 4
 MenuLabel/base_type = &"Label"
 MenuLabel/colors/font_shadow_color = Color(0, 0, 0, 0.09411765)
 MenuLabel/constants/shadow_offset_x = 1
@@ -598,16 +680,28 @@ MenuVBoxContainer/base_type = &"VBoxContainer"
 MenuVBoxContainer/constants/separation = 8
 Panel/styles/panel = ExtResource("6_s5seo")
 PanelContainer/styles/panel = SubResource("StyleBoxTexture_060gm")
+PanelContainer_B/base_type = &"PanelContainer"
+PanelContainer_B/styles/panel = SubResource("StyleBoxTexture_ulc6y")
+ProgressBar/colors/font_color = Color(0.95, 0.95, 0.95, 1)
+ProgressBar/colors/font_outline_color = Color(0, 0, 0, 1)
+ProgressBar/constants/outline_size = 0
 ProgressBar/font_sizes/font_size = 10
+ProgressBar/fonts/font = ExtResource("4_60kxs")
 ProgressBar/styles/background = SubResource("StyleBoxTexture_6k5m6")
 ProgressBar/styles/fill = SubResource("StyleBoxTexture_tk0nj")
-RichTextLabel/font_sizes/normal_font_size = 11
-RichTextLabel/styles/normal = SubResource("StyleBoxTexture_i72qb")
+ProgressBar_simple/base_type = &"ProgressBar"
+ProgressBar_simple/styles/background = SubResource("StyleBoxTexture_keadf")
+ProgressBar_simple/styles/fill = SubResource("StyleBoxTexture_4wgkr")
+RichTextLabel/font_sizes/normal_font_size = 12
+RichTextLabel/styles/normal = SubResource("StyleBoxTexture_2ygc1")
 SideBarButton/base_type = &"Button"
 SideBarButton/styles/hover = SubResource("StyleBoxTexture_fggab")
 SideBarButton/styles/hover_pressed = SubResource("StyleBoxTexture_krpf0")
 SideBarButton/styles/normal = SubResource("StyleBoxTexture_f4m0v")
 SideBarButton/styles/pressed = SubResource("StyleBoxTexture_ygfrh")
+SideBarButton_mirror/base_type = &"Button"
+SideBarButton_mirror/styles/normal = SubResource("StyleBoxTexture_5xyt4")
+SideBarButton_mirror/styles/pressed = SubResource("StyleBoxTexture_554ep")
 TabBar/colors/drop_mark_color = Color(1, 1, 1, 1)
 TabBar/colors/font_disabled_color = Color(0.875, 0.875, 0.875, 0.5)
 TabBar/colors/font_hovered_color = Color(0.95, 0.95, 0.95, 1)
@@ -647,3 +741,5 @@ TextEdit/colors/font_placeholder_color = Color(0.459, 0.349, 0.235, 1)
 TextEdit/font_sizes/font_size = 11
 TextEdit/styles/focus = SubResource("StyleBoxFlat_i72qb")
 TextEdit/styles/normal = SubResource("StyleBoxFlat_s6qld")
+VBoxContainer/constants/separation = 4
+VSeparator/styles/separator = SubResource("StyleBoxLine_5xyt4")
