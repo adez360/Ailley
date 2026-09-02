@@ -360,4 +360,4 @@ position = Vector2(416, -8)
 shape = SubResource("RectangleShape2D_arp2o")
 
 [node name="Node2D" parent="." instance=ExtResource("14_fpun6")]
-position = Vector2(-40, -100)
+position = Vector2(16, 32)
