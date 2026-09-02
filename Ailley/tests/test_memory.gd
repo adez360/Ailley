@@ -269,3 +269,27 @@ func test_load_save_data_with_missing_entries_key_results_in_empty() -> void:
 	memory.load_save_data({})
 
 	assert_eq(memory.entries.size(), 0, "缺 entries 欄位應視為空存檔，清空現有記憶")
+
+
+## issue #953：get_life_highlights()（#384）原本沒有呼叫端把結果寫進墓碑欄位，
+## Agent._capture_life_highlights() 是死亡流程（_die() 死亡當下）新接上的掛點。
+## 直接測掛點本身，繞過 _die() 對 GameClock 的依賴（見套件頂端說明）
+func test_capture_life_highlights_populates_field_from_l4() -> void:
+	var agent := track(Agent.new()) as Agent
+	agent.memory = track(Memory.new()) as Memory
+	agent.memory.entries.append(_make_entry(4, "neutral", 100.0, 41))
+	agent.memory.entries.append(_make_entry(4, "neutral", 100.0, 12))
+
+	agent._capture_life_highlights()
+
+	assert_eq(agent.life_highlights.size(), 2, "兩筆 L4 核心記憶應各彙整成一行生平")
+	assert_true(agent.life_highlights[0].begins_with("第 12 天"), "應依 created_day 由舊到新排序")
+
+
+func test_capture_life_highlights_without_memory_is_noop() -> void:
+	var agent := track(Agent.new()) as Agent
+	agent.memory = null
+
+	agent._capture_life_highlights()
+
+	assert_eq(agent.life_highlights.size(), 0, "沒有 memory 時應安全略過，不噴錯")

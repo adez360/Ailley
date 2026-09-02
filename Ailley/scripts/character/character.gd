@@ -931,6 +931,12 @@ func _die(cause: String) -> void:
 	# 死亡狀態機（is_dead、石化、decay 開始累積）不該卡在那份請求後面才生效
 	_request_last_words(cause)
 
+	# life_highlights 彙整（#953）：跟 last_words 一樣是死亡當下要定格進墓碑的
+	# 欄位，但這半是純引擎彙整 L4 核心記憶、不打 LLM，所以同步做、不走
+	# _request_last_words() 那條 await。基底 no-op（Player 沒有記憶系統），
+	# Agent 覆寫，見 agent.gd
+	_capture_life_highlights()
+
 ## 死亡本體變灰／存活還原正常顏色。獨立成函式是因為 load_save_data() 明確
 ## 允許在節點還沒進場景樹時呼叫（見該函式開頭註解）——這時 @onready var sprite
 ## 還沒初始化，直接寫 sprite.modulate 會炸掉，這裡統一擋 null（CodeRabbit
@@ -966,6 +972,13 @@ func _apply_grave_visual(buried: bool) -> void:
 ## （來不及開口，跟《規格書09》§2 表格「無機會留遺言」的語意不同，是單純沒有
 ## 生成管道）。Agent 覆寫這個 hook 真正送出 LLM 請求，見 agent.gd
 func _request_last_words(_cause: String) -> void:
+	pass
+
+## 墓碑生平彙整的掛點，基底 no-op：只有 Agent 有 memory 與 life_highlights 欄位
+## （Player 死亡走佔位文案，見 epitaph_input.gd）。死亡當下同步呼叫，取的是
+## 「死掉那一刻的一生」——決策迴圈停止後 memory 不再更新。見 agent.gd 的覆寫
+## 與《規格書09》§4-2
+func _capture_life_highlights() -> void:
 	pass
 
 ## 死亡時刻換算成全域遞增的 tick 計數（《規格書09》§2 death_tick 範例
