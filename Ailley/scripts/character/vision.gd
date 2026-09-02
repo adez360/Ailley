@@ -128,6 +128,13 @@ func _refresh_visible() -> void:
 		if not is_instance_valid(other):
 			_in_range.remove_at(i)
 			continue
+		# 屍體不會從場景樹或任何 group 移除（_die() 只是石化），純物理層的
+		# Area2D 偵測看不出差別——死人不是可以互動的「看得到的人」，這裡
+		# 排除掉，不然 context.visible 會一直帶著死人，LLM 誤以為對方還活著
+		# 可以 talk/give/persuade/follow（issue #986，實測角色死後仍被
+		# 選中對話長達數小時）
+		if other.is_dead:
+			continue
 		if _has_line_of_sight(other):
 			current.append(other)
 

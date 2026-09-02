@@ -1996,7 +1996,7 @@ func _process_appointment(now_minutes: int) -> void:
 
 	# 等待階段：對方出現在同一地點就算赴約成功，悄悄結束，不用另外通知
 	var other := _find_character_by_name(with_name)
-	if other != null and _actual_place_of(other) == location:
+	if other != null and not other.is_dead and _actual_place_of(other) == location:
 		_clear_appointment_plan_entry()
 		_appointment = null
 		return
@@ -3476,7 +3476,7 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			# following_id 其實還能找到同一個人。id 是唯一值，不會撞名，
 			# 不需要另外的歧義檢查
 			var follow_target := _find_character_by_id(following_id)
-			if follow_target == null:
+			if follow_target == null or follow_target.is_dead:
 				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
 			return {"success": true, "reason": ""}
 		"perform":
@@ -3937,6 +3937,11 @@ func _pursue_talk_task() -> void:
 			return
 	else:
 		target = _find_character_by_name(target_name)
+		# 指名的對象死了（issue #986）：屍體還留在 "characters" group 裡，
+		# _find_character_by_name() 找得到，但死人不是能對話的目標，當成
+		# 「找不到」處理，不要每分鐘對著屍體重試
+		if target != null and target.is_dead:
+			target = null
 
 	if target == null:
 		# 找不到人只報一次，理由跟「地點打錯只報一次」一樣——這個函式每個
@@ -5072,6 +5077,8 @@ func _pursue_give_task() -> void:
 	var params: Dictionary = _current_task.get("params", {})
 	var target_name: String = str(params.get("target", ""))
 	var target := _find_character_by_name(target_name)
+	if target != null and target.is_dead:
+		target = null
 
 	if target == null:
 		last_action_result = "找不到這個人，可能已經離開了"
@@ -5187,6 +5194,8 @@ func _pursue_attack_task() -> void:
 		return
 
 	var target := _find_character_by_name(target_name)
+	if target != null and target.is_dead:
+		target = null
 
 	if target == null:
 		last_action_result = "找不到這個人，可能已經離開了"
@@ -5439,6 +5448,8 @@ func _pursue_persuade_task() -> void:
 	var params: Dictionary = _current_task.get("params", {})
 	var target_name: String = str(params.get("target", ""))
 	var target := _find_character_by_name(target_name)
+	if target != null and target.is_dead:
+		target = null
 
 	if target == null:
 		last_action_result = "找不到這個人，可能已經離開了"
@@ -5556,7 +5567,7 @@ func _pursue_follow_task() -> void:
 			return
 
 	var target := _find_character_by_id(following_id)
-	if target == null:
+	if target == null or target.is_dead:
 		last_action_result = "找不到要跟隨的人，可能已經離開了"
 		_track_action_result_for_facts("follow", false)
 		following_id = ""
@@ -5662,7 +5673,7 @@ func _fact_lines_summary() -> Array[String]:
 	# 哪裡，才有材料判斷這一輪要不要繼續 follow
 	if not following_id.is_empty():
 		var follow_target := _find_character_by_id(following_id)
-		if follow_target != null:
+		if follow_target != null and not follow_target.is_dead:
 			# 用即時位置反查，不是 current_place（CodeRabbit review 抓到）：
 			# current_place 是任務目的地，跟隨對象還在半路走過去時，這個欄位
 			# 已經先變成目的地了，模型會被告知一個對方根本還沒到的地方。
@@ -5880,6 +5891,10 @@ func _find_nearest_character_within(range_px: float) -> Character:
 		if node == self:
 			continue
 		var candidate := node as Character
+		# 屍體還留在 "characters" group 裡（issue #986），沒指定對象時
+		# 「找人聊」不該挑到一具屍體
+		if candidate.is_dead:
+			continue
 		var distance := get_body_position().distance_to(candidate.get_body_position())
 		if distance <= range_px and distance < nearest_distance:
 			nearest_distance = distance
