@@ -695,9 +695,9 @@ func _cmd_reflect(args: PackedStringArray) -> void:
 # spawn <template_id>
 #
 # #73 驗證用：從 GameManager 的角色庫模板動態生成一隻角色、投放進場景樹。
-# 沿用 agent.tscn（跟 Agent/Agent2 同一份場景）——動態生成的角色目前沒有
-# schedule 來源，_load_schedule() 查不到節點名對應的 assignments 會噴一次
-# 警告一次錯誤，那是誠實反映「這隻角色還沒有行程表」，不是這個指令壞了
+# 沿用 agent.tscn（跟 Agent/Agent2 同一份場景）——spawn_character() 會清空
+# schedule_template 並標記 schedule_optional，_load_schedule() 對動態生成的
+# 角色直接走無排程路徑，不會噴「沒有行程表」的警告與錯誤（#1003）
 const AGENT_SCENE := preload("res://scenes/agent.tscn")
 
 func _cmd_spawn(args: PackedStringArray) -> void:
