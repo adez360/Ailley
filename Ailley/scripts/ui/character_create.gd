@@ -606,8 +606,11 @@ func _refresh_style_buttons() -> void:
 		_style_buttons[i].button_pressed = (i == _style_selected)
 
 
-## 左側模板長條：只列未投放的模板（deployed=true 的已經是場上實體，
-## 該去側欄「在場角色」看，不該再當模板選）
+## 左側模板長條：只列未投放的模板，外加「已下葬屍體」例外（issue #999）——
+## deployed=true 但場上肉體已死亡且安葬、玩家確定不付費復活的角色，列上提供
+## 「永久移除」釋放投放名額；目前化身角色的屍體不列（remove_from_library()
+## 拒絕刪化身）。其他已投放角色（活的、未葬屍體）仍然只在側欄「在場角色」
+## 出現，不該當模板選
 func _refresh_template_list() -> void:
 	_template_capacity_label.text = L10n.tf("UI_CL_CAPACITY", {
 		"used": GameManager.character_library.size(), "max": GameManager.CHARACTER_LIBRARY_CAP,
@@ -621,9 +624,10 @@ func _refresh_template_list() -> void:
 
 	var templates: Array[Dictionary] = []
 	for entry in GameManager.character_library:
-		if not entry.get("deployed", false):
+		if not entry.get("deployed", false) \
+				or (entry.get("id", "") != GameManager.embodied_character_id \
+					and GameManager.is_library_entry_buried(entry.get("id", ""))):
 			templates.append(entry)
-
 	if templates.is_empty():
 		var empty := Label.new()
 		empty.text = "UI_CL_EMPTY"
@@ -637,13 +641,16 @@ func _refresh_template_list() -> void:
 ## row 本身是 HBoxContainer，靠 gui_input 偵測點擊——這一列裡面還有「操控」跟
 ## 刪除兩顆真的 Button，整列包成一顆 Button 會把它們的點擊吃掉（側欄那邊沒有
 ## 這個限制，已改成 character_row.tscn 的 Button）。刪除鈕預設
-## mouse_filter=STOP 會先吃掉那次點擊，不會連帶觸發 row 的套用
+## mouse_filter=STOP 會先吃掉那次點擊，不會連帶觸發 row 的套用。
+## 已下葬屍體列（issue #999）不可套用也不可投放，整列只有「永久移除」一顆鈕
 func _template_row(entry: Dictionary) -> Control:
 	var id: String = entry.get("id", "")
+	var buried := entry.get("deployed", false) and GameManager.is_library_entry_buried(id)
 
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
-	row.gui_input.connect(_on_template_row_gui_input.bind(id))
+	if not buried:
+		row.gui_input.connect(_on_template_row_gui_input.bind(id))
 
 	var name_label := Label.new()
 	name_label.auto_translate_mode = Node.AUTO_TRANSLATE_MODE_DISABLED
@@ -653,6 +660,25 @@ func _template_row(entry: Dictionary) -> Control:
 	name_label.add_theme_color_override("font_color", BARK)
 	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(name_label)
+
+	if buried:
+		var buried_tag := Label.new()
+		buried_tag.text = "UI_CL_BURIED_TAG"
+		buried_tag.add_theme_color_override("font_color", CLAY)
+		buried_tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(buried_tag)
+
+		var remove_button := Button.new()
+		# 永久移除（issue #999）：收掉場上屍體節點、整筆刪除角色庫紀錄，釋放
+		# 一個 DEPLOY_CAP 名額。deployed 紀錄能不能刪的授權在 GameManager
+		# .remove_from_library() 的已葬例外裡，這裡不重複判斷；共用「×」鈕的
+		# _on_template_delete_pressed()，刪完同樣刷新清單
+		remove_button.text = "UI_CL_BTN_REMOVE_BURIED"
+		remove_button.focus_mode = Control.FOCUS_NONE
+		remove_button.add_theme_color_override("font_color", EMBER)
+		remove_button.pressed.connect(_on_template_delete_pressed.bind(id))
+		row.add_child(remove_button)
+		return row
 
 	var deploy_button := Button.new()
 	# 投放成一般 NPC（issue #974）：deploy_from_library(id, false)，跟「操控」
