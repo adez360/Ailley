@@ -749,13 +749,17 @@ static func _validate_tip(data: Variant) -> Dictionary:
 
 # persuade 專屬的 params 驗證（#227）：target／reason 必填非空字串，
 # proposed_task 選填——有填就重用 _validate_task_shape() 驗證它的形狀
-# （跟一般任務同一套邊界），不驗證內容合理性。reason 是說服的理由，自由
-# 文字、不驗證、不二次判定——跟 persuaded 同一套「不驗證心智
-# 判斷內容」的原則，這裡只驗證格式，不驗證說服的理由站不站得住腳。
-# 刻意擋掉 proposed_task.action == "persuade"：巢狀說服（說服對方去說服
-# 別人）語意混亂，不是這個機制要支援的情境
+# （跟一般任務同一套邊界），不驗證內容合理性。corpse_names 原樣穿透給
+# _validate_task_shape()（PR #992 review 抓到）：proposed_task 可以是
+# bury，跟 tasks[] 裡的 bury 任務用同一份屍體白名單，不能因為走了
+# persuade 路徑就少比對（唯一呼叫端 validate_tasks() 拿到的就是同一份
+# 清單）。reason 是說服的理由，自由文字、不驗證、不二次判定——跟
+# persuaded 同一套「不驗證心智判斷內容」的原則，這裡只驗證格式，不驗證
+# 說服的理由站不站得住腳。刻意擋掉 proposed_task.action == "persuade"：
+# 巢狀說服（說服對方去說服別人）語意混亂，不是這個機制要支援的情境
 static func _validate_persuade_params(
-	params: Variant, now_minutes: int, visible_names: Variant = null
+		params: Variant, now_minutes: int, visible_names: Variant = null,
+		corpse_names: Variant = null
 ) -> Dictionary:
 	if not params is Dictionary:
 		return _fail(ERROR_BAD_SHAPE)
@@ -792,7 +796,7 @@ static func _validate_persuade_params(
 		var proposed_task := proposed as Dictionary
 		if proposed_task.get("action") == "persuade":
 			return _fail(ERROR_BAD_SHAPE)
-		var proposed_result := _validate_task_shape(proposed_task, now_minutes, visible_names)
+		var proposed_result := _validate_task_shape(proposed_task, now_minutes, visible_names, corpse_names)
 		if not proposed_result["ok"]:
 			return _fail(proposed_result["error"])
 		normalized["proposed_task"] = proposed_result["data"]
@@ -845,7 +849,7 @@ static func validate_tasks(
 		# 共用邊界檢查與最後 append 進 tasks[] 的是同一份乾淨資料，不是模型
 		# 的原始輸入
 		if task.get("action") == "persuade":
-			var persuade_result := _validate_persuade_params(task.get("params"), now_minutes, visible_names)
+			var persuade_result := _validate_persuade_params(task.get("params"), now_minutes, visible_names, corpse_names)
 			if not persuade_result["ok"]:
 				return _fail(persuade_result["error"])
 			task = task.duplicate()

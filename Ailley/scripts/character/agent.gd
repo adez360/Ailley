@@ -2387,16 +2387,30 @@ func _on_spotted(other: Character) -> void:
 	# _on_action_interrupted() 那道 is_dead 判斷擋不到這裡——這是 vision.gd
 	# 訊號直接觸發的外部事件回呼，死屍仍會被場上其他角色「第一次注意到」，
 	# 沒擋的話會 say() 台詞、甚至問一次 LLM 決策
-	if is_dead or is_in_conversation():
+	if is_dead:
 		return
 
 	# 看到遺體（PR #992 review）：死人不進 context.visible（issue #986，見
 	# vision.gd 的排除），但「看到屍體」是該讓 Agent 知道的事實——排一筆
 	# 事實句給下一次決策，要不要在意、要不要安葬交給模型自己判斷（《00》
 	# 原則二）。vision.gd 只在屍體進入視野那一刻發 spotted（邊緣觸發），
-	# 持續在視野不會重複發
+	# 持續在視野不會重複發。
+	# 這條分流要放在 is_in_conversation() 早退之前（PR #992 第二輪 review
+	# 抓到）：記事實句不 say()、不觸發決策，不會打斷對話——對話中第一次
+	# 看見屍體同樣該記下來。同一具屍體（同名）的事實句若還排在
+	# _pending_fact_lines 裡（送出後等回應套用才消費，見該變數的說明）就
+	# 不重複排——屍體離開視野又回來會再發一次 spotted，沒去重的話同一句
+	# 會疊好幾筆擠進 prompt
 	if other.is_dead:
-		_pending_fact_lines.append("你看到 %s 的遺體。" % other.character_name)
+		var corpse_line := "你看到 %s 的遺體。" % other.character_name
+		if not _pending_fact_lines.has(corpse_line):
+			_pending_fact_lines.append(corpse_line)
+		return
+
+	# 對話中不反應（原與 is_dead 同一個早退，PR #992 第二輪 review 拆開）：
+	# 正在說話時不排 L3 檢索、不記首次注意、不觸發反應決策——這些才是會
+	# 打斷對話的行為；屍體事實句不受此限，見上
+	if is_in_conversation():
 		return
 
 	# 《03》§7 觸發時機表「遇到未在 L1 出現過的角色」（issue #571）：故意放在
