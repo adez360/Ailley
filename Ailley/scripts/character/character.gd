@@ -440,6 +440,11 @@ func _ready() -> void:
 	# 且會跟著 GameClock 的時間流速走，不會像 stats.gd 的連續 drift 那樣綁死真實秒數
 	GameClock.time_changed.connect(_on_game_minute)
 
+	# 明確事件造成的數值變動 → 頭上飄一塊「飽足感 +40」（issue #951）。自然
+	# 漂移不會走到這裡（stats.gd::add() 只在 announce=true 時發訊號）
+	if stats != null and money_popup != null:
+		stats.stat_changed.connect(_on_stat_changed)
+
 # 隨機的 UUID v4。刻意不帶任何語意 —— 擁有者、名字、行程都不編進去，
 # 那些各自是欄位。把 owner 寫進 id 的話，帳號系統一改就得替所有存檔寫遷移
 static func generate_id() -> String:
@@ -501,6 +506,16 @@ func _find_id_holder(id: String) -> Character:
 ## 判斷是否落在 tick 邊界上，不是每次都跑，也不是本地累加器——跟 Stats 漂移共用
 ## 同一個全域邊界，兩者永遠同步觸發。拿規格書自己的算例反查：joy intensity=60、
 ## stability=90、grudge=75 應該是 9 tick ≈ 1.5 小時（90 遊戲分鐘），不是 9 遊戲分鐘
+
+## 明確事件造成的數值變動 → 頭上飄一塊「<欄位> +N」（issue #951）。欄位名走
+## Stats.SPEC 的 label 翻譯 key（STAT_*），跟金錢的 UI_STATUS_MONEY 共用
+## money_popup.show_change()。四捨五入成整數顯示——小數點對玩家沒意義
+func _on_stat_changed(key: String, delta: float) -> void:
+	var amount := int(round(delta))
+	if amount == 0:
+		return
+	money_popup.show_change(Stats.SPEC[key]["label"], amount)
+
 
 func _on_game_minute(_hour: int, _minute: int) -> void:
 	# 昏迷與治療檢查每遊戲分鐘執行（與 GameClock.time_changed 同步）
@@ -1705,7 +1720,7 @@ func _run_work(workstation: Workstation, session_id: int) -> void:
 	if inventory != null:
 		inventory.add_money(WORK_PAYMENT)
 		if money_popup != null:
-			money_popup.show_change(WORK_PAYMENT)
+			money_popup.show_change("UI_STATUS_MONEY", WORK_PAYMENT)
 
 # 收尾：放掉工作站、清狀態與進度條。**撥款不在這裡**——做滿全程才給，
 # 半途放棄走的是同一條收尾路徑但沒有那一行
@@ -1770,7 +1785,7 @@ func buy_from(place: String, item_id: String) -> String:
 	# 退款的路徑不會走到這裡——買賣真的成立、錢是真的扣了，才值得頭上飄一個
 	# -N。中途失敗退款的話淨變動是 0，飄出來只會讓人以為扣了又加，很奇怪
 	if money_popup != null:
-		money_popup.show_change(-price)
+		money_popup.show_change("UI_STATUS_MONEY", -price)
 
 	return BUY_OK
 

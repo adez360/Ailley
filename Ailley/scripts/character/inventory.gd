@@ -330,7 +330,9 @@ func use_item(item_id: String, stats: Stats, effects: Dictionary, is_consumable:
 		deltas["health"] = deltas.get("health", 0.0) + decay_penalty
 
 	for key in deltas:
-		stats.add(key, deltas[key])
+		# announce=true：吃喝／用道具是玩家剛做的明確事件，值得在頭上飄一塊
+		# 「飽足感 +40」（issue #951）
+		stats.add(key, deltas[key], true)
 
 	var remove_reason := remove_item(item_id, 1)
 	if remove_reason != REMOVE_OK:
