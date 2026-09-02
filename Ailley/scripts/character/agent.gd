@@ -17,6 +17,16 @@ extends Character
 ## 誰用哪份行程是資料，寫在資料檔裡才有辦法逐隻不同。
 @export var schedule_template := ""
 
+## 動態投放的角色（建角面板投放／存檔還原／debug spawn）由
+## GameManager.spawn_character() 在 add_child() 之前標記 true：這類角色的
+## schedule_template 是被刻意清空的（見 game_manager.gd 同段註解），代表
+## 「這隻角色本來就不接排程」，不是資料漏填——_load_schedule() 對它們直接
+## 走無排程路徑，不報 assignments 查不到／模板空的警告與錯誤（#1003）。
+## 場景固定 NPC 維持 false：assignments 與場景預設值都空仍然代表
+## npc_schedule.json 資料出錯，照常報。spawn_character() 用 get()/set()
+## 存取這個欄位（player.tscn 沒有它，get() 回 null 自動跳過）
+var schedule_optional := false
+
 ## 決策迴圈開關（#88）：開啟後 LLM 任務完成時會觸發下一次決策請求，
 ## 經 AISchema 驗證後推進 _tasks，跟仲裁器裡其他來源的任務公平競爭。
 ##
@@ -953,6 +963,11 @@ func _actual_place_of(character: Character) -> String:
 func _load_schedule() -> void:
 	_warn_if_node_name_shared()
 
+	# 動態投放的角色刻意不接排程（spawn_character() 清空 schedule_template
+	# 並標記 schedule_optional）——直接走無排程路徑，不查 assignments
+	# （UUID 節點名必然查不到），也不報下面的警告與錯誤（#1003）
+	if schedule_optional:
+		return
 	var assigned := GameManager.get_schedule_template(name)
 	if assigned.is_empty():
 		# 退回 @export 是允許的，但那個預設值是所有 instance 共用的，靜默退回

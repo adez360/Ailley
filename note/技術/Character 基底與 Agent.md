@@ -146,6 +146,9 @@ no-op），`_ensure_unique_id()` 換掉 `character_id` 後呼叫它；`player.gd
 退回時會 `push_warning`。退回本身是允許的，但因為 `agent.tscn` 的預設值
 所有 instance 共用，靜默退回的結果就是兩隻走同一份行程 —— 正是這個機制要防的事。
 漏寫 `assignments` 遠比刻意不指派常見，所以寧可吵。
+這套查表只適用場景固定 NPC——動態投放的角色（建角面板投放／存檔還原／
+debug spawn）由 `spawn_character()` 標記 `schedule_optional`，
+`_load_schedule()` 直接走無排程路徑，不進這個查表（見 [[角色庫與投放]]）。
 
 > [!important] key 用節點名，不用 `character_id`
 > id 是生成的 UUID，人在 json 裡手寫不出來。
