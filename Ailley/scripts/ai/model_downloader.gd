@@ -63,13 +63,14 @@ static func _compute_model_url() -> String:
 # 的既有慣例，不是新發明一套數字
 const RETRY_LIMIT := 1
 
-# 下載前的最低可用空間門檻，抓寬一點（模型＋執行檔本身，加上解壓過程需要
-# 的暫存空間）——精確估計留給實作時對著真實檔案大小算，這裡先用一個粗略
-# 但夠用的門檻，防的是「連下載都下不完就先把磁碟塞爆」這種最壞情況
-const MIN_FREE_SPACE_BYTES := 8 * 1024 * 1024 * 1024  # 8 GB
 
 var _http: HTTPRequest
 var _cancelled := false
+# _download_to_file() 進場時填上，_process() 靠它們在下載期間每幀回報進度；
+# _download_dest 另外讓 cancel() 刪得到寫到一半的檔案
+var _progress_stage: Stage = Stage.CHECKING_SPACE
+var _expected_size := 0
+var _download_dest := ""
 
 
 static func is_platform_supported() -> bool:
@@ -87,10 +88,9 @@ func start() -> void:
 
 	progress_updated.emit(Stage.CHECKING_SPACE, 0, 0)
 	if not _has_enough_free_space():
-		finished.emit(
-			false,
-			"磁碟空間不足，至少需要 %.1f GB 可用空間" % (MIN_FREE_SPACE_BYTES / 1073741824.0)
-		)
+		# 這個檢查實際上是「試寫 probe 檔確認 sidecar 目錄寫得進去」，不是
+		# 精確的剩餘容量查詢（Godot 沒有跨平台 API），錯誤訊息要跟檢查本身相符
+		finished.emit(false, "無法寫入 sidecar 目錄，請檢查權限與磁碟空間")
 		return
 
 	var binary_ok := await _download_binary()
@@ -114,6 +114,25 @@ func cancel() -> void:
 	_cancelled = true
 	if _http != null and is_instance_valid(_http):
 		_http.cancel_request()
+		# cancel_request() 之後 request_completed 不保證會發，不能指望
+		# _download_to_file 裡的 await 自己醒來善後——這裡直接釋放節點、
+		# 刪掉寫到一半的檔案
+		_http.queue_free()
+		_http = null
+		if not _download_dest.is_empty():
+			DirAccess.remove_absolute(_download_dest)
+	# 取消就是結束：不管當下在下載什麼（甚至還沒開始），統一在這裡發
+	# finished，呼叫端收到就能把 UI 收掉，不用另外監聽別的狀態
+	finished.emit(false, "已取消下載")
+
+
+func _process(_delta: float) -> void:
+	# 進度輪詢放在這裡而不是下載協程裡：request() 之後主流程就停在
+	# await request_completed 上；狀態輪詢迴圈會在 DISCONNECTED 時跳出、
+	# 之後才 await 訊號，跟訊號發送時序相衝。_process 每幀照常跑，_http
+	# 還活著就回報當下位元組數
+	if _http != null:
+		progress_updated.emit(_progress_stage, _http.get_downloaded_bytes(), _expected_size)
 
 
 func _has_enough_free_space() -> bool:
@@ -193,7 +212,12 @@ func _download_model() -> bool:
 ## 再用 download_file 直接串流寫檔，_process() 期間輪詢位元組數發 progress_updated。
 ## 完成後比對實際檔案大小跟 Content-Length，對不上視為下載不完整
 func _download_to_file(url: String, dest_path: String, stage: Stage) -> bool:
+	# stage 與 expected size 存進成員變數，進度由 _process() 輪詢發出，
+	# 這裡只負責送出請求後等結果
+	_progress_stage = stage
+	_download_dest = dest_path
 	var expected_size := await _fetch_content_length(url)
+	_expected_size = expected_size
 
 	_http = HTTPRequest.new()
 	_http.use_threads = true
@@ -206,17 +230,14 @@ func _download_to_file(url: String, dest_path: String, stage: Stage) -> bool:
 		_http = null
 		return false
 
-	while _http.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
-		if _cancelled:
-			return false
-		progress_updated.emit(stage, _http.get_downloaded_bytes(), expected_size)
-		await get_tree().process_frame
-
 	var response: Array = await _http.request_completed
 	var result: int = response[0]
 	var response_code: int = response[1]
-	_http.queue_free()
-	_http = null
+	# cancel() 可能已經釋放節點並清掉 _http（訊號若在釋放前發出，這段
+	# 協程仍會被喚醒），別對已釋放的節點再 queue_free 一次
+	if _http != null and is_instance_valid(_http):
+		_http.queue_free()
+		_http = null
 
 	if result != HTTPRequest.RESULT_SUCCESS or response_code < 200 or response_code >= 300:
 		DirAccess.remove_absolute(dest_path)
@@ -283,6 +304,11 @@ func _extract_zip(zip_path: String, target_dir: String) -> bool:
 		if relative.is_empty():
 			continue
 		var out_path := target_dir.path_join(relative)
+		# zip-slip 防呆：zip 內條目名可能夾帶「..」，不解驗就 path_join 會
+		# 寫出 target_dir 之外。simplify_path() 後對照目標目錄前綴，越界整包拒解
+		if not out_path.simplify_path().begins_with(target_dir.simplify_path().path_join("")):
+			reader.close()
+			return false
 		DirAccess.make_dir_recursive_absolute(out_path.get_base_dir())
 		var out_file := FileAccess.open(out_path, FileAccess.WRITE)
 		if out_file == null:

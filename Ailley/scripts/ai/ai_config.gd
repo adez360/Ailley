@@ -313,19 +313,35 @@ static func update_provider_model(provider_name: String, model: String) -> bool:
 		return false
 
 	var data: Dictionary = json.data
-	var providers: Dictionary = data.get("providers", {})
+	# 用 Variant 接再驗型——玩家把 "providers" 改成非物件（例如字串）時，
+	# 型別標註 Dictionary 會直接炸型別錯誤，這裡要的是乾脆回 false
+	var raw_providers: Variant = data.get("providers", {})
+	if not raw_providers is Dictionary:
+		return false
+	var providers: Dictionary = raw_providers as Dictionary
 	if not providers.has(provider_name) or not providers[provider_name] is Dictionary:
 		return false
 
 	(providers[provider_name] as Dictionary)["model"] = model
-	data["providers"] = providers
 
 	var out := FileAccess.open(CONFIG_PATH, FileAccess.WRITE)
 	if out == null:
 		return false
+	# store_string() 失敗（例如磁碟滿）不能只回 false——留在磁碟上的半份
+	# 內容會讓下次 load_from_user() 誤判成 AI_STATUS_BAD_JSON。比照
+	# _write_default_config()：push_error 後刪檔，退回「檔案不存在」狀態
 	var write_ok := out.store_string(JSON.stringify(data, "\t"))
 	out.close()
-	return write_ok
+	if not write_ok:
+		push_error("AIConfig: 寫回 %s 失敗" % CONFIG_PATH)
+		var remove_err := DirAccess.remove_absolute(CONFIG_PATH)
+		if remove_err != OK:
+			push_error(
+				"AIConfig: 清理寫壞的 %s 失敗（錯誤碼 %d），下次啟動可能誤判成 AI_STATUS_BAD_JSON"
+				% [CONFIG_PATH, remove_err]
+			)
+		return false
+	return true
 
 
 # 分開成一個方法是為了讓測試與未來的「設定 UI」能餵 Dictionary 進來，不必落地成檔案
