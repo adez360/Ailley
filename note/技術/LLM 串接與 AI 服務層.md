@@ -332,8 +332,7 @@ user:   <下方 JSON 字串化>                                    ← 每次變
 > [!success] 已定案 —— 拿掉 `MAX_TURNS`，改由 Agent 判斷
 > 原本「講滿 6 輪就散」不是人類行為，是計時器。改成每一輪的回傳多一個
 > `end` 欄位，由說話的一方自己決定要不要收尾：`{"line": "那我先去忙了，改天聊", "end": true}`。
-> `end` 省略視為 `false`。收尾語就是它自己那句話，`DialogueLines.closing()`
-> 不再參與正常流程，只留給 fallback。
+> `end` 省略視為 `false`。收尾語就是它自己那句話。
 >
 > **正常結束 ＝ 有人決定結束**（`ENDED_BY_SPEAKER`），`TOO_FAR` / `INTERRUPTED`
 > 維持原樣仍是「沒好好講完」——這條原則跟 [[talk 動作設計]] 原本的
@@ -449,9 +448,8 @@ max_dialogue_calls_per_game_day`，不是 `>`——跟既有
 `count > max` 會讓計數剛好等於上限那一次仍被放行），達到就回傳跟現有
 冷卻／配額檢查一樣的 `{"ok": false, ...}`。**沒有額外的降級邏輯**：
 `next_line()` 收到 `ok=false` 走既有路徑，
-`conversation.gd::_finish_with_fallback()` 自動說一句
-`DialogueLines.closing()` 收尾，跟現有 LLM 失敗／逾時的降級一模一樣，
-玩家體感上看不出差異，只是提早收尾。
+`conversation.gd::_finish_with_fallback()` 靜默結束、不補台詞（issue #949），
+跟現有 LLM 失敗／逾時的降級一模一樣，只是提早收尾。
 >
 > [!important] 這個旋鈕只在 `dialogue_exempt=true` 時才有意義（CodeRabbit review 抓到）
 > `_is_exempt(policy)` 只有 `policy == CONVERSATION and dialogue_exempt` 才成立；
@@ -494,8 +492,8 @@ LLM 之後（issue #630／《99》P-67），這個扣減不再成立，同一份
 驗證失敗重試的發生率，這三項都還沒有數據支持目前 150 這個預設值。
 
 > [!important] 但 fallback 一定要能終止
-> LLM 失敗／逾時時走 `DialogueLines`，而它**沒有 `end` 訊號**——不特別處理就會
-> 無限吐模板句。fallback 要直接說一句 `DialogueLines.closing()` 並結束對話。
+> LLM 失敗／逾時時 `conversation.gd::_finish_with_fallback()` 直接靜默結束、
+> 不補台詞（issue #949），不會有「拿不到 `end` 訊號就無限吐台詞」的循環。
 
 ### 台詞來源抽象
 
@@ -662,13 +660,13 @@ autoload 已註冊，主控台加了 `ai` 指令。
 ### Step 1 — 對話 ✅ 完成
 
 `PromptBuilder.build_dialogue_envelope()` 組信封，`Agent.next_line()` 打
-`AIService`，`conversation.gd` 改成非同步、等台詞時掛「…」氣泡、拿不到就退回
-`DialogueLines`。`MAX_TURNS` 換成 `SAFETY_MAX_TURNS`（純保險，收尾由 `end` 欄位決定），
+`AIService`，`conversation.gd` 改成非同步、等台詞時掛「…」氣泡、拿不到就靜默
+結束（issue #949）。`MAX_TURNS` 換成 `SAFETY_MAX_TURNS`（純保險，收尾由 `end` 欄位決定），
 `character.gd` 有 `signal spoke`，玩家在對話中打的字也送得進上下文。
 
 開場白（turn 0，被搭話的一方）也一律過 LLM（issue #630／《99》P-67），多開放
-一個 `engage` 欄位，可以選擇不理會這次搭話；`DialogueLines.opening()` 只在
-turn 0 的 LLM 呼叫失敗時當 fallback 使用，跟 `closing()` 是同一種定位。
+一個 `engage` 欄位，可以選擇不理會這次搭話；LLM 呼叫失敗時靜默結束、不補
+台詞（issue #949）。
 
 ### Step 2 — 任務池與仲裁器 ✅ 完成
 
@@ -923,22 +921,22 @@ poc 輸出裡有、《06》沒提到的欄位：`reasoning`／`inner_monologue`�
 沒有回饋、3 秒後突然講話/移動的話體感會很差。正式線接對話與行程時會碰到
 同一個數量級。
 
-**體感層面的解法（#480，2026-08-27 落地）**：`Agent._request_next_decision()`
-在確定要送出請求、真正打網路之前，套用跟 `next_line()`（Step 1 對話）
-完全同一招——`say(AI_THINKING_TEXT, true, false)` 立刻蓋一顆「…」氣泡，
-`interrupt=true` 蓋掉正在顯示的舊訊息。不縮短延遲本身，只讓觸發當下不是
-死寂一片。
+**體感層面的解法（#480，2026-08-27 落地；#949 B 類改呈現方式）**：
+`Agent._request_next_decision()` 在確定要送出請求、真正打網路之前，套用跟
+`next_line()`（Step 1 對話）完全同一招——`thinking_indicator.show_indicator()`
+在角色頭上冒 dots 動畫。不縮短延遲本身，只讓觸發當下不是死寂一片。決策回來
+（`_awaiting_decision = false` 之後）呼叫 `hide_indicator()` 收掉。
 
-> [!note] 「…」氣泡撐不滿整段等待，是刻意接受的取捨
-> `bubble.gd::say()` 的顯示時長跟著文字長度算（`MIN_DURATION` 1.2 秒），
-> 「…」只有一個字，1.2 秒後就自動收掉——比 2.5-4 秒的實測延遲短，決策
-> 真正回來前氣泡多半已經消失。`next_line()` 的既有取捨是「早一點給回饋
-> 比精準對齊網路延遲更重要」，這裡沿用同一個立場，沒有另外做「撐滿整段
-> 等待」的機制（例如改用不會自動收掉的 `hold()`）。用 `game_eval` 直接呼叫
-> `_request_next_decision()` 白箱驗證過：`spoke` 訊號確實以 `"…"` 觸發、
-> 氣泡當下 `visible=true`、且會蓋掉呼叫當下正在顯示的舊訊息。角色停下腳步
-> 做「在想事情」小動作是筆記原本提過的替代方案，#480 沒有採用，兩案只能
-> 二選一時選了跟對話一致、成本較低的氣泡方案。
+> [!note] 指示的收掉時機
+> `thinking_indicator` 有 `MAX_VISIBLE_SECONDS` 安全上限自己收——數值從
+> `AIConfig.DEFAULT_TIMEOUT` 推導：最壞情況是 provider 逾時（20 秒，#852）後
+> 驗證失敗重試最多 2 次（`remote_llm_provider.gd::max_validation_retries()`），
+> 1＋2 次都吃滿逾時再加 5 秒 margin，合計 65 秒。
+> 正常情況下決策回來（`_awaiting_decision = false`）就主動 `hide_indicator()`，
+> 撐得滿 2.5-4 秒的實測延遲。`next_line()`（對話思考）不走這個收掉點，靠
+> `say()` 收——拿到台詞開口說話就是「思考結束」最準的訊號。詳見
+> [[talk 動作設計]]「系統正在等的指示不塞在對話氣泡裡」。角色停下腳步做
+> 「在想事情」小動作是筆記原本提過的替代方案，沒有採用。
 
 **縮短延遲本身的槓桿（另一方向，尚未實作）**：`REASONING_INSTRUCTION` 的
 100 字上限是延遲/品質的直接槓桿，往下砍會更快但決策品質會掉；其他槓桿是模型
@@ -1093,7 +1091,8 @@ llama-server 在跑，`local` provider 的探測固定逾時（約 10 秒，
 
 - `AIService` 的用量統計（`calls_today`／`cooldown_left`／配額）是逐
   `requester_id`（`character_id`）分開算的，兩隻角色同時打不會互相污染
-  彼此的冷卻或配額，`POOL_SIZE=3` 的節點池在這個規模下沒有觀察到排隊卡住
+  彼此的冷卻或配額。`pool_size=3` 的節點池排隊行為見下一節（issue #867，
+  2 隻角色的規模不足以撞到 3 個節點的上限，沒測到東西不代表沒有風險）
 - `context.visible` 確實會把另一隻看得到的 NPC 列進去，`talk`／`give`／
   `persuade`／`attack` 這幾個需要 `target` 的動作理論上都能選到對方
   （不是只能選玩家）
@@ -1101,6 +1100,46 @@ llama-server 在跑，`local` provider 的探測固定逾時（約 10 秒，
   觀察到 NPC 對 NPC 的 `talk`/`give`/`persuade`/`attack` 真的被選中執行
   ——這條路徑機制上打得通，但端到端沒有被這次測試驗證到，需要更長的
   觀察窗（或用 `debug_push_task()` 強制塞一筆去驗執行層）才能確認
+
+## 節點池 pool_size=3 在併發下確實會排隊，但目前 5 隻村民的規模不需要調高（issue #867，2026-09-02 實測）
+
+- 用 `game_eval` 直接對 `AIService.request()` 發 5 筆併發 `SCHEDULED` 請求
+  （跳過角色投放與 `debug_set_llm_decision()` 的 readiness 關卡，直接測
+  `AIService` 自己的池子邏輯——這條路徑跟真正角色的決策請求完全共用同一個
+  `request()`/`_pump()`/`_queue`，測起來等價，而且不用等真的 LLM 伺服器）：
+  `_busy` 立刻頂到 3（`pool_size` 上限），剩下 2 筆進 `_queue` 排隊——
+  `get_usage()` 回傳的 `in_flight`/`queued` 精確反映這個狀態，跟設計文件
+  （見 `main_scene.gd::_apply_startup_ai_state()` 的註解）描述的機制一致。
+- 逾時（`RESULT_TIMEOUT`）確認不會在 `AIService` 這層重試（`_interpret()`
+  明寫理由：已經燒掉一整個 timeout，重試等於讓呼叫端等兩倍），所以每個
+  卡住的請求只佔用節點池一次 timeout 的時間，不會因為內部重試被拉更長。
+- 目前場上固定村民只有 5 隻（`npc001`／`npc002`／`npc003`／`npc004`／
+  `npc006`），只有開場那一刻全部一起補打第一次決策時才可能同時逼近 5 個
+  並發（`main_scene.gd` 的補打迴圈刻意不逐隻 `await`，就是為了讓池子／
+  佇列自己排，見它自己的註解）；遊戲中途的排程觸發是事件驅動、不是固定
+  tick，天生會錯開，正常遊玩幾乎不會有 5 隻同時打。結論：以目前的角色
+  規模，`pool_size=3` 最壞情況只會讓 2 隻角色的第一次決策多等一輪
+  （timeout 從 10 秒調到 20 秒之後，這個「多等一輪」的代價也從約 10 秒
+  變約 20 秒——這是 #866 調高 timeout 帶來的真實副作用，量級不大但存在），
+  不到需要調高 `pool_size` 的程度；角色數量之後如果明顯超過 5，這個結論
+  要重新評估。
+
+### 測試環境的連線逾時雜訊（跟上面同一批測試，不是 AIService 的問題）
+
+刻意讓 `local` provider 連不上（不啟動 llama-server）來製造保證逾時的請求時，
+觀察到 `HTTPRequest` 實際耗時遠超過設定的 `timeout`（例如把 timeout 設成
+3 秒，實測要 9-10 秒才真的 `RESULT_TIMEOUT`；預設 20 秒的話超過 60 秒還
+沒逾時）。用 PowerShell `Test-NetConnection 127.0.0.1:8080` 直接測純 OS
+層級的 TCP 連線，同樣要 18 秒才回報連不上，證實這是**這台測試機的網路
+堆疊**本身回應 ECONNREFUSED 就慢，不是 Godot `HTTPRequest.timeout` 或
+`AIService` 沒有正確設定逾時。有沒有讓遊戲視窗拿到 focus 對這個延遲沒有
+影響（兩種都測過），排除了《Ailley/CLAUDE.md》「headless 環境 HTTPRequest
+較慢」那條警告的適用範圍——這次是在編輯器 Play 模式測的，一樣慢。
+
+對上面 `pool_size` 的結論沒有影響——池子／佇列機制本身測得到、行為正確；
+這裡只是誠實記錄「本機連不上時卡住多久」這個秒數在這台機器上量不準，
+換一台機器實測可能更接近設定值。真正會影響玩家的情境（本機模型真的在
+跑、只是回應慢）沒有這層環境雜訊，`timeout` 秒數本身仍然可信。
 
 ## 投放位置沒有邏輯，落在跟玩家無關的世界原點（issue #685，已修，PR 待開）
 

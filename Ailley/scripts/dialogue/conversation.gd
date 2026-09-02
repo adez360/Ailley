@@ -43,6 +43,11 @@ const REASON_INTERRUPTED := "INTERRUPTED"
 ## （複審 PR #667 抓到：原本兩者共用同一個 reason，誤觸發 note_meeting()）
 const REASON_IGNORED := "IGNORED"
 
+## fallback 收尾時（LLM 停用/逾時/驗證失敗，見 _finish_with_fallback()）連第一句
+## 都還沒講的結束原因：跟 REASON_IGNORED 分開——「引擎要不到台詞」不是任何
+## 一方選擇不理會，事實句不該寫成誰「不理會」誰（見 agent.gd::exit_conversation()）
+const REASON_NO_RESPONSE := "NO_RESPONSE"
+
 ## 聽者主動決定不再繼續聽（issue #691，《99》P-31）：跟 REASON_ENDED_BY_SPEAKER
 ## 分開，因為結束的決定權在聽者，不是講話那一方
 const REASON_ENDED_BY_LISTENER := "ENDED_BY_LISTENER"
@@ -52,6 +57,13 @@ var target: Character
 
 var _turns: Array[Dictionary] = []
 var _finished := false
+
+
+## 這場對話目前已經講出口的句數（含 fallback 補的那句）。
+## agent.gd::exit_conversation() 用它判斷中斷（TOO_FAR／INTERRUPTED）時
+## 到底有沒有真的交談過——一句都沒有就不能記成「講完話了」（issue #950）
+func turn_count() -> int:
+	return _turns.size()
 
 
 func _ready() -> void:
@@ -126,11 +138,10 @@ func _run() -> void:
 			return
 
 		# 被搭話的一方選擇不理會（issue #630）：只有 turn 0 才可能出現，之後
-		# 已經在聊，不會再有「要不要理」這個選項。原本直接 bubble.clear() 收掉
-		# next_line() 開頭顯示的「…」、什麼都不顯示——玩家分不出這跟「LLM 還在
-		# 想」的空窗期有什麼差別。改顯示一句能看出來的提示，不算真的說了話，
-		# broadcast=false 跟 AI_THINKING_TEXT 同一個理由（不該讓鄰近角色把它
-		# 當事實句聽見）
+		# 已經在聊，不會再有「要不要理」這個選項。只收掉思考中指示、什麼都不
+		# 顯示的話，玩家分不出這跟「LLM 還在想」有什麼差別——顯示一句能看出來
+		# 的提示（say() 會先收掉思考中指示）。不算真的說了話，broadcast=false
+		# 跟思考中指示同一個理由（不該讓鄰近角色把它當事實句聽見）
 		if turn == 0 and not result.get("engage", true):
 			if speaker.bubble != null:
 				speaker.say(L10n.t("DLG_IGNORED"), true, false)
@@ -176,27 +187,21 @@ func _speak(speaker: Character, line: String, interrupt: bool = false) -> void:
 	speaker.face_towards(target if speaker == initiator else initiator)
 	speaker.say(line, interrupt)
 
-# LLM 停用/逾時/驗證失敗，next_line() 統一回 ok=false，這裡收尾：說一句
-# DialogueLines 的模板句（唯一還在用它的地方，正常結束的台詞是 LLM 自己
-# 那句，不再另外補一句），然後正常結束——對玩家來說這場對話看起來很正常，
-# 差別只在收尾早了幾輪，不是任何看得出來的「壞掉」。is_opening=true（turn 0
-# 就失敗）時换成 opening()：這時候連第一句都還沒有，講「再見」不合理，
-# 比照 opening() 自己宣告的 fallback 定位（issue #630／《99》P-67）
-func _finish_with_fallback(speaker: Character, listener: Character, is_opening: bool = false) -> void:
-	# next_line() 裡的 await 讓出過控制權，speaker/listener 理論上可能在這段
-	# 期間被移出場景（跟 _process() 的 is_instance_valid 檢查是同一種顧慮）
-	if is_instance_valid(speaker) and is_instance_valid(listener):
-		var line := (
-			DialogueLines.opening(listener.character_name) if is_opening
-			else DialogueLines.closing()
-		)
-		_speak(speaker, line, true)
-		# fallback 這句也是真的說出口的一句，沒算進 _turns 的話，
-		# 之後任何依對話輪數／內容做的判定都會少算這一句
-		# （CodeRabbit review 抓到）
-		_turns.append(PromptBuilder.turn_entry(speaker.character_name, line))
-
-	_finish(REASON_ENDED_BY_SPEAKER)
+# LLM 停用/逾時/驗證失敗，next_line() 統一回 ok=false，這裡收尾。
+#
+# 不補任何台詞（issue #949／《00》原則二）：引擎冒一句「再見」是替角色決定
+# 了他的反應。改成靜默結束，「對方沒有回應／對話中斷」記成客觀事實句
+# （agent.gd::exit_conversation()），要不要在意、下一輪要不要再找對方，
+# 交給 AI 自己判斷。
+#
+# is_opening=true（turn 0 就失敗，連第一句都還沒講）走 REASON_NO_RESPONSE：
+# 引擎要不到台詞不是任何一方選擇不理會，跟 engage=false 的 REASON_IGNORED
+# 分開（見 REASON_NO_RESPONSE 的說明）；兩者都不觸發 _apply_rewards() 的
+# note_meeting()——一句話都沒交換不能算「認識」。
+# 非 is_opening（已經聊了幾輪才失敗）走 REASON_ENDED_BY_LISTENER：確實談過，
+# note_meeting() 照記，只是收尾早了幾輪、沒有道別。
+func _finish_with_fallback(_speaker: Character, _listener: Character, is_opening: bool = false) -> void:
+	_finish(REASON_NO_RESPONSE if is_opening else REASON_ENDED_BY_LISTENER)
 	queue_free()
 
 # 被外部打斷（例如玩家走開、角色要去做別的事）

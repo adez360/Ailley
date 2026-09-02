@@ -50,9 +50,9 @@ func _can_open() -> bool:
 		return true
 	if player.can_queue_line():
 		return true
-	# 顯示成角色頭上的泡泡，不做另一個 UI 元件——跟 DLG_SURPRISE／
-	# DLG_NOISE_ALERT 那類系統提示同一種做法。broadcast=false：這不是玩家
-	# 真的說了什麼，不該讓鄰近角色把它當事實句聽見
+	# 顯示成角色頭上的泡泡，不做另一個 UI 元件——跟 conversation.gd 的
+	# DLG_IGNORED、本檔的 DLG_TOO_FAST 那類系統提示同一種做法。
+	# broadcast=false：這不是玩家真的說了什麼，不該讓鄰近角色把它當事實句聽見
 	player.say(L10n.t("DLG_TOO_FAST"), true, false)
 	return false
 

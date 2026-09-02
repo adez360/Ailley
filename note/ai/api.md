@@ -137,7 +137,7 @@ func is_talk_interruptible() -> bool          # 基底 `not _working`；Agent �
 func enter_conversation(conversation: Node) -> void
 func exit_conversation() -> void
 func leave_conversation() -> void
-func say(line: String, interrupt := false, broadcast := true) -> void   # interrupt=true 蓋掉現在這句；broadcast=false 給系統內部泡泡（!?／！／AI_THINKING_TEXT「…」）用，不廣播 speech_heard，避免鄰近 LLM 角色連環反應（issue #669）
+func say(line: String, interrupt := false, broadcast := true) -> void   # interrupt=true 蓋掉現在這句；broadcast=false 給系統內部泡泡（!?／！／DLG_IGNORED）用，不廣播 speech_heard，避免鄰近 LLM 角色連環反應（issue #669）。「思考中」指示已改用 thinking_indicator 節點、不走 say()（issue #949）
 func speech_duration(line: String) -> float
 func face_towards(other: Character) -> void
 func update_animation(desired_velocity: Vector2) -> void   # facing 讀解算前的期望方向，不是解算後的 velocity（#108）
@@ -241,7 +241,6 @@ Player 不接 speech_heard（issue #669）：說話的人本來就會冒對話�
 @export var decision_source := "local"       # "local"/"cloud"，佔位欄位，真正資料結構見 #122
 @export var model_name := ""                 # decision_source=="cloud" 時的 AIConfig provider 名字
 
-const NOTICE_PAUSE := 2.0
 const SCHEDULE_BASE_PRIORITY := 10.0         # schedule 任務的 base 分數
 const TIME_BONUS := 100.0                    # 在 window 內加這麼多
 const HYSTERESIS := 5.0                      # 要贏現任務這麼多分才換
@@ -350,18 +349,20 @@ _ready: await nav.grid_built 才出發（NavGrid 非同步建置，太早→空�
 _reevaluate()（掛 GameClock.time_changed，一遊戲分鐘一次）：
   1. llm_decision_enabled 時偵測目前 llm 任務是否做滿 duration，是則觸發下一次決策請求
   2. 濾掉過期(_is_expired)／不在窗內的候選，算分取 best，_consider_switch() 決定要不要換
-  3. 不管換沒換都跑 _pursue_current_task()（對話中/工作中/_reacting 時不移動）
+  3. 不管換沒換都跑 _pursue_current_task()（對話中/工作中/表演中時不移動）
 _on_move_finished()：move_finished 是共用訊號（debug 主控台的 goto 也會發），
   靠 last_move_target 比對是不是自己 current_place 的錨點才算數（issue #91）
-spotted 且 !relationships.has_met() → say("！") + stop_moving() + 2s + 重算行程
+spotted 且 !relationships.has_met() → 事實句「你第一次注意到 %s」記入 _daily_events；
+  llm 開著時再排進 _pending_reaction_lines + 立刻請求決策（issue #949，引擎不寫死「！」反應）
   _noticed 表確保每個對象只觸發一次
-noise_heard 且 !is_in_conversation() → say("!?", false, false)，無去重，每次都會反應
-  （broadcast=false：fallback 泡泡不再觸發 speech_heard，PR #674，見下）
+noise_heard 且 !is_in_conversation() → 事件記入 _daily_events；llm 開著時排隊 + 立刻請求決策，
+  無去重，每次都記（引擎不冒寫死 !?，issue #949；玩家側 player.gd 冒 !?，broadcast=false，PR #674）
 speech_heard 且 !is_in_conversation()（issue #669）：
   llm_decision_enabled 開著 → 事實句「你聽到附近的 X 說：『...』」排隊 + 立刻請求下一次決策，
-    問不到結果才退回 say("!?", false, false)；關著（排程模式）→ 不冒 !?（頻率遠高於 noise，見 [[聽覺感測]]）
-  fallback 泡泡一律 broadcast=false（不再觸發 speech_heard），避免鄰近 LLM 角色把 !? 當一句話
-    排進自己的事實句佇列、連環觸發決策（PR #674，見 character.gd::say()）
+    問不到結果就沒有反應（issue #949）；關著（排程模式）→ 事件記入 _daily_events
+    （頻率遠高於 noise，見 [[聽覺感測]]）
+  系統泡泡（player.gd 的 !?、AI_THINKING_TEXT）一律 broadcast=false（不再觸發 speech_heard），
+    避免鄰近 LLM 角色把泡泡當一句話排進自己的事實句佇列、連環觸發決策（PR #674，見 character.gd::say()）
 ⚠ 抵達判定 = 距離 ≤ ARRIVE_DISTANCE(2px) OR 已在目標格內(16px)
   只比距離的話 2..11px 是死角：距離說沒到，find_path() 卻因同格只回一個點
   → move_to() false → 假的「走不到」。每次重算行程都會噴
@@ -683,6 +684,19 @@ func hide_progress() -> void
   不知道工作站或計時器是什麼
 ```
 
+## ThinkingIndicator — scripts/ui/thinking_indicator.gd · class_name · Sprite2D
+
+```gdscript
+func show_indicator(max_seconds := 12.0) -> void   # 頭上冒 dots 動畫
+func hide_indicator() -> void
+```
+
+```text
+† character.tscn 的 UI/ThinkingIndicator。「系統正在等」的載入指示——AI 在想、
+  或對話中 NPC 等玩家打字。不是台詞（issue #949 B 類，取代舊的 bubble.hold("…")）。
+  收掉時機統一在 character.gd::say()／exit_conversation()／force_interrupt()
+```
+
 ## Vision — scripts/character/vision.gd · class_name · Area2D
 
 ```gdscript
@@ -831,29 +845,12 @@ func interrupt() -> void
 → 技術/talk 動作設計
 ```
 
-## DialogueLines — scripts/dialogue/dialogue_lines.gd · class_name · RefCounted
-
-```gdscript
-static func opening(listener_name: String) -> String
-static func reply(stats: Stats, _turn: int) -> String
-static func closing() -> String
-```
-
-```text
-† 只收 String/Stats，不收 Character
-  避免 character→conversation→dialogue_lines→character 循環相依；
-  且這份參數清單 = 之後要送給 LLM 的 context
-† 台詞不分親疏：relations 不留任何評價數值（好感/熟悉/虧欠/信任皆已拿掉），
-  引擎沒有「這兩人熟不熟」的數值可以挑句子
-這個檔是 LLM 失敗時的 fallback，不是要被換掉的暫時品
-```
-
 ---
 
 ## AIService — scripts/ai/ai_service.gd · autoload · Node
 
 ```gdscript
-const POOL_SIZE := 3                         # HTTPRequest 節點數
+func active_pool_size() -> int              # HTTPRequest 節點池大小，開機時由 ai_config.json 的 pool_size（預設 3）決定，不熱重載
 enum Policy { SCHEDULED, CONVERSATION, CREATION }  # SCHEDULED 吃冷卻/配額；CONVERSATION/CREATION 豁免但照樣計數
 const RETRY_LIMIT := 1
 const MAX_ERROR_CHARS := 200

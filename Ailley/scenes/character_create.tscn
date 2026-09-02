@@ -1,8 +1,9 @@
-[gd_scene load_steps=18 format=3 uid="uid://cefpexpl7arvm"]
+[gd_scene load_steps=19 format=3 uid="uid://cefpexpl7arvm"]
 
 [ext_resource type="Script" uid="uid://26jx2ncabjet" path="res://scripts/ui/character_create.gd" id="1_7hjmm"]
 [ext_resource type="StyleBox" uid="uid://db8gj58uccemy" path="res://scenes/ui/panel_style_box_texture.tres" id="2_c105j"]
 [ext_resource type="ButtonGroup" uid="uid://cscidioakocuh" path="res://assets/ui/character_create_gender_group.tres" id="3_c105j"]
+[ext_resource type="ButtonGroup" uid="uid://85v2v62jk7qf" path="res://assets/ui/character_create_mode_group.tres" id="3_xcdvd"]
 [ext_resource type="ButtonGroup" uid="uid://ceyrq0cu0ey8e" path="res://assets/ui/character_create_source_group.tres" id="4_xcdvd"]
 [ext_resource type="ButtonGroup" uid="uid://ct7ppa7xvi5ip" path="res://assets/ui/character_create_style_group.tres" id="5_3khhy"]
 
@@ -196,6 +197,25 @@ auto_translate_mode = 2
 layout_mode = 2
 theme_override_colors/font_color = Color(0.3647059, 0.2901961, 0.21960784, 1)
 
+[node name="ModeRow" type="HBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="AiModeButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/ModeRow"]
+layout_mode = 2
+focus_mode = 0
+toggle_mode = true
+button_pressed = true
+button_group = ExtResource("3_xcdvd")
+text = "UI_CC_MODE_AI"
+
+[node name="EmbodyModeButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/ModeRow"]
+layout_mode = 2
+focus_mode = 0
+toggle_mode = true
+button_group = ExtResource("3_xcdvd")
+text = "UI_CC_MODE_EMBODY"
+
 [node name="Rule1" type="ColorRect" parent="Scrim/Center/Row/Panel/MarginContainer/Col"]
 custom_minimum_size = Vector2(0, 1)
 layout_mode = 2
@@ -333,6 +353,10 @@ auto_translate_mode = 2
 layout_mode = 2
 theme_override_colors/font_color = Color(0.54509807, 0.12156863, 0.078431375, 1)
 autowrap_mode = 3
+
+[node name="DownloadModelButton" type="Button" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock"]
+layout_mode = 2
+text = "UI_CC_DOWNLOAD_MODEL"
 
 [node name="TabPersonality" type="VBoxContainer" parent="Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer"]
 visible = false

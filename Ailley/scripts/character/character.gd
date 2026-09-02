@@ -315,6 +315,9 @@ var _rescued_haulers: Array[Character] = []
 @onready var inventory: Inventory = get_node_or_null("State/Inventory")
 @onready var work_progress: WorkProgress = get_node_or_null("UI/WorkProgress")
 @onready var money_popup: MoneyPopup = get_node_or_null("UI/MoneyPopup")
+## 「系統正在等」的頭上動畫圖示（issue #949 B 類）：AI 在想、或對話中 NPC
+## 在等玩家打字。不是台詞——以前塞在對話氣泡裡看起來像角色在說「…」「？」
+@onready var thinking_indicator: ThinkingIndicator = get_node_or_null("UI/ThinkingIndicator")
 @onready var memory: Memory = get_node_or_null("State/Memory")
 # 只有 Player 掛這個節點——NPC 不需要被引導去任何地方。get_node_or_null()
 # 在沒有這個節點的 Agent 實例上安靜回 null，呼叫端（#305）自己判斷要不要用
@@ -440,6 +443,11 @@ func _ready() -> void:
 	# 且會跟著 GameClock 的時間流速走，不會像 stats.gd 的連續 drift 那樣綁死真實秒數
 	GameClock.time_changed.connect(_on_game_minute)
 
+	# 明確事件造成的數值變動 → 頭上飄一塊「飽足感 +40」（issue #951）。自然
+	# 漂移不會走到這裡（stats.gd::add() 只在 announce=true 時發訊號）
+	if stats != null and money_popup != null:
+		stats.stat_changed.connect(_on_stat_changed)
+
 # 隨機的 UUID v4。刻意不帶任何語意 —— 擁有者、名字、行程都不編進去，
 # 那些各自是欄位。把 owner 寫進 id 的話，帳號系統一改就得替所有存檔寫遷移
 static func generate_id() -> String:
@@ -501,6 +509,16 @@ func _find_id_holder(id: String) -> Character:
 ## 判斷是否落在 tick 邊界上，不是每次都跑，也不是本地累加器——跟 Stats 漂移共用
 ## 同一個全域邊界，兩者永遠同步觸發。拿規格書自己的算例反查：joy intensity=60、
 ## stability=90、grudge=75 應該是 9 tick ≈ 1.5 小時（90 遊戲分鐘），不是 9 遊戲分鐘
+
+## 明確事件造成的數值變動 → 頭上飄一塊「<欄位> +N」（issue #951）。欄位名走
+## Stats.SPEC 的 label 翻譯 key（STAT_*），跟金錢的 UI_STATUS_MONEY 共用
+## money_popup.show_change()。四捨五入成整數顯示——小數點對玩家沒意義
+func _on_stat_changed(key: String, delta: float) -> void:
+	var amount := int(round(delta))
+	if amount == 0:
+		return
+	money_popup.show_change(Stats.SPEC[key]["label"], amount)
+
 
 func _on_game_minute(_hour: int, _minute: int) -> void:
 	# 昏迷與治療檢查每遊戲分鐘執行（與 GameClock.time_changed 同步）
@@ -931,6 +949,12 @@ func _die(cause: String) -> void:
 	# 死亡狀態機（is_dead、石化、decay 開始累積）不該卡在那份請求後面才生效
 	_request_last_words(cause)
 
+	# life_highlights 彙整（#953）：跟 last_words 一樣是死亡當下要定格進墓碑的
+	# 欄位，但這半是純引擎彙整 L4 核心記憶、不打 LLM，所以同步做、不走
+	# _request_last_words() 那條 await。基底 no-op（Player 沒有記憶系統），
+	# Agent 覆寫，見 agent.gd
+	_capture_life_highlights()
+
 ## 死亡本體變灰／存活還原正常顏色。獨立成函式是因為 load_save_data() 明確
 ## 允許在節點還沒進場景樹時呼叫（見該函式開頭註解）——這時 @onready var sprite
 ## 還沒初始化，直接寫 sprite.modulate 會炸掉，這裡統一擋 null（CodeRabbit
@@ -966,6 +990,13 @@ func _apply_grave_visual(buried: bool) -> void:
 ## （來不及開口，跟《規格書09》§2 表格「無機會留遺言」的語意不同，是單純沒有
 ## 生成管道）。Agent 覆寫這個 hook 真正送出 LLM 請求，見 agent.gd
 func _request_last_words(_cause: String) -> void:
+	pass
+
+## 墓碑生平彙整的掛點，基底 no-op：只有 Agent 有 memory 與 life_highlights 欄位
+## （Player 死亡走佔位文案，見 epitaph_input.gd）。死亡當下同步呼叫，取的是
+## 「死掉那一刻的一生」——決策迴圈停止後 memory 不再更新。見 agent.gd 的覆寫
+## 與《規格書09》§4-2
+func _capture_life_highlights() -> void:
 	pass
 
 ## 死亡時刻換算成全域遞增的 tick 計數（《規格書09》§2 death_tick 範例
@@ -1433,13 +1464,11 @@ func enter_conversation(conversation: Node) -> void:
 func exit_conversation(_reason: String = "") -> void:
 	_conversation = null
 	# 對話不管用哪種原因結束（正常收尾／被打斷／走遠）都會呼叫到這裡，是
-	# 唯一保證「這場對話真的結束了」的單一收斂點。agent.gd::next_line() 的
-	# 「思考中」提示改用 bubble.hold() 撐住整個等待期間，沒有 say() 排隊顯示
-	# 那種自動消失的時間兜底——LLM 還沒回應、玩家就走遠的話，沒人會去收這顆
-	# 泡泡。在這裡統一 release_hold() 收掉，release_hold() 沒在 hold 時本來就是
-	# no-op，不用先判斷有沒有真的在 hold
-	if bubble != null:
-		bubble.release_hold()
+	# 唯一保證「這場對話真的結束了」的單一收斂點。next_line()／player.gd 的
+	# 「思考中」指示（AI 在想／NPC 等玩家打字）沒有 say() 那種自動消失的時間
+	# 兜底——LLM 還沒回應、玩家就走遠的話沒人會去收，在這裡統一 hide_indicator()
+	if thinking_indicator != null:
+		thinking_indicator.hide_indicator()
 
 # 自己主動離開對話
 func leave_conversation() -> void:
@@ -1448,7 +1477,9 @@ func leave_conversation() -> void:
 
 ## 進入入眠（issue #827）：暫停 Stats 衰減、用持續顯示的泡泡標示「被天神
 ## 召喚中」（不是一般台詞排隊顯示，靠 bubble.hold() 撐住，直到 exit_offline_
-## sleep() 才收掉，跟 next_line() 的「思考中」泡泡同一種持續提示手法）。
+## sleep() 才收掉——bubble.hold() 另一個在用的是玩家「休息中 💤」提示
+## （#926）；「被天神召喚中」本身有世界觀意義、要當文字讀，跟純載入指示的
+## 「思考中」不同）。
 ## reason 目前只用來記錄／除錯（例如 "model_unavailable"、"human_afk"），
 ## 不影響行為——§4.5／§6.4 兩種觸發情境對外表現完全一樣，呼叫端自己決定
 ## 什麼時候該叫這個，這裡不做任何觸發判斷
@@ -1490,6 +1521,12 @@ func is_offline_kick_eligible() -> bool:
 		return false
 	return Time.get_unix_time_from_system() - _offline_asleep_since_unix >= OFFLINE_KICK_THRESHOLD_SEC
 
+## say() 的指示收點要參考的「決策等待中」狀態。這個狀態住在 Agent 的 LLM
+## 決策迴圈裡，基底沒有——用覆寫方法而不是把旗標搬到基底，是因為只有
+## Agent 有「等 LLM 回決策」這回事；基底恆 false，其他子類別不用管
+func _is_awaiting_decision() -> bool:
+	return false
+
 ## interrupt=true 立刻蓋掉正在顯示/排隊中的內容（LLM 回應等待中的「…」要被
 ## 真正的台詞立刻換掉，不能排在它後面等它自己的顯示時間跑完）。
 ## 預設 false 維持原本「不打斷正在講的話」的排隊語意，其餘呼叫端不用改
@@ -1499,16 +1536,26 @@ func is_offline_kick_eligible() -> bool:
 ## 定義的「聽覺（一般說話）3 格」是物理上聽不聽得到，不分是哪種介面講出來的
 ## （issue #669）。
 ##
-## broadcast=false：內部系統 fallback 泡泡（`!?`／`！` 這類感測不到 LLM
-## 回應時的寫死反應）不是「這個角色真的說了什麼」，不該算進《07》§3 的
-## 「聽得到的對話」——放行的話，鄰近的 LLM 角色會把這句 `!?` 當成一句話
-## 排進自己的事實句佇列、觸發一次決策，決策若同樣問不到結果又冒出自己的
-## `!?`，在 3 格範圍內連環擴散成一波決策請求風暴（CodeRabbit review 抓到，
-## PR #674）。所有這類 fallback 泡泡呼叫端都要傳 false，見 agent.gd／player.gd
-## 的 _on_noise_heard()／_on_speech_heard()／_react_to_spotted_fallback()
+## broadcast=false：系統狀態指示（對話中「不理會」這種提示泡泡）不是
+## 「這個角色真的說了什麼」，不該算進《07》§3 的「聽得到的對話」——放行的話，
+## 鄰近的 LLM 角色會把它當成一句話排進自己的事實句佇列、觸發一次決策，
+## 在 3 格範圍內連環擴散成一波決策請求風暴（CodeRabbit review 抓到，PR #674）。
+## 感測不到 LLM 回應時引擎不再冒寫死反應（issue #949），所以這類呼叫端已大幅
+## 減少；剩下的系統指示泡泡呼叫端都要傳 false：player.gd 的 _on_noise_heard、
+## chat_input.gd、conversation.gd 的 DLG_IGNORED
 func say(line: String, interrupt: bool = false, broadcast: bool = true) -> void:
 	if bubble == null:
 		return
+	# 角色真的開口了——收掉「思考中」指示（issue #949 B 類）。next_line() 拿到
+	# 台詞後透過 _speak() → say() 走到這裡，是「思考結束」最準的訊號。
+	# broadcast=false 的系統反應泡泡（agent.gd 的 DLG_SURPRISE／DLG_NOISE_ALERT
+	# fallback）不算「開口」：決策等待中（_is_awaiting_decision()）冒出來的
+	# 反應泡泡不收指示器——LLM 決策還在飛，提前收掉就又變成「看起來沒反應」
+	# 的死寂空窗（舊 bubble.hold() 時代反應泡泡只是排隊、「…」續撐，同一個
+	# 道理）。真對話台詞一律 broadcast=true，照樣收、不會殘留；非決策等待期
+	# 的 say() 行為不變
+	if thinking_indicator != null and (broadcast or not _is_awaiting_decision()):
+		thinking_indicator.hide_indicator()
 	if interrupt:
 		bubble.clear()
 	bubble.say(line)
@@ -1706,7 +1753,7 @@ func _run_work(workstation: Workstation, session_id: int) -> void:
 	if inventory != null:
 		inventory.add_money(WORK_PAYMENT)
 		if money_popup != null:
-			money_popup.show_change(WORK_PAYMENT)
+			money_popup.show_change("UI_STATUS_MONEY", WORK_PAYMENT)
 
 # 收尾：放掉工作站、清狀態與進度條。**撥款不在這裡**——做滿全程才給，
 # 半途放棄走的是同一條收尾路徑但沒有那一行
@@ -1771,7 +1818,7 @@ func buy_from(place: String, item_id: String) -> String:
 	# 退款的路徑不會走到這裡——買賣真的成立、錢是真的扣了，才值得頭上飄一個
 	# -N。中途失敗退款的話淨變動是 0，飄出來只會讓人以為扣了又加，很奇怪
 	if money_popup != null:
-		money_popup.show_change(-price)
+		money_popup.show_change("UI_STATUS_MONEY", -price)
 
 	return BUY_OK
 
@@ -2201,6 +2248,10 @@ func _on_attacked(attacker: Character) -> void:
 ## 而工作進度 UI 也還開著，跟角色已經不在工作的實際狀態對不上
 func force_interrupt() -> void:
 	stop_moving()
+	# 死亡／入眠／被攻擊等「立刻停下手邊一切」的場合——決策途中的「思考中」
+	# 指示也要立刻收掉，不等它自己的 MAX_VISIBLE_SECONDS（issue #949 B 類）
+	if thinking_indicator != null:
+		thinking_indicator.hide_indicator()
 	if is_in_conversation():
 		leave_conversation()
 	if _working:
@@ -2482,6 +2533,19 @@ func load_save_data(data: Dictionary) -> void:
 	# 不是「缺欄位」那種能被 has() 擋掉的情況（CodeRabbit review 抓到）
 	if stats != null and data.get("stats", null) is Dictionary:
 		stats.load_save_data(data["stats"])
+		# 立即同步 bleeding／injury 衰減暫停，理由跟 attack() 命中瞬間的立即同步
+		# 完全一樣（#923）：injury 是門檻自動 condition，正常靠 _update_conditions()
+		# 每 10 遊戲分鐘一次 tick 重新推導，但讀檔到下一次 tick 之間有空窗期——
+		# 這段期間 Stats._process() 的自然衰減不知道要暫停，injury 會悄悄漂移到
+		# 低於 20 卻沒有真的被治療，同時 health 仍因 bleeding 判定滯後持續下降。
+		# 只重算這一個 condition，不呼叫整個 _update_conditions()：那個函式會
+		# 連同 bleeding 的 -1.5 health 直接效果一起重跑，讀檔當下重複套用一次
+		# 不屬於這次讀檔的「一整個 tick」傷害。is_dead 時跳過，同 attack()
+		# 的理由（#379）：死屍 conditions 只留 petrified，這裡不能把 BLEEDING
+		# 疊加回去蓋掉那個不變量
+		if not is_dead:
+			_set_condition(CONDITION_BLEEDING, stats.get_value("injury") >= 20.0)
+			stats.injury_decay_paused = has_condition(CONDITION_BLEEDING)
 	if relationships != null and data.get("relationships", null) is Dictionary:
 		relationships.load_save_data(data["relationships"])
 

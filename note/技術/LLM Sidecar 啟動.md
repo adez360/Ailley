@@ -4,11 +4,11 @@ tags:
   - agent
   - llm
 status: 進行中
-script: scripts/ai/llama_sidecar.gd
-updated: 2026-08-31
+script: scripts/ai/llama_sidecar.gd, scripts/ai/model_downloader.gd
+updated: 2026-09-02
 ---
 
-# LLM Sidecar 啟動（issue #772，《16》§2.2）
+# LLM Sidecar 啟動（issue #772／#989，《16》§2.2）
 
 開機自動拉起隨遊戲附帶的 `llama-server` 子進程，讓玩家不用自己手動啟動就能用
 本機 AI。跟 [[LLM 串接與 AI 服務層]] 是分工關係：`LlamaSidecar`（autoload）
@@ -46,12 +46,12 @@ res://sidecar/models/<model 檔名>                檔名取 provider.model，�
 `llama-server`）與模型檔**不隨 Godot 匯出自動打包**，`export_presets.cfg`
 的 `include_filter` 維持 `data/*.json`。
 
-正式版發布時以建置後步驟放置：匯出後複製到執行檔旁 `sidecar/` 目錄，或發布
-管線的 content 步驟（Steam depot content root，見《16》B4／issue #793）。
+正式版玩家拿到的檔案怎麼落到這兩個目錄，見下面「首次啟動主動下載」——
+不是建置時打包進安裝包，是遊戲執行期自己下載（issue #989，推翻《16》B3）。
 
-之後真的要切 Steam 獨立 depot（《16》B4）時，整個 `sidecar/` 目錄就是預定的
-depot content root，這裡的路徑不用為了那一步再改——depot 拆分與上架設定另開
-issue，見下方「相關」。
+之後真的要做 Steam 發布（阻塞在《16》B7，Steamworks 帳號還沒申請）時，
+`sidecar/` 目錄結構不用為了那一步改——`ModelDownloader` 落地的檔案位置
+本來就跟這裡定義的目錄慣例一致。
 
 ### 兩種路徑解析（開發／匯出分開判斷）
 
@@ -70,9 +70,10 @@ issue，見下方「相關」。
 2. 執行檔／模型檔用 `FileAccess.file_exists()` 檢查，缺一個就 `push_warning`
    並停在 `Status.MISSING_BINARY`／`MISSING_MODEL`，不嘗試拉起
 3. `OS.create_process(binary_path, args, false)`，`args` 帶 `-m <model_path>
-   --host 127.0.0.1 --port <port> --parallel <AIService.POOL_SIZE> -c 16000`
-   （`--parallel` 引用 `AIService.POOL_SIZE` 同一份常數、兩邊不脫鉤，對齊
-   關係見《04 Godot與AI資料介接規格》§1）
+   --host 127.0.0.1 --port <port> --parallel <pool_size> -c <sidecar.context_size>`
+   （兩個參數都讀 `ai_config.json`：`--parallel` 對齊 `pool_size`（預設 3）、
+   `-c` 對齊 `sidecar.context_size`（預設 16000），都是開機生效、不熱重載，
+   數值權威定義見《04 Godot與AI資料介接規格》§3）
 4. 叫起後先等 `CRASH_CHECK_SEC`（2 秒）觀察窗——沒撐過這段代表根本起不來
    （最常見原因是埠被佔用、`bind()` 失敗立刻結束），標記 `Status.CRASHED`
 5. 撐過觀察窗後改成輪詢 `_probe_port()`，`STARTUP_TIMEOUT_SEC`（30 秒）內
@@ -111,17 +112,81 @@ issue，見下方「相關」。
 > 關機／重開會中止」是同一種已知的開發期限制，沒有更好的解法，開發者自己
 > 用工作管理員／`kill` 清理。
 
-## 尚未驗證
+## 已驗證：匯出版自動拉起（2026-09-02）
 
-這次落地時本機沒有放真的 `llama-server` 執行檔／模型檔進 `sidecar/`
-測試——《16》§2.2 驗收要求的「匯出後的獨立執行檔能自動拉起 `llama-server`
-並連線成功」需要開發者自己放進實體檔案後在編輯器或匯出版裡實測一次；
-這裡只驗證過「檔案不存在」那條路徑（`Status.MISSING_BINARY`／
-`MISSING_MODEL`）不會讓遊戲卡死或崩潰。
+拿一份真的 `llama-server.exe`（含全部 `ggml-*.dll`／`llama-*.dll` 依賴）放進
+匯出版執行檔旁的 `sidecar/windows/`、一份 7.5B 參數的 gguf 放進
+`sidecar/models/`，`ai_config` 的 `local` provider 指到同一個檔名，實機跑
+`export_presets.cfg` 匯出的獨立 `.exe`（不透過編輯器）：
+
+- 遊戲啟動後 5 秒內 `llama-server.exe` 子進程確實被拉起
+- 約 10 秒 `http://127.0.0.1:8080/v1/models` 回 200，遠低於
+  `STARTUP_TIMEOUT_SEC`（30 秒），確認載進的是正確的模型檔
+- 啟動參數（`--host 127.0.0.1 --port <port> --parallel <POOL_SIZE> -c 16000`）
+  正確傳遞
+
+《16》§2.2 驗收「匯出後的獨立執行檔能自動拉起 `llama-server` 並連線成功」
+這半段（自動拉起＋連線成功）到此驗證過。**還沒驗證的部分**：真正對話/決策
+走完整趟 `AIService` 流程（這次只測到 sidecar 自己回應 `/v1/models`，
+沒實際觸發一次遊戲內決策）；用的也不是專案指定的 Qwen2.5-7B-Instruct，
+是隨手可取得的另一顆模型，純粹測拉起機制本身，不代表正式要打包的模型
+也是這個效能/相容性。
+
+## 首次啟動主動下載（issue #989）
+
+`ModelDownloader`（`scripts/ai/model_downloader.gd`）不是 autoload——玩家
+點下「下載本機 AI 模型」時才由呼叫端 `ModelDownloader.new()` 生一個、
+`add_child()`、接上 `progress_updated`／`finished` 訊號、呼叫 `start()`。
+目標路徑呼叫 `LlamaSidecar.get_sidecar_dir()`／`get_platform_subdir()`／
+`get_binary_name()` 這三個公開介面，不重寫一套路徑邏輯（原本是
+`LlamaSidecar` 的私有函式，issue #989 開了公開包裝）。
+
+下載來源：
+
+- `llama-server` 執行檔：`ggml-org/llama.cpp` GitHub release（MIT），目前
+  釘住 `LLAMA_CPP_RELEASE_TAG` 常數指定的版本，asset 命名
+  `llama-<tag>-bin-win-cpu-x64.zip`。**只有 Windows**——macOS／Linux 的
+  release asset 是 `.tar.gz`，Godot 內建 `ZIPReader` 解不開，這兩個平台
+  `ModelDownloader.is_platform_supported()` 回 `false`，UI 端要另外顯示
+  手動安裝引導
+- 模型：Hugging Face `Qwen/Qwen2.5-7B-Instruct-GGUF`（Apache-2.0），目前
+  預設抓 `qwen2.5-7b-instruct-q3_k_m.gguf`——單一檔案，避開 Q4_K_M 以上
+  量化版都是分割檔（`-00001-of-0000N.gguf`）、目前 bundle 的 `llama-server`
+  版本支不支援分割檔直讀還沒驗證過的不確定性。之後真的驗證過可以換更高
+  量化版時，只需要改 `MODEL_FILENAME` 這一個常數（`ai_config.gd` 的
+  `_DEFAULT_LOCAL_MODEL` 要跟著一起改，兩邊有註解互相提醒）
+
+流程：查 `Content-Length`（查不到就跳過大小核對）→ `HTTPRequest.download_file`
+串流下載 → zip 用 `ZIPReader` 解壓到 `sidecar/windows/` → 下載模型檔到
+`sidecar/models/` → 檢查實際檔案大小是否符合 `Content-Length` → 成功後呼叫
+`AIConfig.update_provider_model()` 把 `local` provider 的 `model` 欄位改成
+實際抓到的檔名 → 呼叫 `LlamaSidecar.retry_launch()`，不用重開遊戲就能接上。
+
+失敗（網路錯誤、下載停滯超過 30 秒、磁碟空間不足、解壓失敗、檔案大小
+對不上）走 `finished(false, reason)` 訊號，重試上限比照
+`AIService.RETRY_LIMIT` 的既有慣例。磁碟空間
+檢查目前是「試寫一個小檔案」這種保守判斷，不是精確查詢剩餘容量——Godot
+沒有跨平台的容量查詢原生 API，精確查詢留給之後真的需要再做。
+
+## 驗證與 UI 入口現況
+
+實機下載驗證由實測人員執行，結果補記於 PR #990——涵蓋 `HTTPRequest` 串流
+寫檔、`ZIPReader` 解壓、寫回 `ai_config.json`、`retry_launch()` 不重開遊戲
+接上本機 AI 這條完整鏈路。
+
+UI 觸發入口：建角面板的下載按鈕（`character_create.gd`，顯示條件看
+`LlamaSidecar.status`）與下載進度畫面（`model_download_overlay.gd`，純
+程式建樹不掛 `.tscn`）已實作。主選單／設定畫面的入口與 macOS／Linux 的
+手動安裝引導 UI 未做，需要連進這個 worktree 專屬的 Godot editor 才能用
+`godot-ai` MCP 建立場景，見《技術/平行 Worktree 與 Godot MCP》。
 
 ## 相關
 
 - [[LLM 串接與 AI 服務層]] —— `AIConfig`／`AIService` 的完整設計，`provider`
   的資料結構、`_probe_models()` 就緒探測
-- 《規格書/16_打包與發布規格書》§2.2 —— 這則功能對應的架構決策與驗收標準
-- Steam depot 拆分（《16》B4／§2.6）的實際落地建議另開 issue 追蹤，不在這裡
+- 《規格書/16_打包與發布規格書》§1 B3／§2.2 —— 這則功能對應的架構決策
+  （B3 推翻紀錄）與驗收標準
+- issue #989 —— 首次啟動主動下載，`ModelDownloader` 本體
+- issue #982 —— 建角面板「沒有可用 provider」的提示文字，下載入口預計
+  接在同一個位置旁邊
+- Steam depot 拆分（《16》B4／§2.6）目前暫緩，見《16》§1 B4

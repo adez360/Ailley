@@ -25,7 +25,7 @@ updated: 2026-08-31
 | --- | --- | --- | --- |
 | 發起 | 誰能跟誰講、距離、可否打斷 | `character.gd` | 不變 |
 | 會話 | 狀態機、輪次、結束條件 | `conversation.gd` | 不變 |
-| 內容 | 講什麼 | `dialogue_lines.gd` 依角色狀態組模板句 | 換掉這一個檔 |
+| 內容 | 講什麼 | LLM 逐輪生成（`next_line()`，issue #630） | 已接上 |
 | 呈現 | 氣泡 | `bubble.gd` + `bubble.tscn` | 不變 |
 | 後果 | 數值回補、記憶 | social / mood / note_meeting | 加記憶寫入 |
 
@@ -264,7 +264,7 @@ review 抓到：「髒兮兮」「乾淨多了」「傷已經好了」這幾種�
 | 互動鍵 | `E` | |
 | 被搭話者的行程 | 暫停後重算 | 不是接續原路 |
 | 回補 | social +25、mood +5 | 只有正常講完才發；關係只記 `note_meeting()`，不寫入任何評價數值 |
-| 等待對方回話逾時 | provider 逾時（`ai_config.gd` 預設 20 秒） | 沒有對話專屬的獨立逾時常數——`next_line()` 走 `AIService` 的 provider timeout，provider 設定檔可覆蓋、缺值退回 `ai_config.gd::DEFAULT_TIMEOUT`（20 秒），見《04》§6。逾時走 fallback（`DialogueLines.closing()`）。真人玩家的回話等待秒數留到 MVP-2 玩家加入後再定——現在真人不參與 `talk`，不急 |
+| 等待對方回話逾時 | provider 逾時（`ai_config.gd` 預設 20 秒） | 沒有對話專屬的獨立逾時常數——`next_line()` 走 `AIService` 的 provider timeout，provider 設定檔可覆蓋、缺值退回 `ai_config.gd::DEFAULT_TIMEOUT`（20 秒），見《04》§6。逾時走 fallback（靜默結束、不補台詞，issue #949）。真人玩家的回話等待秒數留到 MVP-2 玩家加入後再定——現在真人不參與 `talk`，不急 |
 
 ## 呈現層的坑
 
@@ -357,44 +357,63 @@ Enter 開啟／送出，Esc 取消。不在對話中就是單純冒一句氣泡�
 > 排隊的句子、`_pending_lines.size()` 降到上限以下，下次玩家按開輸入框自然
 > 就通過了。
 
-> [!important] 常駐提示：真的在等待時才顯示，撐到有結果才收
-> `Bubble.say()`／`_show_next()` 是固定秒數自動消失的排隊機制——秒數由文字
-> 長度算，單一符號（「…」「？」）會被夾到下限 1.2 秒，撐不過一次 LLM 等待
-> （`ai_config.gd` 預設逾時 10 秒），泡泡會比答案早收掉，玩家會看到一段
-> 「看起來像沒理你」的空窗（實際踩過：`agent.gd::next_line()` 開頭顯示的
-> 「思考中」提示 `AI_THINKING_TEXT`）。凡是「要撐到某個明確事件發生才能收」
-> 的提示都改用 `bubble.gd` 的 `hold(message)` / `release_hold()`：`hold()`
-> 清空佇列、顯示訊息但不跑自動消失的計時（`_process()` 裡用 `_holding` 擋掉
-> 計時，處理本身開著是為了 #742 的每幀重夾位置），`release_hold()` 解除後才
-> 恢復正常排隊行為。目前兩處在用：
-> - `player.gd::next_line()` 只在真的要 `await`（緩衝區沒內容）時才對
->   `listener` 呼叫 `hold(WAITING_FOR_PLAYER_TEXT)`（NPC 頭上顯示「？」），
->   `await` 結束（不管是真的送出還是被取消）呼叫 `release_hold()`，
->   `is_instance_valid(listener)` 包一層——跟
->   `conversation.gd::_finish_with_fallback()` 同一種顧慮，`await` 讓出
->   控制權的這段期間 `listener` 理論上可能已經離開場景。
-> - `agent.gd::next_line()` 一開頭 `bubble.hold(AI_THINKING_TEXT)`。收掉的
->   時機交給 `character.gd::exit_conversation()`（對話不管什麼原因結束都會
->   呼叫到，唯一的收斂點）統一 `release_hold()`；正常拿到台詞或 fallback 時，
->   `say(interrupt=true)` 內部的 `bubble.clear()` 會先解除 hold 換成真台詞，
->   `exit_conversation()` 之後再呼叫 `release_hold()` 純粹是 no-op。
+> [!important] 「系統正在等」的指示不塞在對話氣泡裡（issue #949 B 類）
+> 以前用 `bubble.hold("…")`／`hold("？")` 把載入指示塞進對話氣泡，看起來像
+> 角色在說「…」或「？」。改成獨立節點 `character.tscn` 的 `UI/ThinkingIndicator`
+> （`Sprite2D` + `assets/ui/thinking_sprite.png`，6 幀 dots 動畫，
+> `scripts/ui/thinking_indicator.gd`）——`show_indicator()` / `hide_indicator()`，
+> 有 `MAX_VISIBLE_SECONDS`（12 秒）安全上限自己收。**AI 在想**與**對話中 NPC
+> 等玩家打字**共用同一個動畫，都是「系統正在等」、不是台詞。
+>
+> 顯示：
+> - `agent.gd::next_line()` 開頭 → `thinking_indicator.show_indicator()`
+> - `agent.gd::_request_next_decision()` 開頭（行程決策等 LLM）→ 同上
+> - `player.gd::next_line()` 只在真的要 `await`（緩衝區沒內容）時對
+>   `listener.thinking_indicator` `show_indicator()`，`is_instance_valid()`
+>   包一層——`await` 期間 `listener` 理論上可能已離場。
+>
+> 收掉：
+> - `character.gd::say()` 開頭——角色真的開口就收，是「思考結束」最準的訊號
+> - `character.gd::exit_conversation()`——對話任何原因結束的唯一收斂點
+> - `character.gd::force_interrupt()`——死亡／入眠／被攻擊立刻收，不等安全上限
+> - `agent.gd::_request_next_decision()` 決策回來後（`_awaiting_decision = false` 之後）
+>
+> `bubble.hold()` 現在的用途是 `enter_offline_sleep()` 的「被天神召喚中」跟
+> 玩家的「休息中 💤」提示（#926）——前者有世界觀意義、要當文字讀，跟純載入
+> 指示不同，刻意留在氣泡裡。
 
 > [!important] 對方選擇不理你（`engage=false`）要顯示得出來，不能跟「還在等」一樣空白
 > `conversation.gd::_run()` turn 0 若 `result.engage == false`，原本直接
 > `bubble.clear()` 收掉思考中提示、什麼都不顯示——跟上面「LLM 還在想」的
 > 空窗期在畫面上長得一模一樣，玩家分不出「還在等」跟「他不想理你」。
 > 現在改成 `speaker.say(L10n.t("DLG_IGNORED"), true, false)`
-> 顯示一句「他似乎不想理你……」，`broadcast=false` 理由跟
-> `AI_THINKING_TEXT` 一樣：這不是角色真的說了什麼，不該觸發鄰近角色的
-> `speech_heard`。
+> 顯示一句「他似乎不想理你……」，`broadcast=false` 理由跟思考中指示一樣：
+> 這不是角色真的說了什麼，不該觸發鄰近角色的 `speech_heard`。
 
 > [!note] 對話結束不會有引擎代講的道別台詞
 > `conversation.gd::_finish()` 不管什麼結束原因（正常結束／走遠／被打斷／
 > fallback）都不補道別台詞——`exit_conversation()` 迴圈跑完就結束，不會幫
-> 任何一方講話。引擎只提供「跟誰講完話了」這個客觀事實
-> （`agent.gd::exit_conversation()` 寫進 `_daily_events`，見
+> 任何一方講話。引擎只把「這場對話怎麼結束的」寫成一句客觀事實
+> （`agent.gd::exit_conversation()` → `_daily_events`，見
 > [[00_設計原則與架構#原則二：引擎只給事件，不給情緒]]），角色要不要道別、
 > 用什麼語氣，是 AI 自己下一輪決定的事，不是系統畫面台詞。
+
+> [!important] 結束事實句依原因分寫，不一律「講完話了」（issue #950）
+> `agent.gd::_conversation_end_fact(reason, other, had_exchange, is_initiator)`
+> 是純函式，措辭只陳述發生了什麼、不定性：
+>
+> | 結束原因 | 事實句 |
+> | --- | --- |
+> | `ENDED_BY_SPEAKER` / `ENDED_BY_LISTENER`（正常收尾） | 「你跟 X 講完話了」 |
+> | `IGNORED`（turn 0 不理會） | 發起方：「X 不理你的搭話，沒有回應」／被搭話方：「你不理會 X 的搭話」 |
+> | `TOO_FAR` / `INTERRUPTED`，`turn_count() > 0` | 「你和 X 的對話中途中斷了」 |
+> | `TOO_FAR` / `INTERRUPTED`，`turn_count() == 0` | 「你和 X 的對話還沒開始就中斷了」 |
+>
+> 玩家按 E 搭話後、在對方還沒開口（turn 0 等 LLM）時就走開會走
+> `TOO_FAR` 且 `turn_count() == 0`——這時記「講完話了」是假事實，會被送進
+> 睡前反思。`TOO_FAR` / `INTERRUPTED` 也不動 `_track_action_result_for_facts`
+> 的連續失敗計數（既沒完成也不是被拒絕），且一句話都沒交換時不重設
+> `_last_social_minute`（#338 的「多久沒說話」基準）。
 
 > [!note] 這是接 LLM 的入口
 > 目前輸入只是讓玩家自己的角色說話，或是送進對話輪次；沒有額外的語意

@@ -18,6 +18,7 @@ extends CanvasLayer
 @onready var _status_button: Button = $HBoxContainer/TabContainer/MarginContainer/HBoxContainer/狀態
 @onready var _expand: CanvasLayer = $StatusExpand
 @onready var _expand_panel: PanelContainer = $StatusExpand/PanelContainer
+@onready var _status_bars := $StatusExpand/PanelContainer/MarginContainer/VBoxContainer/StatusBars
 @onready var _tabs: Array[Control] = [
 	$HBoxContainer/TabContainer/MarginContainer/HBoxContainer/VSeparator,
 	$HBoxContainer/TabContainer/MarginContainer/HBoxContainer/狀態,
@@ -106,6 +107,7 @@ func _refresh_target(character: Character) -> void:
 		return
 	_snapshot.texture = _current_frame_texture(character)
 	_name_label.text = character.character_name
+	_status_bars.set_character(character)
 
 
 func _current_frame_texture(character: Character) -> Texture2D:

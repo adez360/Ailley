@@ -1,6 +1,6 @@
-[gd_scene load_steps=7 format=3 uid="uid://cmi20plptktnc"]
+[gd_scene load_steps=7 format=3 uid="uid://c5ru5e0khgjrn"]
 
-[ext_resource type="Script" path="res://scripts/ui/status_bars.gd" id="1_2opd5"]
+[ext_resource type="Script" uid="uid://1nxsnpmy833g" path="res://scripts/ui/status_bars.gd" id="1_2opd5"]
 [ext_resource type="Texture2D" uid="uid://cfisgoin75p8o" path="res://assets/icons/icons.png" id="1_r5koo"]
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_2opd5"]

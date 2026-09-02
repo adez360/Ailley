@@ -3,9 +3,9 @@ tags:
   - 技術
   - ui
 status: 已實作
-scene: scenes/bubble.tscn, scenes/chat_input.tscn, scenes/debug_console.tscn, scenes/hud.tscn
-script: scripts/ui/bubble.gd, scripts/ui/status_panel.gd, scripts/ui/inventory_panel.gd, scripts/ui/hotbar.gd, scripts/ui/inventory_slot_button.gd
-updated: 2026-08-19
+scene: scenes/bubble.tscn, scenes/chat_input.tscn, scenes/debug_console.tscn, scenes/hud.tscn, scenes/character.tscn
+script: scripts/ui/bubble.gd, scripts/ui/status_panel.gd, scripts/ui/inventory_panel.gd, scripts/ui/hotbar.gd, scripts/ui/inventory_slot_button.gd, scripts/ui/money_popup.gd
+updated: 2026-09-02
 ---
 
 # UI 版面與素材規格
@@ -241,6 +241,31 @@ keycode：`hotbar_1`–`hotbar_9`（數字鍵 1–9）、滑鼠滾輪（`wrapi()
 `_select_relative()` 的 `delta` 固定 ±1，不可能繞回目前這格。
 
 `inventory_toggle`（`Tab`）取代原本的 `P` 鍵，沒有保留 fallback。
+
+## 角色頭上的數值變動提示（`MoneyPopup`，issue #951）
+
+`character.tscn` 的 `UI/MoneyPopup`（`Node2D`，位置 (0, -18)），跟 `Bubble`／
+`WorkProgress` 同一種「掛在角色身上、頭上飄一塊」的模式。
+
+`show_change(label_key: String, amount: int)` 每呼叫一次生一塊 `Label`
+（程式建，不靠場景子節點）、往上飄 12px、0.9 秒淡出後自己 `queue_free()`。
+文字是 `"<欄位> <±N>"`：金錢傳 `"UI_STATUS_MONEY"` → 「金錢 -50」，數值傳
+`Stats.SPEC[key]["label"]`（`STAT_SATIETY` 等）→ 「飽足感 +40」。同一瞬間多筆
+（一份食物同時補飽足感和水分）各往上錯開 11px，不疊住。正／負用顏色分
+（Moss 綠／Ember 紅）。
+
+**觸發來源**：
+- 金錢：`character.gd::buy_from()` 成功、`_run_work()` 撥款時直接呼叫。
+- 數值：`Stats.add(key, delta, announce := true)` 發 `stat_changed(key, delta)`，
+  `character.gd::_on_stat_changed()` 接了轉呼叫。`announce` 預設 `false`——
+  自然漂移（`_apply_drift()`）、內部調整都不傳，只有「玩家剛做了一件事」
+  的離散變動才傳（目前接了 `inventory.use_item()`：吃、喝、用道具）。
+  `delta` 是夾制前的原始請求量，含正負號。
+
+目前只有吃喝／用道具與金錢兩條路徑會飄。attack 造成的 `health`／`injury`、
+工作動作扣 `hygiene`（`ACTION_DIRTY`）、haul 的持續 `stamina` 流失都還沒接——
+haul 是每幀 `* delta` 的連續流失，性質同漂移、不該飄；其餘等實機看要不要補。
+NPC 也會飄（跟金錢 popup 一致），要不要限定只有玩家看實機再說。
 
 ## 還沒做的
 

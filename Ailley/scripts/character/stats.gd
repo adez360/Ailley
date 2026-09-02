@@ -34,6 +34,12 @@ extends Node
 ## `ACTION_RECOVERY`（agent.gd）項目，會直接把 hygiene 往上加，drift 只是
 ## 不再自己往下掉
 
+## 明確事件造成的數值變動（issue #951）：吃喝、用道具、工作結算這類「玩家
+## 剛做了一件事、數值動了一下」的離散變動會發這個訊號，Character 接了之後
+## 在角色頭上飄一塊「飽足感 +40」。自然漂移（_apply_drift）不發——那是背景
+## 緩慢變化，不是一次事件。delta 已是實際夾制前的請求量，含正負號
+signal stat_changed(key: String, delta: float)
+
 const MIN := 0.0
 const MAX := 100.0
 const CRITICAL := 30.0		# 低於這個值算「該處理了」
@@ -109,8 +115,13 @@ func set_value(key: String, value: float) -> void:
 		return
 	values[key] = clampf(value, MIN, MAX)
 
-func add(key: String, delta: float) -> void:
+# announce=true：這是一次明確事件（吃喝、用道具、工作結算…），發 stat_changed
+# 讓 Character 在頭上飄一塊變動提示。自然漂移（_apply_drift）走 set_value()、
+# 不經過這裡，本來就不會誤觸（issue #951）
+func add(key: String, delta: float, announce: bool = false) -> void:
 	set_value(key, get_value(key) + delta)
+	if announce and delta != 0.0 and SPEC.has(key):
+		stat_changed.emit(key, delta)
 
 func is_need(key: String) -> bool:
 	return SPEC.has(key) and SPEC[key]["is_need"]

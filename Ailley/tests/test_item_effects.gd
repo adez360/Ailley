@@ -67,6 +67,7 @@ func test_character_eat_reads_real_item_database() -> void:
 
 	_assert_eq(result, Character.EAT_OK, "吃烤肉應成功")
 	_assert_eq(character.stats.get_value("satiety"), 40.0, "satiety 應套用 items.json 的 effect_satiety +40")
+	_assert_eq(character.stats.get_value("stamina"), 10.0, "stamina 應套用 items.json 的 effect_stamina +10")
 	_assert_eq(character.inventory.has_item("cooked_meat", 1), false, "吃掉後應消耗 1 份")
 	character.free()
 

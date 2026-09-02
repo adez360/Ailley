@@ -5,7 +5,7 @@
 		"local": {
 			"base_url": "http://127.0.0.1:8080/v1",
 			"api_key": "",
-			"model": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+			"model": "qwen2.5-7b-instruct-q3_k_m.gguf",
 			"timeout": 20.0,
 			"supports_json_schema": true,
 			"format_guaranteed": true
@@ -23,9 +23,13 @@
 	"dialogue_exempt": true,
 	"max_dialogue_calls_per_game_day": 150,
 	"max_creation_calls_per_game_day": 0,
+	"pool_size": 3,
 	"embedding": {
 		"base_url": "http://127.0.0.1:8081/v1",
 		"model": "bge-small-zh-v1.5-q8_0.gguf",
 		"timeout": 10.0
+	},
+	"sidecar": {
+		"context_size": 16000
 	}
 }

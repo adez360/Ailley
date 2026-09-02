@@ -81,7 +81,7 @@ updated: 2026-09-01
 
 事件驅動架構下，決策請求以**單一角色**為單位發起，不再是每 tick 批次送出全體 NPC（見《10》§5.1、《12》§5.1）。
 
-**這些不是獨立行程的網路端點**——`AIService` 一律打同一個 `LocalLLM`／`RemoteLLM` 的 `/v1/chat/completions`。`AIService` 內部維護一個 `POOL_SIZE := 3` 的 `HTTPRequest` 節點池（跟 llama-server 的 `--parallel 3` 對齊），佇列依**優先序**分派給空閒節點：`CONVERSATION` 類請求先出隊，其餘照進來的順序（#492），可以同時有 3 筆在飛。差別只在 `PromptBuilder` 組出來的 `envelope.payload.type`（決定 system prompt、要不要帶 `response_format`），不是不同 URL——下表沿用「訊息類型」只是方便對照「這次呼叫要做什麼」，實際 wire format 見《技術/LLM 串接與 AI 服務層》與 `Ailley/scripts/ai/prompt_builder.gd`。
+**這些不是獨立行程的網路端點**——`AIService` 一律打同一個 `LocalLLM`／`RemoteLLM` 的 `/v1/chat/completions`。`AIService` 內部維護一個 `HTTPRequest` 節點池，池大小由 `ai_config.json` 的 `pool_size` 定義（預設 3，全域一份不分 provider；節點池在 `AIService._ready()` 建立一次，開機生效、不隨 `reload_config()` 熱重載，要讀實際池大小一律經 `AIService.active_pool_size()`），llama-server 啟動參數 `--parallel` 對齊同一份 `pool_size`；佇列依**優先序**分派給空閒節點：`CONVERSATION` 類請求先出隊，其餘照進來的順序（#492），可以同時有 `pool_size` 筆在飛。llama-server 的 context 大小（啟動參數 `-c`）由 `ai_config.json` 的 `sidecar.context_size` 定義（預設 16000，開機生效）。差別只在 `PromptBuilder` 組出來的 `envelope.payload.type`（決定 system prompt、要不要帶 `response_format`），不是不同 URL——下表沿用「訊息類型」只是方便對照「這次呼叫要做什麼」，實際 wire format 見《技術/LLM 串接與 AI 服務層》與 `Ailley/scripts/ai/prompt_builder.gd`。
 
 啟動就緒檢查也不是獨立端點：`AIService._probe_models()` 打 provider 標準的 `GET {base_url}/models`（OpenAI 相容 API 既有端點，順便驗證 API 金鑰是否有效），不是下面曾經設想過的 `/health`——`ai_service.gd`／`ai_config.gd` 的註解都明講「刻意不用《04》§4-1 想像的 `/health`，那是沒有的」。
 
@@ -451,7 +451,7 @@ Godot 操控層                房主機                    llama-server
 | 呼叫類型 | 失敗時的行為 |
 | --- | --- |
 | `plan` | 這輪不產生新 `tasks`，角色留在既有任務池，不特別寫 `last_action_result` |
-| `dialogue` | `conversation.gd::_finish_with_fallback()` 改說一句 `DialogueLines.closing()` 收尾 |
+| `dialogue` | `conversation.gd::_finish_with_fallback()` 靜默結束、不補台詞（issue #949） |
 | `words_to_creator_choice`／`creation`／`reflection`／`checkpoint` | 直接 `return`，呼叫端不做額外內容重試或降級成別的內容；`AIService` 仍依上面 §6 的傳輸層規則對可重試錯誤（HTTP 5xx、特定網路錯誤）自動重試 1 次，不受這裡影響。`creation`（`words_to_creator` 生成）的「內容違規重試 3 次、仍失敗改用固定備用句庫」是《99》P-10 已定案的目標行為，尚未實作——現行行為就是本表這一列 |
 
 HTTP 5xx、逾時都落在上面 AIService 層的 `http`／`timeout` identifier 裡，不是獨立分類；本文件先前設想的「`request_id`／`protocol_version` 不符」這類檢查也不存在——請求裡本來就沒有這兩個欄位（見 §4）。
