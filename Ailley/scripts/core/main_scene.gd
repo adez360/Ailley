@@ -28,6 +28,11 @@ func _ready() -> void:
 	# 再進都會跑到（CodeRabbit review on #825）。DatabaseManager 建這個子
 	# 節點也是用 call_deferred()，deferred 一拍讓建立先跑完，這裡才拿得到它
 	call_deferred("_rebuild_dynamic_homes_once")
+	# 全畫面昏迷倒數警示（issue #803）：純程式建 UI（比照 OnboardingHint 的
+	# 動態掛法），自己訂閱 GameClock.time_changed 掃場上角色，沒人在倒數時
+	# 整層隱藏。掛在這裡而不是角色身上——它是每場一份的全域 HUD，不是角色的
+	# 頭上配件
+	add_child(IncapacitationAlert.new())
 
 
 	var new_game := true
