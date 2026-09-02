@@ -2882,17 +2882,28 @@ func _reevaluate_once() -> void:
 
 	# 力竭時強制進入休息，優先於一般的任務仲裁
 	var has_exhausted := conditions.any(func(c): return c.get("type") == "exhausted")
-	if has_exhausted:
+
+	# issue #988：hydration／satiety 掉到 CRITICAL 以下時不能再讓力竭休息
+	# 霸占仲裁——Stats._apply_drift() 在休息期間照常運作，力竭休息本身
+	# 又沒有任何出口（唯一結束條件是 stamina 恢復），角色可能因此渴死/
+	# 餓死，卻從沒機會決定要不要冒著疲勞去找水喝。危急時讓出仲裁權交還
+	# 給 AI 自己判斷，不是引擎預先替它決定「這種情況不用問你」（原則二）
+	var has_physio_crisis := stats != null and (
+		stats.get_value("hydration") < Stats.CRITICAL
+		or stats.get_value("satiety") < Stats.CRITICAL
+	)
+
+	if has_exhausted and not has_physio_crisis:
 		_force_rest_until_recovered(now_minutes)
 		_pursue_current_task()
 		return
 
-	# 力竭解除後清理：角色不再具有 CONDITION_EXHAUSTED 且 _current_task 仍指向
-	# exhaustion_rest synthetic task 時，清除 _current_task、current_place、
-	# current_state 及相關追逐狀態，再繼續正常仲裁。這個 synthetic task 不在
-	# _tasks 池子裡，不會被正常的過期掃描清掉，必須在這裡主動處理——條件比對
-	# id 而不只是 source，避免以後其他 reflex 來源的任務被誤判成這個 synthetic
-	# task 清掉
+	# 力竭解除後、或危機逃脫（#988：力竭但 hydration／satiety < CRITICAL，見上方
+	# 分支）時，_current_task 仍指向 exhaustion_rest synthetic task 就清除
+	# _current_task、current_place、current_state 及相關追逐狀態，再繼續正常
+	# 仲裁。這個 synthetic task 不在 _tasks 池子裡，不會被正常的過期掃描清掉，
+	# 必須在這裡主動處理——條件比對 id 而不只是 source，避免以後其他 reflex
+	# 來源的任務被誤判成這個 synthetic task 清掉
 	if not _current_task.is_empty() \
 			and _current_task.get("id", "") == "exhaustion_rest" \
 			and _current_task.get("source", "") == "reflex":
