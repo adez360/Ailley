@@ -64,6 +64,34 @@ func test_set_value_unknown_key_is_noop() -> void:
 	assert_eq(stats.get_value("not_a_real_stat"), 0.0, "不存在的欄位不該被寫入")
 
 
+func test_add_announce_emits_stat_changed() -> void:
+	# issue #951：announce=true（明確事件）發 stat_changed，帶原始 delta（含正負、
+	# 夾制前）——Character 接了在頭上飄一塊「飽足感 +40」
+	var stats := track(Stats.new()) as Stats
+	stats.set_value("satiety", 50.0)
+	var got := []
+	stats.stat_changed.connect(func(key, delta): got.append([key, delta]))
+
+	stats.add("satiety", 40.0, true)
+
+	assert_eq(got.size(), 1, "announce=true 應發一次 stat_changed")
+	assert_eq(got[0][0], "satiety")
+	assert_eq(got[0][1], 40.0, "delta 是原始請求量，不是夾制後的實際變化")
+
+
+func test_add_default_does_not_emit() -> void:
+	# 預設 announce=false（自然漂移、內部調整）不發訊號，不會誤飄字
+	var stats := track(Stats.new()) as Stats
+	stats.set_value("satiety", 50.0)
+	var count := [0]
+	stats.stat_changed.connect(func(_k, _d): count[0] += 1)
+
+	stats.add("satiety", 40.0)
+	stats.add("satiety", 0.0, true)  # delta 0 也不發
+
+	assert_eq(count[0], 0, "announce 預設 false、或 delta 為 0 時不該發 stat_changed")
+
+
 func test_apply_drift_moves_need_toward_zero() -> void:
 	var stats := track(Stats.new()) as Stats
 	_seed_all(stats)
