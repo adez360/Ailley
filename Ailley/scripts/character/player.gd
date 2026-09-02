@@ -60,15 +60,14 @@ var _nearby_interactables: Array[Node2D] = []
 ## 版本／鎖的機制，它從頭到尾只有一個值，寫一次之後只會被讀取（issue #399）
 ##
 ## user:// 只依 project.godot 的 project name 解析，不分 worktree/checkout，
-## 跟 DatabaseManager.DATABASE_PATH（issue #334）同一個病根：用這個 checkout
-## 的 res:// 絕對路徑算完整 sha256 接在子目錄後，讓不同 checkout 落地成不同
-## 實體檔案，不會互相覆寫（issue #769）
+## 跟 DatabaseManager.DATABASE_PATH（issue #334）同一個病根：用 CheckoutIsolation
+## 算出的雜湊接在子目錄後，讓不同 checkout 落地成不同實體檔案，不會互相
+## 覆寫（issue #769／#987）
 var _PLAYER_ID_PATH := _compute_player_id_path()
 
 
 static func _compute_player_id_path() -> String:
-	var checkout_hash := ProjectSettings.globalize_path("res://").sha256_text()
-	return "user://saves_%s/player_id.txt" % checkout_hash
+	return "user://saves_%s/player_id.txt" % CheckoutIsolation.compute_hash()
 
 ## 搭話診斷用的逐筆 print()（issue #654：兩個角色重疊時搭話完全沒反應）。
 ## 正常遊玩預設關閉；除錯時改成 true。與 Conversation.TALK_DEBUG（PR #723）
