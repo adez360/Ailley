@@ -2603,7 +2603,17 @@ func _release_home_if_dynamic(npc_id: String) -> void:
 
 	var location_id := str(rows[0].get("home_location_id", ""))
 	if _is_valid_home_location_id(location_id):
-		_demolish_home_scene(location_id)
+		# 溢出共用的家不能被單一退場拆掉（CodeRabbit review on #995）：
+		# _grow_home_supply() 的兩條溢出 fallback（找不到落點、建立／復活
+		# 失敗）會把第二隻角色指到現有 active 家，兩列 npc 共用同一個
+		# home_location_id。任一隻退場就整間拆掉＋is_active=0 的話，還留
+		# 在世界裡那隻的 PlaceAnchors.resolve_for() 會解析不到自己的家——
+		# 先查排除自己後的占用集合，還有別人占著就不拆
+		var occupied := _occupied_home_location_ids(
+			_world_character_ids(), npc_id
+		)
+		if not occupied.has(location_id):
+			_demolish_home_scene(location_id)
 
 
 ## 進世界時把 DB 裡每一筆仍是 active 的家重新 instantiate 一次（issue #825

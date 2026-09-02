@@ -16,10 +16,10 @@ extends McpTestSuite
 ## 每個測試自己在 setup() 塞 loc_home_01~05 當 active fixture、teardown()
 ## 只還原 fixture 動過的列。
 ##
-## 例外：同幀「拆家→復活」的回歸測試（CodeRabbit review on #995）需要活的
-## 場景樹——測試內自掛一個 Level＋PlaceAnchors（place_anchors 群組）假世界，
-## 整棵交給 track() 讓 runner 在測試後收掉；真實世界的 NavGrid 落點搜尋
-## 仍不在涵蓋範圍。
+## 例外：兩個場景相關回歸測試（CodeRabbit review on #995）需要活的場景樹——
+## 測試內自掛測試用節點（假世界 Level＋PlaceAnchors／characters 群組的假
+## 角色），整棵交給 track() 讓 runner 在測試後收掉；真實世界的 NavGrid
+## 落點搜尋仍不在涵蓋範圍。
 ##
 ## 不在本套件涵蓋範圍：需要真場景的部分——loc_home_* 錨點、has_for()/
 ## resolve_for() 的 home 轉譯、_world_character_ids() 對 characters 群組的
@@ -150,6 +150,34 @@ func _insert_test_npc(npc_id: String, home_location_id: String) -> void:
 
 func _home_id(index: int) -> String:
 	return "%s%02d" % [_persistence.HOME_LOCATION_PREFIX, index]
+
+## 兩個場景相關回歸測試共用的 loc_home_NN fixture：共用 DB 可能已有實機
+## 玩出來的同名列——沒有就建一筆（teardown 刪掉），有就記下原值（teardown
+## 還原），不假設它不存在
+func _ensure_test_home(location_id: String) -> void:
+	var rows := DatabaseManager.select(
+		"location", "location_id = '%s'" % location_id, ["is_active", "pos_x", "pos_y"]
+	)
+	if rows.is_empty():
+		assert_true(
+			DatabaseManager.insert("location", {
+				"location_id": location_id,
+				"name": location_id,
+				"description": "",
+				"location_type": "home",
+				"capacity": 1,
+				"danger": 0,
+				"is_active": 0,
+			}),
+			"測試前置：建立已拆除（is_active=0）的 %s" % location_id
+		)
+		_created_location_ids.append(location_id)
+	else:
+		_fixture_prior_active[location_id] = int(rows[0].get("is_active", 0))
+		_fixture_prior_pos[location_id] = {
+			"pos_x": rows[0].get("pos_x", 0.0),
+			"pos_y": rows[0].get("pos_y", 0.0),
+		}
 
 
 ## 游標歸零後連續分配 FIXTURE_HOME_COUNT 次，拿到 01～05 全不重複，且
@@ -400,31 +428,8 @@ func test_same_frame_demolish_then_reactivate_rebuilds_live_nodes() -> void:
 	var location_id := _home_id(6)
 	var house_name := "DynamicHome_%s" % location_id
 
-	# fixture：共用 DB 可能已有實機玩出來的 loc_home_06——沒有就建一筆
-	#（teardown 刪掉），有就記下原值（teardown 還原），不假設它不存在
-	var rows := DatabaseManager.select(
-		"location", "location_id = '%s'" % location_id, ["is_active", "pos_x", "pos_y"]
-	)
-	if rows.is_empty():
-		assert_true(
-			DatabaseManager.insert("location", {
-				"location_id": location_id,
-				"name": location_id,
-				"description": "",
-				"location_type": "home",
-				"capacity": 1,
-				"danger": 0,
-				"is_active": 0,
-			}),
-			"測試前置：建立已拆除（is_active=0）的 %s" % location_id
-		)
-		_created_location_ids.append(location_id)
-	else:
-		_fixture_prior_active[location_id] = int(rows[0].get("is_active", 0))
-		_fixture_prior_pos[location_id] = {
-			"pos_x": rows[0].get("pos_x", 0.0),
-			"pos_y": rows[0].get("pos_y", 0.0),
-		}
+	# fixture：共用 DB 可能已有實機玩出來的 loc_home_06，不假設它不存在
+	_ensure_test_home(location_id)
 
 	# 假世界：比照 level.tscn 的父子結構——Level 底下掛 PlaceAnchors
 	#（place_anchors 群組）；_spawn_home_scene() 靠 anchors.get_parent() 找
@@ -497,4 +502,90 @@ func test_same_frame_demolish_then_reactivate_rebuilds_live_nodes() -> void:
 	assert_true(
 		not rows_after.is_empty() and int(rows_after[0].get("is_active", 0)) == 1,
 		"復活後 %s 應標回 is_active=1" % location_id
+	)
+
+
+## 溢出共用的家不能被單一退場拆掉（CodeRabbit review on #995）：
+## _grow_home_supply() 的兩條溢出 fallback（找不到落點、建立／復活失敗）會把
+## 第二隻角色指到現有 active 家，兩列 npc 共用同一個 home_location_id。任一隻
+## 退場就把家拆掉＋is_active=0 的話，還留在世界裡那隻的
+## PlaceAnchors.resolve_for() 會解析不到自己的家——_release_home_if_dynamic()
+## 要先查排除自己後的占用集合，還有別人占著就不拆；最後一隻退場才照舊拆
+func test_shared_home_survives_release_until_last_occupant_leaves() -> void:
+	if GameManager._world_unloading:
+		skip("測試環境處於世界卸載狀態，_release_home_if_dynamic() 會提前 return")
+		return
+
+	var tree := _persistence.get_tree()
+	if tree == null:
+		skip("測試環境沒有場景樹，無法組世界名冊")
+		return
+	if tree.get_nodes_in_group("characters").size() > 0:
+		skip("測試環境已有 characters 群組節點，無法控制世界名冊")
+		return
+
+	var location_id := _home_id(6)
+	_ensure_test_home(location_id)
+
+	# 溢出共用：兩列 npc 指到同一個家
+	_insert_test_npc(TEST_NPC_PREFIX + "x", location_id)
+	_insert_test_npc(TEST_NPC_PREFIX + "y", location_id)
+
+	# thhome_y 還在世界裡：characters 群組掛一個帶 character_id 的假角色。
+	# _world_character_ids() 用 node.get("character_id") 抓 id、不轉型成
+	# Character，所以一顆掛內聯腳本的 Node 就夠
+	var character_script := GDScript.new()
+	character_script.source_code = "@tool\nextends Node\nvar character_id := \"\""
+	assert_true(
+		character_script.reload() == OK,
+		"測試前置：編譯假角色腳本"
+	)
+	var other_character := Node.new()
+	other_character.set_script(character_script)
+	other_character.set("character_id", TEST_NPC_PREFIX + "y")
+	tree.root.add_child(other_character)
+	other_character.add_to_group("characters")
+	track(other_character)
+
+	# 前置：排除自己（thhome_x）後的占用集合應含這個家
+	var occupied := _persistence._occupied_home_location_ids(
+		_persistence._world_character_ids(), TEST_NPC_PREFIX + "x"
+	)
+	assert_true(
+		occupied.has(location_id),
+		"測試前置：thhome_y 還在世界，%s 應算占用" % location_id
+	)
+
+	# thhome_x 退場：thhome_y 還占著，家不能拆
+	_persistence._release_home_if_dynamic(TEST_NPC_PREFIX + "x")
+	var rows_after := DatabaseManager.select(
+		"location", "location_id = '%s'" % location_id, ["is_active"]
+	)
+	assert_true(
+		not rows_after.is_empty() and int(rows_after[0].get("is_active", 0)) == 1,
+		"共用家的另一位占用者還在，%s 不該被拆（is_active 應維持 1）" % location_id
+	)
+	occupied = _persistence._occupied_home_location_ids(
+		_persistence._world_character_ids(), TEST_NPC_PREFIX + "x"
+	)
+	assert_true(
+		occupied.has(location_id),
+		"退場後占用集合應仍含 %s（thhome_y 還在世界）" % location_id
+	)
+
+	# thhome_y 也退場：沒有別人占用了，照舊拆掉（is_active=0）
+	_persistence._release_home_if_dynamic(TEST_NPC_PREFIX + "y")
+	var rows_last := DatabaseManager.select(
+		"location", "location_id = '%s'" % location_id, ["is_active"]
+	)
+	assert_true(
+		not rows_last.is_empty() and int(rows_last[0].get("is_active", 0)) == 0,
+		"最後一隻退場後 %s 應照舊拆掉（is_active=0）" % location_id
+	)
+	occupied = _persistence._occupied_home_location_ids(
+		_persistence._world_character_ids(), TEST_NPC_PREFIX + "y"
+	)
+	assert_false(
+		occupied.has(location_id),
+		"全部退場後占用集合不該再含 %s" % location_id
 	)
