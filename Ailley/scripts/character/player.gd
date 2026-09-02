@@ -283,6 +283,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	var shop_place: String = candidates["shop_place"]
 	var downed: Character = candidates["downed"]
 	var other: Character = candidates["other"]
+	var corpse: Character = candidates["corpse"]
 
 	# 除錯用（issue #654：兩個角色重疊站在同一格時搭話完全沒反應，追不到
 	# 原因，程式碼審查沒看出漏洞）。列出這一刻視野裡的每個角色跟距離／
@@ -361,20 +362,26 @@ func _unhandled_input(event: InputEvent) -> void:
 			report_action_failure("start_haul", haul_reason)
 		return
 
-	# 死人不能搭話——對著石化的屍體按 E 開的是「復活／搬運」二選一選單
-	# （issue #758），不是直接跟他聊天。revive() 跟 start_haul() 對屍體都能
-	# 成功執行，同一個 interact 鍵沒辦法讓玩家表達要哪一種，所以跟 tip_menu
-	# 同一種「開小選單」寫法，不是直接呼叫。先擋 is_dead 再判表演，屍體不會
-	# 被拿去開打賞選單；其他人（活人）走原本路徑。corpse_menu 理論上一定找
-	# 得到（場景裡固定掛著），跟 vending_menu／tip_menu 同一種「多防一手」
-	# 寫法——場景漏掛時退回原本「直接復活」的舊行為，不讓 E 整個沒反應
-	if other != null and other.is_dead:
+	# 對著石化的屍體按 E 開的是「復活／搬運」二選一選單（issue #758），不是
+	# 直接跟他聊天。revive() 跟 start_haul() 對屍體都能成功執行，同一個 interact
+	# 鍵沒辦法讓玩家表達要哪一種，所以跟 tip_menu 同一種「開小選單」寫法。
+	# 屍體候選走 vision.get_corpses()（issue #986 把死者移出 _visible，issue
+	# #1026 補上這條路），不是從 `other` 反推。corpse_menu 理論上一定找得到
+	# （場景裡固定掛著），跟 vending_menu／tip_menu 同一種「多防一手」寫法——
+	# 場景漏掛時退回原本「直接復活」的舊行為，不讓 E 整個沒反應。
+	# 屍體比可搭話對象遠時讓位給搭話（跟 downed 對 other 同一種距離判斷）。
+	# 過渡窗 fallback：死亡到下一次 _refresh_visible()（CHECK_INTERVAL 0.2s）之間
+	# 死者還在 _visible、尚未進 _corpses，corpse 候選是 null——這個窗內保留
+	# main 的 other.is_dead 判斷，按 E 照樣開屍體選單，不回歸成「搭話失敗泡泡」
+	if (corpse != null and candidates["to_corpse"] <= candidates["to_other"]) \
+			or (other != null and other.is_dead):
+		var corpse_target := corpse if corpse != null else other
 		if corpse_menu != null:
 			if TALK_DEBUG:
 				print("[talk_debug_654] 走了屍體復活／搬運選單分支（issue #758）")
-			corpse_menu.open(other, self)
+			corpse_menu.open(corpse_target, self)
 			return
-		var revive_reason := revive(other)
+		var revive_reason := revive(corpse_target)
 		if TALK_DEBUG:
 			print("[talk_debug_654] 走了直接復活分支（corpse_menu 漏掛 fallback），reason=%s" % revive_reason)
 		if revive_reason != REVIVE_OK:
@@ -449,14 +456,20 @@ func _is_facing(target: Vector2) -> bool:
 ## _working／is_dead／is_offline_asleep），兩邊都收會讓同一個人同時是搭話候選
 ## 又是搬運候選，距離又剛好一樣（HAUL_RANGE == TALK_RANGE），還得另外決哪個優先。
 ## 分流後兩邊各自呼叫一次 _nearest_facing()，跟 workstation 同一種寫法（issue #637）
+##
+## 屍體（`corpse`）走 vision.get_corpses()、不在 get_visible_characters() 裡
+## （issue #986 把死者移出 _visible），跟 downed／other 一樣各自 _nearest_facing()
+## 一次。對屍體按 E 開「復活／搬運」選單（issue #758），見 _unhandled_input()
 func _get_interact_candidates() -> Dictionary:
 	var workstation := _nearest_facing(_nearby_group("workstations"), WORK_RANGE, func(n): return n.global_position) as Workstation
 	var shop_place := _nearest_shop_place()
 	var visible_characters: Array = vision.get_visible_characters() if vision != null else []
+	var corpse_characters: Array = vision.get_corpses() if vision != null else []
 	var downed_characters := visible_characters.filter(func(n): return (n as Character).has_condition(CONDITION_INCAPACITATED))
 	var talkable_characters := visible_characters.filter(func(n): return not (n as Character).has_condition(CONDITION_INCAPACITATED) and not (n as Character).is_offline_asleep)
 	var downed := _nearest_facing(downed_characters, HAUL_RANGE, func(n): return (n as Character).get_body_position()) as Character
 	var other := _nearest_facing(talkable_characters, TALK_RANGE, func(n): return (n as Character).get_body_position()) as Character
+	var corpse := _nearest_facing(corpse_characters, HAUL_RANGE, func(n): return (n as Character).get_body_position()) as Character
 
 	# 不在範圍內／沒被面向的候選距離是 INF，直接輸掉比較，不用另外再寫一層
 	# null／空字串判斷
@@ -466,10 +479,12 @@ func _get_interact_candidates() -> Dictionary:
 		"shop_place": shop_place,
 		"downed": downed,
 		"other": other,
+		"corpse": corpse,
 		"to_work": get_body_position().distance_to(workstation.global_position) if workstation != null else INF,
 		"to_shop": get_body_position().distance_to(anchors.resolve(shop_place)) if not shop_place.is_empty() and anchors != null else INF,
 		"to_downed": get_body_position().distance_to(downed.get_body_position()) if downed != null else INF,
 		"to_other": get_body_position().distance_to(other.get_body_position()) if other != null else INF,
+		"to_corpse": get_body_position().distance_to(corpse.get_body_position()) if corpse != null else INF,
 	}
 
 ## 餐酒館／藥草鋪這兩個地點目前唯一還有 buy 這個交易入口（issue #572：拿掉
@@ -558,6 +573,7 @@ func _process(_delta: float) -> void:
 	var workstation: Workstation = candidates["workstation"]
 	var downed: Character = candidates["downed"]
 	var other: Character = candidates["other"]
+	var corpse: Character = candidates["corpse"]
 
 	var target_workstation: Workstation = null
 	var target_other: Character = null
@@ -581,6 +597,9 @@ func _process(_delta: float) -> void:
 		pass		# 商店贏了，但沒有節點可高亮
 	elif downed != null and candidates["to_downed"] <= candidates["to_other"]:
 		target_other = downed
+	elif corpse != null and candidates["to_corpse"] <= candidates["to_other"]:
+		# 屍體優先於搭話：_unhandled_input() 的屍體分支排在 talk_to() 之前
+		target_other = corpse
 	elif other != null:
 		target_other = other
 
