@@ -6,7 +6,8 @@ extends Node2D
 ##
 ## 跟 work_progress.gd／money_popup.gd 同一種「頭上飄一塊 UI」掛法，差別在
 ## 顯示時機不由呼叫端逐次推播，而是輪詢型：自己訂閱 GameClock.time_changed，
-## 每遊戲分鐘重讀宿主（get_parent() 必須是 Character）的昏迷狀態。選輪詢的
+## 每遊戲分鐘重讀宿主（往上找第一個 Character 祖先——實際掛在 Character 底下
+## 的 UI 節點下，見 character.gd::_ready()）的昏迷狀態。選輪詢的
 ## 理由：昏迷可能經 load_save_data() 還原——那條路徑只重建 condition、不會
 ## 經過 _start_incapacitation()，事件推播會漏掉；倒數本身也是「條件持續成立
 ## 就持續顯示」的狀態，不是一次性事件。
@@ -29,6 +30,8 @@ var _label: Label
 
 func _ready() -> void:
 	position = OFFSET
+	# 既有頭上 UI 的基準 z_index（Bubble/WorkProgress/MoneyPopup 場景值都是 10）
+	z_index = 10
 	visible = false
 
 	_label = Label.new()
@@ -47,7 +50,13 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 
 
 func _refresh() -> void:
-	var character := get_parent() as Character
+	# 實際掛在 Character 底下的 UI 節點（Node2D）下，宿主要往上找第一個
+	# Character 祖先；輕量實例（測試等）沒有 Character 祖先就安靜跳過
+	var node := get_parent()
+	var character := node as Character
+	while character == null and node != null:
+		node = node.get_parent()
+		character = node as Character
 	if character == null or character.is_dead:
 		visible = false
 		return
