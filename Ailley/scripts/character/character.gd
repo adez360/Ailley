@@ -654,8 +654,9 @@ func _update_exhausted_condition() -> void:
 	elif stamina > EXHAUSTION_RECOVERY_THRESHOLD and has_condition(CONDITION_EXHAUSTED):
 		_set_condition(CONDITION_EXHAUSTED, false)
 
-## 開始昏迷（health ≤ 0 觸發）。記錄開始時間，30 分鐘內若無人搬走則自動傳送藥草鋪
-## （《99》P-27，搬走邏輯依賴 #161 haul/struggle）
+## 開始昏迷（health ≤ 0 觸發）。記錄開始時間作為昏迷倒數基準：逾時未獲救治
+## 轉入真正死亡流程（#379，依 #368 拍板，見《規格書09》文首拍板 note）。
+## 搬走邏輯依賴 #161 haul/struggle（《99》P-27）
 func _start_incapacitation() -> void:
 	_set_condition(CONDITION_INCAPACITATED, true)
 	_incapacitation_start_minute = GameClock.hour * 60 + GameClock.minute
