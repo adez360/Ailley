@@ -229,3 +229,15 @@ UI_CORPSE_MENU_REVIVE,"復活","Revive"
 UI_CORPSE_MENU_HAUL,"搬運","Haul"
 UI_CORPSE_MENU_DECAY,"腐壞進度 {percent}%，還剩約 {hours} 小時未安葬會立無名碑","Decay {percent}%, about {hours}h left before an unmarked grave"
 UI_CORPSE_MENU_BURIED,"已安葬","Buried"
+UI_DB_INIT_FAILED_TITLE,"資料庫初始化失敗","Database initialization failed"
+UI_DB_INIT_FAILED_BODY,"資料庫初始化失敗，遊戲無法繼續啟動。
+
+存檔資料庫：{path}
+
+可能是這個資料庫的版本跟目前遊戲版本不相容（例如切換到較舊的分支/版本）。
+請查看遊戲 log 或聯絡開發者處理；必要時可備份後刪除上面這個檔案讓遊戲重建一份全新的資料庫。","Database initialization failed; the game cannot start.
+
+Save database: {path}
+
+The database version is probably incompatible with this build (e.g. you switched to an older branch/version).
+Check the game log or contact the developer; if needed, back up and delete the file above to let the game rebuild a fresh database."

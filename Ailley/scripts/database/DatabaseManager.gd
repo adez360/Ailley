@@ -730,7 +730,7 @@ func _table_has_column(
 ##
 ## 專案目前沒有任何遊戲內的 toast／通知系統（見 note/技術/存檔.md「存哪」
 ## 一節），OS.alert() 是不必新建 UI 就能面向玩家的一次性提示；DatabaseManager
-## 是最早 _ready() 的 autoload 之一（見 project.godot [autoload] 順序），
+## 是 main scene 載入前就會跑完 _ready() 的 autoload 之一（見 project.godot [autoload] 順序），
 ## alert 期間引擎會阻塞在這裡，main_menu.tscn（run/main_scene）要等所有
 ## autoload 都 _ready() 完才會載入，玩家看到的只有這個提示，不會先閃過
 ## 主選單。alert 關閉後立刻 quit()，遊戲不會帶著壞掉的 DB 往下開機。
@@ -741,16 +741,8 @@ func _halt_on_init_failure() -> void:
 	)
 
 	OS.alert(
-		(
-			"資料庫初始化失敗，遊戲無法繼續啟動。\n\n"
-			+ "存檔資料庫：%s\n\n"
-			+ "可能是這個資料庫的版本跟目前遊戲版本不相容"
-			+ "（例如切換到較舊的分支/版本）。\n"
-			+ "請查看遊戲 log 或聯絡開發者處理；必要時可備份後"
-			+ "刪除上面這個檔案讓遊戲重建一份全新的資料庫。"
-		)
-		% real_path,
-		"資料庫初始化失敗"
+		L10n.tf("UI_DB_INIT_FAILED_BODY", {"path": real_path}),
+		L10n.t("UI_DB_INIT_FAILED_TITLE")
 	)
 
 	get_tree().quit(1)
