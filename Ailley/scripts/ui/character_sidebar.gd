@@ -33,6 +33,8 @@ var _closed_x: float
 var _open_x: float
 var _tween: Tween
 
+var _row_collapsed_height: float = 0.0
+
 
 func _ready() -> void:
 	_closed_x = VIEWPORT_W - _tab_button.custom_minimum_size.x
@@ -94,11 +96,12 @@ func _refresh() -> void:
 		_list.add_child(_row(character))
 
 
-## 一列是 character_row.tscn 的實例（Button 內含縮圖＋名稱）＋一顆「收回」鈕，
-## 包成 HBoxContainer 當兄弟節點——不要把收回鈕塞進 character_row.tscn 的
-## Button 裡面當子節點，那會撞上 character_create.gd 模板列已經踩過的坑
-## （Button 包 Button 會吃掉子按鈕的點擊，見該檔案 _template_row() 的說明）。
-## character_row.tscn 本身的內容（縮圖＋名稱）要調外觀去改那份場景，不要在
+## 一列是 character_row.tscn 的實例（toggle_mode 的 Button，內含縮圖＋名稱＋
+## 展開卡）＋一顆「收回」鈕，包成 HBoxContainer 當兄弟節點——不要把收回鈕塞
+## 進 character_row.tscn 的 Button 裡面當子節點，那會撞上 character_create.gd
+## 模板列已經踩過的坑（Button 包 Button 會吃掉子按鈕的點擊，見該檔案
+## _template_row() 的說明）。character_row.tscn 本身的內容（縮圖＋名稱＋展開卡）
+## 要調外觀去改那份場景，不要在
 ## 這裡再寫一套組節點的程式碼
 func _row(character: Character) -> Control:
 	var row: Button = ROW_SCENE.instantiate()
@@ -107,7 +110,10 @@ func _row(character: Character) -> Control:
 	var name_label: Label = row.get_node("MarginContainer/HBoxContainer/Label")
 	name_label.text = character.character_name
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.pressed.connect(_on_row_pressed.bind(character))
+	_row_collapsed_height = row.custom_minimum_size.y
+	var expand: Control = row.get_node("Expand")
+	expand.set_character(character)
+	row.toggled.connect(_on_row_toggled.bind(character, row, expand))
 
 	# 收回（issue #974）：目前化身角色與已死亡角色不能收回
 	# （GameManager.recall_from_library() 本來就會拒絕，這裡先 disable 讓玩家
@@ -125,18 +131,25 @@ func _row(character: Character) -> Control:
 	return wrapper
 
 
-## 點列表裡的角色，鏡頭跟著他——走 Selection（world/selection.gd）同一套
+## row 是 toggle 按鈕，每一列各自獨立開關，可以同時展開好幾列比較。按下（切
+## 到展開）當下鏡頭跟著這個角色——走 Selection（world/selection.gd）同一套
 ## 選取機制，不繞過去直接呼叫 FollowCamera，這樣 _selected／描邊那些狀態
-## 才會跟世界地圖上點角色是同一回事，不會兩邊各自一套。側欄本身留著不收合，
-## 方便連續點好幾個角色比較
-func _on_row_pressed(character: Character) -> void:
+## 才會跟世界地圖上點角色是同一回事。收合不動選取，只有按下那一刻才切鏡頭。
+## 展開高度直接讀 Expand（status_bars.tscn 實例）排版後的最小高度，不在這裡
+## 另外寫一份數字跟場景重複
+func _on_row_toggled(pressed: bool, character: Character, row: Button, expand: Control) -> void:
 	if not is_instance_valid(character):
 		return
-	var selection := get_tree().get_first_node_in_group("selection") as Selection
-	if selection == null:
-		push_error("CharacterSidebar: 找不到 Selection")
-		return
-	selection.select(character)
+	expand.visible = pressed
+	if pressed:
+		row.custom_minimum_size.y = expand.position.y + expand.get_combined_minimum_size().y
+		var selection := get_tree().get_first_node_in_group("selection") as Selection
+		if selection == null:
+			push_error("CharacterSidebar: 找不到 Selection")
+		else:
+			selection.select(character)
+	else:
+		row.custom_minimum_size.y = _row_collapsed_height
 
 
 ## 收回（issue #974）：GameManager.recall_from_library() 把肉體 queue_free()、
