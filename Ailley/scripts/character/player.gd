@@ -437,8 +437,9 @@ func _is_facing(target: Vector2) -> bool:
 ##
 ## 工作站候選來自 InteractArea（Area2D，見 _ready()），取代原本每次呼叫都
 ## 掃過整個 group 的寫法。商店候選（issue #572）不是場景物件，直接對
-## `_nearest_shop_place()` 那兩個已知地點各檢查一次距離＋面向，數量固定
-## 只有 2 個，不值得為此另開一個 Area2D。角色候選改用
+## `_nearest_shop_place()` 那兩個已知地點各檢查一次是否站進地點的 Area2D
+## 範圍（issue #1022，不要求面向——地點是站進去的區域，不是站在外面面對的
+## 一個點），數量固定只有 2 個，不值得為此另開一個 Area2D。角色候選改用
 ## `vision.get_visible_characters()`，不另開 Area2D（issue #109 拍板，見
 ## note/技術/talk 動作設計.md）——反正 talk_to() 已經要做視線判定，搭話
 ## 候選跟著視線走沒理由重複維護兩份
@@ -475,34 +476,21 @@ func _get_interact_candidates() -> Dictionary:
 ## 販賣機實體道具，改成直接跟地點互動）
 const SHOP_PLACES := ["tavern", "herb_shop"]
 
-## 站在商店地點旁邊、且面向該地點時，回傳地點名稱；都不符合回空字串。
-## 跟 _nearest_facing() 同一套「面向＋距離」判斷，只是候選是固定的兩個
-## PlaceAnchors 座標，不是場上的節點
+## 站在商店地點的 Area2D 範圍內時，回傳地點名稱；都不在回空字串。跟
+## _nearest_facing() 那套「面向＋距離」判斷不是同一套——地點是站進去的區域，
+## 不是站在外面面對的一個點，站進區域後往哪個方向面對都算數（issue #1022：
+## 商店改成 Area2D 之後，原本的點+半徑+面向判斷把區域內大半範圍誤判成
+## 「太遠」或「沒面向」，買賣幾乎按不進去）
 func _nearest_shop_place() -> String:
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
 	if anchors == null:
 		return ""
 
-	var best_place := ""
-	var best_distance := INF
-
 	for place in SHOP_PLACES:
-		if not anchors.has(place):
-			continue
+		if anchors.is_within(place, get_body_position()):
+			return place
 
-		var target: Vector2 = anchors.resolve(place)
-		if not _is_facing(target):
-			continue
-
-		var distance := get_body_position().distance_to(target)
-		if distance > BUY_RANGE:
-			continue
-
-		if distance < best_distance:
-			best_distance = distance
-			best_place = place
-
-	return best_place
+	return ""
 
 ## 同一類（工作站／販賣機／角色）裡，玩家面向著的、距離最近的那個。沒面向
 ## 的候選直接跳過，不進距離比較——即使範圍內只有這一個候選，沒面向就是
@@ -544,7 +532,7 @@ func _nearby_group(group: String) -> Array:
 # 同一種寫法——目標沒變就不重複呼叫 set_highlighted()。對話中不顯示任何
 # 互動高亮：這時候按 E 是離開對話，不是觸發工作站/商店/搭話。商店（issue
 # #572 起）不是場景物件，沒有節點可以掛描邊高亮，這裡只算優先序、不畫
-# 任何東西——玩家走進 BUY_RANGE 面向地點就能按 E，沒有額外的視覺提示
+# 任何東西——玩家走進商店地點的 Area2D 範圍就能按 E，沒有額外的視覺提示
 var _highlighted_workstation: Workstation = null
 var _highlighted_other: Character = null
 
