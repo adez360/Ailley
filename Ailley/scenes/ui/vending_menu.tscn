@@ -50,7 +50,7 @@ horizontal_scroll_mode = 0
 
 [node name="ItemList" type="VBoxContainer" parent="Panel/VBox/ItemScroll"]
 layout_mode = 2
-size_flags_horizontal = 1
+size_flags_horizontal = 3
 theme_override_constants/separation = 3
 
 [node name="HintLabel" type="Label" parent="Panel/VBox"]
