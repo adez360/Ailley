@@ -241,6 +241,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	# 另開一個按鍵；其餘失敗原因（墓碑滿了）才真的回報給玩家
 	if is_hauling():
 		var haul_target := get_hauling_target()
+		# 昏迷但還活著的目標不是屍體，bury() 一定回傳 BURY_TARGET_NOT_DEAD——
+		# 這種情況沒有「安葬」可言，直接當放下處理（issue #958）
+		if not haul_target.is_dead:
+			stop_haul()
+			return
 		var bury_reason := bury(haul_target)
 		if bury_reason == BURY_OK:
 			return
