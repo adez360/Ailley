@@ -440,6 +440,11 @@ func _ready() -> void:
 	# 且會跟著 GameClock 的時間流速走，不會像 stats.gd 的連續 drift 那樣綁死真實秒數
 	GameClock.time_changed.connect(_on_game_minute)
 
+	# 明確事件造成的數值變動 → 頭上飄一塊「飽足感 +40」（issue #951）。自然
+	# 漂移不會走到這裡（stats.gd::add() 只在 announce=true 時發訊號）
+	if stats != null and money_popup != null:
+		stats.stat_changed.connect(_on_stat_changed)
+
 # 隨機的 UUID v4。刻意不帶任何語意 —— 擁有者、名字、行程都不編進去，
 # 那些各自是欄位。把 owner 寫進 id 的話，帳號系統一改就得替所有存檔寫遷移
 static func generate_id() -> String:
@@ -501,6 +506,16 @@ func _find_id_holder(id: String) -> Character:
 ## 判斷是否落在 tick 邊界上，不是每次都跑，也不是本地累加器——跟 Stats 漂移共用
 ## 同一個全域邊界，兩者永遠同步觸發。拿規格書自己的算例反查：joy intensity=60、
 ## stability=90、grudge=75 應該是 9 tick ≈ 1.5 小時（90 遊戲分鐘），不是 9 遊戲分鐘
+
+## 明確事件造成的數值變動 → 頭上飄一塊「<欄位> +N」（issue #951）。欄位名走
+## Stats.SPEC 的 label 翻譯 key（STAT_*），跟金錢的 UI_STATUS_MONEY 共用
+## money_popup.show_change()。四捨五入成整數顯示——小數點對玩家沒意義
+func _on_stat_changed(key: String, delta: float) -> void:
+	var amount := int(round(delta))
+	if amount == 0:
+		return
+	money_popup.show_change(Stats.SPEC[key]["label"], amount)
+
 
 func _on_game_minute(_hour: int, _minute: int) -> void:
 	# 昏迷與治療檢查每遊戲分鐘執行（與 GameClock.time_changed 同步）
@@ -931,6 +946,12 @@ func _die(cause: String) -> void:
 	# 死亡狀態機（is_dead、石化、decay 開始累積）不該卡在那份請求後面才生效
 	_request_last_words(cause)
 
+	# life_highlights 彙整（#953）：跟 last_words 一樣是死亡當下要定格進墓碑的
+	# 欄位，但這半是純引擎彙整 L4 核心記憶、不打 LLM，所以同步做、不走
+	# _request_last_words() 那條 await。基底 no-op（Player 沒有記憶系統），
+	# Agent 覆寫，見 agent.gd
+	_capture_life_highlights()
+
 ## 死亡本體變灰／存活還原正常顏色。獨立成函式是因為 load_save_data() 明確
 ## 允許在節點還沒進場景樹時呼叫（見該函式開頭註解）——這時 @onready var sprite
 ## 還沒初始化，直接寫 sprite.modulate 會炸掉，這裡統一擋 null（CodeRabbit
@@ -966,6 +987,13 @@ func _apply_grave_visual(buried: bool) -> void:
 ## （來不及開口，跟《規格書09》§2 表格「無機會留遺言」的語意不同，是單純沒有
 ## 生成管道）。Agent 覆寫這個 hook 真正送出 LLM 請求，見 agent.gd
 func _request_last_words(_cause: String) -> void:
+	pass
+
+## 墓碑生平彙整的掛點，基底 no-op：只有 Agent 有 memory 與 life_highlights 欄位
+## （Player 死亡走佔位文案，見 epitaph_input.gd）。死亡當下同步呼叫，取的是
+## 「死掉那一刻的一生」——決策迴圈停止後 memory 不再更新。見 agent.gd 的覆寫
+## 與《規格書09》§4-2
+func _capture_life_highlights() -> void:
 	pass
 
 ## 死亡時刻換算成全域遞增的 tick 計數（《規格書09》§2 death_tick 範例
@@ -1499,13 +1527,13 @@ func is_offline_kick_eligible() -> bool:
 ## 定義的「聽覺（一般說話）3 格」是物理上聽不聽得到，不分是哪種介面講出來的
 ## （issue #669）。
 ##
-## broadcast=false：內部系統 fallback 泡泡（`!?`／`！` 這類感測不到 LLM
-## 回應時的寫死反應）不是「這個角色真的說了什麼」，不該算進《07》§3 的
-## 「聽得到的對話」——放行的話，鄰近的 LLM 角色會把這句 `!?` 當成一句話
-## 排進自己的事實句佇列、觸發一次決策，決策若同樣問不到結果又冒出自己的
-## `!?`，在 3 格範圍內連環擴散成一波決策請求風暴（CodeRabbit review 抓到，
-## PR #674）。所有這類 fallback 泡泡呼叫端都要傳 false，見 agent.gd／player.gd
-## 的 _on_noise_heard()／_on_speech_heard()／_react_to_spotted_fallback()
+## broadcast=false：系統狀態指示（對話中「不理會」這種提示泡泡）不是
+## 「這個角色真的說了什麼」，不該算進《07》§3 的「聽得到的對話」——放行的話，
+## 鄰近的 LLM 角色會把它當成一句話排進自己的事實句佇列、觸發一次決策，
+## 在 3 格範圍內連環擴散成一波決策請求風暴（CodeRabbit review 抓到，PR #674）。
+## 感測不到 LLM 回應時引擎不再冒寫死反應（issue #949），所以這類呼叫端已大幅
+## 減少；剩下的系統指示泡泡呼叫端都要傳 false：player.gd 的 _on_noise_heard、
+## chat_input.gd、conversation.gd 的 DLG_IGNORED
 func say(line: String, interrupt: bool = false, broadcast: bool = true) -> void:
 	if bubble == null:
 		return
@@ -1706,7 +1734,7 @@ func _run_work(workstation: Workstation, session_id: int) -> void:
 	if inventory != null:
 		inventory.add_money(WORK_PAYMENT)
 		if money_popup != null:
-			money_popup.show_change(WORK_PAYMENT)
+			money_popup.show_change("UI_STATUS_MONEY", WORK_PAYMENT)
 
 # 收尾：放掉工作站、清狀態與進度條。**撥款不在這裡**——做滿全程才給，
 # 半途放棄走的是同一條收尾路徑但沒有那一行
@@ -1771,7 +1799,7 @@ func buy_from(place: String, item_id: String) -> String:
 	# 退款的路徑不會走到這裡——買賣真的成立、錢是真的扣了，才值得頭上飄一個
 	# -N。中途失敗退款的話淨變動是 0，飄出來只會讓人以為扣了又加，很奇怪
 	if money_popup != null:
-		money_popup.show_change(-price)
+		money_popup.show_change("UI_STATUS_MONEY", -price)
 
 	return BUY_OK
 

@@ -17,9 +17,6 @@ extends Character
 ## 誰用哪份行程是資料，寫在資料檔裡才有辦法逐隻不同。
 @export var schedule_template := ""
 
-## 看到陌生人之後愣住多久（現實秒）
-const NOTICE_PAUSE := 2.0
-
 ## 決策迴圈開關（#88）：開啟後 LLM 任務完成時會觸發下一次決策請求，
 ## 經 AISchema 驗證後推進 _tasks，跟仲裁器裡其他來源的任務公平競爭。
 ##
@@ -49,10 +46,10 @@ var _words_to_creator_spoken := false
 ## 判定是否要說出口的 AI 呼叫進行中（見 maybe_speak_to_creator() 的鎖）
 var _words_to_creator_pending := false
 
-## #381：墓碑四內容欄位其中兩個（《規格書 09》§4-2）。life_highlights 由引擎彙整
-## L4 核心記憶產出，絕不讓 LLM 潤飾——彙整函式 `Memory.get_life_highlights()`
-## 已實作（#384），但死亡流程（`Character._die()`）還沒有任何呼叫端把結果寫進
-## 這個欄位，見 [[記憶與睡眠反思]]「墓碑欄位 life_highlights」。
+## #381：墓碑內容欄位（《規格書 09》§4-2）。life_highlights 由引擎彙整
+## L4 核心記憶產出，絕不讓 LLM 潤飾——彙整函式 `Memory.get_life_highlights()`（#384）
+## 由死亡流程 `Character._die()` → 下面覆寫的 `_capture_life_highlights()`（#953）
+## 在死亡當下寫入，見 [[記憶與睡眠反思]]「墓碑欄位 life_highlights」。
 ## words_to_creator 是墓碑第三個欄位，已存在於上面（#164），不重複宣告。
 ## last_words（第二個欄位）改由 Character 基底宣告（#379，死亡狀態機落地時
 ## 才發現這裡本來就先開了欄位形狀——Godot 4.5 不允許子類別重新宣告父類別
@@ -316,11 +313,6 @@ var _pending_persuade: Dictionary = {}
 # 這裡不需要模型回覆特定欄位表態，_fact_lines_summary() 讀到的當下
 # 就直接消化清空，不留到下一輪、也不用等回應來解析
 var _pending_reaction_lines: Array[String] = []
-
-# 正在對陌生人做「！」反應。那 2 秒刻意站著不動，期間不重新起步——
-# GameClock 一個遊戲分鐘就是 1 現實秒，不擋的話 1 秒後就被送回路上，
-# 2 秒的愣住實際上只有 1 秒
-var _reacting := false
 
 # 目前有沒有一份決策請求還沒回來。_reevaluate() 靠它避免同一份請求還在飛時
 # 又觸發第二份（同一個 LLM 任務完成的當下可能被重算好幾次），
@@ -1069,31 +1061,66 @@ func _is_preemptible() -> bool:
 # 任務。憑當下的 _current_task 判斷會有兩種撲空：真正該清的那筆任務已經
 # 不是 _current_task、清不到；或是被別人搭話時，自己另一筆不相干的待辦
 # talk 任務剛好是 _current_task，被誤刪
+## 對話結束時記進 _daily_events 的客觀事實句措辭（issue #950）。抽成純函式
+## 方便測試：把「哪種結束原因對應哪句事實」跟 exit_conversation() 其餘要碰
+## 場景樹／autoload 的部分拆開。措辭只陳述發生了什麼，不定性「被冷落」
+## 「聊得不愉快」——那是 AI 睡前反思自己判斷的事（《00》原則二）。
+## is_initiator 只在 REASON_IGNORED 分兩種說法時用到。
+static func _conversation_end_fact(reason: String, other_name: String, had_exchange: bool, is_initiator: bool) -> String:
+	match reason:
+		Conversation.REASON_IGNORED:
+			# 對方一句話沒說就不理會（複審 PR #667）：兩邊各給誠實的說法
+			return (
+				"%s 不理你的搭話，沒有回應" % other_name if is_initiator
+				else "你不理會 %s 的搭話" % other_name
+			)
+		Conversation.REASON_NO_RESPONSE:
+			# 引擎要不到台詞（LLM 停用／逾時，見 conversation.gd 的
+			# _finish_with_fallback()），不是任何人選擇不理會——兩邊都只能
+			# 誠實記「沒有回應」，不能寫成誰「不理會」誰
+			return (
+				"%s 沒有回應你的搭話" % other_name if is_initiator
+				else "你沒有回應 %s 的搭話" % other_name
+			)
+		Conversation.REASON_TOO_FAR, Conversation.REASON_INTERRUPTED:
+			# 距離拉開／被打斷而中止。玩家按 E 搭話後、在對方還沒開口
+			# （turn 0 等 LLM）時就走開也走這條——沒交換過任何一句，
+			# 記「講完話了」是假事實
+			return (
+				"你和 %s 的對話中途中斷了" % other_name if had_exchange
+				else "你和 %s 的對話還沒開始就中斷了" % other_name
+			)
+		_:
+			return "你跟 %s 講完話了" % other_name
+
+
 func exit_conversation(reason: String = "") -> void:
 	# 事件事實句要在 super() 把 _conversation 清成 null 之前先讀——這裡只記
-	# 客觀事實（跟誰講完話／被不理會），不記對話內容好壞，那是睡前反思時 LLM
-	# 自己判斷的事
+	# 客觀事實（跟誰講完話／被不理會／對話中斷），不記對話內容好壞，那是睡前
+	# 反思時 LLM 自己判斷的事。措辭見 _conversation_end_fact()（issue #950）
 	#
-	# REASON_IGNORED（複審 PR #667 抓到）：對方一句話沒說就不理會，「你跟 X
-	# 講完話了」是假話，兩邊要分別給誠實的說法——被搭話的一方看到的是自己
-	# 選擇不理會，發起搭話的一方看到的是對方沒有回應
+	# REASON_NO_RESPONSE（引擎要不到台詞，見 conversation.gd 的
+	# _finish_with_fallback()）：不是任何人選擇不理會，兩邊都只能記「沒有回應」
 	if _conversation != null:
 		var other: Character = _conversation.target if _conversation.initiator == self else _conversation.initiator
 		if other != null:
+			var had_exchange: bool = _conversation.turn_count() > 0
+			var event_text := _conversation_end_fact(
+				reason, other.character_name, had_exchange, self == _conversation.initiator
+			)
 			# #426：current_place 對指名對話（direct-target talk）從頭到尾是
 			# 空字串（沒有 place 可言），這裡改用即時座標反查——對話結束當下
 			# 兩人就站在彼此旁邊，位置是準的
-			var event_text: String
-			if reason == Conversation.REASON_IGNORED:
-				event_text = (
-					"%s 不理你的搭話，沒有回應" % other.character_name if self == _conversation.initiator
-					else "你不理會 %s 的搭話" % other.character_name
-				)
-			else:
-				event_text = "你跟 %s 講完話了" % other.character_name
+
 			_push_daily_event(event_text, [other.character_id], _resolve_actual_place())
-			# 「多久沒說話」事實句的計時基準（#338）
-			_last_social_minute = _now_minutes()
+			# 「多久沒說話」事實句的計時基準（#338）：一句話都沒交換的中斷
+			# （距離拉開／被打斷、turn 0 就散）不算「講到話」，不重設計時基準
+			var contactless_break := (
+				(reason == Conversation.REASON_TOO_FAR or reason == Conversation.REASON_INTERRUPTED)
+				and not had_exchange
+			)
+			if not contactless_break:
+				_last_social_minute = _now_minutes()
 
 	super(reason)
 
@@ -1101,11 +1128,21 @@ func exit_conversation(reason: String = "") -> void:
 		var was_llm := _active_talk_task_source == "llm"
 
 		# talk_to() 剛送出時只知道對話物件建立成功，對方 turn 0 要不要理還沒
-		# 問——真正的結果要等這裡知道 reason 才算數，被無視（REASON_IGNORED）
-		# 算失敗，這樣連續失敗計數才會如實累積，下輪決策才有機會避開同一個
-		# 一再不理自己的對象（複審 PR #667 抓到，原本在 _pursue_talk_task()
-		# 送出當下就搶先記成功）
-		_track_action_result_for_facts("talk", reason != Conversation.REASON_IGNORED)
+		# 問——真正的結果要等這裡知道 reason 才算數（複審 PR #667 抓到，原本在
+		# _pursue_talk_task() 送出當下就搶先記成功）：
+		#   REASON_IGNORED：被無視，算失敗，連續失敗計數如實累積，下輪決策才
+		#     有機會避開一再不理自己的對象。
+		#   REASON_NO_RESPONSE：引擎要不到回應（非對方選擇），同樣算失敗。
+		#   REASON_TOO_FAR／REASON_INTERRUPTED：距離拉開或被打斷而中止，既沒
+		#     完成也不是被拒絕——不動連續失敗計數，不誤導下輪決策（issue #950）。
+		#   其餘（正常講完／聽者收尾）：算成功。
+		match reason:
+			Conversation.REASON_IGNORED, Conversation.REASON_NO_RESPONSE:
+				_track_action_result_for_facts("talk", false)
+			Conversation.REASON_TOO_FAR, Conversation.REASON_INTERRUPTED:
+				pass
+			_:
+				_track_action_result_for_facts("talk", true)
 
 		_remove_task(_active_talk_task_id)
 		if _current_task.get("id", "") == _active_talk_task_id:
@@ -1481,6 +1518,15 @@ func _request_last_words(cause: String) -> void:
 	if not result["ok"]:
 		return
 	last_words = result["data"]["last_words"]
+
+## 墓碑生平彙整（#384／#953，《規格書09》§4-2）。覆寫 Character 的 no-op 掛點——
+## _die() 死亡當下同步呼叫，把 L4 核心記憶彙整成 life_highlights 定格進墓碑。
+## get_life_highlights() 純資料格式化、不打 LLM，不需要 await 也不需要世代守衛。
+## #384 只做了彙整函式，這裡是把它接上死亡流程的呼叫端
+func _capture_life_highlights() -> void:
+	if memory == null:
+		return
+	life_highlights = memory.get_life_highlights()
 
 ## 正式決策迴圈（#88）的請求端，模式照抄 next_line()——build envelope、await
 ## AIService、parse_completion、validate_*，任何一關失敗都靜默放棄，任務池
@@ -2403,39 +2449,15 @@ func _on_spotted(other: Character) -> void:
 
 	_push_daily_event("你第一次注意到 %s" % other.character_name, [other.character_id])
 
+	# 引擎不替角色決定反應（issue #949／《00》原則二）：事件已經記進
+	# _daily_events，要不要停下來、要不要說話交給模型的 tasks[] 決定。
+	# 排程模式（沒有 LLM 可問）＝ 就是沒有立即反應，事件仍留著等下次反思——
+	# 不冒寫死的「！」，那是引擎指定的反應
 	if llm_decision_enabled:
 		_queue_reaction_fact_line(
 			"你第一次注意到 %s，要不要停下來、要不要說些什麼，由你自己決定" % other.character_name
 		)
-		var result := await _request_next_decision()
-		if is_dead:
-			return
-		if result.get("triggered", false) and not result.get("ok", false):
-			await _react_to_spotted_fallback()
-		return
-
-	await _react_to_spotted_fallback()
-
-# 陌生人反應的寫死版本，兩種情況共用：排程模式（沒有 LLM 可問）、以及
-# llm_decision_enabled 開著但這次決策問不到結果
-func _react_to_spotted_fallback() -> void:
-	# broadcast=false：這是系統 fallback 泡泡，不是角色真的說了什麼，不該被
-	# 3 格內的人當成「聽到的對話」——同 _on_noise_heard()／_on_speech_heard()
-	# 的理由，見 character.gd::say() 的說明（CodeRabbit review 抓到，PR #674）
-	say(L10n.t("DLG_SURPRISE"), false, false)
-	stop_moving()
-
-	# _reacting 期間 _pursue_current_task() 不重新起步。少了它，1 秒後
-	# GameClock 的重算就會把角色送回路上，NOTICE_PAUSE 訂 2 秒實際上只有 1 秒
-	_reacting = true
-	await get_tree().create_timer(NOTICE_PAUSE).timeout
-	_reacting = false
-
-	# 愣完重算行程而不是接回原本那條路：這 2 秒可能已經跨過行程的整點，
-	# 與 exit_conversation() 同一個理由。剛剛的 stop_moving() 已經把路徑清掉，
-	# 這次重算會重新起步
-	if not is_in_conversation():
-		_reevaluate()
+		await _request_next_decision()
 
 # 視野裡跟丟某個人（issue #405）。
 #
@@ -2472,13 +2494,15 @@ func _on_lost(other: Character) -> void:
 	_queue_reaction_fact_line("你看不到 %s 了，要不要有反應由你自己決定" % other.character_name)
 	await _request_next_decision()
 
-# 範圍內有人發出聲音（見 character.gd 的 make_noise()）。
+# 範圍內有人發出聲音（見 character.gd 的 make_noise()／shout）。
 # 跟 _on_spotted 不同，這裡不記錄「已經反應過」——聲音是一次性事件，
-# 每次都該有反應，不是像陌生人那樣「見過一次就不再驚訝」
+# 每次都該有反應，不是像陌生人那樣「見過一次就不再驚訝」。
 #
-# llm_decision_enabled 開著時（#407）：同 _on_spotted() 的做法，事實句
-# 排隊＋立刻問一次模型，不寫死冒 !?——問不到結果時一樣退回寫死反應，
-# 理由跟 _on_spotted() 的說明相同
+# 引擎不替角色決定反應（issue #949／《00》原則二）：事件記進 _daily_events
+# 留給睡前反思，llm_decision_enabled 開著時再多排一次立即決策——要不要有
+# 反應、冒不冒驚呼由模型的 tasks[] 決定。問不到結果（逾時／驗證失敗）時
+# 不再退回寫死的「!?」，事件已經留在 _daily_events 裡。noise（make_noise／
+# shout）本來就低頻，記進 _daily_events 不會洗版
 func _on_noise_heard(_source: Character) -> void:
 	# 死屍不反應（CodeRabbit review 抓到），同 _on_spotted() 的理由——這是
 	# character.gd::make_noise() 直接觸發的外部事件回呼，_on_time_changed()
@@ -2486,45 +2510,30 @@ func _on_noise_heard(_source: Character) -> void:
 	if is_dead or is_in_conversation():
 		return
 
+	_push_daily_event("你聽到附近傳來一個聲音")
+
 	if llm_decision_enabled:
 		_queue_reaction_fact_line("你聽到一個聲音，要不要有反應由你自己決定")
-		var result := await _request_next_decision()
-		if is_dead:
-			return
-		if result.get("triggered", false) and not result.get("ok", false):
-			say(L10n.t("DLG_NOISE_ALERT"), false, false)
-		return
-
-	# fallback（排程模式，沒有 LLM 可問）：維持原本寫死的 !? 反應
-	say(L10n.t("DLG_NOISE_ALERT"), false, false)
+		await _request_next_decision()
 
 # 範圍內有人說話（一般聊天輸入框或 talk_to() 對話，見 character.gd::say()
 # 的廣播，issue #669）。跟 _on_noise_heard() 同一種感測/反應分離，差別是
 # 這裡帶了實際講的內容——《07》§3「聽覺（一般說話）3 格」定義的本來就是
-# 「聽得到的對話」，內容是客觀事實，要不要反應交給模型自己判斷
+# 「聽得到的對話」，內容是客觀事實，要不要反應交給模型自己判斷。
 #
-# 排程模式（llm_decision_enabled 關著）刻意不冒 !?，跟 _on_noise_heard() 不同：
-# 一般說話遠比 make_noise()／shout 頻繁（玩家聊天、talk_to() 每一句都算），
-# 排程模式又沒有決策迴圈會消費 _pending_reaction_lines，硬套 noise 那套寫死
-# 反應只會讓排程模式的 NPC 對著每一句路過的對話狂冒 !?。這只是排程模式下
-# 沒有「決策者」時的視覺呈現選擇，不影響 llm_decision_enabled 開著時送給
-# 模型的事實內容（下面完整保留），跟原則二要保護的「事件有沒有讓 AI 知道」
-# 是兩回事；llm_decision_enabled 開著但這次問不到結果（逾時／驗證失敗）時，
-# 仍比照 _on_noise_heard() 退回寫死反應，不能讓角色看起來完全沒反應
+# 引擎不替角色決定反應（issue #949）：問不到結果時不再冒寫死的「!?」。
+# llm_decision_enabled 開著時走既有的「事實句排隊＋立即決策」；關著時（排程
+# 模式）一般說話遠比 make_noise()／shout 頻繁，只記進 _daily_events（cap 30、
+# pop_front，記憶體有界）留給之後的睡前反思，不即時觸發任何東西
 func _on_speech_heard(source: Character, line: String) -> void:
 	if is_dead or is_in_conversation():
 		return
 
 	if llm_decision_enabled:
 		_queue_reaction_fact_line("你聽到附近的 %s 說：『%s』，要不要有反應由你自己決定" % [source.character_name, line])
-		var result := await _request_next_decision()
-		# await 期間對方可能已經走 talk_to() 建立了新對話（見 character.gd
-		# 該函式），這裡的 fallback 不能無條件冒 !?，會插進正在顯示的
-		# 對話泡泡（CodeRabbit review 抓到，PR #674）
-		if is_dead or is_in_conversation():
-			return
-		if result.get("triggered", false) and not result.get("ok", false):
-			say(L10n.t("DLG_NOISE_ALERT"), false, false)
+		await _request_next_decision()
+	else:
+		_push_daily_event("你聽到附近的 %s 說：『%s』" % [source.character_name, line], [source.character_id])
 
 # 把一次性事件（看到陌生人、聽到聲音）排進下一次決策的事實句佇列
 # （#402／#407）。見 _pending_reaction_lines 的欄位說明
@@ -3671,10 +3680,6 @@ func _pursue_current_task() -> void:
 	# 表演中同理：_run_perform() 自己跑完 PERFORM_DURATION_MINUTES 才收尾，
 	# 這裡不該在協程進行中又重新選一次任務把它打斷
 	if is_performing():
-		return
-
-	# 對陌生人「！」的那 2 秒刻意站著不動
-	if _reacting:
 		return
 
 	# murmur 沒有目標、也不用移動——講給自己聽當下就結束，不屬於「走到某個
@@ -4966,11 +4971,14 @@ func _pursue_murmur_task() -> void:
 		# murmur 沒有追逐、每筆任務只跑這裡一次，resolve() 的結果就是終局結果
 		# （不像 talk／give／attack 之後還有一次真正執行可能失敗）
 
-	# 內容層跟 talk 同一套「模板先頂著，LLM 版之後再換」的分工（見
-	# note/技術/talk 動作設計.md）：murmur 沒有聽者，講的是給自己聽的話，
-	# 不能沿用 DialogueLines.reply() 那組面向對話對象的句子
-	if should_speak and stats != null:
-		say(DialogueLines.murmur(stats))
+	# 內容由模型自己給（issue #949）：murmur 動作帶 line 欄位，跟 talk 的回應
+	# 內容同一套。引擎不再用 DialogueLines.murmur() 依 get_lowest_need()／
+	# CRITICAL 門檻挑一句寫死的模板句塞進角色嘴裡——那是引擎替角色決定他此刻
+	# 在想什麼（《00》原則二）。line 缺失時（驗證層已要求非空，這裡只是防呆）
+	# 只消化任務、不出聲
+	var murmur_line: String = str(_current_task.get("params", {}).get("line", "")).strip_edges()
+	if should_speak and not murmur_line.is_empty():
+		say(murmur_line)
 
 	# 連續失敗事實句涵蓋所有實際執行的動作，不分來源——跟 eat/drink/talk
 	# 既有規則一致（CodeRabbit review 抓到：原本只計 llm 來源，schedule 來源

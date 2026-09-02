@@ -1,0 +1,25 @@
+[gd_scene load_steps=3 format=4 uid="uid://dofs2g4y4djnf"]
+
+[ext_resource type="TileSet" uid="uid://36nik4otk8av" path="res://assets/tileset/house-tileset.tres" id="1_b1fwh"]
+[ext_resource type="PackedScene" uid="uid://8gs8myay40dw" path="res://scenes/houses/door.tscn" id="2_nwqdy"]
+
+[node name="House" type="Node2D"]
+y_sort_enabled = true
+
+[node name="floor" type="TileMapLayer" parent="."]
+z_index = -1
+tile_map_data = PackedByteArray("AAACAAEAAAABAAIAAAACAAIAAAABAAIAAAACAAMAAAABAAIAAAADAAMAAAABAAIAAAADAAIAAAABAAIAAAADAAEAAAABAAIAAAAEAAEAAAABAAIAAAAEAAIAAAABAAIAAAAEAAMAAAABAAIAAAAEAAQAAAABAAIAAAADAAQAAAABAAIAAAACAAQAAAABAAIAAAABAAMAAAABAAIAAAABAAIAAAABAAIAAAABAAQAAAABAAIAAAABAAEAAAABAAIAAAA=")
+tile_set = ExtResource("1_b1fwh")
+
+[node name="Wall" type="TileMapLayer" parent="."]
+y_sort_enabled = true
+tile_map_data = PackedByteArray("AAAAAAEAAAAAAAIAAAAAAAIAAAAAAAIAAAAAAAMAAAAAAAIAAAAFAAMAAAACAAIAAAAFAAIAAAACAAIAAAAFAAEAAAACAAIAAAAEAAQAAAABAAMAAAACAAQAAQADAAIAAAABAAQAAAABAAMAAAABAAAAAAABAAEAAAACAAAAAAABAAEAAAADAAAAAAABAAEAAAAEAAAAAAABAAEAAAAAAAQAAAAAAAMAAAAAAAAAAAAAAAEAAAAFAAAAAAACAAEAAAAFAAQAAAACAAMAAAADAAQAAAADAAAAAAA=")
+tile_set = ExtResource("1_b1fwh")
+
+[node name="object" type="TileMapLayer" parent="."]
+y_sort_enabled = true
+tile_map_data = PackedByteArray("AAABAAEAAgAAAAEAAAACAAEAAgADAAIAAAADAAAAAgACAAAAAAADAAIAAgADAAUAAAA=")
+tile_set = ExtResource("1_b1fwh")
+
+[node name="Door" parent="." instance=ExtResource("2_nwqdy")]
+position = Vector2(56, 76)

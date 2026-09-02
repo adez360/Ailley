@@ -1,4 +1,4 @@
-[gd_scene load_steps=32 format=4 uid="uid://b2e0tw4w7vsnc"]
+[gd_scene load_steps=33 format=4 uid="uid://b2e0tw4w7vsnc"]
 
 [ext_resource type="Material" uid="uid://cmbcfxlkxxnwq" path="res://addons/TileMapDual/ghost_material.tres" id="1_b121j"]
 [ext_resource type="Texture2D" uid="uid://ctijta7lomsfg" path="res://assets/tiles/Sprite-0001.png" id="2_8c41q"]
@@ -13,6 +13,7 @@
 [ext_resource type="PackedScene" uid="uid://da6s5nc2lvunj" path="res://scenes/houses/house_001.tscn" id="10_olg7q"]
 [ext_resource type="TileSet" uid="uid://e8v6djrm0yrt" path="res://assets/tileset/terra.tres" id="11_t1rx8"]
 [ext_resource type="PackedScene" uid="uid://qldhpqap03c8" path="res://scenes/animal.tscn" id="12_anml"]
+[ext_resource type="PackedScene" uid="uid://w7pcundsoi8m" path="res://scenes/houses/restaurant.tscn" id="14_fpun6"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_pl1ev"]
 texture = ExtResource("2_8c41q")
@@ -357,3 +358,6 @@ shape = SubResource("RectangleShape2D_wc255")
 [node name="Right" type="CollisionShape2D" parent="MapBoundary"]
 position = Vector2(416, -8)
 shape = SubResource("RectangleShape2D_arp2o")
+
+[node name="Node2D" parent="." instance=ExtResource("14_fpun6")]
+position = Vector2(16, 32)

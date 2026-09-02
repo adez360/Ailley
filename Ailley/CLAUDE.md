@@ -20,7 +20,7 @@
 | `scripts/core/` | autoload：時鐘、靜態資料 |
 | `scripts/character/` | Character 基底、Player/Agent、Stats/Relationships/Vision 元件 |
 | `scripts/world/` | NavGrid、FollowCamera |
-| `scripts/dialogue/` | Conversation、DialogueLines |
+| `scripts/dialogue/` | Conversation |
 | `scripts/ai/` | LLM 服務層。**全專案唯一碰網路的地方** |
 | `scripts/ui/` | Bubble、ChatInput、DebugConsole、DebugOverlay、TimeLabel |
 | `data/*.json` | NPC 排程、地點資料、AI 設定範本 |
