@@ -89,6 +89,14 @@ const READINESS_RETRY_DELAY_SEC := 3.0
 
 var config: AIConfig
 
+## 真正建出來的池子大小（CodeRabbit review 抓到，PR #1002）：_pool 只在
+## _ready() 建一次，不會跟著 reload_config() 換掉的 config.pool_size 一起變。
+## 需要「這一局實際能同時處理幾個請求」的呼叫端（agent.gd 的逾時保底公式）
+## 要讀這個，不要直接讀 config.pool_size——玩家中途改設定檔重載之後，
+## 兩者可能不一致，用 config 那份會讓保底公式的基準跟實際池子脫鉤
+func active_pool_size() -> int:
+	return _pool.size()
+
 var _pool: Array[HTTPRequest] = []
 var _busy := {}					# HTTPRequest -> _Job，沒有 key 就代表這個節點閒著
 var _queue: Array = []			# 等節點的 _Job，出隊順序見 _next_job_index()
