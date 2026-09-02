@@ -2001,6 +2001,12 @@ const HOME_PLACEMENT_MAX_RADIUS := 60
 const DYNAMIC_HOME_ANCHOR_TO_HOUSE := Vector2(-32.0, -56.0)
 const DYNAMIC_HOME_FOOTPRINT := Vector2(144.0, 128.0)
 
+## 新家要離「其他既有地點錨點」（涼亭、酒館、藥草鋪、墓園…）多遠。比
+## HOME_MIN_SEPARATION 大一截：那些地點有自己的視覺範圍（涼亭的頂、天神之石
+## 的石頭），而且第一間家的搜尋起點就是涼亭錨點，不拉開就會長在涼亭正上面。
+## 房屋足跡對角線約 190px，220 讓房子的每個角落都清出那些地點的錨點格
+const PLACE_ANCHOR_CLEARANCE := 220.0
+
 
 ## _ensure_npc_record() 的共用收尾：用 _resolve_home_location() 驗證／必要時
 ## 重新分配 character 目前的 home_location_id，寫回記憶體；若跟 DB 現存值不同
@@ -2287,26 +2293,32 @@ func _next_new_home_location_id() -> String:
 
 
 ## 幫一間新家找位置：錨點格與房屋足跡在 NavGrid 上都可走、跟現有每一間家的
-## 距離都 > HOME_MIN_SEPARATION。搜尋起點用第一間現有的家；一間都還沒有
-##（第一個進場的角色）就從涼亭錨點起（角色本來就都投放在涼亭，見
-## GameManager.spawn_character()）。一圈圈往外找（跟 NavGrid.nearest_free_cell()
-## 同一套「掃外框」手法，這裡多一條距離篩選）。找不到回傳 Vector2.INF
+## 距離：跟每一間現有的家 > HOME_MIN_SEPARATION，跟每一個其他既有地點錨點
+##（涼亭、酒館…）> PLACE_ANCHOR_CLEARANCE——不然會長在涼亭之類的地點上面
+##（實測踩到）。搜尋起點用第一間現有的家；一間都還沒有（第一個進場的角色）
+## 就從涼亭錨點起（角色本來就都投放在涼亭，見 GameManager.spawn_character()），
+## 起點只是搜尋原點，PLACE_ANCHOR_CLEARANCE 會把實際落點推離涼亭。一圈圈往外
+## 找（跟 NavGrid.nearest_free_cell() 同一套「掃外框」手法）。找不到回傳 Vector2.INF
 func _find_home_placement() -> Vector2:
 
 	var nav = get_tree().get_first_node_in_group("nav_grid")
 	if nav == null:
 		return Vector2.INF
 
-	var existing_positions := _existing_home_positions()
+	var anchors = get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null:
+		return Vector2.INF
+
+	var existing_homes := _existing_home_positions()
+	var other_places := _other_place_anchor_positions(anchors)
 
 	var seed_world: Vector2
-	if not existing_positions.is_empty():
-		seed_world = existing_positions[0]
-	else:
-		var anchors = get_tree().get_first_node_in_group("place_anchors")
-		if anchors == null or not anchors.has("pavilion"):
-			return Vector2.INF
+	if not existing_homes.is_empty():
+		seed_world = existing_homes[0]
+	elif anchors.has("pavilion"):
 		seed_world = anchors.resolve("pavilion")
+	else:
+		return Vector2.INF
 
 	var seed_cell: Vector2i = nav.world_to_cell(seed_world)
 
@@ -2321,19 +2333,36 @@ func _find_home_placement() -> Vector2:
 				if not _home_footprint_free(nav, cell):
 					continue
 				var candidate: Vector2 = nav.cell_to_world(cell)
-				if _far_enough_from_all(candidate, existing_positions):
-					return candidate
+				if not _far_enough_from_all(candidate, existing_homes, HOME_MIN_SEPARATION):
+					continue
+				if not _far_enough_from_all(candidate, other_places, PLACE_ANCHOR_CLEARANCE):
+					continue
+				return candidate
 
 	return Vector2.INF
 
 
-func _far_enough_from_all(candidate: Vector2, positions: Array) -> bool:
+func _far_enough_from_all(candidate: Vector2, positions: Array, min_dist: float) -> bool:
 
 	for pos in positions:
-		if candidate.distance_to(pos) < HOME_MIN_SEPARATION:
+		if candidate.distance_to(pos) < min_dist:
 			return false
 
 	return true
+
+
+## PlaceAnchors 底下所有「不是家」的錨點世界座標（涼亭、酒館、藥草鋪、墓園、
+## 藥草叢、森林、天神之石）。家的錨點名字都是 loc_home_ 開頭，排除掉——那些
+## 由 _existing_home_positions() 另外用 HOME_MIN_SEPARATION 這條較寬鬆的距離管
+func _other_place_anchor_positions(anchors) -> Array:
+
+	var positions := []
+
+	for child in anchors.get_children():
+		if child is Node2D and not str(child.name).begins_with(HOME_LOCATION_PREFIX):
+			positions.append((child as Node2D).global_position)
+
+	return positions
 
 
 ## 落點足跡檢查：錨點那格可走，且房屋罩住的方框（DYNAMIC_HOME_FOOTPRINT
@@ -2427,12 +2456,14 @@ func _create_or_reactivate_home(location_id: String, position: Vector2) -> bool:
 	return true
 
 
-## 動態家的場景表現：房屋場景掛在 world 群組底下（跟 GameManager.
-## spawn_character() 的角色掛法一致，避免跟 Level 底下的裝飾物 y-sort
-## 脫鉤），同時在 PlaceAnchors 底下加一個同名 Area2D 錨點——resolve()／has()
-## 靠 PlaceAnchors 底下的同名子節點查，resolve_from_position() 反查則要
-## 錨點底下有 CollisionShape2D（靜態家當初也是 Area2D+Shape，死在家裡才能
-## 反查出 loc_home_NN）。兩邊都先檢查存不存在才建立，讀檔重建
+## 動態家的場景表現：房屋場景掛在 Level 底下（＝ PlaceAnchors 的父節點），
+## 跟 level.tscn 裡原本手擺的房屋節點同一個父節點、同一套 y-sort／z 排序
+## 脈絡——掛在 world 群組（跟角色一起）底下時，house_001/002 的 floor 圖層
+## z_index=-1 會被地圖蓋掉，房子看起來沒地板（實測踩到）。同時在
+## PlaceAnchors 底下加一個同名 Area2D 錨點——resolve()／has() 靠 PlaceAnchors
+## 底下的同名子節點查，resolve_from_position() 反查則要錨點底下有
+## CollisionShape2D（靜態家當初也是 Area2D+Shape，死在家裡才能反查出
+## loc_home_NN）。兩邊都先檢查存不存在才建立，讀檔重建
 ##（_rebuild_dynamic_homes()）跟成長路徑可能對同一個 location_id 各呼叫
 ## 一次，不該疊出兩份
 ##
@@ -2469,13 +2500,13 @@ func _spawn_home_scene(location_id: String, position: Vector2) -> void:
 		anchor.add_child(shape)
 		anchors.add_child(anchor)
 
-	var world = get_tree().get_first_node_in_group("world")
-	if world == null:
-		push_error("[CharacterStatePersistence] 場景沒有 world 群組節點，%s 沒有房屋可看" % location_id)
+	var level = anchors.get_parent()
+	if level == null:
+		push_error("[CharacterStatePersistence] PlaceAnchors 沒有父節點，%s 沒有地方掛房屋" % location_id)
 		return
 
 	var house_name := "DynamicHome_%s" % location_id
-	if world.has_node(NodePath(house_name)):
+	if level.has_node(NodePath(house_name)):
 		return
 
 	var house_scene: PackedScene = load(_home_scene_path(location_id))
@@ -2489,7 +2520,7 @@ func _spawn_home_scene(location_id: String, position: Vector2) -> void:
 	var door_local: Vector2 = door.position if door != null else Vector2(88.0, -8.0)
 	# 門對齊錨點北邊一格：Door 全域座標 = 錨點正上方 16px
 	house.global_position = position - Vector2(0.0, 16.0) - door_local
-	world.add_child(house)
+	level.add_child(house)
 
 	# 新的碰撞體要等一個物理幀才會反映到物理空間，deferred 重建 NavGrid
 	# 讓房子底下的格子立刻變 solid，find_path() 不會把終點算進房裡
@@ -2507,11 +2538,11 @@ func _demolish_home_scene(location_id: String) -> void:
 	if anchors != null and anchors.has_node(NodePath(location_id)):
 		anchors.get_node(NodePath(location_id)).queue_free()
 
-	var world = get_tree().get_first_node_in_group("world")
-	if world != null:
+	var level = anchors.get_parent() if anchors != null else null
+	if level != null:
 		var house_name := "DynamicHome_%s" % location_id
-		if world.has_node(NodePath(house_name)):
-			world.get_node(NodePath(house_name)).queue_free()
+		if level.has_node(NodePath(house_name)):
+			level.get_node(NodePath(house_name)).queue_free()
 
 	if not DatabaseManager.update(
 		"location", {"is_active": 0},

@@ -29,6 +29,10 @@ const TEST_NPC_PREFIX := "thhome_"
 var _persistence: Node = null
 var _saved_cursor := -1
 var _created_location_ids: Array[String] = []
+# fixture 動到的既有 loc_home_* 列，記下原本的 is_active 好在 teardown 還原——
+# 不能用「一律 UPDATE ... is_active=0 WHERE location_type='home'」收尾，那會把
+# 實機玩出來、跟這個 suite 無關的動態家也一起關掉（CodeRabbit review on #995）
+var _fixture_prior_active: Dictionary = {}
 
 
 func suite_name() -> String:
@@ -56,7 +60,10 @@ func setup() -> void:
 
 	for i in range(1, FIXTURE_HOME_COUNT + 1):
 		var location_id := _home_id(i)
-		if DatabaseManager.select("location", "location_id = '%s'" % location_id, ["location_id"]).is_empty():
+		var rows := DatabaseManager.select(
+			"location", "location_id = '%s'" % location_id, ["is_active"]
+		)
+		if rows.is_empty():
 			DatabaseManager.insert("location", {
 				"location_id": location_id,
 				"name": "Home %d" % i,
@@ -68,6 +75,7 @@ func setup() -> void:
 			})
 			_created_location_ids.append(location_id)
 		else:
+			_fixture_prior_active[location_id] = int(rows[0].get("is_active", 0))
 			DatabaseManager.update(
 				"location", {"is_active": 1}, "location_id = '%s'" % location_id
 			)
@@ -76,16 +84,22 @@ func setup() -> void:
 func teardown() -> void:
 	DatabaseManager.delete("npc", "npc_id LIKE '%s%%'" % TEST_NPC_PREFIX)
 
-	# fixture 或測試中經 _grow_home_supply()／_create_or_reactivate_home() 額外
-	# 建出的動態 location 列（沒有場景時不會生出場景節點，但 DB 列會留下）——
-	# 我們建的直接刪；migration 13 帶進來的既有 loc_home_* 還原成 is_active=0
+	# 測試中經 _grow_home_supply()／_create_or_reactivate_home() 額外建出的
+	# 動態 location 列（沒有場景時不會生出場景節點，但 DB 列會留下）——連同
+	# setup() 自己 insert 的 fixture 一起刪
 	for location_id in _created_location_ids:
 		DatabaseManager.delete("location", "location_id = '%s'" % location_id)
 	_created_location_ids.clear()
 
-	DatabaseManager.update(
-		"location", {"is_active": 0}, "location_type = 'home'"
-	)
+	# setup() 動過 is_active 的既有列還原成原值——只碰 fixture 動過的那幾列，
+	# 不掃 location_type='home' 全表（會誤關實機玩出來的動態家）
+	for location_id in _fixture_prior_active:
+		DatabaseManager.update(
+			"location",
+			{"is_active": _fixture_prior_active[location_id]},
+			"location_id = '%s'" % location_id
+		)
+	_fixture_prior_active.clear()
 
 	if _saved_cursor >= 0:
 		_persistence._set_home_cursor(_saved_cursor)
