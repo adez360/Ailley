@@ -81,6 +81,12 @@ func _ready() -> void:
 func get_visible_characters() -> Array[Character]:
 	return _visible.duplicate()
 
+# 目前看得到、但已死亡未安葬的屍體。跟 get_visible_characters() 分開回傳：
+# 屍體不是能 talk/give/persuade/follow 的「看得到的人」，不進 _visible（issue
+# #986），但玩家仍要能對屍體開「復活／搬運」選單（issue #758／#1026）。回傳副本
+func get_corpses() -> Array[Character]:
+	return _corpses.duplicate()
+
 func can_see(other: Character) -> bool:
 	return _visible.has(other)
 
