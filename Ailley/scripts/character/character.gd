@@ -2482,6 +2482,19 @@ func load_save_data(data: Dictionary) -> void:
 	# 不是「缺欄位」那種能被 has() 擋掉的情況（CodeRabbit review 抓到）
 	if stats != null and data.get("stats", null) is Dictionary:
 		stats.load_save_data(data["stats"])
+		# 立即同步 bleeding／injury 衰減暫停，理由跟 attack() 命中瞬間的立即同步
+		# 完全一樣（#923）：injury 是門檻自動 condition，正常靠 _update_conditions()
+		# 每 10 遊戲分鐘一次 tick 重新推導，但讀檔到下一次 tick 之間有空窗期——
+		# 這段期間 Stats._process() 的自然衰減不知道要暫停，injury 會悄悄漂移到
+		# 低於 20 卻沒有真的被治療，同時 health 仍因 bleeding 判定滯後持續下降。
+		# 只重算這一個 condition，不呼叫整個 _update_conditions()：那個函式會
+		# 連同 bleeding 的 -1.5 health 直接效果一起重跑，讀檔當下重複套用一次
+		# 不屬於這次讀檔的「一整個 tick」傷害。is_dead 時跳過，同 attack()
+		# 的理由（#379）：死屍 conditions 只留 petrified，這裡不能把 BLEEDING
+		# 疊加回去蓋掉那個不變量
+		if not is_dead:
+			_set_condition(CONDITION_BLEEDING, stats.get_value("injury") >= 20.0)
+			stats.injury_decay_paused = has_condition(CONDITION_BLEEDING)
 	if relationships != null and data.get("relationships", null) is Dictionary:
 		relationships.load_save_data(data["relationships"])
 

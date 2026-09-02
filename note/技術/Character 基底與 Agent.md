@@ -347,6 +347,16 @@ Agent/Agent2 是場景裡的靜態節點，`_ready()` 時自己查表更貼近�
 > `Character._update_conditions()` 每次檢查完就把這個 bool 設成
 > `has_condition("bleeding")` 的目前值，`Stats._process()` 只在這個 key 上多一行
 > `continue`。真的出現第二個需要暫停 drift 的欄位時再抽成通用機制。
+>
+> 這個旗標是純執行期 derived 狀態，不會隨存檔走（`Stats.get_save_data()`
+> 只存 `values`），所以除了 `_update_conditions()` 的 10 分鐘一次 tick，
+> 另外兩個會讓 injury 瞬間跨過門檻、不能等下個 tick 的地方也各自立即重算
+> 一次：`attack()` 命中瞬間（#821/#851 一併立即同步昏迷）、
+> `Character.load_save_data()` 套用完 `stats.load_save_data()` 之後
+> （#923，讀檔到下個 tick 之間的空窗期原本會讓已經在流血的角色悄悄止血）。
+> 三處都只重算 `CONDITION_BLEEDING` 與 `injury_decay_paused` 這一組，
+> 不呼叫整個 `_update_conditions()`——那個函式會連同 bleeding 的 `-1.5`
+> health 直接效果一起重跑，在非 tick 邊界的時間點多套用一次不該發生的傷害。
 
 ## 未做
 
