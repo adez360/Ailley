@@ -1069,31 +1069,54 @@ func _is_preemptible() -> bool:
 # 任務。憑當下的 _current_task 判斷會有兩種撲空：真正該清的那筆任務已經
 # 不是 _current_task、清不到；或是被別人搭話時，自己另一筆不相干的待辦
 # talk 任務剛好是 _current_task，被誤刪
+## 對話結束時記進 _daily_events 的客觀事實句措辭（issue #950）。抽成純函式
+## 方便測試：把「哪種結束原因對應哪句事實」跟 exit_conversation() 其餘要碰
+## 場景樹／autoload 的部分拆開。措辭只陳述發生了什麼，不定性「被冷落」
+## 「聊得不愉快」——那是 AI 睡前反思自己判斷的事（《00》原則二）。
+## is_initiator 只在 REASON_IGNORED 分兩種說法時用到。
+static func _conversation_end_fact(reason: String, other_name: String, had_exchange: bool, is_initiator: bool) -> String:
+	match reason:
+		Conversation.REASON_IGNORED:
+			# 對方一句話沒說就不理會（複審 PR #667）：兩邊各給誠實的說法
+			return (
+				"%s 不理你的搭話，沒有回應" % other_name if is_initiator
+				else "你不理會 %s 的搭話" % other_name
+			)
+		Conversation.REASON_TOO_FAR, Conversation.REASON_INTERRUPTED:
+			# 距離拉開／被打斷而中止。玩家按 E 搭話後、在對方還沒開口
+			# （turn 0 等 LLM）時就走開也走這條——沒交換過任何一句，
+			# 記「講完話了」是假事實
+			return (
+				"你和 %s 的對話中途中斷了" % other_name if had_exchange
+				else "你和 %s 的對話還沒開始就中斷了" % other_name
+			)
+		_:
+			return "你跟 %s 講完話了" % other_name
+
+
 func exit_conversation(reason: String = "") -> void:
 	# 事件事實句要在 super() 把 _conversation 清成 null 之前先讀——這裡只記
-	# 客觀事實（跟誰講完話／被不理會），不記對話內容好壞，那是睡前反思時 LLM
-	# 自己判斷的事
-	#
-	# REASON_IGNORED（複審 PR #667 抓到）：對方一句話沒說就不理會，「你跟 X
-	# 講完話了」是假話，兩邊要分別給誠實的說法——被搭話的一方看到的是自己
-	# 選擇不理會，發起搭話的一方看到的是對方沒有回應
+	# 客觀事實（跟誰講完話／被不理會／對話中斷），不記對話內容好壞，那是睡前
+	# 反思時 LLM 自己判斷的事。措辭見 _conversation_end_fact()（issue #950）
 	if _conversation != null:
 		var other: Character = _conversation.target if _conversation.initiator == self else _conversation.initiator
 		if other != null:
+			var had_exchange: bool = _conversation.turn_count() > 0
+			var event_text := _conversation_end_fact(
+				reason, other.character_name, had_exchange, self == _conversation.initiator
+			)
 			# #426：current_place 對指名對話（direct-target talk）從頭到尾是
 			# 空字串（沒有 place 可言），這裡改用即時座標反查——對話結束當下
 			# 兩人就站在彼此旁邊，位置是準的
-			var event_text: String
-			if reason == Conversation.REASON_IGNORED:
-				event_text = (
-					"%s 不理你的搭話，沒有回應" % other.character_name if self == _conversation.initiator
-					else "你不理會 %s 的搭話" % other.character_name
-				)
-			else:
-				event_text = "你跟 %s 講完話了" % other.character_name
 			_push_daily_event(event_text, [other.character_id], _resolve_actual_place())
-			# 「多久沒說話」事實句的計時基準（#338）
-			_last_social_minute = _now_minutes()
+			# 「多久沒說話」事實句的計時基準（#338）：一句話都沒交換的中斷
+			# （距離拉開／被打斷、turn 0 就散）不算「講到話」，不重設計時基準
+			var contactless_break := (
+				(reason == Conversation.REASON_TOO_FAR or reason == Conversation.REASON_INTERRUPTED)
+				and not had_exchange
+			)
+			if not contactless_break:
+				_last_social_minute = _now_minutes()
 
 	super(reason)
 
@@ -1101,11 +1124,20 @@ func exit_conversation(reason: String = "") -> void:
 		var was_llm := _active_talk_task_source == "llm"
 
 		# talk_to() 剛送出時只知道對話物件建立成功，對方 turn 0 要不要理還沒
-		# 問——真正的結果要等這裡知道 reason 才算數，被無視（REASON_IGNORED）
-		# 算失敗，這樣連續失敗計數才會如實累積，下輪決策才有機會避開同一個
-		# 一再不理自己的對象（複審 PR #667 抓到，原本在 _pursue_talk_task()
-		# 送出當下就搶先記成功）
-		_track_action_result_for_facts("talk", reason != Conversation.REASON_IGNORED)
+		# 問——真正的結果要等這裡知道 reason 才算數（複審 PR #667 抓到，原本在
+		# _pursue_talk_task() 送出當下就搶先記成功）：
+		#   REASON_IGNORED：被無視，算失敗，連續失敗計數如實累積，下輪決策才
+		#     有機會避開一再不理自己的對象。
+		#   REASON_TOO_FAR／REASON_INTERRUPTED：距離拉開或被打斷而中止，既沒
+		#     完成也不是被拒絕——不動連續失敗計數，不誤導下輪決策（issue #950）。
+		#   其餘（正常講完／聽者收尾）：算成功。
+		match reason:
+			Conversation.REASON_IGNORED:
+				_track_action_result_for_facts("talk", false)
+			Conversation.REASON_TOO_FAR, Conversation.REASON_INTERRUPTED:
+				pass
+			_:
+				_track_action_result_for_facts("talk", true)
 
 		_remove_task(_active_talk_task_id)
 		if _current_task.get("id", "") == _active_talk_task_id:
