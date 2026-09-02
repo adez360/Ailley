@@ -30,6 +30,8 @@ func _ready() -> void:
 	call_deferred("_rebuild_dynamic_homes_once")
 
 
+	var new_game := true
+
 	if GameManager.continue_requested:
 		GameManager.continue_requested = false
 		if not _apply_continue():
@@ -38,9 +40,14 @@ func _ready() -> void:
 			# 抓到：原本這裡沒有提前 return，_apply_startup_ai_state() 還是會
 			# 對已經要被丟棄的場景做 get_nodes_in_group("agents") 之類的操作）
 			return
-	else:
-		# issue #585：新手引導只在新遊戲開場顯示一次，讀檔（繼續遊戲）不顯示
-		add_child(OnboardingHint.new())
+		new_game = false
+
+	# 操作說明面板一律掛著（F1 隨時叫得出來，見 onboarding_hint.gd）；只有新
+	# 遊戲第一次開場才自動彈一次（issue #585／#1017），讀檔（繼續遊戲）不彈。
+	# 節點建在提前 return 之後，讀檔失敗不會留一個沒掛進樹的孤兒節點
+	var onboarding := OnboardingHint.new()
+	onboarding.auto_show = new_game
+	add_child(onboarding)
 
 	_apply_startup_ai_state()
 
