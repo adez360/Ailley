@@ -4079,6 +4079,8 @@ func _talk_failure_message(failure: String) -> String:
 			return "現在打斷不了對方"
 		Character.TALK_TARGET_NOT_VISIBLE:
 			return "視線被擋住了，搭不上話"
+		Character.TALK_AI_OFFLINE:
+			return "對方現在沒有回應"
 		_:
 			return "搭話沒有成功"
 
