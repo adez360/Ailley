@@ -48,6 +48,8 @@ var _shape: CollisionShape2D = null
 
 var _in_range: Array[Character] = []		# 在半徑內，但可能被牆擋著
 var _visible: Array[Character] = []			# 扣掉被擋住的，真的看得到的
+var _corpses: Array[Character] = []			# 看得到但已死亡未安葬的——不進 _visible（issue #986），
+												# 進入視野時照樣發 spotted 讓 Agent 記「遺體」事實句（PR #992）
 var _timer := 0.0
 
 
@@ -103,6 +105,7 @@ func _on_body_exited(body: Node2D) -> void:
 		return
 
 	_in_range.erase(other)
+	_corpses.erase(other)	# 屍體離開半徑只移除、不發 lost——「看不到遺體」不是「跟丟」
 
 	# 離開半徑等於一定看不到，不必等下一次視線檢查才發 lost
 	if _visible.has(other):
@@ -122,24 +125,46 @@ func _process(delta: float) -> void:
 # body_exited 對 queue_free() 掉的節點不保證會發
 func _refresh_visible() -> void:
 	var current: Array[Character] = []
+	var current_corpses: Array[Character] = []
 
 	for i in range(_in_range.size() - 1, -1, -1):
 		var other := _in_range[i]
 		if not is_instance_valid(other):
 			_in_range.remove_at(i)
 			continue
-		if _has_line_of_sight(other):
+		if not _has_line_of_sight(other):
+			continue
+		# 屍體不會從場景樹或任何 group 移除（_die() 只是石化），純物理層的
+		# Area2D 偵測看不出差別。死人不是可以互動的「看得到的人」，不進
+		# _visible——不然 context.visible 會一直帶著死人，LLM 誤以為對方還
+		# 活著可以 talk/give/persuade/follow（issue #986，實測角色死後仍被
+		# 選中對話長達數小時）。但「看到遺體」本身是該讓 Agent 知道的事實
+		# （PR #992 review）：屍體維護在 _corpses 裡，進入視野那一刻照樣發
+		# spotted（邊緣觸發，持續在視野不重複），由 agent.gd 記一筆遺體
+		# 事實句。已安葬的視同墓碑，不再回報
+		if other.is_dead:
+			if not other.is_buried:
+				current_corpses.append(other)
+		else:
 			current.append(other)
 
 	for other in current:
 		if not _visible.has(other):
 			spotted.emit(other)
 
+	for other in current_corpses:
+		if not _corpses.has(other):
+			spotted.emit(other)
+
 	for other in _visible:
-		if is_instance_valid(other) and not current.has(other):
+		# 死亡不算「跟丟」——人只是從 _visible 換到 _corpses，發 lost 會讓
+		# Agent 記一筆「你看不到 ○○ 了」，跟人在眼前倒下的事實相反
+		if is_instance_valid(other) and not current.has(other) \
+				and not current_corpses.has(other):
 			lost.emit(other)
 
 	_visible = current
+	_corpses = current_corpses
 
 # issue #798：原本這裡先過面向錐角（點積判定）才算看得到，但角色的
 # facing 只在移動時更新（見 character.gd::update_animation()），長動作

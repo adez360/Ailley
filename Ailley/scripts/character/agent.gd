@@ -1609,6 +1609,15 @@ func _request_next_decision(
 	var fact_lines_sent_count := _pending_fact_lines.size()
 
 	var visible: Array[Character] = vision.get_visible_characters() if vision != null else []
+	# bury 白名單的屍體來源（PR #992 review）：屍體不在 context.visible 裡
+	# （issue #986），模型從「你看到 ○○ 的遺體」事實句得知名字。死亡角色
+	# 不會被移除節點（見 character.gd::_cemetery_grave_count() 的同一個
+	# 理由），直接掃 characters group 過濾「已死亡未安葬」就是即時正確答案
+	var corpse_names := PackedStringArray()
+	for node in get_tree().get_nodes_in_group("characters"):
+		var corpse := node as Character
+		if corpse != null and corpse.is_dead and not corpse.is_buried:
+			corpse_names.append(corpse.character_name)
 	var envelope := PromptBuilder.build_plan_envelope(
 		self, visible, _task_pool_summary(), _today_plan_summary(), effective_allow_update_plan,
 		_fact_lines_summary(), had_pending_persuade, current_place, allow_appointment,
@@ -1624,7 +1633,7 @@ func _request_next_decision(
 	var validator := func(data: Dictionary) -> Dictionary:
 		return AISchema.validate_tasks(
 			data, effective_allow_update_plan, now_minutes, allow_appointment, allow_perform_tip,
-			visible_names
+			visible_names, corpse_names
 		)
 
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
@@ -2042,7 +2051,7 @@ func _process_appointment(now_minutes: int) -> void:
 
 	# 等待階段：對方出現在同一地點就算赴約成功，悄悄結束，不用另外通知
 	var other := _find_character_by_name(with_name)
-	if other != null and _actual_place_of(other) == location:
+	if other != null and not other.is_dead and _actual_place_of(other) == location:
 		_clear_appointment_plan_entry()
 		_appointment = null
 		return
@@ -2424,7 +2433,30 @@ func _on_spotted(other: Character) -> void:
 	# _on_action_interrupted() 那道 is_dead 判斷擋不到這裡——這是 vision.gd
 	# 訊號直接觸發的外部事件回呼，死屍仍會被場上其他角色「第一次注意到」，
 	# 沒擋的話會 say() 台詞、甚至問一次 LLM 決策
-	if is_dead or is_in_conversation():
+	if is_dead:
+		return
+
+	# 看到遺體（PR #992 review）：死人不進 context.visible（issue #986，見
+	# vision.gd 的排除），但「看到屍體」是該讓 Agent 知道的事實——排一筆
+	# 事實句給下一次決策，要不要在意、要不要安葬交給模型自己判斷（《00》
+	# 原則二）。vision.gd 只在屍體進入視野那一刻發 spotted（邊緣觸發），
+	# 持續在視野不會重複發。
+	# 這條分流要放在 is_in_conversation() 早退之前（PR #992 第二輪 review
+	# 抓到）：記事實句不 say()、不觸發決策，不會打斷對話——對話中第一次
+	# 看見屍體同樣該記下來。同一具屍體（同名）的事實句若還排在
+	# _pending_fact_lines 裡（送出後等回應套用才消費，見該變數的說明）就
+	# 不重複排——屍體離開視野又回來會再發一次 spotted，沒去重的話同一句
+	# 會疊好幾筆擠進 prompt
+	if other.is_dead:
+		var corpse_line := "你看到 %s 的遺體。" % other.character_name
+		if not _pending_fact_lines.has(corpse_line):
+			_pending_fact_lines.append(corpse_line)
+		return
+
+	# 對話中不反應（原與 is_dead 同一個早退，PR #992 第二輪 review 拆開）：
+	# 正在說話時不排 L3 檢索、不記首次注意、不觸發反應決策——這些才是會
+	# 打斷對話的行為；屍體事實句不受此限，見上
+	if is_in_conversation():
 		return
 
 	# 《03》§7 觸發時機表「遇到未在 L1 出現過的角色」（issue #571）：故意放在
@@ -3498,6 +3530,10 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			var follow_target := _find_character_by_id(following_id)
 			if follow_target == null:
 				return {"success": false, "reason": "找不到這個人，可能已經離開了"}
+			# 目標死亡跟「找不到」分開回報（PR #992 review）：跟丟文案會讓模型
+			# 以為人還在別處可找，事實是對方已經死了
+			if follow_target.is_dead:
+				return {"success": false, "reason": "%s 已經死了" % follow_target.character_name}
 			return {"success": true, "reason": ""}
 		"perform":
 			# perform 在 SUCCESS_PARAMS 上（見那張表），會落進下面的 _roll_success()
@@ -3953,6 +3989,11 @@ func _pursue_talk_task() -> void:
 			return
 	else:
 		target = _find_character_by_name(target_name)
+		# 指名的對象死了（issue #986）：屍體還留在 "characters" group 裡，
+		# _find_character_by_name() 找得到，但死人不是能對話的目標，當成
+		# 「找不到」處理，不要每分鐘對著屍體重試
+		if target != null and target.is_dead:
+			target = null
 
 	if target == null:
 		# 找不到人只報一次，理由跟「地點打錯只報一次」一樣——這個函式每個
@@ -5091,6 +5132,8 @@ func _pursue_give_task() -> void:
 	var params: Dictionary = _current_task.get("params", {})
 	var target_name: String = str(params.get("target", ""))
 	var target := _find_character_by_name(target_name)
+	if target != null and target.is_dead:
+		target = null
 
 	if target == null:
 		last_action_result = "找不到這個人，可能已經離開了"
@@ -5206,6 +5249,8 @@ func _pursue_attack_task() -> void:
 		return
 
 	var target := _find_character_by_name(target_name)
+	if target != null and target.is_dead:
+		target = null
 
 	if target == null:
 		last_action_result = "找不到這個人，可能已經離開了"
@@ -5458,6 +5503,8 @@ func _pursue_persuade_task() -> void:
 	var params: Dictionary = _current_task.get("params", {})
 	var target_name: String = str(params.get("target", ""))
 	var target := _find_character_by_name(target_name)
+	if target != null and target.is_dead:
+		target = null
 
 	if target == null:
 		last_action_result = "找不到這個人，可能已經離開了"
@@ -5575,7 +5622,7 @@ func _pursue_follow_task() -> void:
 			return
 
 	var target := _find_character_by_id(following_id)
-	if target == null:
+	if target == null or target.is_dead:
 		last_action_result = "找不到要跟隨的人，可能已經離開了"
 		_track_action_result_for_facts("follow", false)
 		following_id = ""
@@ -5681,7 +5728,7 @@ func _fact_lines_summary() -> Array[String]:
 	# 哪裡，才有材料判斷這一輪要不要繼續 follow
 	if not following_id.is_empty():
 		var follow_target := _find_character_by_id(following_id)
-		if follow_target != null:
+		if follow_target != null and not follow_target.is_dead:
 			# 用即時位置反查，不是 current_place（CodeRabbit review 抓到）：
 			# current_place 是任務目的地，跟隨對象還在半路走過去時，這個欄位
 			# 已經先變成目的地了，模型會被告知一個對方根本還沒到的地方。
@@ -5899,6 +5946,10 @@ func _find_nearest_character_within(range_px: float) -> Character:
 		if node == self:
 			continue
 		var candidate := node as Character
+		# 屍體還留在 "characters" group 裡（issue #986），沒指定對象時
+		# 「找人聊」不該挑到一具屍體
+		if candidate.is_dead:
+			continue
 		var distance := get_body_position().distance_to(candidate.get_body_position())
 		if distance <= range_px and distance < nearest_distance:
 			nearest_distance = distance
