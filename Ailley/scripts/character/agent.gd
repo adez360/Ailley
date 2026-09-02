@@ -2873,7 +2873,18 @@ func _reevaluate_once() -> void:
 
 	# 力竭時強制進入休息，優先於一般的任務仲裁
 	var has_exhausted := conditions.any(func(c): return c.get("type") == "exhausted")
-	if has_exhausted:
+
+	# issue #988：hydration／satiety 掉到 CRITICAL 以下時不能再讓力竭休息
+	# 霸占仲裁——Stats._apply_drift() 在休息期間照常運作，力竭休息本身
+	# 又沒有任何出口（唯一結束條件是 stamina 恢復），角色可能因此渴死/
+	# 餓死，卻從沒機會決定要不要冒著疲勞去找水喝。危急時讓出仲裁權交還
+	# 給 AI 自己判斷，不是引擎預先替它決定「這種情況不用問你」（原則二）
+	var has_physio_crisis := stats != null and (
+		stats.get_value("hydration") < Stats.CRITICAL
+		or stats.get_value("satiety") < Stats.CRITICAL
+	)
+
+	if has_exhausted and not has_physio_crisis:
 		_force_rest_until_recovered(now_minutes)
 		_pursue_current_task()
 		return
