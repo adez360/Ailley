@@ -110,9 +110,10 @@ func is_speaking() -> bool:
 	return visible or not _queue.is_empty()
 
 ## 常駐顯示，不會自動消失——跟 say() 排隊機制不同，這裡要「一直掛著直到
-## release_hold() 被呼叫」。目前唯一的用途是入眠時的「被天神召喚中」
-## （character.gd::enter_offline_sleep()）——那句有世界觀意義要當文字讀，所以
-## 留在氣泡裡；純載入指示的「思考中」已改用 thinking_indicator（issue #949 B 類）。
+## release_hold() 被呼叫」。目前的用途是入眠時的「被天神召喚中」
+## （character.gd::enter_offline_sleep()）跟玩家的「休息中 💤」提示（#926）——
+## 前者有世界觀意義要當文字讀，所以留在氣泡裡；純載入指示的「思考中」已改用
+## thinking_indicator（issue #949 B 類）。
 ## 清掉目前的佇列：常駐提示期間不該有排隊的舊訊息突然插進來
 func hold(message: String) -> void:
 	_queue.clear()

@@ -349,6 +349,12 @@ var _sleep_reflection_pending := false
 func is_decision_in_flight() -> bool:
 	return _awaiting_decision
 
+## character.gd::say() 的指示收點用（R1 review minor）：決策等待中的系統反應
+## 泡泡（say(..., false, false)）不該把「思考中」指示收掉——LLM 決策還在飛，
+## 提前收掉就又變成「看起來沒反應」的死寂空窗。走公開的存取器，不直接摸旗標
+func _is_awaiting_decision() -> bool:
+	return is_decision_in_flight()
+
 ## 給 game_manager.gd 的跨日自動存檔（#468）判斷要不要等這隻角色。回傳 false
 ## 代表反思還在飛（_sleep_reflection_in_flight），或雖然剛做完但撞期時記了一次
 ## 補跑（_sleep_reflection_pending，見 _finish_sleep_reflection_request()）——

@@ -13,9 +13,23 @@ extends Sprite2D
 ## 掛在 character.tscn 的 UI 底下，位置由場景給。
 
 const FRAME_SECONDS := 0.12			# 每幀停留時間
-## 安全上限：show() 之後最多撐這麼久就自己收掉。對得上 ai_config.gd 的
-## provider 逾時天花板——真的等超過這個時間多半是卡住了，留著只會誤導
-const MAX_VISIBLE_SECONDS := 12.0
+## 驗證失敗重試次數上限。出處是 remote_llm_provider.gd::max_validation_retries()
+## （《12》§3.4「RemoteLLM 必須實作驗證失敗重試」，上限 2 次，P-22 #3）——那裡
+## 是實例方法、不是 const，const 運算式引用不到，只能用具名常數鏡像一份；
+## 改動重試次數時兩邊要一起改
+const VALIDATION_RETRIES := 2
+
+## 逐次重試之間的排隊／解析／驗證開銷餘裕
+const TIMEOUT_MARGIN_SECONDS := 5.0
+
+## 安全上限：show() 之後最多撐這麼久就自己收掉。正常收點是 await 結束的
+## hide_indicator()（AI 回了台詞／決策、玩家送出打字）與 exit_conversation()／
+## force_interrupt() 的統一收斂——這個上限只是洩漏防護，真的撐超過它才收，
+## 代表請求卡死了，留著只會誤導。推導：最壞情況是 provider 逾時後驗證失敗
+## 重試——1 次逾時＋VALIDATION_RETRIES 次重試，每次都吃滿 ai_config.gd 的
+## DEFAULT_TIMEOUT（#852 已從 10 秒調到 20 秒），再加 TIMEOUT_MARGIN_SECONDS：
+## 20 ×（1＋2）＋5 = 65 秒
+const MAX_VISIBLE_SECONDS := AIConfig.DEFAULT_TIMEOUT * (1.0 + VALIDATION_RETRIES) + TIMEOUT_MARGIN_SECONDS
 
 var _frame_elapsed := 0.0
 var _hide_at := 0.0

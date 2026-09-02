@@ -378,8 +378,9 @@ Enter 開啟／送出，Esc 取消。不在對話中就是單純冒一句氣泡�
 > - `character.gd::force_interrupt()`——死亡／入眠／被攻擊立刻收，不等安全上限
 > - `agent.gd::_request_next_decision()` 決策回來後（`_awaiting_decision = false` 之後）
 >
-> `bubble.hold()` 現在只剩 `enter_offline_sleep()` 的「被天神召喚中」在用——
-> 那句有世界觀意義、要當文字讀，跟純載入指示不同，刻意留在氣泡裡。
+> `bubble.hold()` 現在的用途是 `enter_offline_sleep()` 的「被天神召喚中」跟
+> 玩家的「休息中 💤」提示（#926）——前者有世界觀意義、要當文字讀，跟純載入
+> 指示不同，刻意留在氣泡裡。
 
 > [!important] 對方選擇不理你（`engage=false`）要顯示得出來，不能跟「還在等」一樣空白
 > `conversation.gd::_run()` turn 0 若 `result.engage == false`，原本直接

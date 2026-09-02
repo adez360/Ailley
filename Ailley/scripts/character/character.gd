@@ -1449,8 +1449,9 @@ func leave_conversation() -> void:
 
 ## 進入入眠（issue #827）：暫停 Stats 衰減、用持續顯示的泡泡標示「被天神
 ## 召喚中」（不是一般台詞排隊顯示，靠 bubble.hold() 撐住，直到 exit_offline_
-## sleep() 才收掉——這是唯一還在用 bubble.hold() 的地方，因為「被天神召喚中」
-## 本身有世界觀意義、要當文字讀，跟純載入指示的「思考中」不同）。
+## sleep() 才收掉——bubble.hold() 另一個在用的是玩家「休息中 💤」提示
+## （#926）；「被天神召喚中」本身有世界觀意義、要當文字讀，跟純載入指示的
+## 「思考中」不同）。
 ## reason 目前只用來記錄／除錯（例如 "model_unavailable"、"human_afk"），
 ## 不影響行為——§4.5／§6.4 兩種觸發情境對外表現完全一樣，呼叫端自己決定
 ## 什麼時候該叫這個，這裡不做任何觸發判斷
@@ -1492,6 +1493,12 @@ func is_offline_kick_eligible() -> bool:
 		return false
 	return Time.get_unix_time_from_system() - _offline_asleep_since_unix >= OFFLINE_KICK_THRESHOLD_SEC
 
+## say() 的指示收點要參考的「決策等待中」狀態。這個狀態住在 Agent 的 LLM
+## 決策迴圈裡，基底沒有——用覆寫方法而不是把旗標搬到基底，是因為只有
+## Agent 有「等 LLM 回決策」這回事；基底恆 false，其他子類別不用管
+func _is_awaiting_decision() -> bool:
+	return false
+
 ## interrupt=true 立刻蓋掉正在顯示/排隊中的內容（LLM 回應等待中的「…」要被
 ## 真正的台詞立刻換掉，不能排在它後面等它自己的顯示時間跑完）。
 ## 預設 false 維持原本「不打斷正在講的話」的排隊語意，其餘呼叫端不用改
@@ -1512,8 +1519,14 @@ func say(line: String, interrupt: bool = false, broadcast: bool = true) -> void:
 	if bubble == null:
 		return
 	# 角色真的開口了——收掉「思考中」指示（issue #949 B 類）。next_line() 拿到
-	# 台詞後透過 _speak() → say() 走到這裡，是「思考結束」最準的訊號
-	if thinking_indicator != null:
+	# 台詞後透過 _speak() → say() 走到這裡，是「思考結束」最準的訊號。
+	# broadcast=false 的系統反應泡泡（agent.gd 的 DLG_SURPRISE／DLG_NOISE_ALERT
+	# fallback）不算「開口」：決策等待中（_is_awaiting_decision()）冒出來的
+	# 反應泡泡不收指示器——LLM 決策還在飛，提前收掉就又變成「看起來沒反應」
+	# 的死寂空窗（舊 bubble.hold() 時代反應泡泡只是排隊、「…」續撐，同一個
+	# 道理）。真對話台詞一律 broadcast=true，照樣收、不會殘留；非決策等待期
+	# 的 say() 行為不變
+	if thinking_indicator != null and (broadcast or not _is_awaiting_decision()):
 		thinking_indicator.hide_indicator()
 	if interrupt:
 		bubble.clear()

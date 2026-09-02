@@ -930,7 +930,10 @@ poc 輸出裡有、《06》沒提到的欄位：`reasoning`／`inner_monologue`�
 （`_awaiting_decision = false` 之後）呼叫 `hide_indicator()` 收掉。
 
 > [!note] 指示的收掉時機
-> `thinking_indicator` 有 `MAX_VISIBLE_SECONDS`（12 秒）安全上限自己收，
+> `thinking_indicator` 有 `MAX_VISIBLE_SECONDS` 安全上限自己收——數值從
+> `AIConfig.DEFAULT_TIMEOUT` 推導：最壞情況是 provider 逾時（20 秒，#852）後
+> 驗證失敗重試最多 2 次（`remote_llm_provider.gd::max_validation_retries()`），
+> 1＋2 次都吃滿逾時再加 5 秒 margin，合計 65 秒。
 > 正常情況下決策回來（`_awaiting_decision = false`）就主動 `hide_indicator()`，
 > 撐得滿 2.5-4 秒的實測延遲。`next_line()`（對話思考）不走這個收掉點，靠
 > `say()` 收——拿到台詞開口說話就是「思考結束」最準的訊號。詳見
