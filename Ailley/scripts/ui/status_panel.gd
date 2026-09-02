@@ -1,11 +1,11 @@
 class_name StatusPanel
 extends CanvasLayer
 
-## 點選角色彈出的三分頁面板：狀態／今日／物品（#172，《15》§2）。
+## 點選角色彈出的四分頁面板：狀態／今日／物品／內心（#172、#736，《15》§2）。
 ##
-## 三個分頁合成一個面板而不是三個各自獨立的面板，理由見《15》§2-1：三者是
-## 「我點的這個角色現在是什麼狀況」的三個切面，選取機制只有一套，640×360
-## 也放不下三個並存的面板。分頁互斥顯示，靠 visible 切換。
+## 四個分頁合成一個面板而不是各自獨立的面板，理由見《15》§2-1：都是
+## 「我點的這個角色現在是什麼狀況」的切面，選取機制只有一套，640×360
+## 也放不下四個並存的面板。分頁互斥顯示，靠 visible 切換。
 ##
 ## 狀態頁（現況即規格，原本就有）：姓名、年齡、金錢、Stats.SPEC 全部數值。
 ## 今日頁（#172 新增）：today_plan（自我回報的意圖）＋ today_log（引擎寫的
@@ -13,16 +13,18 @@ extends CanvasLayer
 ## 的 36 格，唯讀顯示——不重用 InventorySlotButton，那顆按鈕的 _get_inventory()
 ## 寫死抓 "player" 群組，只服務玩家自己的背包／快捷欄，這裡要顯示的是「玩家
 ## 選中的任意角色」，且《15》§2-6 明講不做拖放、不做點擊換手持，本來就不需要
-## 那顆按鈕的互動能力。
+## 那顆按鈕的互動能力。內心頁（#736 新增）：AI 自行宣告的 emotion（character.gd
+## 的 emotion 字典）＋引擎判定的 conditions 陣列，唯讀顯示，不顯示 duration_left。
 ##
 ## 場景結構是這份腳本的合約，改路徑要兩邊一起改：
 ##   CanvasLayer（本腳本）
 ##     Panel（280x208，Setting menu.png 帶標題列那格）
 ##       TitleBg／TitleLabel（角色名字）
-##       TabBar（HBoxContainer，StatusTabButton／TodayTabButton／ItemsTabButton）
+##       TabBar（HBoxContainer，StatusTabButton／TodayTabButton／ItemsTabButton／InnerTabButton）
 ##       StatusTab（VBox：AgeLabel／MoneyLabel／StatsBox）
 ##       TodayTab（ScrollContainer > TodayVBox：PlanHeader／PlanList／LogHeader／LogList）
 ##       ItemsTab（GridContainer 9 欄，空的，本腳本長出 36 個唯讀格子）
+##       InnerTab（VBox：EmotionLabel／ConditionsHeader／ConditionsBox）
 ##       HintLabel
 
 const BARK := Color("2F2522")
@@ -45,11 +47,19 @@ const ACTION_LABELS := {
 	"idle": "發呆", "attack": "攻擊", "haul": "搬運", "struggle": "掙扎",
 }
 
+## character.gd::EMOTION_TYPES -> 顯示用中文。neutral 不進這張表——neutral
+## 視同「沒有進行中的情緒」，內心頁直接顯示 EMPTY_PLACEHOLDER，不會查到這裡
+const EMOTION_LABELS := {
+	"joy": "開心", "anger": "憤怒", "sadness": "悲傷", "fear": "恐懼",
+	"surprise": "驚訝", "disgust": "厭惡", "anticipation": "期待",
+}
+
 @onready var panel: Panel = $Panel
 @onready var title_label: Label = $Panel/TitleLabel
 @onready var status_tab_button: Button = $Panel/TabBar/StatusTabButton
 @onready var today_tab_button: Button = $Panel/TabBar/TodayTabButton
 @onready var items_tab_button: Button = $Panel/TabBar/ItemsTabButton
+@onready var inner_tab_button: Button = $Panel/TabBar/InnerTabButton
 @onready var status_tab: VBoxContainer = $Panel/StatusTab
 @onready var age_label: Label = $Panel/StatusTab/AgeLabel
 @onready var money_label: Label = $Panel/StatusTab/MoneyLabel
@@ -58,12 +68,16 @@ const ACTION_LABELS := {
 @onready var plan_list: VBoxContainer = $Panel/TodayTab/TodayVBox/PlanList
 @onready var log_list: VBoxContainer = $Panel/TodayTab/TodayVBox/LogList
 @onready var items_tab: GridContainer = $Panel/ItemsTab
+@onready var inner_tab: VBoxContainer = $Panel/InnerTab
+@onready var emotion_label: Label = $Panel/InnerTab/EmotionLabel
+@onready var conditions_header: Label = $Panel/InnerTab/ConditionsHeader
+@onready var conditions_box: VBoxContainer = $Panel/InnerTab/ConditionsBox
 @onready var hint_label: Label = $Panel/HintLabel
 
 var _stat_labels := {}				# key（Stats.SPEC 的鍵）-> Label
 var _item_slots: Array[TextureRect] = []	# 36 格，_ready() 時建好，順序固定
 var _character: Character = null
-var _current_tab := 0				# 0=狀態 1=今日 2=物品
+var _current_tab := 0				# 0=狀態 1=今日 2=物品 3=內心
 
 
 func _ready() -> void:
@@ -72,9 +86,13 @@ func _ready() -> void:
 	status_tab_button.text = L10n.t("UI_CHAR_TAB_STATUS")
 	today_tab_button.text = L10n.t("UI_CHAR_TAB_TODAY")
 	items_tab_button.text = L10n.t("UI_CHAR_TAB_ITEMS")
+	inner_tab_button.text = L10n.t("UI_CHAR_TAB_INNER")
+	conditions_header.text = L10n.t("UI_STATUS_CONDITIONS_HEADER")
+	conditions_header.add_theme_color_override("font_color", BARK)
 	status_tab_button.pressed.connect(_set_tab.bind(0))
 	today_tab_button.pressed.connect(_set_tab.bind(1))
 	items_tab_button.pressed.connect(_set_tab.bind(2))
+	inner_tab_button.pressed.connect(_set_tab.bind(3))
 
 	for key in Stats.SPEC:
 		var label := Label.new()
@@ -189,9 +207,11 @@ func _set_tab(tab: int) -> void:
 	status_tab.visible = tab == 0
 	today_tab.visible = tab == 1
 	items_tab.visible = tab == 2
+	inner_tab.visible = tab == 3
 	status_tab_button.disabled = tab == 0
 	today_tab_button.disabled = tab == 1
 	items_tab_button.disabled = tab == 2
+	inner_tab_button.disabled = tab == 3
 
 	if _character == null:
 		return
@@ -199,6 +219,7 @@ func _set_tab(tab: int) -> void:
 		0: _refresh_status_tab()
 		1: _refresh_today_tab()
 		2: _refresh_items_tab()
+		3: _refresh_inner_tab()
 
 func _refresh_status_tab() -> void:
 	# -1 是「未知」（見 character.gd::age 的說明）——固定寫在場景裡的 NPC
@@ -310,6 +331,29 @@ func _refresh_items_tab() -> void:
 		# 同一種標記法（《15》§2-6）
 		var is_hotbar_selected := i < Inventory.HOTBAR_SIZE and i == inventory.get_selected_index()
 		rect.modulate = HOTBAR_TINT if is_hotbar_selected else NORMAL_TINT
+
+## 情緒（AI 自行宣告）＋ conditions（引擎判定的生理衍生狀態），唯讀顯示
+## （《15》§2-7，#736）。不顯示 emotion.duration_left——issue 明講這頁只給
+## 玩家看「現在是什麼狀況」，剩多久是引擎內部排程細節
+func _refresh_inner_tab() -> void:
+	var emotion_type: String = _character.emotion.get("type", "neutral")
+	if emotion_type == "neutral":
+		emotion_label.text = EMPTY_PLACEHOLDER
+	else:
+		var label: String = EMOTION_LABELS.get(emotion_type, emotion_type)
+		var intensity := int(_character.emotion.get("intensity", 0))
+		emotion_label.text = _line("UI_STATUS_EMOTION", "%s（強度 %d）" % [label, intensity])
+	emotion_label.add_theme_color_override("font_color", BARK)
+
+	_clear_children(conditions_box)
+	if _character.conditions.is_empty():
+		_add_placeholder_line(conditions_box)
+	else:
+		for condition in _character.conditions:
+			var label := Label.new()
+			label.text = _character._get_condition_display_name(condition.get("type", ""))
+			label.add_theme_color_override("font_color", BARK)
+			conditions_box.add_child(label)
 
 func _line(label_key: String, value: String) -> String:
 	return "%s：%s" % [L10n.t(label_key), value]

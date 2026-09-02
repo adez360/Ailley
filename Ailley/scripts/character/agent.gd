@@ -3770,7 +3770,14 @@ func _pursue_current_task() -> void:
 		return
 
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
-	if anchors == null or not anchors.has_for(self, current_place):
+	# anchors 整個還沒掛進場景樹（動態生成的 Agent 可能搶在 PlaceAnchors
+	# _ready() 之前先跑一次 _reevaluate()）跟下面「anchors 存在但查無此地」
+	# 是兩個不同階段的暫時失敗，這裡要先擋掉，不然 anchors.HOME_PLACE_NAME
+	# 會對 null 取屬性直接 crash（issue #916）。同樣不落地
+	# _pursued_place／_pursuit_done：理由見下面 has_for() 分支的說明
+	if anchors == null:
+		return
+	if not anchors.has_for(self, current_place):
 		# home_location_id 還沒指派時 has_for() 對 "home" 一定回傳 false——
 		# 動態生成的 Agent 在 CharacterStatePersistence 完成同步之前就可能
 		# 先跑一次 _reevaluate()，這是會自己好的暫時狀態，不是打錯字。不能
@@ -4257,9 +4264,24 @@ func _pursue_work_task() -> void:
 	last_action_result = reason
 
 	if reason == Character.WORK_OCCUPIED:
-		# 工作站已被佔用：保留目前的 schedule work 任務，不清掉也不呼叫 _reevaluate()。
-		# 讓下一個時間事件觸發重試，避免頻繁的同步重評估導致遊戲無回應
+		# 工作站被佔用：先原地重試（名額通常很快釋出，不急著放棄），但要記進
+		# 跨任務失敗計數（issue #868）——不然這個分支會變成全檔案唯一「失敗
+		# 但什麼都不記錄」的路徑，AI 永遠不會被告知它其實一直失敗。
 		push_warning("Agent %s: work_at 失敗（工作站被佔用）" % [character_name])
+		_track_action_result_for_facts("work", false)
+		if _consecutive_failure_count >= FACT_CONSECUTIVE_FAILURE_THRESHOLD:
+			# 連續 3 次還是佔用中：退避／放棄，別再每個遊戲分鐘原地重試。
+			# schedule 來源退避到這個 window 結束（同 eat/drink 那套機制）；
+			# llm 來源沒有 window 可退，直接離開任務池（同 eat/drink 對 llm
+			# 失敗的既有處理）
+			_pursued_place = ""
+			_pursuit_done = false
+			_mark_schedule_retry_backoff(_current_task)
+			if _current_task.get("source", "") != "schedule":
+				_remove_task(_current_task.get("id", ""))
+			_clear_current_task(false)
+			if llm_decision_enabled and not _awaiting_decision:
+				_request_next_decision(_today_plan_needs_new_goal())
 		return
 
 	# TOO_FAR 且真的找得到工作站：地點雜湊站位（PlaceAnchors.MAX_STANCE_DISTANCE）
@@ -4281,8 +4303,17 @@ func _pursue_work_task() -> void:
 		push_warning("Agent %s: work_at 失敗（%s）" % [character_name, reason])
 		# 其他失敗原因：清掉任務、重置 pursuit state 並等待決策。同上改用
 		# _clear_current_task()，避免漏記 today_log；失敗也一併設退避，理由
-		# 同上一條路徑（CodeRabbit review 抓到）
+		# 同上一條路徑（CodeRabbit review 抓到）。失敗收尾——含跨任務失敗計數
+		# （issue #868 發現這個分支原本沒記）與 llm 來源的任務池清除——統一
+		# 收進 _fail_work_task()（沒有清除那行，llm 來源的失敗任務會留在池子
+		# 裡，下一次重算原地選回來）
 		_fail_work_task()
+		return
+
+	# work_at() 成功卡位（不代表已做滿撥款，撥款另由 _run_work() 協程完成）。
+	# 一併記成功，才能把連續失敗計數歸零——不然這裡若漏記，一次成功卡位
+	# 之後的下一次失敗會延續上一輪沒被清掉的計數，門檻提早觸發
+	_track_action_result_for_facts("work", true)
 
 # TOO_FAR 重試專用的第二段追逐（issue #925）：目標是工作站本體座標，不是
 # 地點站位，跟上面「走去地點站位」那段分開處理——退回工作站座標後角色會
@@ -4321,13 +4352,18 @@ func _pursue_work_too_far_retry() -> void:
 
 # work 任務失敗時的共用收尾。原本只有一個失敗分支，issue #925 加了 TOO_FAR
 # 重試之後同一段收尾邏輯出現三次（一般失敗／重試移動失敗／重試 work_at()
-# 仍失敗），抽出來避免重複
+# 仍失敗），抽出來避免重複；跨任務失敗計數（issue #868）與 llm 來源的任務
+# 池清除（沒有這行，llm 來源的失敗任務會留在池子裡，下一次重算原地選回來）
+# 也在這裡統一處理
 func _fail_work_task() -> void:
 	_pursued_place = ""
 	_pursuit_done = false
 	_work_pursuit_target = Vector2.ZERO
 	_work_pursuit_workstation = null
 	_mark_schedule_retry_backoff(_current_task)
+	if _current_task.get("source", "") == "llm":
+		_remove_task(_current_task.get("id", ""))
+	_track_action_result_for_facts("work", false)
 	_clear_current_task(false)
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())

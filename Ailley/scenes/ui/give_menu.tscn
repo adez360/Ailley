@@ -1,0 +1,47 @@
+[gd_scene load_steps=2 format=3 uid="uid://bdwnpstjspc4m"]
+
+[ext_resource type="Script" uid="uid://dmjj7ovyt0k1c" path="res://scripts/ui/give_menu.gd" id="1_cfw7u"]
+
+[node name="GiveMenu" type="CanvasLayer"]
+layer = 20
+script = ExtResource("1_cfw7u")
+
+[node name="Panel" type="Panel" parent="."]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -110.0
+offset_top = -120.0
+offset_right = 110.0
+offset_bottom = 120.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="Panel"]
+layout_mode = 0
+offset_left = 10.0
+offset_top = 8.0
+offset_right = 140.0
+offset_bottom = 132.0
+mouse_filter = 2
+theme_override_constants/separation = 4
+
+[node name="TitleLabel" type="Label" parent="Panel/VBox"]
+layout_mode = 2
+horizontal_alignment = 1
+
+[node name="ItemScroll" type="ScrollContainer" parent="Panel/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="ItemList" type="VBoxContainer" parent="Panel/VBox/ItemScroll"]
+layout_mode = 2
+size_flags_horizontal = 4
+theme_override_constants/separation = 3
+
+[node name="HintLabel" type="Label" parent="Panel/VBox"]
+layout_mode = 2
+horizontal_alignment = 1
+autowrap_mode = 3
