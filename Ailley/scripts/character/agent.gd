@@ -594,20 +594,27 @@ func _log_task_ended(task: Dictionary, ok: bool, target_override: String = "") -
 
 ## ---- 事實句機制（#338，《01-3》§3）----
 ##
-## 1 tick = 10 遊戲分鐘（《02》§1-4／《01-3》§3 三處門檻互相驗證過），下面
-## 門檻常數統一換算成遊戲分鐘，跟 _now_minutes() 同一個時間基準
+## 1 tick = 10 遊戲分鐘（《02》§1-4）。事實句門檻的單位看常數名後綴：`_TICK`
+## 以 tick 為單位（跟生理 drift 的單位相同，見 stats.gd 的 SPEC 註解），比較時
+## 才乘 GameClock.GAME_MINUTES_PER_TICK 換算回遊戲分鐘；`_MIN` 以遊戲分鐘為
+## 單位，跟 _now_minutes() 同一個時間基準。#797 曾把 tick 當成遊戲分鐘換算出
+## 10 倍誤差，把單位寫進常數名就是為了杜絕再犯
 
-## #797：三個門檻原本是獨立選的敘事節奏常數，跟生理衰減無關；但 #731 把生理
-## drift 大幅調慢後，兩者的「多久算危急」撞在一起甚至反過來——舊數值下生理
-## 危機最快 23-50 分鐘就觸發，遠早於這裡任何一級，社交敘事排不上競爭；新
-## drift 下生理危機最慢要到 252 分鐘（satiety）才觸發，跟舊的「3 小時」
-## （180 分鐘）幾乎重疊，wakefulness/stamina（143 分鐘）甚至更早觸發。
-## 下面重新抓的三個數字，全部明顯晚於 252 分鐘，讓生理需求真的危急時能
-## 搶到決策權重，社交沉默只在生理需求都還過得去、角色相對閒暇時才會被
-## 優先考慮
-const FACT_SOCIAL_SILENCE_6H_MIN := 360		# 36 tick
-const FACT_SOCIAL_SILENCE_HALF_DAY_MIN := 720	# 72 tick
-const FACT_SOCIAL_SILENCE_1_DAY_MIN := 1440	# 144 tick
+## #797：社交沉默三級門檻全部落在最早的生理危機「之前」。#731 調慢 drift 後，
+## 四項生理數值從出生值自然衰減到 CRITICAL(30)（stats.gd）需要的 tick 數：
+##   stamina      (80−30)/0.35   ≈ 143 tick
+##   wakefulness  (90−30)/0.42   ≈ 143 tick
+##   hydration    (80−30)/0.278  ≈ 180 tick
+##   satiety      (100−30)/0.278 ≈ 252 tick
+## 本 PR 先前的 1440 遊戲分鐘（= 144 tick）跟 stamina/wakefulness 的 143 tick
+## 只差 1 tick，正是要避開的撞點。改成 30/60/120 tick（5/10/20 遊戲小時），
+## 最後一級比最早的危機早約 23 tick，三級敘事層次在角色還能自由行動時完整
+## 走完，不會跟任何生理危機重疊；代價是沉默句最早 5 遊戲小時就會出現（另一
+## 個方向是全部放到危機之後，取捨見 PR #943 的代修留言）。數值是代修者的
+## 判斷，原作者可再調整
+const FACT_SOCIAL_SILENCE_30_TICK := 30		# 300 遊戲分鐘（5 小時）
+const FACT_SOCIAL_SILENCE_60_TICK := 60		# 600 遊戲分鐘（10 小時）
+const FACT_SOCIAL_SILENCE_120_TICK := 120	# 1200 遊戲分鐘（20 小時）
 const FACT_GOAL_STALE_MIN := 360				# 36 tick
 const FACT_CONSECUTIVE_FAILURE_THRESHOLD := 3
 
@@ -5496,13 +5503,12 @@ func _fact_lines_summary() -> Array[String]:
 
 	# 社交沉默：三級距取最長那條符合的，不三句一起塞（#338 建議做法）
 	var since_social := _now_minutes() - _last_social_minute
-	if since_social >= FACT_SOCIAL_SILENCE_1_DAY_MIN:
-		lines.append("你整整一天沒有和任何人說過話。")
-	elif since_social >= FACT_SOCIAL_SILENCE_HALF_DAY_MIN:
+	if since_social >= FACT_SOCIAL_SILENCE_120_TICK * GameClock.GAME_MINUTES_PER_TICK:
+		lines.append("你快一整天沒有和任何人說過話了。")
+	elif since_social >= FACT_SOCIAL_SILENCE_60_TICK * GameClock.GAME_MINUTES_PER_TICK:
 		lines.append("你已經大半天沒和任何人說過話了。")
-	elif since_social >= FACT_SOCIAL_SILENCE_6H_MIN:
-		lines.append("你已經六個小時沒和任何人說過話了。")
-
+	elif since_social >= FACT_SOCIAL_SILENCE_30_TICK * GameClock.GAME_MINUTES_PER_TICK:
+		lines.append("你已經五個小時沒和任何人說過話了。")
 	# 目標拖延：只有真的設過 current_goal（_goal_set_minute >= 0）才判斷，
 	# 沒設過目標不該無中生有講「你想做的那件事拖很久」
 	if _goal_set_minute >= 0 and _now_minutes() - _goal_set_minute >= FACT_GOAL_STALE_MIN:
