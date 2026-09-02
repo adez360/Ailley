@@ -21,9 +21,6 @@ signal line_submitted(text: String)
 ## Conversation 節點的地方（見該檔 `_finish()` 的說明），節點因此永遠留在場景樹上
 signal turn_resolved(text: String, ok: bool)
 
-## NPC 頭上「輪到你了」的常駐提示符號（issue #207）。純符號不是語言內容，
-## 跟 agent.gd::AI_THINKING_TEXT（"…"）同一種處理，不走 L10n
-const WAITING_FOR_PLAYER_TEXT := "？"
 
 ## 玩家提早打字（還沒真的輪到自己）時暫存的話，見 _on_line_submitted()
 ## 與 next_line() 開頭的緩衝檢查（#207）。FIFO 佇列而不是單一欄位——
@@ -660,15 +657,17 @@ func next_line(listener: Character, _turns: Array[Dictionary], _max_turns: int) 
 		var line: String = _pending_lines.pop_front()
 		return {"ok": true, "line": line, "end": false}
 
-	if is_instance_valid(listener) and listener.bubble != null:
-		listener.bubble.hold(WAITING_FOR_PLAYER_TEXT)
+	# NPC 頭上顯示「思考中」指示，讓玩家知道對方在等自己打字（issue #207／
+	# #949 B 類）。跟 AI 思考共用同一個動畫圖示——都是「系統正在等」，不是台詞
+	if is_instance_valid(listener) and listener.thinking_indicator != null:
+		listener.thinking_indicator.show_indicator()
 
 	_turn_waiting = true
 	var resolved: Array = await turn_resolved
 	_turn_waiting = false
 
-	if is_instance_valid(listener) and listener.bubble != null:
-		listener.bubble.release_hold()
+	if is_instance_valid(listener) and listener.thinking_indicator != null:
+		listener.thinking_indicator.hide_indicator()
 
 	return {"ok": resolved[1], "line": resolved[0], "end": false}
 

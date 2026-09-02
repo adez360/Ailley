@@ -315,6 +315,9 @@ var _rescued_haulers: Array[Character] = []
 @onready var inventory: Inventory = get_node_or_null("State/Inventory")
 @onready var work_progress: WorkProgress = get_node_or_null("UI/WorkProgress")
 @onready var money_popup: MoneyPopup = get_node_or_null("UI/MoneyPopup")
+## 「系統正在等」的頭上動畫圖示（issue #949 B 類）：AI 在想、或對話中 NPC
+## 在等玩家打字。不是台詞——以前塞在對話氣泡裡看起來像角色在說「…」「？」
+@onready var thinking_indicator: ThinkingIndicator = get_node_or_null("UI/ThinkingIndicator")
 @onready var memory: Memory = get_node_or_null("State/Memory")
 # 只有 Player 掛這個節點——NPC 不需要被引導去任何地方。get_node_or_null()
 # 在沒有這個節點的 Agent 實例上安靜回 null，呼叫端（#305）自己判斷要不要用
@@ -1433,13 +1436,11 @@ func enter_conversation(conversation: Node) -> void:
 func exit_conversation(_reason: String = "") -> void:
 	_conversation = null
 	# 對話不管用哪種原因結束（正常收尾／被打斷／走遠）都會呼叫到這裡，是
-	# 唯一保證「這場對話真的結束了」的單一收斂點。agent.gd::next_line() 的
-	# 「思考中」提示改用 bubble.hold() 撐住整個等待期間，沒有 say() 排隊顯示
-	# 那種自動消失的時間兜底——LLM 還沒回應、玩家就走遠的話，沒人會去收這顆
-	# 泡泡。在這裡統一 release_hold() 收掉，release_hold() 沒在 hold 時本來就是
-	# no-op，不用先判斷有沒有真的在 hold
-	if bubble != null:
-		bubble.release_hold()
+	# 唯一保證「這場對話真的結束了」的單一收斂點。next_line()／player.gd 的
+	# 「思考中」指示（AI 在想／NPC 等玩家打字）沒有 say() 那種自動消失的時間
+	# 兜底——LLM 還沒回應、玩家就走遠的話沒人會去收，在這裡統一 hide_indicator()
+	if thinking_indicator != null:
+		thinking_indicator.hide_indicator()
 
 # 自己主動離開對話
 func leave_conversation() -> void:
@@ -1448,7 +1449,8 @@ func leave_conversation() -> void:
 
 ## 進入入眠（issue #827）：暫停 Stats 衰減、用持續顯示的泡泡標示「被天神
 ## 召喚中」（不是一般台詞排隊顯示，靠 bubble.hold() 撐住，直到 exit_offline_
-## sleep() 才收掉，跟 next_line() 的「思考中」泡泡同一種持續提示手法）。
+## sleep() 才收掉——這是唯一還在用 bubble.hold() 的地方，因為「被天神召喚中」
+## 本身有世界觀意義、要當文字讀，跟純載入指示的「思考中」不同）。
 ## reason 目前只用來記錄／除錯（例如 "model_unavailable"、"human_afk"），
 ## 不影響行為——§4.5／§6.4 兩種觸發情境對外表現完全一樣，呼叫端自己決定
 ## 什麼時候該叫這個，這裡不做任何觸發判斷
@@ -1509,6 +1511,10 @@ func is_offline_kick_eligible() -> bool:
 func say(line: String, interrupt: bool = false, broadcast: bool = true) -> void:
 	if bubble == null:
 		return
+	# 角色真的開口了——收掉「思考中」指示（issue #949 B 類）。next_line() 拿到
+	# 台詞後透過 _speak() → say() 走到這裡，是「思考結束」最準的訊號
+	if thinking_indicator != null:
+		thinking_indicator.hide_indicator()
 	if interrupt:
 		bubble.clear()
 	bubble.say(line)
@@ -2201,6 +2207,10 @@ func _on_attacked(attacker: Character) -> void:
 ## 而工作進度 UI 也還開著，跟角色已經不在工作的實際狀態對不上
 func force_interrupt() -> void:
 	stop_moving()
+	# 死亡／入眠／被攻擊等「立刻停下手邊一切」的場合——決策途中的「思考中」
+	# 指示也要立刻收掉，不等它自己的 MAX_VISIBLE_SECONDS（issue #949 B 類）
+	if thinking_indicator != null:
+		thinking_indicator.hide_indicator()
 	if is_in_conversation():
 		leave_conversation()
 	if _working:

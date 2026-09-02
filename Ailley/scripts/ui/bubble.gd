@@ -40,8 +40,8 @@ const BASE_BUBBLE_Z_INDEX := 10
 ## instance 共用同一份順序。
 ##
 ## 原本用全域遞增計數器＋對 4096（CanvasItem z_index 合法範圍上限）取模，
-## CodeRabbit review 抓到：hold() 可以讓一顆氣泡長期停在畫面上（例如「輪到你了」
-## 的常駐提示），計數器繞回 0 時完全可能撞到還在顯示的舊氣泡、把新氣泡排到
+## CodeRabbit review 抓到：hold() 可以讓一顆氣泡長期停在畫面上（「被天神召喚中」
+## 這種入眠提示），計數器繞回 0 時完全可能撞到還在顯示的舊氣泡、把新氣泡排到
 ## 它後面——不是機率低的邊角案例，是真的會發生。改成陣列位置就沒有這個問題：
 ## 位置範圍永遠落在「目前同時可見的氣泡數」內，不會無限增長，也就不會繞回去
 static var _visible_order: Array = []
@@ -110,9 +110,10 @@ func is_speaking() -> bool:
 	return visible or not _queue.is_empty()
 
 ## 常駐顯示，不會自動消失——跟 say() 排隊機制不同，這裡要「一直掛著直到
-## release_hold() 被呼叫」（例如「輪到玩家了」這種要等玩家真的動作才能收起
-## 的提示，見 note/技術/talk 動作設計.md、issue #207）。清掉目前的佇列：
-## 常駐提示期間不該有排隊的舊訊息突然插進來
+## release_hold() 被呼叫」。目前唯一的用途是入眠時的「被天神召喚中」
+## （character.gd::enter_offline_sleep()）——那句有世界觀意義要當文字讀，所以
+## 留在氣泡裡；純載入指示的「思考中」已改用 thinking_indicator（issue #949 B 類）。
+## 清掉目前的佇列：常駐提示期間不該有排隊的舊訊息突然插進來
 func hold(message: String) -> void:
 	_queue.clear()
 	_holding = true

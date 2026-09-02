@@ -137,7 +137,7 @@ func is_talk_interruptible() -> bool          # 基底 `not _working`；Agent �
 func enter_conversation(conversation: Node) -> void
 func exit_conversation() -> void
 func leave_conversation() -> void
-func say(line: String, interrupt := false, broadcast := true) -> void   # interrupt=true 蓋掉現在這句；broadcast=false 給系統內部泡泡（!?／！／AI_THINKING_TEXT「…」）用，不廣播 speech_heard，避免鄰近 LLM 角色連環反應（issue #669）
+func say(line: String, interrupt := false, broadcast := true) -> void   # interrupt=true 蓋掉現在這句；broadcast=false 給系統內部泡泡（!?／！／DLG_IGNORED）用，不廣播 speech_heard，避免鄰近 LLM 角色連環反應（issue #669）。「思考中」指示已改用 thinking_indicator 節點、不走 say()（issue #949）
 func speech_duration(line: String) -> float
 func face_towards(other: Character) -> void
 func update_animation(desired_velocity: Vector2) -> void   # facing 讀解算前的期望方向，不是解算後的 velocity（#108）
@@ -681,6 +681,19 @@ func hide_progress() -> void
 ```text
 † 掛在角色底下（跟 Bubble 同一種「頭上飄一塊 UI」），純顯示，
   不知道工作站或計時器是什麼
+```
+
+## ThinkingIndicator — scripts/ui/thinking_indicator.gd · class_name · Sprite2D
+
+```gdscript
+func show_indicator(max_seconds := 12.0) -> void   # 頭上冒 dots 動畫
+func hide_indicator() -> void
+```
+
+```text
+† character.tscn 的 UI/ThinkingIndicator。「系統正在等」的載入指示——AI 在想、
+  或對話中 NPC 等玩家打字。不是台詞（issue #949 B 類，取代舊的 bubble.hold("…")）。
+  收掉時機統一在 character.gd::say()／exit_conversation()／force_interrupt()
 ```
 
 ## Vision — scripts/character/vision.gd · class_name · Area2D

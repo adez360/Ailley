@@ -1,4 +1,4 @@
-[gd_scene load_steps=38 format=3 uid="uid://dv2awnrkam36p"]
+[gd_scene load_steps=40 format=3 uid="uid://dv2awnrkam36p"]
 
 [ext_resource type="Script" uid="uid://cqx2masxgq7si" path="res://scripts/character/character.gd" id="1_0dpix"]
 [ext_resource type="Script" uid="uid://clx4a8kt1td2c" path="res://scripts/character/stats.gd" id="2_2hyy3"]
@@ -11,6 +11,8 @@
 [ext_resource type="Script" uid="uid://t6axa01hiamc" path="res://scripts/ui/money_popup.gd" id="9_ih8y6"]
 [ext_resource type="Texture2D" uid="uid://pcq7ouq5pyt8" path="res://assets/characters/16x16 Idle-Sheet.png" id="10_idle"]
 [ext_resource type="Texture2D" uid="uid://b4byn4agp2182" path="res://assets/characters/16x16 Walk-Sheet.png" id="11_walk"]
+[ext_resource type="Texture2D" uid="uid://b0dpx4c58g68p" path="res://assets/ui/thinking_sprite.png" id="12_50cep"]
+[ext_resource type="Script" uid="uid://b7wlhpmclh4nt" path="res://scripts/ui/thinking_indicator.gd" id="13_8yvht"]
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_bolw2"]
 atlas = ExtResource("10_idle")
@@ -282,3 +284,10 @@ offset_right = 14.0
 offset_bottom = 7.0
 horizontal_alignment = 1
 vertical_alignment = 1
+
+[node name="ThinkingIndicator" type="Sprite2D" parent="UI"]
+z_index = 11
+position = Vector2(0, -19)
+texture = ExtResource("12_50cep")
+hframes = 6
+script = ExtResource("13_8yvht")
