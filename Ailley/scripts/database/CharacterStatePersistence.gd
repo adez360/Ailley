@@ -117,6 +117,7 @@ var _wallet_loading: Dictionary = {}
 
 func _ready() -> void:
 	call_deferred("_sync_all_characters")
+	call_deferred("_rebuild_dynamic_homes")
 
 	if GameClock != null:
 		if not GameClock.time_changed.is_connected(
@@ -1177,6 +1178,12 @@ func _on_character_tree_exited(
 		npc_id
 	)
 
+	# issue #751：角色節點真的離開世界時，若牠住的是動態成長出來的家，
+	# 拆除對應的場景表現。跟上面幾行同一個「節點離場即清理」的觸發點
+	_release_home_if_dynamic(
+		npc_id
+	)
+
 
 # =====================================================
 # Inventory Signal Disconnect
@@ -2018,17 +2025,47 @@ func _ensure_npc_record(
 # Home Location（issue #391，《規格書07_地點/家》round-robin 分配）
 # =====================================================
 
-## 地圖上固定的家數量。MVP／Phase 2 拍板固定 5 間（見 issue #370 決策），
-## 不支援依人數上限動態生成，見《99》P-58。綁 GameManager.DEPLOY_CAP
-##（《07_地點/家》L21-22 拍板的對應關係），不在這裡再寫死一份 5；同時這個數
-## 必須等於 level.tscn 的 PlaceAnchors 底下 loc_home_* 錨點數——錨點少於這個數，
-## 多出來的家 has_for()/resolve_for() 會解析不到（code review 抓到，PR #727）
-const HOME_LOCATION_COUNT := GameManager.DEPLOY_CAP
+## 5 間靜態家（issue #391，level.tscn 裡永久畫好的 Marker2D）之外，供給
+## 改成動態成長（issue #751，P-58 提前）：場上需要幾間就長幾間，不再受
+## DEPLOY_CAP 這個人數上限的靜態假設綁住。STATIC_HOME_ANCHOR_COUNT 只描述
+## 「這幾個編號的錨點是場景永久內容，不能刪」，跟供給上限無關
 const HOME_LOCATION_PREFIX := "loc_home_"
+const STATIC_HOME_ANCHOR_COUNT := 5
 
-## level.tscn PlaceAnchors 底下實際佈置的 loc_home_* 錨點數。跟 DEPLOY_CAP
-## 是兩個獨立事實：前者是地圖供給，後者是人數上限，兩者脫鉤時要吵出來
-const HOME_ANCHOR_COUNT := 5
+## 房屋場景路徑，動態生成的家用來 instantiate（issue #751）。前 5 間已經畫在
+## level.tscn 裡，不需要這個——只有超出這 5 間、動態成長出來的才會真的
+## instantiate 這個場景。用 load() 而不是 preload()：這個檔案處理的是全部
+## 角色的 state/wallet/inventory 同步，流量遠比家的動態成長高，preload
+## 會讓整個檔案的編譯綁死在這一個場景檔存不存在上——house.tscn 萬一被搬移
+## 或壞掉，只該讓成長這條路徑失敗，不該連累其他完全不相干的同步邏輯
+const HOME_SCENE_PATH := "res://scenes/house.tscn"
+
+## 動態家彼此、與靜態家之間的最小間距。除了 5 間靜態家當初踩過的
+## resolve_from_position() 反查坑（要距離 > character.gd 的
+## ACTUAL_PLACE_RADIUS 32px，見 note/技術/村莊地圖.md 的 PR #727
+## postmortem）——house.tscn 的碰撞形狀是照 Sprite2D 實際尺寸 autofit 出來的
+## 112x80px，間距不夠兩棟房子的碰撞會疊在一起。128px（比房子最長邊還寬）
+## 兩者都顧到了
+const HOME_MIN_SEPARATION := 128.0
+
+## _find_home_placement() 的落點搜尋半徑上界（單位：格）：從第一間現有的家
+## 一圈圈往外掃，掃到這個半徑還找不到就回 Vector2.INF、走溢出共用安全閥。
+## 遠大於現實需求（NavGrid 可走範圍不可能被家占滿到這個程度），只是給搜尋
+## 一條明確的停止線，跟其他成長參數一樣收成常數
+const HOME_PLACEMENT_MAX_RADIUS := 60
+
+## 動態家錨點到房屋原點的固定偏移。錨點不能跟房屋同一點——house.tscn 的
+## StaticBody2D（112x80，見 DYNAMIC_HOME_FOOTPRINT）會把錨點整個蓋住，
+## 角色 move_to 錨點永遠被擋在箱緣（_has_arrived_at() 對動態家永不成立、
+## resolve_from_position() 也反查不到，CodeRabbit review on #825）。比照
+## 靜態家「錨點在門口」的慣例：房屋往北收 48px（3 格），碰撞箱下緣剛好
+## 落在錨點格外，錨點那格與錨點那一整列保持可走
+const DYNAMIC_HOME_ANCHOR_TO_HOUSE := Vector2(0.0, -48.0)
+
+## house.tscn StaticBody2D 碰撞箱尺寸（16px 一格 → 7x5 格的實體足跡）。
+## _find_home_placement() 的落點足跡檢查以這個尺寸為準；house.tscn 改碰撞
+## 尺寸時這裡要跟著改
+const DYNAMIC_HOME_FOOTPRINT := Vector2(112.0, 80.0)
 
 
 ## _ensure_npc_record() 的共用收尾：用 _resolve_home_location() 驗證／必要時
@@ -2103,7 +2140,8 @@ func _resolve_home_location_for(
 	)
 
 
-	# 值本身也要驗證是這一批 loc_home_01～loc_home_05 命名，不能只驗證
+	# 值本身也要驗證是 loc_home_NN（正整數編號，動態成長後沒有固定上限）
+	# 命名，不能只驗證
 	# location 表裡「有沒有這一列」——舊 fallback（issue #391 之前）寫的
 	# home_001 那類值在 location 表裡也確實有一列，會通過純存在性檢查，
 	# 但場景裡沒有同名錨點，has_for()/resolve_for() 永遠解析不到、每次都
@@ -2114,7 +2152,7 @@ func _resolve_home_location_for(
 		var requested_rows := (
 			DatabaseManager.select_where(
 				"location",
-				"location_id = ?",
+				"location_id = ? AND is_active = 1",
 				[
 					current_value
 				],
@@ -2124,12 +2162,15 @@ func _resolve_home_location_for(
 			)
 		)
 
-		# 除了「格式合法＋location 表有這一列」，還要「沒有被別的還在世界的
-		# 角色佔走」——記憶體值可能來自讀檔還原的存檔，跟 DB 現況分歧（存檔
-		# 值與 DB 值打架、或 _ensure_unique_id() 換過 character_id 後照抄舊
-		# 存檔）時，只驗前兩個會讓兩個角色同時「以為」自己分到同一間，而且
-		# 完全靜默，連溢出安全閥的 warning 都沒有。被佔用就落到下面的
-		# round-robin 重分配（code review 抓到，PR #727）
+		# 除了「格式合法＋location 表有這一列且仍是 active」，還要「沒有被別的
+		# 還在世界的角色佔走」——記憶體值可能來自讀檔還原的存檔，跟 DB 現況
+		# 分歧（存檔值與 DB 值打架、或 _ensure_unique_id() 換過 character_id
+		# 後照抄舊存檔）時，只驗格式跟存在性會讓兩個角色同時「以為」自己分到
+		# 同一間，而且完全靜默（code review 抓到，PR #727）。is_active 這道
+		# 篩選是 issue #751 新加的：這間家若已被 _release_home_if_dynamic()
+		# 標記拆除（is_active=0），沿用檢查在這裡自然失敗，逼這個角色走下面
+		# 的全新分配——「重進不保留分配權」不需要另外去清 npc.home_location_id
+		# 這個欄位（也不能清，NOT NULL 加 FK RESTRICT，硬清會撞資料庫）
 		if not requested_rows.is_empty() and not occupied.has(current_value):
 			return current_value
 
@@ -2137,9 +2178,11 @@ func _resolve_home_location_for(
 	return _assign_next_home_location(occupied)
 
 
-## value 是不是這一批 loc_home_01～loc_home_05 其中一個合法命名——只檢查
-## 格式，不查 DB（DB 存在性由呼叫端另外查）。用來擋掉 issue #391 之前的
-## 舊 fallback 值（例如 home_001）與其他任何不屬於這批命名的殘留值
+## value 是不是 loc_home_ 開頭的合法命名——只檢查格式，不查 DB（DB
+## 存在性／is_active 由呼叫端另外查）。用來擋掉 issue #391 之前的舊
+## fallback 值（例如 home_001）與其他任何不屬於這批命名的殘留值。
+## 不再檢查上限（issue #751 之前是 index <= HOME_LOCATION_COUNT）——供給
+## 動態成長後沒有固定上限，只要是正整數編號就是合法格式
 func _is_valid_home_location_id(value: String) -> bool:
 
 	if value.is_empty():
@@ -2153,26 +2196,26 @@ func _is_valid_home_location_id(value: String) -> bool:
 	if not suffix.is_valid_int():
 		return false
 
-	var index := int(suffix)
-
-	return index >= 1 and index <= HOME_LOCATION_COUNT
+	return int(suffix) >= 1
 
 
-## 5 間 loc_home_01~05 是這個 issue 新加的 location 列，只在缺的時候補——
+## loc_home_0N 的 N，不是合法命名回傳 -1。用來判斷一間家落在靜態範圍
+## （<= STATIC_HOME_ANCHOR_COUNT）還是動態範圍
+func _home_location_index(location_id: String) -> int:
+
+	if not _is_valid_home_location_id(location_id):
+		return -1
+
+	return int(location_id.substr(HOME_LOCATION_PREFIX.length()))
+
+
+## 5 間 loc_home_01~05 是 issue #391 新加的 location 列，只在缺的時候補——
 ## 已存在（例如上次啟動已經建過）就不動它，避免覆寫掉未來可能加上的
-## 客製欄位（名稱／danger 等）
+## 客製欄位（名稱／danger 等）。動態成長出來的家（issue #751）不歸這裡管，
+## 見 _grow_home_supply()
 func _ensure_home_locations_seeded() -> void:
 
-	if HOME_LOCATION_COUNT > HOME_ANCHOR_COUNT:
-		push_error(
-			(
-				"[CharacterStatePersistence] "
-				+ "DEPLOY_CAP=%d 超過地圖上的 loc_home_* 錨點數 %d，"
-				+ "多出來的家解析不到座標（《07_地點/家》：地圖動態擴張 Phase 3/4 才支援）"
-			) % [HOME_LOCATION_COUNT, HOME_ANCHOR_COUNT]
-		)
-
-	for i in range(1, HOME_LOCATION_COUNT + 1):
+	for i in range(1, STATIC_HOME_ANCHOR_COUNT + 1):
 
 		var location_id := (
 			"%s%02d" % [HOME_LOCATION_PREFIX, i]
@@ -2212,54 +2255,461 @@ func _ensure_home_locations_seeded() -> void:
 
 
 ## round-robin：從游標位置沿固定順序找第一間沒有被「目前還在世界上的角色」
-## 佔用的家，分配後游標移到它的下一個位置（mod N）。occupied 由呼叫端傳入
-## （_resolve_home_location_for() 已經算好一份排除自己的占用快照，沿用檢查
-## 跟重分配看同一份，中途世界人數變動也不會前後不一致）。占用＝還在世界上的
-## 角色的 npc 列（見 _occupied_home_location_ids()）：角色離開世界後那間家
-## 即視為空出，下一輪巡覽自然會排到它；游標本身不回退（《規格書07_地點/家》
-## 拍板細節「角色刪除：騰出的房屋標記為空」）
+## 佔用的 active 家，分配後游標移到它的下一個位置（mod 目前家的總數）。
+## occupied 由呼叫端傳入（_resolve_home_location_for() 已經算好一份排除自己
+## 的占用快照，沿用檢查跟重分配看同一份，中途世界人數變動也不會前後不一致）。
+## 佔用＝還在世界上的角色的 npc 列（見 _occupied_home_location_ids()）：
+## 角色離開世界後那間家即視為空出，下一輪巡覽自然會排到它；游標本身不回退。
+##
+## 現有家全滿時不再走溢出共用安全閥（issue #751 拿掉這個機制）——改成呼叫
+## _grow_home_supply() 真的長一間新的出來，不需要犧牲「每人一間」這個保證
 func _assign_next_home_location(occupied: Dictionary) -> String:
 
-	var cursor := _get_home_cursor()
+	var active_ids := _active_home_location_ids()
+	var count := active_ids.size()
 
-	for offset in range(HOME_LOCATION_COUNT):
+	if count > 0:
 
-		var index := (cursor + offset) % HOME_LOCATION_COUNT
-		var location_id := (
-			"%s%02d" % [HOME_LOCATION_PREFIX, index + 1]
+		var cursor := _get_home_cursor() % count
+
+		for offset in range(count):
+
+			var index := (cursor + offset) % count
+			var location_id: String = active_ids[index]
+
+			if not occupied.has(location_id):
+				_set_home_cursor((index + 1) % count)
+				return location_id
+
+	return _grow_home_supply()
+
+
+## 目前所有 is_active=1 的 loc_home_* location_id，依編號排序——round-robin
+## 掃描的候選清單。跟舊版「固定 0..HOME_LOCATION_COUNT-1」的差別是這份清單
+## 長度會隨供給成長變動，且編號可能有缺口（拆除後 is_active=0 的家被排除，
+## 直到 _grow_home_supply() 復活它才會重新出現在這裡）
+func _active_home_location_ids() -> Array[String]:
+
+	var rows := DatabaseManager.select_where(
+		"location",
+		"location_id LIKE ? AND is_active = 1",
+		[HOME_LOCATION_PREFIX + "%"],
+		["location_id"]
+	)
+
+	var ids: Array[String] = []
+	for row in rows:
+		ids.append(str(row.get("location_id", "")))
+
+	ids.sort()
+	return ids
+
+
+## 現有的家全部被占用時成長供給（issue #751）：優先復活一間先前被
+## _release_home_if_dynamic() 拆除、目前 is_active=0 的家（重用編號，
+## 避免拆了又長無止盡往後加號碼），沒有可復活的才真的開一個新編號。
+## 兩種情況都要重新搜尋一次落點——復活的家原本的座標不一定還適用（可能
+## 已經被別的東西占走，或單純想避免每次都長在同一點造成視覺群聚）
+func _grow_home_supply() -> String:
+
+	var location_id := _reactivatable_home_location_id()
+	if location_id.is_empty():
+		location_id = _next_new_home_location_id()
+
+	var position := _find_home_placement()
+
+	if position == Vector2.INF:
+		# 地圖找不到落點（理論上不會發生，NavGrid 範圍遠大於目前的家數量）：
+		# 寧可跟目前游標指到的家共用，也不要讓 home_location_id 留空撞
+		# NPCSchema 的 NOT NULL——跟舊版溢出安全閥同一個「不能讓整套同步
+		# 卡死」的理由，只是現在只在真正找不到地方時才會走到這裡
+		var active_ids := _active_home_location_ids()
+		if not active_ids.is_empty():
+			push_warning(
+				"[CharacterStatePersistence] 找不到新家的落點，%s 溢出共用。"
+				% active_ids[0]
+			)
+			return active_ids[0]
+		push_error("[CharacterStatePersistence] 一間家都沒有、也找不到新落點，無法分配。")
+		return ""
+
+	if not _create_or_reactivate_home(location_id, position):
+		# DB 寫入失敗：不能回傳 location 表裡不存在的 id——npc.home_location_id
+		# 的 FK 會擋下整筆角色同步（CodeRabbit review on #825）。退回共用現有
+		# 的 active 家，跟上面找不到落點的溢出共用同一個「不能讓整套同步卡死」
+		# 的理由
+		var fallback_ids := _active_home_location_ids()
+		if not fallback_ids.is_empty():
+			push_warning(
+				"[CharacterStatePersistence] 動態家 %s 建立／復活失敗，%s 溢出共用。"
+								% [location_id, fallback_ids[0]]
+			)
+			return fallback_ids[0]
+		push_error("[CharacterStatePersistence] 動態家建立失敗且沒有任何現成的家可共用，無法分配。")
+		return ""
+	return location_id
+
+
+## 挑一個目前 is_active=0（先前被拆除）的家來復活，依編號取最小的那個；
+## 沒有可復活的回傳空字串
+func _reactivatable_home_location_id() -> String:
+
+	var rows := DatabaseManager.select_where(
+		"location",
+		"location_id LIKE ? AND is_active = 0",
+		[HOME_LOCATION_PREFIX + "%"],
+		["location_id"]
+	)
+
+	var ids: Array[String] = []
+	for row in rows:
+		ids.append(str(row.get("location_id", "")))
+
+	if ids.is_empty():
+		return ""
+
+	ids.sort()
+	return ids[0]
+
+
+## 挑一個沒被用過的新編號：掃現有全部 loc_home_*（不論 active/inactive）的
+## 編號，取最小的缺口——缺口用完才往上加，避免拆了又長把編號一路推高
+func _next_new_home_location_id() -> String:
+
+	var rows := DatabaseManager.select_where(
+		"location",
+		"location_id LIKE ?",
+		[HOME_LOCATION_PREFIX + "%"],
+		["location_id"]
+	)
+
+	var used := {}
+	for row in rows:
+		var index := _home_location_index(str(row.get("location_id", "")))
+		if index > 0:
+			used[index] = true
+
+	var candidate := 1
+	while used.has(candidate):
+		candidate += 1
+
+	return "%s%02d" % [HOME_LOCATION_PREFIX, candidate]
+
+
+## 幫一間新家找位置：錨點格與房屋 7x5 格足跡在 NavGrid 上都可走、跟現有
+## 每一間家（靜態＋動態）的距離都 > HOME_MIN_SEPARATION。用第一間現有的家
+## 當搜尋起點，一圈圈往外找（跟 NavGrid.nearest_free_cell() 同一套「掃外框」
+## 手法，這裡多一條距離篩選）。找不到回傳 Vector2.INF
+func _find_home_placement() -> Vector2:
+
+	var nav = get_tree().get_first_node_in_group("nav_grid")
+	if nav == null:
+		return Vector2.INF
+
+	var existing_positions := _existing_home_positions()
+	if existing_positions.is_empty():
+		return Vector2.INF
+
+	var seed_cell: Vector2i = nav.world_to_cell(existing_positions[0])
+
+	for radius in range(0, HOME_PLACEMENT_MAX_RADIUS + 1):
+		for y in range(-radius, radius + 1):
+			for x in range(-radius, radius + 1):
+
+				if radius > 0 and absi(x) != radius and absi(y) != radius:
+					continue
+
+				var cell: Vector2i = seed_cell + Vector2i(x, y)
+				if not _home_footprint_free(nav, cell):
+					continue
+				var candidate: Vector2 = nav.cell_to_world(cell)
+				if _far_enough_from_all(candidate, existing_positions):
+					return candidate
+
+	return Vector2.INF
+
+
+func _far_enough_from_all(candidate: Vector2, positions: Array) -> bool:
+
+	for pos in positions:
+		if candidate.distance_to(pos) < HOME_MIN_SEPARATION:
+			return false
+
+	return true
+
+
+## 落點足跡檢查：錨點那格可走，且房屋碰撞箱罩住的 7x5 格全部可走。房子
+## 生成後這些格會變成 solid（_spawn_home_scene() 生成後會重建 NavGrid），
+## 只驗錨點單一格會把家蓋在牆上／其他靜態障礙上（CodeRabbit review on #825）
+##
+## 格數由 DYNAMIC_HOME_FOOTPRINT（112x80）對 16px 的 NavGrid 格換算：
+## 以錨點 cell 為基準，房屋中心在北邊 3 格（DYNAMIC_HOME_ANCHOR_TO_HOUSE），
+## 足跡涵蓋 x: -3..+3、y: -5..-1（相對錨點 cell）的 35 格
+func _home_footprint_free(nav, anchor_cell: Vector2i) -> bool:
+
+	if not nav.is_cell_free(anchor_cell):
+		return false
+
+	var house_cell: Vector2i = anchor_cell + Vector2i(
+		int(DYNAMIC_HOME_ANCHOR_TO_HOUSE.x / 16.0),
+		int(DYNAMIC_HOME_ANCHOR_TO_HOUSE.y / 16.0)
+	)
+	var half_cells := Vector2i(
+		int(DYNAMIC_HOME_FOOTPRINT.x / 32.0),
+		int(DYNAMIC_HOME_FOOTPRINT.y / 32.0)
+	)
+
+	for dy in range(-half_cells.y, half_cells.y + 1):
+		for dx in range(-half_cells.x, half_cells.x + 1):
+			if not nav.is_cell_free(house_cell + Vector2i(dx, dy)):
+				return false
+
+	return true
+
+## 現有每一間家的世界座標，不分靜態動態。靜態 5 間座標來自場景 Marker2D
+## （單一事實來源，DB 不重複存），動態的座標存在 location.pos_x/pos_y
+## （見 migration 12）
+func _existing_home_positions() -> Array:
+
+	var positions := []
+
+	var anchors = get_tree().get_first_node_in_group("place_anchors")
+	if anchors != null:
+		for i in range(1, STATIC_HOME_ANCHOR_COUNT + 1):
+			var anchor_name := "%s%02d" % [HOME_LOCATION_PREFIX, i]
+			if anchors.has_node(NodePath(anchor_name)):
+				positions.append(anchors.get_node(NodePath(anchor_name)).global_position)
+
+	var rows := DatabaseManager.select_where(
+		"location",
+		"location_id LIKE ? AND pos_x IS NOT NULL",
+		[HOME_LOCATION_PREFIX + "%"],
+		["pos_x", "pos_y"]
+	)
+
+	for row in rows:
+		positions.append(Vector2(float(row.get("pos_x", 0.0)), float(row.get("pos_y", 0.0))))
+
+	return positions
+
+
+## 建立或復活一筆動態家的 DB 資料列＋場景節點。靜態 5 間永遠 active，
+## _grow_home_supply() 只會在它們全部被占用之後才呼叫到這裡，理論上
+## location_id 一定落在動態範圍，但仍防呆判斷一次（見 _spawn_home_scene()），
+## 避免誤觸 level.tscn 裡的永久節點。回傳成敗：DB 寫入失敗時呼叫端不能拿著
+## 一個 location 表裡不存在的 id 去寫 npc.home_location_id（FK 會擋下整筆
+## 角色同步），要退回共用現有的家
+func _create_or_reactivate_home(location_id: String, position: Vector2) -> bool:
+
+	var existing := DatabaseManager.select_where(
+		"location", "location_id = ?", [location_id], ["location_id"]
+	)
+
+	if existing.is_empty():
+
+		if not DatabaseManager.insert("location", {
+			"location_id": location_id,
+			"name": location_id,
+			"description": "",
+			"location_type": "home",
+			"capacity": 1,
+			"danger": 0,
+			"is_active": 1,
+			"pos_x": position.x,
+			"pos_y": position.y,
+		}):
+			push_error(
+				"[CharacterStatePersistence] 動態家 %s 建立失敗 | DB=%s"
+				% [location_id, DatabaseManager.db.error_message]
+			)
+			return false
+
+	else:
+
+		if not DatabaseManager.update(
+			"location",
+			{"is_active": 1, "pos_x": position.x, "pos_y": position.y},
+			"location_id = '%s'" % DatabaseManager.escape_sql_string(location_id)
+		):
+			push_error(
+				"[CharacterStatePersistence] 動態家 %s 復活失敗 | DB=%s"
+				% [location_id, DatabaseManager.db.error_message]
+			)
+			return false
+
+	_spawn_home_scene(location_id, position)
+	return true
+
+
+## 動態家的場景表現：house.tscn 掛在 world 群組底下（跟 GameManager.
+## spawn_character() 的角色掛法一致，避免跟 Level 底下的裝飾物 y-sort
+## 脫鉤），同時在 PlaceAnchors 底下加一個同名 Marker2D——resolve()／has()
+## 全部靠 PlaceAnchors 底下的同名子節點查，沒有這個錨點，has_for()／
+## resolve_for() 永遠解析不到剛建好的這間家。兩邊都先檢查存不存在才建立，
+## 讀檔重建（_rebuild_dynamic_homes()）跟成長路徑可能對同一個 location_id
+## 各呼叫一次，不該疊出兩份
+##
+## position 是錨點（門口可走格）的世界座標，也是 DB pos_x/pos_y 存的值；
+## 房屋本體另用 DYNAMIC_HOME_ANCHOR_TO_HOUSE 往北收，碰撞箱不蓋住錨點。
+## 生成後 deferred 重建 NavGrid（見 _schedule_nav_rebuild()）
+func _spawn_home_scene(location_id: String, position: Vector2) -> void:
+
+	if _home_location_index(location_id) <= STATIC_HOME_ANCHOR_COUNT:
+		push_error(
+			"[CharacterStatePersistence] %s 落在靜態範圍，不該動態生成場景節點"
+			% location_id
+		)
+		return
+
+	var anchors = get_tree().get_first_node_in_group("place_anchors")
+	if anchors == null:
+		push_error("[CharacterStatePersistence] 場景沒有 place_anchors 群組節點，%s 沒有座標可用" % location_id)
+		return
+
+	if not anchors.has_node(NodePath(location_id)):
+		var marker := Marker2D.new()
+		marker.name = location_id
+		marker.position = position
+		anchors.add_child(marker)
+
+	var world = get_tree().get_first_node_in_group("world")
+	if world == null:
+		push_error("[CharacterStatePersistence] 場景沒有 world 群組節點，%s 沒有房屋可看" % location_id)
+		return
+
+	var house_name := "DynamicHome_%s" % location_id
+	if world.has_node(NodePath(house_name)):
+		return
+
+	var house_scene: PackedScene = load(HOME_SCENE_PATH)
+	if house_scene == null:
+		push_error("[CharacterStatePersistence] 載入 %s 失敗，%s 沒有房屋可看" % [HOME_SCENE_PATH, location_id])
+		return
+
+	var house := house_scene.instantiate()
+	house.name = house_name
+	house.global_position = position + DYNAMIC_HOME_ANCHOR_TO_HOUSE
+	world.add_child(house)
+
+	# 新的 StaticBody2D 要等一個物理幀才會反映到物理空間，deferred 重建
+	# NavGrid 讓房子底下的格子立刻變 solid，find_path() 不會把終點算進房裡
+	_schedule_nav_rebuild()
+
+
+## 拆除一間動態家的場景表現（issue #751：「拆除」語意）。location 列本身
+## 不刪，改成 is_active=0，等下次 _grow_home_supply() 復活它——刪列會去撞
+## npc.home_location_id 的 FOREIGN KEY ... ON DELETE RESTRICT（離場角色的
+## 舊值還留著，是無害的殘留：下次牠重新解析時 is_active=0 會讓「沿用檢查」
+## 自然失敗，逼牠走全新分配，不需要另外去改 npc 那筆的 home_location_id）
+func _demolish_home_scene(location_id: String) -> void:
+
+	var anchors = get_tree().get_first_node_in_group("place_anchors")
+	if anchors != null and anchors.has_node(NodePath(location_id)):
+		anchors.get_node(NodePath(location_id)).queue_free()
+
+	var world = get_tree().get_first_node_in_group("world")
+	if world != null:
+		var house_name := "DynamicHome_%s" % location_id
+		if world.has_node(NodePath(house_name)):
+			world.get_node(NodePath(house_name)).queue_free()
+
+	if not DatabaseManager.update(
+		"location", {"is_active": 0},
+		"location_id = '%s'" % DatabaseManager.escape_sql_string(location_id)
+	):
+		push_error(
+			"[CharacterStatePersistence] %s 標記 is_active=0 失敗 | DB=%s"
+			% [location_id, DatabaseManager.db.error_message]
 		)
 
-		if not occupied.has(location_id):
-			_set_home_cursor((index + 1) % HOME_LOCATION_COUNT)
-			return location_id
+	# 房子拆掉了，它的格子要還回來——同樣 deferred 一幀（queue_free() 的
+	# 節點要等幀末才真的離開樹）
+	_schedule_nav_rebuild()
 
-	# 溢出安全閥，不是刻意設計的同居功能：5 間全滿在 DEPLOY_CAP=5 的
-	# 世界人數上限下「理論上」不會發生（見《規格書07_地點/家》），但玩家
-	# 本身也會走這條路徑要一間家（見 _ensure_npc_record()），main.tscn
-	# 目前仍留有一個沒走 deploy_from_library() 的設計期測試用 Player 節點
-	# （見 note/技術/村莊地圖.md），會把實際需求推到 6，讓這裡真的碰得到。
-	# home_location_id 在 NPCSchema 是 NOT NULL，回傳空字串會讓
-	# _ensure_npc_record() 整筆失敗、state/wallet/inventory 同步永久卡死
-	# ——寧可讓這個角色暫時跟游標當下那一間共用，也不要讓整套同步斷掉。
-	# 游標要先收斂上界再算共用那間：正常流程游標經 mod 永遠在 0～N-1，
-	# 但舊 DB 可能存過 >= N 的值（schema 的 CHECK 只保證 >= 0），直接
-	# cursor + 1 會算出 loc_home_06 撞 NPCSchema 的外鍵、npc insert 失敗、
-	# _ensure_npc_record() 整筆卡死——正是這個安全閥想避免的結果
-	# （code review 抓到，PR #727）
-	var overflow_index := cursor % HOME_LOCATION_COUNT
-	var overflow_location_id := (
-		"%s%02d" % [HOME_LOCATION_PREFIX, overflow_index + 1]
+
+## 角色節點離開場景樹時，若牠住的是動態成長出來的家（超出 5 間靜態範圍），
+## 拆除對應的場景表現（issue #751：重進不保留分配權）。靜態 5 間不受影響
+## ——本來就是永久場景內容，空出來後照舊靠 round-robin 給下一個人
+func _release_home_if_dynamic(npc_id: String) -> void:
+
+	# 整個世界卸載（Esc「回主選單」的 change_scene_to_file()、關視窗的 quit()）
+	# 也會讓場上每個角色 tree_exited——那是整樹拆除，不是「這個角色被從世界中
+	# 移除」。這個節點掛在 DatabaseManager（autoload）底下，比當前場景晚釋放、
+	# DB 還活著，回呼照樣執行：不擋的話每次離開世界，所有動態家都會被標
+	# is_active=0，下次進場 _rebuild_dynamic_homes() 查不到任何 active 的動態列，
+	# 「讀檔原樣重建」變死碼（CodeRabbit review on #825 抓到）。只有單一角色
+	# 退場才拆除動態家；世界卸載中一律跳過，旗標由 GameManager 管理
+	# （離開流程起點設 true，進場／deploy 時重置）
+	if GameManager._world_unloading:
+		return
+
+	var rows := DatabaseManager.select_where(
+		NPC_TABLE, "npc_id = ?", [npc_id], ["home_location_id"]
+	)
+	if rows.is_empty():
+		return
+
+	var location_id := str(rows[0].get("home_location_id", ""))
+	if _home_location_index(location_id) > STATIC_HOME_ANCHOR_COUNT:
+		_demolish_home_scene(location_id)
+
+
+## 進世界時把 DB 裡每一筆仍是 active 的動態家重新 instantiate 一次
+## （issue #751「讀檔時重建」）。動態家的錨點與房屋節點都是純執行期產物，
+## 重開遊戲／回選單再進場後場景樹裡什麼都沒有，只剩 DB 的 pos_x/pos_y。
+##
+## 呼叫時機：autoload 開機的 deferred 那次撞的是主選單場景（沒有世界可掛），
+## 真正的重建入口在世界進場點 main_scene.gd::_ready()——每次進世界（新遊戲／
+## 繼續／回選單再進）都會呼叫（CodeRabbit review on #825 抓到進世界後沒有
+## 任何重建路徑）。場景沒有 place_anchors 就直接跳過：主選單開機不噴錯
+func _rebuild_dynamic_homes() -> void:
+
+	if not DatabaseManager.is_ready:
+		return
+
+	if get_tree().get_first_node_in_group("place_anchors") == null:
+		return
+
+	var rows := DatabaseManager.select_where(
+		"location",
+		"location_id LIKE ? AND is_active = 1 AND pos_x IS NOT NULL",
+		[HOME_LOCATION_PREFIX + "%"],
+		["location_id", "pos_x", "pos_y"]
 	)
 
-	_set_home_cursor((overflow_index + 1) % HOME_LOCATION_COUNT)
+	for row in rows:
+		var location_id := str(row.get("location_id", ""))
+		if _home_location_index(location_id) <= STATIC_HOME_ANCHOR_COUNT:
+			continue
+		var position := Vector2(float(row.get("pos_x", 0.0)), float(row.get("pos_y", 0.0)))
+		_spawn_home_scene(location_id, position)
 
-	push_warning(
-		"[CharacterStatePersistence] "
-		+ "5 間家全滿，%s 溢出共用（容量安全閥，非刻意同居設計，見《99》P-58）。"
-		% overflow_location_id
-	)
+## 生成／拆除動態家之後重建 NavGrid（CodeRabbit review on #825）：房子底下
+## 的格子要變 solid、拆掉的要還回來。新加／剛移除的碰撞體要等一個物理幀
+## 才會反映到物理空間（NavGrid._ready() 開場建置同樣的理由），所以 await
+## 一幀再 rebuild。同一拍多次生成／拆除只重建一次——rebuild() 是整張網格
+## 重掃，沒必要逐棟各掃一遍
+var _nav_rebuild_pending := false
 
-	return overflow_location_id
+func _schedule_nav_rebuild() -> void:
+
+	if _nav_rebuild_pending:
+		return
+
+	var tree := get_tree()
+	if tree == null:
+		return
+
+	_nav_rebuild_pending = true
+	await tree.physics_frame
+	_nav_rebuild_pending = false
+
+	if not is_inside_tree():
+		return
+
+	var nav = tree.get_first_node_in_group("nav_grid")
+	if nav != null:
+		nav.rebuild()
 
 
 ## 占用集合＝「目前還在世界上的角色」的 character_id 對到的 npc 列所占的家。
@@ -2336,9 +2786,10 @@ func _get_home_cursor() -> int:
 	if rows.is_empty():
 		return 0
 
-	# 收斂上界：這裡 mod 過，呼叫端就算忘了取 % 也不會算出界外的家
-	# （code review 抓到，PR #727）
-	return int(rows[0].get("next_index", 0)) % HOME_LOCATION_COUNT
+	# 不在這裡收斂上界了（issue #751 之前是 % HOME_LOCATION_COUNT）——供給
+	# 動態成長後沒有固定的家數量，收斂交給呼叫端（_assign_next_home_location()
+	# 用當下真正的 active 家數量取 %，那裡才知道真正的界在哪）
+	return maxi(0, int(rows[0].get("next_index", 0)))
 
 
 func _set_home_cursor(value: int) -> void:

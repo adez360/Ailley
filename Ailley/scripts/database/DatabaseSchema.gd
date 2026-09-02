@@ -34,7 +34,7 @@ extends RefCounted
 ## CREATE TABLE 對不上時，
 ## 這裡加一，並在 MIGRATIONS 補上對應 entry。純新增 table 不算——
 ## CREATE TABLE IF NOT EXISTS 自己會建，不需要 migration。
-const CURRENT_VERSION := 11
+const CURRENT_VERSION := 12
 
 
 ## 版本落後時依序套用的變更，每個 entry：
@@ -97,6 +97,11 @@ const MIGRATIONS: Array[Dictionary] = [
 		"version": 11,
 		"name": "Add npc_relations.relations_met_count (issue #651)",
 		"apply": Callable(DatabaseSchema, "_migrate_v11_add_relations_met_count")
+	},
+	{
+		"version": 12,
+		"name": "Add location.pos_x/pos_y for dynamically-created homes (issue #751)",
+		"apply": Callable(DatabaseSchema, "_migrate_v12_add_location_position")
 	}
 ]
 
@@ -837,6 +842,45 @@ static func _migrate_v11_add_relations_met_count(db) -> bool:
 	return true
 
 
+## Migration 12：location 補 pos_x／pos_y（issue #751）。座標的單一事實來源
+## 一直是場景裡的 Marker2D（places.gd 檔頭說明），原本 5 間靜態家的座標故意
+## 不在 DB 重複存一份。動態生成的家沒有對應的 .tscn 節點能保存座標——
+## 遊戲重開後 level.tscn 只會載入原始的 5 個錨點，動態新增的節點與座標
+## 一起消失，讀檔後房子解析不到。這兩欄只給動態生成的家用，允許 NULL：
+## 靜態 5 間座標仍由場景決定，不寫這兩欄，跟 migration 8
+## 的 world_character_state.following_npc_id 同一種簡單 ADD COLUMN 案例，
+## 不需要整表重建
+static func _migrate_v12_add_location_position(db) -> bool:
+	if not db.query("PRAGMA table_info(location);"):
+		push_error(
+			"[DatabaseSchema] Migration 12: Failed to read columns of location: "
+			+ db.error_message
+		)
+		return false
+
+	var existing_columns: Array = (db.query_result as Array).map(
+		func(row): return row.get("name", "")
+	)
+
+	if not existing_columns.has("pos_x"):
+		if not db.query("ALTER TABLE location ADD COLUMN pos_x REAL;"):
+			push_error(
+				"[DatabaseSchema] Migration 12: Failed to add pos_x: "
+				+ db.error_message
+			)
+			return false
+
+	if not existing_columns.has("pos_y"):
+		if not db.query("ALTER TABLE location ADD COLUMN pos_y REAL;"):
+			push_error(
+				"[DatabaseSchema] Migration 12: Failed to add pos_y: "
+				+ db.error_message
+			)
+			return false
+
+	return true
+
+
 ## Migration 6：npc_action_history 是同一輪開發（#428）才新增的表，
 ## NPCActionHistorySchema.gd 最初把 idx_npc_action_history_npc 只建在
 ## (npc_id)，後來（#511 CodeRabbit review）才發現重複率分析需要
@@ -967,8 +1011,22 @@ static func _migrate_v9_notnull_primary_keys(db) -> bool:
 			DatabaseSchema, "_migrate_v8_create_npc_relations_with_trust"
 		)
 
+	# issue #751 之後現行的 LocationSchema 多了 pos_x／pos_y；會跑到
+	# migration 9 的舊資料庫（user_version<=8）還沒有這兩欄（v12 的
+	# ALTER TABLE ADD COLUMN 才會補），照樣用現行 schema 重建會在
+	# _migrate_rebuild_verify_column_shape() 新舊欄位數對不上、驗證判定
+	# 失敗、整個 initialize() 中止（同上面 migration 7 的
+	# world_character_state 事故）。舊表還沒有 pos_x 時改用凍結形狀重建，
+	# 這兩欄唯一由 migration 12 補上（它的 ALTER TABLE 已查 PRAGMA
+	# table_info 擋重複欄位）
+	var location_entry := {"table": "location", "schema": LocationSchema, "repair_null_pk": true}
+	if not _migrate_table_has_column(db, "location", "pos_x"):
+		location_entry["create_fn"] = Callable(
+			DatabaseSchema, "_migrate_v9_create_location_without_pos"
+		)
+
 	return _migrate_rebuild_table_group(db, [
-		{"table": "location", "schema": LocationSchema, "repair_null_pk": true},
+		location_entry,
 		{"table": "npc", "schema": NPCSchema, "repair_null_pk": true},
 		{"table": "grave", "schema": GraveSchema},
 		{"table": "memories", "schema": MemorySchema},
@@ -997,6 +1055,47 @@ static func _migrate_v9_notnull_primary_keys(db) -> bool:
 		{"table": "npc_wallet", "schema": NPCWalletSchema},
 		{"table": "world_character_state", "schema": WorldCharacterStateSchema}
 	])
+
+
+## Migration 9 當年重建 location 時的表結構凍結版（CodeRabbit review 抓到，
+## 同上面 migration 7 的 world_character_state 事故）：issue #751 之後現行
+## 的 LocationSchema 多了 pos_x／pos_y，用「現在的形狀」去對 user_version<=8、
+## 還沒有這兩欄的舊資料庫做 _migrate_rebuild_verify_column_shape()，新舊
+## 欄位數對不上，驗證判定失敗、migration 9 中止，migration 12 永遠跑不到。
+## 這裡凍結 pos 欄位出現之前的表形狀；這兩欄唯一由 migration 12 的
+## ALTER TABLE ADD COLUMN 補上。只在 _migrate_v9_notnull_primary_keys()
+## 判定舊表沒有 pos_x 時才被指定成 create_fn 呼叫
+static func _migrate_v9_create_location_without_pos(db) -> bool:
+	var sql := """
+	CREATE TABLE IF NOT EXISTS location (
+
+		location_id TEXT NOT NULL PRIMARY KEY,
+
+		name TEXT NOT NULL,
+
+		description TEXT DEFAULT '',
+
+		location_type TEXT DEFAULT '',
+
+		capacity INTEGER NOT NULL DEFAULT 0
+			CHECK (capacity >= 0),
+
+		danger INTEGER NOT NULL DEFAULT 0
+			CHECK (danger BETWEEN 0 AND 100),
+
+		is_active INTEGER NOT NULL DEFAULT 1
+			CHECK (is_active IN (0, 1))
+	);
+	"""
+
+	if not db.query(sql):
+		push_error(
+			"[DatabaseSchema] Migration 9: Failed to recreate location (frozen shape without pos columns): "
+			+ db.error_message
+		)
+		return false
+
+	return true
 
 
 ## npc_relations 在 migration 9 當下（issue #561；原訂版號 8，見上面 Migration 9
