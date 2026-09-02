@@ -391,10 +391,27 @@ Enter 開啟／送出，Esc 取消。不在對話中就是單純冒一句氣泡�
 > [!note] 對話結束不會有引擎代講的道別台詞
 > `conversation.gd::_finish()` 不管什麼結束原因（正常結束／走遠／被打斷／
 > fallback）都不補道別台詞——`exit_conversation()` 迴圈跑完就結束，不會幫
-> 任何一方講話。引擎只提供「跟誰講完話了」這個客觀事實
-> （`agent.gd::exit_conversation()` 寫進 `_daily_events`，見
+> 任何一方講話。引擎只把「這場對話怎麼結束的」寫成一句客觀事實
+> （`agent.gd::exit_conversation()` → `_daily_events`，見
 > [[00_設計原則與架構#原則二：引擎只給事件，不給情緒]]），角色要不要道別、
 > 用什麼語氣，是 AI 自己下一輪決定的事，不是系統畫面台詞。
+
+> [!important] 結束事實句依原因分寫，不一律「講完話了」（issue #950）
+> `agent.gd::_conversation_end_fact(reason, other, had_exchange, is_initiator)`
+> 是純函式，措辭只陳述發生了什麼、不定性：
+>
+> | 結束原因 | 事實句 |
+> | --- | --- |
+> | `ENDED_BY_SPEAKER` / `ENDED_BY_LISTENER`（正常收尾） | 「你跟 X 講完話了」 |
+> | `IGNORED`（turn 0 不理會） | 發起方：「X 不理你的搭話，沒有回應」／被搭話方：「你不理會 X 的搭話」 |
+> | `TOO_FAR` / `INTERRUPTED`，`turn_count() > 0` | 「你和 X 的對話中途中斷了」 |
+> | `TOO_FAR` / `INTERRUPTED`，`turn_count() == 0` | 「你和 X 的對話還沒開始就中斷了」 |
+>
+> 玩家按 E 搭話後、在對方還沒開口（turn 0 等 LLM）時就走開會走
+> `TOO_FAR` 且 `turn_count() == 0`——這時記「講完話了」是假事實，會被送進
+> 睡前反思。`TOO_FAR` / `INTERRUPTED` 也不動 `_track_action_result_for_facts`
+> 的連續失敗計數（既沒完成也不是被拒絕），且一句話都沒交換時不重設
+> `_last_social_minute`（#338 的「多久沒說話」基準）。
 
 > [!note] 這是接 LLM 的入口
 > 目前輸入只是讓玩家自己的角色說話，或是送進對話輪次；沒有額外的語意
