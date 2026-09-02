@@ -2889,12 +2889,12 @@ func _reevaluate_once() -> void:
 		_pursue_current_task()
 		return
 
-	# 力竭解除後清理：角色不再具有 CONDITION_EXHAUSTED 且 _current_task 仍指向
-	# exhaustion_rest synthetic task 時，清除 _current_task、current_place、
-	# current_state 及相關追逐狀態，再繼續正常仲裁。這個 synthetic task 不在
-	# _tasks 池子裡，不會被正常的過期掃描清掉，必須在這裡主動處理——條件比對
-	# id 而不只是 source，避免以後其他 reflex 來源的任務被誤判成這個 synthetic
-	# task 清掉
+	# 力竭解除後、或危機逃脫（#988：力竭但 hydration／satiety < CRITICAL，見上方
+	# 分支）時，_current_task 仍指向 exhaustion_rest synthetic task 就清除
+	# _current_task、current_place、current_state 及相關追逐狀態，再繼續正常
+	# 仲裁。這個 synthetic task 不在 _tasks 池子裡，不會被正常的過期掃描清掉，
+	# 必須在這裡主動處理——條件比對 id 而不只是 source，避免以後其他 reflex
+	# 來源的任務被誤判成這個 synthetic task 清掉
 	if not _current_task.is_empty() \
 			and _current_task.get("id", "") == "exhaustion_rest" \
 			and _current_task.get("source", "") == "reflex":
