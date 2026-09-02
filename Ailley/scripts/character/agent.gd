@@ -1691,9 +1691,13 @@ func _request_next_decision(
 			if _provider.always_ready():
 				# HumanInput（#156）：《12》§6.2／P-22 #2 中逾時 120 秒真人沒有
 				# 決策，視同離線走 §4.5 入眠流程——「真人沒回應」不是網路瞬斷，
-				# 不用 reload_config_and_wait() 再確認；恢復由 _probe_offline_
-				# recovery() 的低頻探測兜底（真人來源永遠 ready，一個探測週期
-				# 後醒來接回決策迴圈）
+				# 不用 reload_config_and_wait() 再確認。先設恢復探測節流（比照
+				# 下方 LLM 分支）：真人來源 always_ready()，不先節流的話入眠後
+				# 下一輪 _probe_offline_recovery() 立刻探測成功，等於只睡一瞬，
+				# 面板馬上又跳出來。節流後由 _probe_offline_recovery() 的低頻
+				# 探測兜底，一個探測週期後醒來接回決策迴圈
+				_offline_probe_not_before_minute = _now_minutes() \
+					+ OFFLINE_RECOVERY_PROBE_INTERVAL_MINUTES
 				enter_offline_sleep("no_response")
 			else:
 				await AIService.reload_config_and_wait()

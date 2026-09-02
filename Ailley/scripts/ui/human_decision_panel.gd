@@ -76,6 +76,12 @@ func _init(character_name: String, actions: Array, visible_names: PackedStringAr
 
 func _ready() -> void:
 	layer = 20
+	# 逾時倒數與 agent.gd 決策看門狗同一個真實時鐘（get_tree().paused 時照
+	# 走）：看門狗吃 Time.get_ticks_msec()（暫停不停錶），面板若跟著樹一起
+	# 凍結，暫停逾 135 秒會被看門狗先殺掉決策、遲到的真人輸入被安靜丟棄。
+	# 掛 ALWAYS 讓 _process 在暫停期間照常收到真實 delta、_elapsed 照累加，
+	# 也讓暫停中等決策的真人照常操作面板（輸入處理不暫停）
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	_open_count += 1
 	_build_ui()
 

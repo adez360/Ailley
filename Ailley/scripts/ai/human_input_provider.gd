@@ -75,7 +75,17 @@ func decide(envelope: Dictionary, _requester_id: String, _policy: AIService.Poli
 
 	var result: Dictionary
 	if is_instance_valid(panel) and panel.settled and panel.decided_ok:
-		result = {"ok": true, "data": panel.decision_data, "error": ""}
+		# 包成 OpenAI 相容信封再回傳：呼叫端（agent.gd::_decide_with_retry()）
+		# 把 data 餵給 AISchema.parse_completion()，後者只認
+		# choices[0].message.content 內含 JSON 字串的形狀（ai_schema.gd::
+		# extract_content()），扁平 dict 無 choices 鍵一律 no_content——
+		# 《12》§3.4「面板輸出走跟 LLM 來源同一條驗證路徑」的落地方式
+		# 就是偽裝成同一種回應信封
+		result = {
+			"ok": true,
+			"data": {"choices": [{"message": {"content": JSON.stringify(panel.decision_data)}}]},
+			"error": "",
+		}
 	else:
 		result = {"ok": false, "data": {}, "error": "no_response"}
 	if is_instance_valid(panel):
