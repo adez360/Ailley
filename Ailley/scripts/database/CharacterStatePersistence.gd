@@ -2001,11 +2001,12 @@ const HOME_PLACEMENT_MAX_RADIUS := 60
 const DYNAMIC_HOME_ANCHOR_TO_HOUSE := Vector2(-32.0, -56.0)
 const DYNAMIC_HOME_FOOTPRINT := Vector2(144.0, 128.0)
 
-## 新家要離「其他既有地點錨點」（涼亭、酒館、藥草鋪、墓園…）多遠。比
-## HOME_MIN_SEPARATION 大一截：那些地點有自己的視覺範圍（涼亭的頂、天神之石
-## 的石頭），而且第一間家的搜尋起點就是涼亭錨點，不拉開就會長在涼亭正上面。
-## 房屋足跡對角線約 190px，220 讓房子的每個角落都清出那些地點的錨點格
-const PLACE_ANCHOR_CLEARANCE := 220.0
+## 新家的落點（＝門口錨點）要離「其他既有地點錨點」（涼亭、酒館、藥草鋪、
+## 墓園…）多遠。房屋足跡最寬處相對落點約 104px（往西北），128 讓那些地點的
+## 錨點格落在房屋碰撞箱外、還留一點視覺間距。不能設太大：village 地圖不大，
+## 7 個地點錨點散在中央，實測（project_run + game_eval）>150 時就找不到同時
+## 滿足所有錨點的落點，_grow_home_supply() 會退回共用、失去每人一間
+const PLACE_ANCHOR_CLEARANCE := 128.0
 
 
 ## _ensure_npc_record() 的共用收尾：用 _resolve_home_location() 驗證／必要時
