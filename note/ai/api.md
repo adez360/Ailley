@@ -370,6 +370,8 @@ speech_heard 且 !is_in_conversation()（issue #669）：
 † assignments 與 identities 的 key 都是節點名，兩塊分開：前者「用哪份行程」，後者「我是誰」
   查不到 → 退回 @export 並 push_warning（預設值 instance 共用，靜默退回會兩隻同行程）
   節點名只在同一層唯一，不同父節點下撞名 → push_error（兩隻會查到同一筆）
+† 動態投放角色（spawn_character() 生出來的）不查 assignments：spawn 標記
+  schedule_optional，_load_schedule() 直接走無排程路徑，不報警告／錯誤（#1003）
 † move_finished 要比對 last_move_target：debug 主控台的 goto 也會發同一個訊號，
   照單全收會把別人的移動當成自己這趟的結論
 † Task 的 reasoning／inner_monologue（llm 來源才有）只印 console，決策準不準沒有系統性驗證
