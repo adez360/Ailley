@@ -1,7 +1,7 @@
 ---
 tags: [技術, packaging, ai]
 status: 現況
-updated: 2026-09-02
+updated: 2026-09-03
 ---
 
 # 打包雲端 AI 驗證
@@ -39,8 +39,7 @@ godot --headless --export-release "Linux" /tmp/ailley-export/ailley.x86_64
 不含真實 `data/ai_config.json`（《16》§2.1 紅線核對通過，以 `strings` 掃執行檔確認）。
 
 注意：Godot 4.5 會把 GDExtension 的 `libgdsqlite.linux.template_release.x86_64.so`
-自動帶到執行檔旁邊——這與 §2.1「不含 GDExtension 匯出」的舊拍板不一致（專案實際上
-已接上 SQLite，見《14》），該段落要等下一次規格書同步收斂。
+自動帶到執行檔旁邊，不需要額外設定 include 規則；《16》§2.1 已同步這項現況。
 
 ## 首次啟動自動產生設定檔（§2.3，已驗證）
 
