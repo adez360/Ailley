@@ -23,9 +23,13 @@
 	"dialogue_exempt": true,
 	"max_dialogue_calls_per_game_day": 150,
 	"max_creation_calls_per_game_day": 0,
+	"pool_size": 3,
 	"embedding": {
 		"base_url": "http://127.0.0.1:8081/v1",
 		"model": "bge-small-zh-v1.5-q8_0.gguf",
 		"timeout": 10.0
+	},
+	"sidecar": {
+		"context_size": 16000
 	}
 }

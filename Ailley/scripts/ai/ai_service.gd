@@ -39,8 +39,6 @@ extends Node
 ## 金鑰只在 _send() 組 Authorization header 時碰得到。任何要進 log 或
 ## 回傳給呼叫端的字串都先過 _scrub()。
 
-const POOL_SIZE := 3
-
 ## 這次呼叫屬於哪一種，決定要不要吃速率限制。
 ##
 ## SCHEDULED   —— 行程重排等由系統自己發動的呼叫。吃冷卻與每日配額
@@ -123,7 +121,11 @@ signal readiness_batch_finished(generation: int)
 func _ready() -> void:
 	reload_config()
 
-	for i in POOL_SIZE:
+	# 池子大小照開機當下讀到的設定值建一次（issue #1000）：玩家改設定檔、
+	# 呼叫 reload_config_and_wait() 熱重載，不會跟著重建這批 HTTPRequest
+	# 節點——池子大小屬於「要重開遊戲才生效」的那一類設定，跟 timeout／
+	# base_url 這種每次送出前才讀的欄位不同
+	for i in config.pool_size:
 		var http := HTTPRequest.new()
 		http.name = "Request%d" % i
 		# 逐 provider 的逾時在 _send() 送出前才設定（不同 provider 可能給

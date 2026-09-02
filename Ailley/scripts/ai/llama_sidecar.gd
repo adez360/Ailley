@@ -16,7 +16,7 @@ extends Node
 ## 就跳過自動拉起，玩家原本就可以自己手動啟動 llama-server 再用 debug 主控台
 ## 的 `ai` 指令重新連線，跟現行「AI 設定不完整就退回排程模式」的既有容錯
 ## 行為一致，這裡不另外發明一套彈窗通知機制（正式版的玩家可見 AI 狀態
-## UI 是 #356 的範圍，不是這裡）。
+## UI 是 #1001 的範圍，不是這裡）。
 ##
 ## 目錄慣例（issue #772 開工時拍板，尚未有實體檔案進版控——執行檔／模型檔
 ## 由開發者自己放進來測試，見 note/技術/LLM Sidecar 啟動.md）：
@@ -45,10 +45,9 @@ const POLL_INTERVAL_SEC := 1.0
 # 通常會馬上因為 bind 失敗而退出）
 const CRASH_CHECK_SEC := 2.0
 
-# 《04》§1 已定案的數值。--parallel 不寫死在這裡——它要對齊 AIService.POOL_SIZE
-# （HTTP 請求池大小），組 args 時引用 autoload 的同一份常數，兩邊只寫一份，
-# 不會出現「改了池大小忘記改啟動參數」的脫鉤
-const SIDECAR_ARGS_TAIL := ["-c", "16000"]
+# --parallel 跟 -c 都不寫死在這裡（issue #1000）——兩者都對齊
+# AIConfig（--parallel 對齊 pool_size，-c 對齊 sidecar_context_size），組
+# args 時直接讀同一份 config，不會出現「改了設定忘記改啟動參數」的脫鉤
 
 var status: Status = Status.NOT_ATTEMPTED
 var status_reason := ""
@@ -118,13 +117,13 @@ func _maybe_launch() -> void:
 		push_warning("[LlamaSidecar] " + status_reason)
 		return
 
-	# --parallel 對齊 AIService.POOL_SIZE（見 SIDECAR_ARGS_TAIL 的說明）
+	# --parallel／-c 都對齊同一份 config（見上方 issue #1000 的說明）
 	var args := PackedStringArray([
 		"-m", model_path,
 		"--host", "127.0.0.1", "--port", str(port),
-		"--parallel", str(AIService.POOL_SIZE),
+		"--parallel", str(config.pool_size),
+		"-c", str(config.sidecar_context_size),
 	])
-	args.append_array(PackedStringArray(SIDECAR_ARGS_TAIL))
 
 	_pid = OS.create_process(binary_path, args, false)
 	if _pid == -1:

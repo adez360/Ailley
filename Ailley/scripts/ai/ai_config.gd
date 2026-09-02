@@ -54,10 +54,22 @@ const DEFAULT_MODEL := "openai/gpt-4o-mini"
 # 拿到回應。20 秒／30 秒各自跑了 40 次以上、0 次逾時，但這個樣本量沒辦法
 # 精確定出「最佳」數字（伺服器延遲是叢集性的，小樣本容易漏抓），20 秒是
 # 「有實測資料撐腰的最小候選值」，不是理論上限。沒有調更高（例如一度討論
-# 過的 60 秒）：AIService.POOL_SIZE 只有 3 個 HTTP 節點，timeout 拉更長會在
+# 過的 60 秒）：POOL_SIZE 只有 3 個 HTTP 節點，timeout 拉更長會在
 # 多角色場景下放大排隊風險，這次是單人測試量不到，留給之後的多角色測試
 # 決定要不要再往上調
 const DEFAULT_TIMEOUT := 20.0
+
+## AIService 共用連線池的節點數（issue #1000）。全域一個值、不分 provider——
+## _pool 是 AIService._ready() 建立一次的共用 HTTPRequest 池，不管請求要打去
+## 哪個 provider 都從同一批節點裡搶，架構上還沒拆成 per-provider 各自獨立的池
+## （那是更大的排程重寫，見 #1000 討論，這次不做）。原本寫死在
+## ai_service.gd 的常數，搬進設定檔讓玩家能依自己那台機器的 GPU/slot 容量調整
+const DEFAULT_POOL_SIZE := 3
+
+## 內建 sidecar（issue #772，《16》§2.2）自己的 context 大小，對應它啟動時
+## 帶的 `-c` 參數。原本寫死在 llama_sidecar.gd 的 SIDECAR_ARGS_TAIL，跟其他
+## 連線容量設定一起搬進設定檔（#1000）
+const DEFAULT_SIDECAR_CONTEXT_SIZE := 16000
 
 ## 速率限制的預設值。放在設定檔而不是寫死在 ai_service.gd，是因為這兩個數字
 ## 是「花多少錢」的旋鈕，屬於玩家的決定，不是程式的常數（決策裡它們也標著「暫定」）。
@@ -190,6 +202,9 @@ var embedding_base_url := DEFAULT_EMBEDDING_BASE_URL
 var embedding_model := DEFAULT_EMBEDDING_MODEL
 var embedding_timeout := DEFAULT_EMBEDDING_TIMEOUT
 
+var pool_size := DEFAULT_POOL_SIZE
+var sidecar_context_size := DEFAULT_SIDECAR_CONTEXT_SIZE
+
 
 # 內建 sidecar 的本機連線預設值（《16》§2.2 決定隨安裝包附上的 llama-server，
 # 固定跑在這個位址與埠號）。寫死在這裡，不讀 ai_config.example.json——範本檔
@@ -220,7 +235,19 @@ static func _write_default_config() -> bool:
 		},
 		"min_interval_sec": DEFAULT_MIN_INTERVAL_SEC,
 		"max_calls_per_game_day": DEFAULT_MAX_CALLS_PER_GAME_DAY,
-		"dialogue_exempt": DEFAULT_DIALOGUE_EXEMPT
+		"dialogue_exempt": DEFAULT_DIALOGUE_EXEMPT,
+		"pool_size": DEFAULT_POOL_SIZE,
+		# 三個區塊都寫出實際生效的預設值（issue #1000），不是留白——玩家想
+		# 接自己的地端 embedding／調整 sidecar context 大小時，設定檔裡本來
+		# 就看得到這個欄位存在，不用去翻 ai_config.example.json 才知道
+		"embedding": {
+			"base_url": DEFAULT_EMBEDDING_BASE_URL,
+			"model": DEFAULT_EMBEDDING_MODEL,
+			"timeout": DEFAULT_EMBEDDING_TIMEOUT
+		},
+		"sidecar": {
+			"context_size": DEFAULT_SIDECAR_CONTEXT_SIZE
+		}
 	}
 
 	var file := FileAccess.open(CONFIG_PATH, FileAccess.WRITE)
@@ -296,6 +323,17 @@ func _apply(data: Dictionary) -> void:
 	max_dialogue_calls_per_game_day = maxi(0, int(
 		data.get("max_dialogue_calls_per_game_day", DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY)
 	))
+	# 跟 timeout 同一個理由：<= 0 不是合法的池子大小／context 大小，不信任
+	# 非正值，退回預設值而不是讓 AIService 建出一個空池子或 sidecar 帶 -c 0 開機
+	var raw_pool_size := int(data.get("pool_size", DEFAULT_POOL_SIZE))
+	pool_size = raw_pool_size if raw_pool_size > 0 else DEFAULT_POOL_SIZE
+	var raw_sidecar: Variant = data.get("sidecar", {})
+	var raw_sidecar_context_size := DEFAULT_SIDECAR_CONTEXT_SIZE
+	if raw_sidecar is Dictionary:
+		raw_sidecar_context_size = int(
+			(raw_sidecar as Dictionary).get("context_size", DEFAULT_SIDECAR_CONTEXT_SIZE)
+		)
+	sidecar_context_size = raw_sidecar_context_size if raw_sidecar_context_size > 0 else DEFAULT_SIDECAR_CONTEXT_SIZE
 	max_creation_calls_per_game_day = maxi(0, int(
 		data.get("max_creation_calls_per_game_day", DEFAULT_MAX_CREATION_CALLS_PER_GAME_DAY)
 	))
