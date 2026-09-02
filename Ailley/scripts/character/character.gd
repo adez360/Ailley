@@ -1793,7 +1793,12 @@ func buy_from(place: String, item_id: String) -> String:
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
 	if anchors == null or not anchors.has(place):
 		return BUY_TARGET_NOT_FOUND
-	if get_body_position().distance_to(anchors.resolve(place)) > BUY_RANGE:
+	# 站進地點的 Area2D 範圍內就算數，不是離錨點中心 BUY_RANGE(32px) 內——
+	# #814 把地點從 Marker2D 換成 64×64 的矩形之後，半徑判斷把矩形內大半範圍
+	# 誤判成「太遠」（issue #1022）。Agent 走 resolve_for() 算出的站位本來就
+	# clamp 在矩形內（見 places.gd::_place_hashed_point()），這裡放寬不影響
+	# 它原本就會通過的檢查
+	if not anchors.is_within(place, get_body_position()):
 		return BUY_TOO_FAR
 	if inventory == null:
 		return BUY_NO_INVENTORY
