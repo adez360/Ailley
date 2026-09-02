@@ -43,6 +43,7 @@ UI_ONBOARDING_INTERACT,"E　互動（工作／購買／搬運等）","E to inter
 UI_ONBOARDING_TALK,"Enter　跟角色說話","Enter to talk to a character"
 UI_ONBOARDING_SELECT,"滑鼠左鍵　點選角色查看狀態","Left-click a character to see their status"
 UI_ONBOARDING_ATTACK,"滑鼠右鍵　攻擊","Right-click to attack"
+UI_ONBOARDING_GIVE,"G　送禮","G to give a gift"
 UI_ONBOARDING_INVENTORY,"Tab　開關背包，數字鍵切換快捷欄","Tab to open your inventory, number keys to switch hotbar slot"
 UI_CREDITS_QWEN,"Qwen2.5（Apache-2.0）","Qwen2.5 (Apache-2.0)"
 UI_CREDITS_LLAMACPP,"llama.cpp（MIT）","llama.cpp (MIT)"
@@ -158,7 +159,18 @@ UI_CC_SOURCE,"決策來源","Decision source"
 UI_CC_SOURCE_LOCAL,"本機","Local"
 UI_CC_SOURCE_CLOUD,"雲端","Cloud"
 UI_CC_SOURCE_HUMAN,"真人","Human"
-UI_CC_SOURCE_NO_PROVIDER,"沒有可用的 provider，去 ai_config.json 設定","No provider available — set one up in ai_config.json"
+UI_CC_SOURCE_NO_PROVIDER,"沒有可用的 provider，去 {path} 設定（範本見 {example}）","No provider available — set one up in {path} (template: {example})"
+UI_CC_DOWNLOAD_MODEL,"下載本機 AI 模型","Download local AI model"
+UI_MODEL_DOWNLOAD_TITLE,"下載本機 AI 模型","Downloading local AI model"
+UI_MODEL_DOWNLOAD_STAGE_SPACE,"檢查磁碟空間…","Checking disk space…"
+UI_MODEL_DOWNLOAD_STAGE_BINARY,"下載執行檔…","Downloading engine…"
+UI_MODEL_DOWNLOAD_STAGE_EXTRACT,"解壓執行檔…","Extracting engine…"
+UI_MODEL_DOWNLOAD_STAGE_MODEL,"下載模型檔…","Downloading model…"
+UI_MODEL_DOWNLOAD_SUCCESS,"下載完成，本機 AI 已可使用","Download complete — local AI is ready"
+UI_MODEL_DOWNLOAD_FAILED,"下載失敗：{reason}","Download failed: {reason}"
+UI_MODEL_DOWNLOAD_CANCEL,"取消","Cancel"
+UI_MODEL_DOWNLOAD_CLOSE,"關閉","Close"
+UI_MODEL_DOWNLOAD_UNSUPPORTED,"此平台目前不支援自動下載，請參考文件手動安裝","Auto-download isn't supported on this platform yet — see the docs for manual setup"
 UI_CC_STYLE_NAME,"造型 {n}","Style {n}"
 UI_CC_STYLE_HINT,"6 套造型組目前是佔位色塊，實際內容待補","The 6 style sets are placeholder colors for now — real content is pending"
 UI_CC_MISSING,"還缺：{items}","Missing: {items}"
@@ -177,6 +189,8 @@ UI_CL_DEPLOY_FAILED,"投放失敗（已投放或世界人數已滿）","Deploy f
 UI_CS_TITLE,"地圖角色","Characters on Map"
 UI_CS_EMPTY,"地圖上還沒有角色","No characters on the map"
 UI_CS_BTN_ADD,"＋ 新增角色","+ Add Character"
+UI_CS_BTN_RECALL,"收回","Recall"
+UI_CS_RECALL_EMBODIED,"化身角色無法收回","Cannot recall your embodied character"
 UI_PAUSED,"已暫停","Paused"
 FAIL_TARGET_NOT_FOUND,"附近沒有這個對象。","There's no one there."
 FAIL_TARGET_IS_SELF,"不能對自己這麼做。","You can't do that to yourself."
@@ -217,3 +231,15 @@ UI_CORPSE_MENU_REVIVE,"復活","Revive"
 UI_CORPSE_MENU_HAUL,"搬運","Haul"
 UI_CORPSE_MENU_DECAY,"腐壞進度 {percent}%，還剩約 {hours} 小時未安葬會立無名碑","Decay {percent}%, about {hours}h left before an unmarked grave"
 UI_CORPSE_MENU_BURIED,"已安葬","Buried"
+UI_DB_INIT_FAILED_TITLE,"資料庫初始化失敗","Database initialization failed"
+UI_DB_INIT_FAILED_BODY,"資料庫初始化失敗，遊戲無法繼續啟動。
+
+存檔資料庫：{path}
+
+可能是這個資料庫的版本跟目前遊戲版本不相容（例如切換到較舊的分支/版本）。
+請查看遊戲 log 或聯絡開發者處理；必要時可備份後刪除上面這個檔案讓遊戲重建一份全新的資料庫。","Database initialization failed; the game cannot start.
+
+Save database: {path}
+
+The database version is probably incompatible with this build (e.g. you switched to an older branch/version).
+Check the game log or contact the developer; if needed, back up and delete the file above to let the game rebuild a fresh database."

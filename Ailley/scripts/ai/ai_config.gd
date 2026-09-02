@@ -23,17 +23,16 @@ extends RefCounted
 ## 主控台輸出一律走 Provider.masked_key()，不要直接碰 api_key。
 
 ## user:// 只依 project.godot 的 project name 解析，不分 worktree/checkout，
-## 跟 DatabaseManager.DATABASE_PATH（issue #334）同一個病根：用這個 checkout
-## 的 res:// 絕對路徑算完整 sha256 接在檔名後，讓不同 checkout 落地成不同
-## 實體檔案，不會互相覆寫（issue #769）。被 static func（load_from_user()／
+## 跟 DatabaseManager.DATABASE_PATH（issue #334）同一個病根：用 CheckoutIsolation
+## 算出的雜湊接在檔名後，讓不同 checkout 落地成不同實體檔案，不會互相覆寫
+## （issue #769／#987）。被 static func（load_from_user()／
 ## _write_default_config()）讀取，只能用 static var，不能用 const 呼叫函式
 static var CONFIG_PATH := _compute_config_path()
 const EXAMPLE_PATH := "res://data/ai_config.example.json"
 
 
 static func _compute_config_path() -> String:
-	var checkout_hash := ProjectSettings.globalize_path("res://").sha256_text()
-	return "user://ai_config_%s.json" % checkout_hash
+	return "user://ai_config_%s.json" % CheckoutIsolation.compute_hash()
 
 # 開發期預設 OpenRouter；換本機 llama-server 只要在設定檔另開一個 provider，
 # 不用改這裡的預設值——這兩個常數只在 provider 沒填某欄位時當退回值
@@ -54,10 +53,22 @@ const DEFAULT_MODEL := "openai/gpt-4o-mini"
 # 拿到回應。20 秒／30 秒各自跑了 40 次以上、0 次逾時，但這個樣本量沒辦法
 # 精確定出「最佳」數字（伺服器延遲是叢集性的，小樣本容易漏抓），20 秒是
 # 「有實測資料撐腰的最小候選值」，不是理論上限。沒有調更高（例如一度討論
-# 過的 60 秒）：AIService.POOL_SIZE 只有 3 個 HTTP 節點，timeout 拉更長會在
+# 過的 60 秒）：POOL_SIZE 只有 3 個 HTTP 節點，timeout 拉更長會在
 # 多角色場景下放大排隊風險，這次是單人測試量不到，留給之後的多角色測試
 # 決定要不要再往上調
 const DEFAULT_TIMEOUT := 20.0
+
+## AIService 共用連線池的節點數（issue #1000）。全域一個值、不分 provider——
+## _pool 是 AIService._ready() 建立一次的共用 HTTPRequest 池，不管請求要打去
+## 哪個 provider 都從同一批節點裡搶，架構上還沒拆成 per-provider 各自獨立的池
+## （那是更大的排程重寫，見 #1000 討論，這次不做）。原本寫死在
+## ai_service.gd 的常數，搬進設定檔讓玩家能依自己那台機器的 GPU/slot 容量調整
+const DEFAULT_POOL_SIZE := 3
+
+## 內建 sidecar（issue #772，《16》§2.2）自己的 context 大小，對應它啟動時
+## 帶的 `-c` 參數。原本寫死在 llama_sidecar.gd 的 SIDECAR_ARGS_TAIL，跟其他
+## 連線容量設定一起搬進設定檔（#1000）
+const DEFAULT_SIDECAR_CONTEXT_SIZE := 16000
 
 ## 速率限制的預設值。放在設定檔而不是寫死在 ai_service.gd，是因為這兩個數字
 ## 是「花多少錢」的旋鈕，屬於玩家的決定，不是程式的常數（決策裡它們也標著「暫定」）。
@@ -190,13 +201,21 @@ var embedding_base_url := DEFAULT_EMBEDDING_BASE_URL
 var embedding_model := DEFAULT_EMBEDDING_MODEL
 var embedding_timeout := DEFAULT_EMBEDDING_TIMEOUT
 
+var pool_size := DEFAULT_POOL_SIZE
+var sidecar_context_size := DEFAULT_SIDECAR_CONTEXT_SIZE
+
 
 # 內建 sidecar 的本機連線預設值（《16》§2.2 決定隨安裝包附上的 llama-server，
 # 固定跑在這個位址與埠號）。寫死在這裡，不讀 ai_config.example.json——範本檔
 # 同時示範 openrouter 這個玩家要自己填金鑰的 provider，不能整包照抄當預設值，
 # 這裡只需要「local」那一段
 const _DEFAULT_LOCAL_BASE_URL := "http://127.0.0.1:8080/v1"
-const _DEFAULT_LOCAL_MODEL := "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+# 跟 ModelDownloader.MODEL_FILENAME（issue #989）是同一個檔名，兩邊要一起
+# 改——這裡不 import 那個常數，`AIConfig` 是比較底層的共用模組，不該反過來
+# 依賴一個新功能腳本。首次啟動自動產生的設定檔先假設玩家會下載這個檔名，
+# 真的下載完成後 ModelDownloader.update_provider_model() 還是會覆寫成
+# 它實際抓到的檔名，這裡只是讓兩者預設情況下一致，不是唯一真相來源
+const _DEFAULT_LOCAL_MODEL := "qwen2.5-7b-instruct-q3_k_m.gguf"
 
 
 # 首次啟動、`user://` 還沒有設定檔時自動寫一份指向內建 sidecar 的預設值
@@ -220,7 +239,19 @@ static func _write_default_config() -> bool:
 		},
 		"min_interval_sec": DEFAULT_MIN_INTERVAL_SEC,
 		"max_calls_per_game_day": DEFAULT_MAX_CALLS_PER_GAME_DAY,
-		"dialogue_exempt": DEFAULT_DIALOGUE_EXEMPT
+		"dialogue_exempt": DEFAULT_DIALOGUE_EXEMPT,
+		"pool_size": DEFAULT_POOL_SIZE,
+		# 三個區塊都寫出實際生效的預設值（issue #1000），不是留白——玩家想
+		# 接自己的地端 embedding／調整 sidecar context 大小時，設定檔裡本來
+		# 就看得到這個欄位存在，不用去翻 ai_config.example.json 才知道
+		"embedding": {
+			"base_url": DEFAULT_EMBEDDING_BASE_URL,
+			"model": DEFAULT_EMBEDDING_MODEL,
+			"timeout": DEFAULT_EMBEDDING_TIMEOUT
+		},
+		"sidecar": {
+			"context_size": DEFAULT_SIDECAR_CONTEXT_SIZE
+		}
 	}
 
 	var file := FileAccess.open(CONFIG_PATH, FileAccess.WRITE)
@@ -286,6 +317,59 @@ static func load_from_user() -> AIConfig:
 	return config
 
 
+## `ModelDownloader`（issue #989）下載完模型後，把實際落地的檔名寫回設定檔，
+## 玩家不用自己編輯 JSON。走原始 Dictionary 往返（讀 → 只改
+## `providers.<name>.model` 這一個鍵 → 寫回），不透過 `_apply()`／`Provider`
+## 那條解析路徑——`Provider` 只塞它自己認得的欄位，來回一趟會把設定檔裡它
+## 不認得的欄位（例如玩家自己加的備註用鍵）弄丟。找不到檔案／JSON 壞掉／
+## 指定的 provider 不存在都回傳 false，呼叫端自行決定要不要 push_warning，
+## 這裡不擅自吵
+static func update_provider_model(provider_name: String, model: String) -> bool:
+	if not FileAccess.file_exists(CONFIG_PATH):
+		return false
+
+	var file := FileAccess.open(CONFIG_PATH, FileAccess.READ)
+	if file == null:
+		return false
+	var text := file.get_as_text()
+	file.close()
+
+	var json := JSON.new()
+	if json.parse(text) != OK or not json.data is Dictionary:
+		return false
+
+	var data: Dictionary = json.data
+	# 用 Variant 接再驗型——玩家把 "providers" 改成非物件（例如字串）時，
+	# 型別標註 Dictionary 會直接炸型別錯誤，這裡要的是乾脆回 false
+	var raw_providers: Variant = data.get("providers", {})
+	if not raw_providers is Dictionary:
+		return false
+	var providers: Dictionary = raw_providers as Dictionary
+	if not providers.has(provider_name) or not providers[provider_name] is Dictionary:
+		return false
+
+	(providers[provider_name] as Dictionary)["model"] = model
+
+	var out := FileAccess.open(CONFIG_PATH, FileAccess.WRITE)
+	if out == null:
+		return false
+	# store_string() 失敗（例如磁碟滿）不能只回 false——留在磁碟上的半份
+	# 內容會讓下次 load_from_user() 誤判成 AI_STATUS_BAD_JSON。比照
+	# _write_default_config()：push_error 後刪檔，退回「檔案不存在」狀態
+	var write_ok := out.store_string(JSON.stringify(data, "\t"))
+	out.close()
+	if not write_ok:
+		push_error("AIConfig: 寫回 %s 失敗" % CONFIG_PATH)
+		var remove_err := DirAccess.remove_absolute(CONFIG_PATH)
+		if remove_err != OK:
+			push_error(
+				"AIConfig: 清理寫壞的 %s 失敗（錯誤碼 %d），下次啟動可能誤判成 AI_STATUS_BAD_JSON"
+				% [CONFIG_PATH, remove_err]
+			)
+		return false
+	return true
+
+
 # 分開成一個方法是為了讓測試與未來的「設定 UI」能餵 Dictionary 進來，不必落地成檔案
 func _apply(data: Dictionary) -> void:
 	# 速率限制在 enabled 的判斷之前就先讀，不然「設定檔在、但 enabled = false」
@@ -296,6 +380,17 @@ func _apply(data: Dictionary) -> void:
 	max_dialogue_calls_per_game_day = maxi(0, int(
 		data.get("max_dialogue_calls_per_game_day", DEFAULT_MAX_DIALOGUE_CALLS_PER_GAME_DAY)
 	))
+	# 跟 timeout 同一個理由：<= 0 不是合法的池子大小／context 大小，不信任
+	# 非正值，退回預設值而不是讓 AIService 建出一個空池子或 sidecar 帶 -c 0 開機
+	var raw_pool_size := int(data.get("pool_size", DEFAULT_POOL_SIZE))
+	pool_size = raw_pool_size if raw_pool_size > 0 else DEFAULT_POOL_SIZE
+	var raw_sidecar: Variant = data.get("sidecar", {})
+	var raw_sidecar_context_size := DEFAULT_SIDECAR_CONTEXT_SIZE
+	if raw_sidecar is Dictionary:
+		raw_sidecar_context_size = int(
+			(raw_sidecar as Dictionary).get("context_size", DEFAULT_SIDECAR_CONTEXT_SIZE)
+		)
+	sidecar_context_size = raw_sidecar_context_size if raw_sidecar_context_size > 0 else DEFAULT_SIDECAR_CONTEXT_SIZE
 	max_creation_calls_per_game_day = maxi(0, int(
 		data.get("max_creation_calls_per_game_day", DEFAULT_MAX_CREATION_CALLS_PER_GAME_DAY)
 	))

@@ -45,9 +45,9 @@ extends "res://scripts/save/save_service.gd"
 ## 原生擴充套件換真正的系統鎖。
 
 ## user:// 只依 project.godot 的 project name 解析，不分 worktree/checkout，
-## 跟 DatabaseManager.DATABASE_PATH（issue #334）同一個病根：用這個 checkout
-## 的 res:// 絕對路徑算完整 sha256 接在子目錄後，讓不同 checkout 落地成不同
-## 實體檔案，不會互相覆寫（issue #769）
+## 跟 DatabaseManager.DATABASE_PATH（issue #334）同一個病根：用 CheckoutIsolation
+## 算出的雜湊接在子目錄後，讓不同 checkout 落地成不同實體檔案，不會互相
+## 覆寫（issue #769／#987）
 var CHARACTERS_DIR := _compute_saves_dir("characters")
 var WORLDS_DIR := _compute_saves_dir("worlds")
 const LOCK_SUFFIX := ".lock"
@@ -55,8 +55,7 @@ const LOCK_INFO_FILENAME := "info.json"
 
 
 static func _compute_saves_dir(kind: String) -> String:
-	var checkout_hash := ProjectSettings.globalize_path("res://").sha256_text()
-	return "user://saves_%s/%s" % [checkout_hash, kind]
+	return "user://saves_%s/%s" % [CheckoutIsolation.compute_hash(), kind]
 
 var _held_locks: Dictionary = {} # lock_dir(String) -> true，這個 process 目前持有寫入權的存檔
 

@@ -21,12 +21,8 @@ signal line_submitted(text: String)
 ## Conversation 節點的地方（見該檔 `_finish()` 的說明），節點因此永遠留在場景樹上
 signal turn_resolved(text: String, ok: bool)
 
-## NPC 頭上「輪到你了」的常駐提示符號（issue #207）。純符號不是語言內容，
-## 跟 agent.gd::AI_THINKING_TEXT（"…"）同一種處理，不走 L10n
-const WAITING_FOR_PLAYER_TEXT := "？"
 
-## 玩家頭上「休息中」的常駐提示符號（issue #926），跟 WAITING_FOR_PLAYER_TEXT
-## 同一種「純符號不走 L10n」處理
+## 玩家頭上「休息中」的常駐提示符號（issue #926）——純符號、不走 L10n
 const RESTING_TEXT := "💤"
 
 ## 玩家提早打字（還沒真的輪到自己）時暫存的話，見 _on_line_submitted()
@@ -64,15 +60,14 @@ var _nearby_interactables: Array[Node2D] = []
 ## 版本／鎖的機制，它從頭到尾只有一個值，寫一次之後只會被讀取（issue #399）
 ##
 ## user:// 只依 project.godot 的 project name 解析，不分 worktree/checkout，
-## 跟 DatabaseManager.DATABASE_PATH（issue #334）同一個病根：用這個 checkout
-## 的 res:// 絕對路徑算完整 sha256 接在子目錄後，讓不同 checkout 落地成不同
-## 實體檔案，不會互相覆寫（issue #769）
+## 跟 DatabaseManager.DATABASE_PATH（issue #334）同一個病根：用 CheckoutIsolation
+## 算出的雜湊接在子目錄後，讓不同 checkout 落地成不同實體檔案，不會互相
+## 覆寫（issue #769／#987）
 var _PLAYER_ID_PATH := _compute_player_id_path()
 
 
 static func _compute_player_id_path() -> String:
-	var checkout_hash := ProjectSettings.globalize_path("res://").sha256_text()
-	return "user://saves_%s/player_id.txt" % checkout_hash
+	return "user://saves_%s/player_id.txt" % CheckoutIsolation.compute_hash()
 
 ## 搭話診斷用的逐筆 print()（issue #654：兩個角色重疊時搭話完全沒反應）。
 ## 正常遊玩預設關閉；除錯時改成 true。與 Conversation.TALK_DEBUG（PR #723）
@@ -259,6 +254,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	# 另開一個按鍵；其餘失敗原因（墓碑滿了）才真的回報給玩家
 	if is_hauling():
 		var haul_target := get_hauling_target()
+		# 昏迷但還活著的目標不是屍體，bury() 一定回傳 BURY_TARGET_NOT_DEAD——
+		# 這種情況沒有「安葬」可言，直接當放下處理（issue #958）
+		if not haul_target.is_dead:
+			# 玩家主動放下，不冒「掙脫」假事實（原則二）：引擎側釋放應傳 notify_target=false
+			stop_haul(false)
+			return
 		var bury_reason := bury(haul_target)
 		if bury_reason == BURY_OK:
 			return
@@ -764,15 +765,17 @@ func next_line(listener: Character, _turns: Array[Dictionary], _max_turns: int) 
 		var line: String = _pending_lines.pop_front()
 		return {"ok": true, "line": line, "end": false}
 
-	if is_instance_valid(listener) and listener.bubble != null:
-		listener.bubble.hold(WAITING_FOR_PLAYER_TEXT)
+	# NPC 頭上顯示「思考中」指示，讓玩家知道對方在等自己打字（issue #207／
+	# #949 B 類）。跟 AI 思考共用同一個動畫圖示——都是「系統正在等」，不是台詞
+	if is_instance_valid(listener) and listener.thinking_indicator != null:
+		listener.thinking_indicator.show_indicator()
 
 	_turn_waiting = true
 	var resolved: Array = await turn_resolved
 	_turn_waiting = false
 
-	if is_instance_valid(listener) and listener.bubble != null:
-		listener.bubble.release_hold()
+	if is_instance_valid(listener) and listener.thinking_indicator != null:
+		listener.thinking_indicator.hide_indicator()
 
 	return {"ok": resolved[1], "line": resolved[0], "end": false}
 

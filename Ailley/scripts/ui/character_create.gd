@@ -80,6 +80,9 @@ const HONEY := Color("F0A94E")
 @onready var _human_button: Button = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock/SourceButtonsRow/HumanButton
 @onready var _model_dropdown: OptionButton = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock/ModelDropdown
 @onready var _model_hint: Label = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock/ModelHint
+# issue #989：沒有本機 provider 時，旁邊補一個下載入口，不只是叫玩家自己
+# 去手動編輯 ai_config.json（#982 那個提示本身也在同一次一併修正）
+@onready var _download_model_button: Button = $Scrim/Center/Row/Panel/MarginContainer/Col/TabContainer/TabBasic/DecisionSourceBlock/DownloadModelButton
 
 ## 固定順序 = HEXACO 六維（誠實謙遜／情緒起伏／外向性／友善性／嚴謹性／開放性），
 ## 跟 collect()／_load_entry() 的欄位順序對齊——增減維度要動這裡跟場景兩邊
@@ -249,6 +252,7 @@ func _wire_signals() -> void:
 	_cloud_button.pressed.connect(_on_source_pressed.bind("cloud"))
 	_human_button.pressed.connect(_on_source_pressed.bind("human"))
 	_model_dropdown.item_selected.connect(_on_model_selected)
+	_download_model_button.pressed.connect(_on_download_model_pressed)
 
 	for i in _sliders.size():
 		_sliders[i].value_changed.connect(_on_slider_changed.bind(i))
@@ -346,6 +350,19 @@ func _on_source_pressed(value: String) -> void:
 	_refresh_source_buttons()
 	_refresh_model_dropdown()
 	_refresh_strength()
+
+## issue #989：開下載進度面板，蓋在最上層（get_tree().root，不是這個面板
+## 底下——ModelDownloadOverlay 自己是全螢幕 scrim，掛在建角面板內部會被
+## TabContainer 的裁切範圍夾住）。面板關閉（不管成功或取消）後重新整理一次
+## 來源按鈕與型號下拉，讓玩家不用重開建角面板就能看到剛下載好的本機模型
+func _on_download_model_pressed() -> void:
+	var overlay := ModelDownloadOverlay.new()
+	get_tree().root.add_child(overlay)
+	overlay.tree_exited.connect(func() -> void:
+		_refresh_source_buttons()
+		_refresh_model_dropdown()
+	)
+
 
 func _on_model_selected(index: int) -> void:
 	if index < 0 or index >= _model_dropdown.item_count:
@@ -542,15 +559,33 @@ func _refresh_model_dropdown() -> void:
 	_model_dropdown.clear()
 	_model_dropdown.visible = _decision_source != "human"
 	_model_hint.visible = false
+	_download_model_button.visible = false
 
 	if _decision_source == "human":
 		_model_name = ""
 		return
 
+	# 下載按鈕看的是 LlamaSidecar.status，不是「provider 存不存在」——
+	# ai_config.json 首次啟動會自動寫一份指到 127.0.0.1:8080 的 local
+	# provider（格式合法，_providers_by_locality() 判定通過），但那不代表
+	# llama-server 執行檔／模型檔真的落地了。缺檔案時 LlamaSidecar._maybe_
+	# launch()（開機時跑過一次）會停在 MISSING_BINARY／MISSING_MODEL，
+	# 這才是「需要下載」的真正訊號——只看 provider pool 空不空，在「設定檔
+	# 已經有預設值但檔案還沒下載」這個最常見的首次安裝情境下永遠不會顯示
+	if _decision_source == "local" and ModelDownloader.is_platform_supported():
+		_download_model_button.visible = LlamaSidecar.status in [
+			LlamaSidecar.Status.MISSING_BINARY, LlamaSidecar.Status.MISSING_MODEL
+		]
+
 	var pool := _providers_by_locality(_decision_source == "local")
 	if pool.is_empty():
 		_model_name = ""
-		_model_hint.text = L10n.t("UI_CC_SOURCE_NO_PROVIDER")
+		# 帶入真實路徑，不是寫死的字面檔名——之前這句提示指向的
+		# "ai_config.json" 對不上實際存在的 user://ai_config_<hash>.json，
+		# 玩家照著找根本找不到檔案（issue #982）
+		_model_hint.text = L10n.tf(
+			"UI_CC_SOURCE_NO_PROVIDER", {"path": AIConfig.CONFIG_PATH, "example": AIConfig.EXAMPLE_PATH}
+		)
 		_model_hint.visible = true
 		return
 
@@ -619,6 +654,15 @@ func _template_row(entry: Dictionary) -> Control:
 	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(name_label)
 
+	var deploy_button := Button.new()
+	# 投放成一般 NPC（issue #974）：deploy_from_library(id, false)，跟「操控」
+	# 共用同一套投放機制，差別只在 as_player。列表只列未投放模板，不需要
+	# disabled 判斷
+	deploy_button.text = "UI_CL_BTN_DEPLOY"
+	deploy_button.focus_mode = Control.FOCUS_NONE
+	deploy_button.pressed.connect(_on_template_deploy_pressed.bind(id))
+	row.add_child(deploy_button)
+
 	var embody_button := Button.new()
 	# 操控（#726 自舊角色庫面板移植）：把這筆未投放模板直接投放為玩家化身
 	# （deploy_from_library(id, true)）。列表只列未投放模板，不需要 disabled 判斷
@@ -644,6 +688,14 @@ func _on_template_row_gui_input(event: InputEvent, id: String) -> void:
 
 func _on_template_delete_pressed(id: String) -> void:
 	GameManager.remove_from_library(id)
+	_refresh_template_list()
+
+func _on_template_deploy_pressed(id: String) -> void:
+	if GameManager.deploy_from_library(id, false) == null:
+		_template_capacity_label.text = L10n.t("UI_CL_DEPLOY_FAILED")
+		_template_capacity_label.add_theme_color_override("font_color", EMBER)
+		return
+	_template_capacity_label.remove_theme_color_override("font_color")
 	_refresh_template_list()
 
 func _on_template_embody_pressed(id: String) -> void:
