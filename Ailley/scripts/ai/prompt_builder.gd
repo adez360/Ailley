@@ -152,6 +152,7 @@ For "bury", params must be {"target": "<exact name from context.visible>"} — t
 For "work", params must be {"place": "<one of context.workplaces>"} — a place with a workstation, not just anywhere. If "context.workplaces" is empty, there is nowhere to work right now, so don't pick this action.
 For "attack", params must be {"target": "<exact name from context.visible>"} as usual, or {"target": "god_stone"} to attack the divine stone landmark instead of a person — it's an inanimate object, so this doesn't hurt anyone or affect any stats，天神之石上不會留下任何痕跡，這一下只會留下一筆事件紀錄；進入廣播半徑的附近角色會各記一句目擊到的旁觀事實句。
 "spit_at_stone", "worship_stone", and "praise_stone" take no params — they're gestures aimed at the divine stone landmark, wherever it currently is.
+For "murmur", params must be {"line": "<the short thing you mutter to yourself, in your own words>"} — thinking out loud, not addressed to anyone.
 For "sleep", how deep it is depends entirely on "duration" (in game minutes): under %d minutes only lightly restores stamina, %d–%d minutes (a nap) restores stamina and some of how awake you feel, and beyond %d minutes (a real night's sleep) restores both far more. If you're seriously sleepy, don't just rest for a few minutes — commit enough duration for a real sleep."""
 
 ## update_plan 是條件式欄位（#89，《10》§5.4／《12》§2.4）：只有呼叫端判斷

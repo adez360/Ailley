@@ -7,8 +7,8 @@ extends RefCounted
 ## 翻譯 —— auto_translate_mode 預設 INHERIT，把屬性值填成 key 就會生效，
 ## **不必**經過這裡。這個類別是給程式碼裡組出來的字串用的。
 ##
-## 為什麼不直接用 tr()：tr() 是 Object 的實例方法，而需要翻譯的三個地方都拿不到 self ——
-## DialogueLines 全是 static func、Stats.SPEC 是 const、AIConfig.load_from_user() 也是 static。
+## 為什麼不直接用 tr()：tr() 是 Object 的實例方法，而需要翻譯的地方拿不到 self ——
+## 例如 Stats.SPEC 是 const、AIConfig.load_from_user() 也是 static。
 ## TranslationServer.translate() 沒有這個限制。
 ##
 ## 翻譯表在 res://locale/*.csv，由 project.godot 的 internationalization/locale/translations 掛上。
