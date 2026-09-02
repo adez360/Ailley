@@ -31,6 +31,18 @@ const WAITING_FOR_PLAYER_TEXT := "？"
 ## 取用的前一句，前一句就這樣靜默消失（CodeRabbit review 抓到）
 var _pending_lines: Array[String] = []
 
+## _pending_lines 上限（issue #843）：原本無上限，玩家可以趁 NPC／LLM 還沒
+## 回應時連續打好幾句排隊，體驗上會跟對話實際節奏脫節——打的話已經不是在
+## 回應剛剛聽到的內容。滿了之後 chat_input.gd 鎖住輸入框，不讓玩家再開
+## 新的一句，等 next_line() 消化掉排隊的句子、緩衝區空出位置才解鎖
+const MAX_PENDING_LINES := 3
+
+## chat_input.gd 開啟輸入框前呼叫，判斷要不要鎖住（issue #843）。真的輪到
+## 玩家（_turn_waiting）時永遠放行——那是 next_line() 直接在等的那一句，
+## 跟排隊無關；不是輪到玩家時才看緩衝區還有沒有位置
+func can_queue_line() -> bool:
+	return _turn_waiting or _pending_lines.size() < MAX_PENDING_LINES
+
 ## next_line() 正在 await turn_resolved 的期間才是 true——_on_line_submitted()
 ## 與 exit_conversation() 靠這個判斷「現在直接 emit 給正在等的 next_line()」
 ## 還是「還沒輪到，先緩衝」（#207）
@@ -162,6 +174,26 @@ func _unhandled_input(event: InputEvent) -> void:
 			report_action_failure("attack", attack_reason)
 		return
 
+	# 送禮（issue #841）：獨立按鍵，不擠進 interact（E）那條已經很長的優先序鏈
+	# （工作／商店／搬運／復活／打賞／搭話）——give 目標判定只看「面向且在
+	# 範圍內」，跟 attack 同一套 _get_interact_candidates()["other"]，不需要
+	# 額外分流。開的是選單（選物品），不像 attack 按下去立刻執行，所以目標
+	# 找不到時直接回報失敗，找得到就交給 give_menu 自己接手後續
+	if event.is_action_pressed("give"):
+		get_viewport().set_input_as_handled()
+		var give_menu := get_tree().get_first_node_in_group("give_menu")
+		if give_menu != null and give_menu.is_open():
+			return
+		var give_target: Character = _get_interact_candidates()["other"]
+		if give_target != null and give_target.is_dead:
+			give_target = null
+		if give_target == null:
+			report_action_failure("give", Character.GIVE_TARGET_NOT_FOUND)
+			return
+		if give_menu != null:
+			give_menu.open(give_target, self)
+		return
+
 	if not event.is_action_pressed("interact"):
 		return
 
@@ -192,6 +224,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	# corpse_menu 開著時同一個理由（issue #758）
 	var corpse_menu := get_tree().get_first_node_in_group("corpse_menu")
 	if corpse_menu != null and corpse_menu.is_open():
+		return
+
+	# give_menu 開著時同一個理由（issue #841）：give_menu.gd 自己接 interact
+	# 當關閉鍵，這裡漏了 guard 的話，E 會被這裡搶先吃掉、選單關不掉
+	var give_menu_open_check := get_tree().get_first_node_in_group("give_menu")
+	if give_menu_open_check != null and give_menu_open_check.is_open():
 		return
 
 	get_viewport().set_input_as_handled()
@@ -383,15 +421,15 @@ func _is_facing(target: Vector2) -> bool:
 ##
 ## 昏迷角色（`downed`）跟可搭話對象（`other`）從同一份 vision 清單分流、互斥——
 ## 昏迷者不進 `other`：talk_to() 沒有擋昏迷目標（is_talk_interruptible() 只看
-## _working／is_dead），兩邊都收會讓同一個人同時是搭話候選又是搬運候選，
-## 距離又剛好一樣（HAUL_RANGE == TALK_RANGE），還得另外決哪個優先。分流後
-## 兩邊各自呼叫一次 _nearest_facing()，跟 workstation 同一種寫法（issue #637）
+## _working／is_dead／is_offline_asleep），兩邊都收會讓同一個人同時是搭話候選
+## 又是搬運候選，距離又剛好一樣（HAUL_RANGE == TALK_RANGE），還得另外決哪個優先。
+## 分流後兩邊各自呼叫一次 _nearest_facing()，跟 workstation 同一種寫法（issue #637）
 func _get_interact_candidates() -> Dictionary:
 	var workstation := _nearest_facing(_nearby_group("workstations"), WORK_RANGE, func(n): return n.global_position) as Workstation
 	var shop_place := _nearest_shop_place()
 	var visible_characters: Array = vision.get_visible_characters() if vision != null else []
 	var downed_characters := visible_characters.filter(func(n): return (n as Character).has_condition(CONDITION_INCAPACITATED))
-	var talkable_characters := visible_characters.filter(func(n): return not (n as Character).has_condition(CONDITION_INCAPACITATED))
+	var talkable_characters := visible_characters.filter(func(n): return not (n as Character).has_condition(CONDITION_INCAPACITATED) and not (n as Character).is_offline_asleep)
 	var downed := _nearest_facing(downed_characters, HAUL_RANGE, func(n): return (n as Character).get_body_position()) as Character
 	var other := _nearest_facing(talkable_characters, TALK_RANGE, func(n): return (n as Character).get_body_position()) as Character
 

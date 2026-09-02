@@ -343,19 +343,50 @@ Enter 開啟／送出，Esc 取消。不在對話中就是單純冒一句氣泡�
 > 同一套邏輯：有人在等就 `emit(ok=false)` 取消，沒有就只清掉可能殘留的緩衝，
 > 不讓上一場對話沒送出的半句話流進下一場。
 
-> [!important] 常駐提示：真的在等待時，NPC 頭上顯示「？」
-> `Bubble.say()`／`_show_next()` 是固定秒數自動消失的排隊機制，跟
-> `agent.gd::AI_THINKING_TEXT`（"…"）那個「思考中」提示用的是同一套——但
-> 「輪到你了」這個提示要「一直掛著直到玩家真的送出」，套用自動消失邏輯的話
-> 玩家慢慢想的時候提示會自己不見。`bubble.gd` 加了 `hold(message)` /
-> `release_hold()`：`hold()` 清空佇列、顯示訊息但不跑自動消失的計時
-> （`_process()` 裡用 `_holding` 擋掉計時，處理本身開著是為了 #742 的
-> 每幀重夾位置），`release_hold()` 解除後才恢復正常排隊行為。
-> `next_line()` 只在真的要 `await`（緩衝區沒內容）時才對 `listener` 呼叫
-> `hold(WAITING_FOR_PLAYER_TEXT)`，`await` 結束（不管是真的送出還是被取消）
-> 呼叫 `release_hold()`，`is_instance_valid(listener)` 包一層——跟
-> `conversation.gd::_finish_with_fallback()` 同一種顧慮，`await` 讓出控制權
-> 的這段期間 `listener` 理論上可能已經離開場景。
+> [!important] 排隊上限（issue #843）：打太快要鎖輸入框，不能無限緩衝
+> `_pending_lines` 原本沒有上限——玩家可以趁 NPC／LLM 還沒回應時連續打好
+> 幾句排隊，體驗上會跟對話實際節奏脫節（打的話已經不是在回應剛剛聽到的
+> 內容）。`player.gd` 加了 `const MAX_PENDING_LINES := 3` 與
+> `can_queue_line()`：真的輪到玩家（`_turn_waiting`）永遠放行，不是輪到
+> 玩家時才看緩衝區還有沒有位置。`chat_input.gd::_unhandled_input()` 開啟
+> 輸入框前呼叫 `can_queue_line()`，滿了就不開框，改用
+> `player.say(L10n.t("DLG_TOO_FAST"), true, false)` 在玩家頭上冒一句
+> 「等等村民回覆啦，太快了」——跟 `DLG_SURPRISE`／`DLG_NOISE_ALERT` 那類
+> 系統提示同一種做法，`broadcast=false` 是同一個理由。沒有另外做「解鎖」
+> 事件：`can_queue_line()` 每次都是即時看緩衝區大小，`next_line()` 消化掉
+> 排隊的句子、`_pending_lines.size()` 降到上限以下，下次玩家按開輸入框自然
+> 就通過了。
+
+> [!important] 常駐提示：真的在等待時才顯示，撐到有結果才收
+> `Bubble.say()`／`_show_next()` 是固定秒數自動消失的排隊機制——秒數由文字
+> 長度算，單一符號（「…」「？」）會被夾到下限 1.2 秒，撐不過一次 LLM 等待
+> （`ai_config.gd` 預設逾時 10 秒），泡泡會比答案早收掉，玩家會看到一段
+> 「看起來像沒理你」的空窗（實際踩過：`agent.gd::next_line()` 開頭顯示的
+> 「思考中」提示 `AI_THINKING_TEXT`）。凡是「要撐到某個明確事件發生才能收」
+> 的提示都改用 `bubble.gd` 的 `hold(message)` / `release_hold()`：`hold()`
+> 清空佇列、顯示訊息但不跑自動消失的計時（`_process()` 裡用 `_holding` 擋掉
+> 計時，處理本身開著是為了 #742 的每幀重夾位置），`release_hold()` 解除後才
+> 恢復正常排隊行為。目前兩處在用：
+> - `player.gd::next_line()` 只在真的要 `await`（緩衝區沒內容）時才對
+>   `listener` 呼叫 `hold(WAITING_FOR_PLAYER_TEXT)`（NPC 頭上顯示「？」），
+>   `await` 結束（不管是真的送出還是被取消）呼叫 `release_hold()`，
+>   `is_instance_valid(listener)` 包一層——跟
+>   `conversation.gd::_finish_with_fallback()` 同一種顧慮，`await` 讓出
+>   控制權的這段期間 `listener` 理論上可能已經離開場景。
+> - `agent.gd::next_line()` 一開頭 `bubble.hold(AI_THINKING_TEXT)`。收掉的
+>   時機交給 `character.gd::exit_conversation()`（對話不管什麼原因結束都會
+>   呼叫到，唯一的收斂點）統一 `release_hold()`；正常拿到台詞或 fallback 時，
+>   `say(interrupt=true)` 內部的 `bubble.clear()` 會先解除 hold 換成真台詞，
+>   `exit_conversation()` 之後再呼叫 `release_hold()` 純粹是 no-op。
+
+> [!important] 對方選擇不理你（`engage=false`）要顯示得出來，不能跟「還在等」一樣空白
+> `conversation.gd::_run()` turn 0 若 `result.engage == false`，原本直接
+> `bubble.clear()` 收掉思考中提示、什麼都不顯示——跟上面「LLM 還在想」的
+> 空窗期在畫面上長得一模一樣，玩家分不出「還在等」跟「他不想理你」。
+> 現在改成 `speaker.say(L10n.t("DLG_IGNORED"), true, false)`
+> 顯示一句「他似乎不想理你……」，`broadcast=false` 理由跟
+> `AI_THINKING_TEXT` 一樣：這不是角色真的說了什麼，不該觸發鄰近角色的
+> `speech_heard`。
 
 > [!note] 對話結束不會有引擎代講的道別台詞
 > `conversation.gd::_finish()` 不管什麼結束原因（正常結束／走遠／被打斷／

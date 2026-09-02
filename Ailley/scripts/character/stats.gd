@@ -71,6 +71,12 @@ var values := {}
 ## Stats 自己不知道 conditions 是什麼
 var injury_decay_paused := false
 
+## 入眠狀態（issue #827，《10》§4.5「玩家離線處置」）：所有需求暫停衰減，
+## 不會因此餓死。跟 injury_decay_paused 同一種寫法——由 Character 依
+## is_offline_asleep 設定，Stats 自己不知道為什麼要暫停，也不管是哪個原因
+## （真人離線／模型失效）觸發的入眠，兩種情境對 Stats 而言是同一件事
+var all_drift_paused := false
+
 
 func _ready() -> void:
 	for key in SPEC:
@@ -84,6 +90,8 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 		_apply_drift()
 
 func _apply_drift() -> void:
+	if all_drift_paused:
+		return
 	for key in SPEC:
 		var spec: Dictionary = SPEC[key]
 		if spec["drift"] == 0.0:

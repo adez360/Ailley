@@ -138,6 +138,14 @@ const LLM_TASK_POOL_CAP := 20
 ## 性質不同）
 const STUCK_RETRY_INTERVAL_MINUTES := 72
 
+## 入眠中補打恢復探測的節流間隔（遊戲分鐘，1 遊戲分鐘 = 1 現實秒）。入眠的
+## 觸發掛在真實決策結果上（見 _request_next_decision() 的失敗分支），但入眠
+## 之後沒有任何決策會再發出，解除得靠這裡的低頻探測：每個間隔補打一次
+## reload_config_and_wait()，provider 恢復就退出入眠。抓 30：跟 AIService
+## 的 min_interval_sec（30 現實秒）同一個量級——再短就逼近輪詢，再長的話
+## provider 恢復後角色要多石化半分多鐘才醒，玩家體感明顯
+const OFFLINE_RECOVERY_PROBE_INTERVAL_MINUTES := 30
+
 ## 候選任務池。這一版只在 _load_schedule() 建立一次就不再變動——
 ## 「到點才可用」靠仲裁時的 window 過濾，不是把任務從池子裡搬進搬出
 var _tasks: Array[Dictionary] = []
@@ -194,10 +202,6 @@ var _l3_recalled_for := {}
 # _pursue_current_task() 每個遊戲分鐘都會跑，靠這個分辨「還在處理同一個地點」
 # 與「地點換了要重新起步」
 var _pursued_place := ""
-
-# _on_action_interrupted() 存的即時位置反查快照，給 _on_attacked() 讀
-# （見那兩個函式的說明，#426）
-var _place_before_interrupt := ""
 
 # 這一趟移動已經有結論了（走到了，或 _check_stuck() 放棄了）。
 # 少了它，放棄之後下一次重算又會對同一個走不到的目標重新 move_to()，
@@ -317,6 +321,11 @@ var _awaiting_decision := false
 # 的推導綁在它上面）。初始值設成負的節流間隔，保證出生後第一次真的卡住時
 # 不用等滿一個間隔就能立刻補一次
 var _last_stuck_retry_minute := -STUCK_RETRY_INTERVAL_MINUTES
+
+# 入眠恢復探測的節流錨點（遊戲分鐘，見 _probe_offline_recovery()）：下一個
+# 遊戲分鐘之前不打探測。入眠當下（_request_next_decision() 的失敗分支）會
+# 先設成「現在 + 間隔」——剛確認完 provider 失效，不值得立刻再打一輪
+var _offline_probe_not_before_minute := 0
 
 # 長動作檢查點決策請求還有沒有一份在飛（issue #336）。跟 _awaiting_decision
 # 是兩個獨立的旗標，各自防各自的重疊呼叫——檢查點問的是「這筆任務要不要
@@ -487,19 +496,28 @@ var _next_daily_event_id := 0
 ## location_override 時改用覆寫值，見下一段
 ##
 ## location_override 給 current_place 當下不可信或不適用的呼叫端用（#426：
-## _on_attacked() 用 _place_before_interrupt 快照的即時位置反查、
-## exit_conversation() 直接呼叫 _resolve_actual_place()——見那兩個函式的
-## 說明）：非 null 時取代 current_place，其餘呼叫端不用管這個參數（省略即為
-## null），維持原本「一律用 current_place」的行為（CodeRabbit review 抓到
-## force_interrupt() 會搶先把 current_place 清空，直接讀會拿到空字串）。
+## _on_attacked()／exit_conversation() 都直接呼叫 _resolve_actual_place()——
+## 見那兩個函式的說明）：非 null 時取代 current_place，其餘呼叫端不用管這個
+## 參數（省略即為 null），維持原本「一律用 current_place」的行為（CodeRabbit
+## review 抓到 force_interrupt() 會搶先把 current_place 清空，直接讀會拿到
+## 空字串）。
 ##
-## 一定要用 null 當「沒有指定」的哨兵，不能用空字串——`_place_before_interrupt`
-## 快照下來的值本來就可能合法地是空字串（角色被攻擊當下 current_place 本來就
+## 一定要用 null 當「沒有指定」的哨兵，不能用空字串——_resolve_actual_place()
+## 反查出來的值本來就可能合法地是空字串（角色被攻擊當下 current_place 本來就
 ## 沒設過），空字串當「沒指定」處理的話，會誤用呼叫這裡當下已經被 _reevaluate()
 ## 重新指派的 current_place（可能是完全不相關的新地點），而不是「這件事發生
 ## 時真的沒有地點」這個事實（CodeRabbit review 抓到）
+##
+## also_pending 給期待「緊接著那次決策」（不是隔天反思）就要讀到這件事的
+## 呼叫端用（#851）：_daily_events 只有睡前反思會讀，force_interrupt() 觸發的
+## 立即決策讀的是 _fact_lines_summary() → _pending_fact_lines，兩份完全不同
+## 的清單。true 時同時把 content 補進 _pending_fact_lines，兩處只維護一套
+## 文字，不用呼叫端各自重複組字串
 func _push_daily_event(
-	content: String, related_npcs: Array[String] = [], location_override: Variant = null
+	content: String,
+	related_npcs: Array[String] = [],
+	location_override: Variant = null,
+	also_pending: bool = false,
 ) -> void:
 	var location_id: String = current_place if location_override == null else str(location_override)
 	_daily_events.append({
@@ -511,6 +529,8 @@ func _push_daily_event(
 	_next_daily_event_id += 1
 	if _daily_events.size() > DAILY_EVENTS_CAP:
 		_daily_events.pop_front()
+	if also_pending:
+		_pending_fact_lines.append(content)
 
 ## 加一筆今天做過的事（#172）。minute 取 GameClock，target 沒有對象的動作
 ## 傳空字串——UI 端顯示時整個省略，不印「無」（《15》§2-5）
@@ -679,7 +699,11 @@ func witness_god_stone_gesture(line: String) -> void:
 ## _words_to_creator_spoken 會一起通過早退檢查，兩個回應都成立時就會說兩次
 ## ——CodeRabbit review 抓到的競態
 func maybe_speak_to_creator(heard_line: String) -> void:
-	if words_to_creator.is_empty() or _words_to_creator_spoken or _words_to_creator_pending:
+	# 入眠中不發請求（CodeRabbit review 抓到）：words_to_creator 的 AI 判定
+	# 跟決策請求一樣不該對入眠者發出；回應側（下方 is_dead 那排）同樣補上
+	# is_offline_asleep，入眠發生在請求在途時，回應抵達也不會說出口
+	if is_offline_asleep or words_to_creator.is_empty() \
+			or _words_to_creator_spoken or _words_to_creator_pending:
 		return
 
 	var chance := 0.4 if int(emotion.get("intensity", 0)) >= 70 else 0.25
@@ -694,7 +718,7 @@ func maybe_speak_to_creator(heard_line: String) -> void:
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
 	_words_to_creator_pending = false
 
-	if is_dead or my_generation != _decision_generation:
+	if is_dead or is_offline_asleep or my_generation != _decision_generation:
 		return
 	if not result["ok"] or not result["data"]["say_it"]:
 		return
@@ -1093,6 +1117,17 @@ const AI_THINKING_TEXT := "…"
 ## 沒有 CONVERSATION 那種豁免，重試間隔只有幾秒、遠低於預設 30 秒冷卻，不跳過
 ## 冷卻檢查的話重試永遠會被自己剛送出的上一次呼叫擋成 ERROR_RATE_LIMITED，
 ## 《12》§3.4 要求的重試在 SCHEDULED 路徑上會實際失效（PR #176 review 抓到）
+# 卡死保底用的輪詢間隔與逾時緩衝（issue #860）：實測到 _provider.decide()
+# 底層的 await 在極少數情況下永遠不會 resolve（AIService 自己的佇列與忙碌
+# 節點都已經清空，代表回應早就處理完，只是通知呼叫端的訊號沒有送達），
+# 導致 _awaiting_decision 卡死、這隻角色永久不會再送出任何決策請求。
+# 這裡不去猜確切是哪個訊號漏發——不管底層卡在哪裡，都要有一個不依賴
+# 「await 一定會 resolve」的保底機制
+const DECISION_WATCHDOG_POLL_SEC := 0.25
+const DECISION_WATCHDOG_GRACE_SEC := 5.0
+const DECISION_WATCHDOG_FALLBACK_TIMEOUT_SEC := 15.0
+
+
 func _decide_with_retry(envelope: Dictionary, policy: AIService.Policy, validator: Callable) -> Dictionary:
 	var attempts := _provider.max_validation_retries() + 1
 	# 記住最後一次的失敗原因，迴圈跑完直接回它——parse 與 validate 兩種失敗
@@ -1101,7 +1136,7 @@ func _decide_with_retry(envelope: Dictionary, policy: AIService.Policy, validato
 	for attempt in attempts:
 		var context := DecisionContext.new()
 		context.is_retry = attempt > 0
-		var result: Dictionary = await _provider.decide(envelope, character_id, policy, context)
+		var result: Dictionary = await _decide_with_watchdog(envelope, policy, context)
 		if not result["ok"]:
 			return result
 
@@ -1117,14 +1152,76 @@ func _decide_with_retry(envelope: Dictionary, policy: AIService.Policy, validato
 
 	return last
 
+
+# 保底計時器（issue #860）：用輪詢取代訊號競賽，避免另外自己實作一套
+# 「等兩個訊號誰先到」的機制——GDScript 沒有內建的 race 原語，硬做一套反而
+# 多一種新的訊號漏發風險。期限取 provider 的 timeout 乘上最壞的排隊與
+# 內部重試倍數再加緩衝（公式見下方 if 內的註解），讓 HTTPRequest 正常的
+# 逾時失敗有機會先跑完；抓不到 provider timeout（例如 provider_name
+# 打錯字）就退回一個保守的固定值，不讓保底機制本身變成
+# 另一個沒有上限的等待
+#
+# 逾時之後不去追殺底層的 _provider.decide() 協程——它可能稍後才真的完成，
+# 但那時候 state 已經沒有任何呼叫端在讀，一份遲到的結果安靜地被丟棄，
+# 跟直接取消相比風險更低（不用去確認 AIService 內部的節點/佇列狀態
+# 中途被打斷會不會產生新的不一致）
+func _decide_with_watchdog(
+	envelope: Dictionary, policy: AIService.Policy, context: DecisionContext
+) -> Dictionary:
+	var state := {"done": false, "result": {}}
+	_run_decide_into_state(state, envelope, policy, context)
+
+	var timeout_sec := DECISION_WATCHDOG_FALLBACK_TIMEOUT_SEC
+	var provider := AIService.config.get_provider(_provider.provider_name())
+	if provider != null and provider.timeout > 0.0:
+		# 期限不只是「一次 HTTP 往返」的長度：時鐘從這裡起跑，涵蓋請求在
+		# AIService._queue 排隊與節點池對 retryable 失敗（network／HTTP 5xx）
+		# 內部重試 RETRY_LIMIT 次的階段。POOL_SIZE 個節點全被佔住時，排隊
+		# 最壞要等 POOL_SIZE 份「每份最多 (RETRY_LIMIT + 1) × timeout」的
+		# 請求做完，自己再花一份同樣的最壞值，所以取 POOL_SIZE + 1 份。
+		# 逾時本身（RESULT_TIMEOUT）不重試（ai_service.gd::_interpret()），
+		# 算進最壞值也不會低估。期限只是保底不是目標延遲——多等一輪比
+		# 把稍後會完成的合法排隊請求安靜丟掉好（PR #864 review major）
+		timeout_sec = (
+			provider.timeout * (AIService.RETRY_LIMIT + 1) * (AIService.POOL_SIZE + 1)
+			+ DECISION_WATCHDOG_GRACE_SEC
+		)
+
+	var deadline_msec := Time.get_ticks_msec() + int(timeout_sec * 1000.0)
+	while not state["done"] and Time.get_ticks_msec() < deadline_msec:
+		await get_tree().create_timer(DECISION_WATCHDOG_POLL_SEC).timeout
+
+	if state["done"]:
+		return state["result"]
+	return AISchema._fail("decision_watchdog_timeout")
+
+
+func _run_decide_into_state(
+	state: Dictionary, envelope: Dictionary, policy: AIService.Policy, context: DecisionContext
+) -> void:
+	var result: Dictionary = await _provider.decide(envelope, character_id, policy, context)
+	state["result"] = result
+	state["done"] = true
+
+
 func next_line(listener: Character, turns: Array[Dictionary], max_turns: int) -> Dictionary:
 	# 立刻蓋掉正在顯示的東西，讓玩家知道「這個角色在想」，不是卡住。
 	# AIService.request() 還沒送出就已經先顯示——冷卻/配額檢查也算在等待時間裡，
 	# 玩家看到「…」的時間可能比實際打網路的時間長，這是刻意的：早一點給回饋
-	# 比精準對齊網路延遲更重要。broadcast=false：這是「正在想」的內部狀態
-	# 泡泡，不是角色真的說了什麼，不該觸發鄰近角色的 speech_heard（CodeRabbit
-	# review 抓到，PR #674）
-	say(AI_THINKING_TEXT, true, false)
+	# 比精準對齊網路延遲更重要。
+	#
+	# 直接呼叫 bubble.hold()，不走 say()：say() 排隊顯示的秒數是依文字長度算的
+	# （bubble.gd 的 SECONDS_PER_CHAR），「…」只有 1 個字元會被夾到下限 1.2 秒，
+	# 但 LLM 常常等超過 1.2 秒（ai_config.gd 預設逾時 10 秒）——泡泡提早消失、
+	# 答案還沒回來，畫面上會有一段看起來像「他不理你」的空窗，玩家分不出
+	# 「還在等」跟「他不想理你」。改用 hold() 撐到明確收掉為止：拿到台詞或
+	# fallback 時，_speak()／_finish_with_fallback() 呼叫 say(interrupt=true)
+	# 會先 bubble.clear() 換成真正的台詞；對話中途被打斷（走遠/角色離場）時
+	# exit_conversation() 統一 release_hold()（見 character.gd）。hold() 本來
+	# 就不會觸發 speech_heard 廣播，不用像 say() 那樣額外傳 broadcast=false
+	# （CodeRabbit review PR #674 的顧慮在這裡改用 hold() 就不成立了）
+	if bubble != null:
+		bubble.hold(AI_THINKING_TEXT)
 
 	# turns 空陣列＝被搭話的第一輪，還沒人開口——這輪多開放 engage 欄位，
 	# 讓對象可以選擇不理會這次搭話（issue #630）。之後的輪次已經在聊，
@@ -1368,11 +1465,14 @@ func _request_last_words(cause: String) -> void:
 func _request_next_decision(
 	allow_update_plan: bool = false, allow_appointment: bool = false, allow_perform_tip: bool = false
 ) -> Dictionary:
-	# 死屍不建立新的決策請求（CodeRabbit review 抓到）：跟下面 await 之後的
-	# is_dead 判斷是兩件事——那道只擋「套用已經送出去的回應」，這裡擋在送出
-	# 請求之前，避免死亡後還被 _pending_reaction_lines 補問邏輯（見本函式
-	# 結尾）之類的呼叫端觸發一次白白浪費的 AI 請求
-	if is_dead:
+	# 死屍／入眠中的角色不建立新的決策請求（CodeRabbit review 抓到）：跟下面
+	# await 之後的 is_dead 判斷是兩件事——那道只擋「套用已經送出去的回應」，
+	# 這裡擋在送出請求之前，避免死亡後還被 _pending_reaction_lines 補問邏輯
+	# （見本函式結尾）之類的呼叫端觸發一次白白浪費的 AI 請求。is_offline_asleep
+	# 同理：入眠中石化在原地，_on_perform_finished()／_on_action_interrupted()
+	# 等事件收尾路徑雖然各自有旗標判斷，但呼叫端很多，統一擋在這裡才不會
+	# 漏掉哪一條路徑在入眠中偷偷發出決策請求
+	if is_dead or is_offline_asleep:
 		return {"ok": false, "triggered": false}
 	if _awaiting_decision:
 		return {"ok": false, "triggered": false}
@@ -1430,9 +1530,17 @@ func _request_next_decision(
 		_fact_lines_summary(), had_pending_persuade, current_place, allow_appointment,
 		allow_perform_tip, _recalled_summary(), _workplaces_summary()
 	)
+	# issue #794：跟這次組 envelope 送出去的 context.visible 用同一份名字
+	# 清單，讓驗證層能擋掉「語法上合法但不是真實可見角色」的幻覺目標
+	# （不只是 #766 那種照抄 schema 字面文字），不用等執行層才因為
+	# 找不到這個角色而失敗
+	var visible_names := PackedStringArray()
+	for character in visible:
+		visible_names.append(character.character_name)
 	var validator := func(data: Dictionary) -> Dictionary:
 		return AISchema.validate_tasks(
-			data, effective_allow_update_plan, now_minutes, allow_appointment, allow_perform_tip
+			data, effective_allow_update_plan, now_minutes, allow_appointment, allow_perform_tip,
+			visible_names
 		)
 
 	var result := await _decide_with_retry(envelope, AIService.Policy.SCHEDULED, validator)
@@ -1455,7 +1563,28 @@ func _request_next_decision(
 		final_result = {"ok": false, "triggered": true}
 	elif not result["ok"]:
 		final_result = {"ok": false, "triggered": true}
+		# 入眠觸發（issue #827，《10》§6.4「模型失效處理」：模型下架／額度用盡／
+		# 格式錯誤時視同離線，走 §4.5 入眠流程）：決策請求確定失敗（世代沒變、
+		# 不是被 debug 開關作廢、角色也沒死）代表 provider 現在真的問不到。比照
+		# main_scene.gd／game_manager.gd 的既有先例，事件觸發補打一次
+		# reload_config_and_wait() 再確認——瞬斷會在探測期間自己恢復，不值得為
+		# 它入眠；確認仍未就緒才入眠。恢復靠 _probe_offline_recovery() 的低頻
+		# 探測或入眠發生當下還在飛的回應成功抵達，AIService 自己不做背景輪詢
+		# （見 ai_service.gd reload_config() 註解）的既有原則不變
+		if llm_decision_enabled and not is_dead and not is_offline_asleep:
+			await AIService.reload_config_and_wait()
+			if llm_decision_enabled and not is_dead and not is_offline_asleep \
+					and not bool(AIService.get_readiness(get_provider_name()).get("ready", false)):
+				_offline_probe_not_before_minute = _now_minutes() \
+					+ OFFLINE_RECOVERY_PROBE_INTERVAL_MINUTES
+				enter_offline_sleep("model_unavailable")
 	else:
+		# 決策成功代表 provider 活著（issue #827）：入眠發生當下還在飛的決策
+		# 回應成功抵達時，順手把入眠解除。檢查點／反思這類不吃 _awaiting_decision
+		# 旗標的請求不會路過這裡解除入眠，那條路的恢復由 _probe_offline_recovery()
+		# 的低頻探測兜底，不靠在途回應
+		if is_offline_asleep:
+			exit_offline_sleep()
 		var data: Dictionary = result["data"]
 
 		# 這輪回應真的通過驗證、確定會被套用，才消費快照下來的一次性事實句數量
@@ -1483,9 +1612,17 @@ func _request_next_decision(
 		#
 		# stats.get_lowest_need_place()（《系統分析計畫》§5 早就指定的
 		# fallback 路徑：問不到 AI 就先去滿足最低的那項需求，不是站在原地）
-		# 一直沒有任何呼叫端接上——只有真的有需求跌破 CRITICAL 時才用它排
-		# move_to，沒有需求需要處理時維持原本的 idle，不會讓角色沒事也到處
-		# 亂晃
+		# 只有真的有需求跌破 CRITICAL 時才用它排 move_to——這條分支不動，
+		# 危急狀態下的角色永遠導向最需要的地點，不受下面的改動影響。
+		#
+		# 沒有需求需要處理時（issue #798），把原本的 idle 換成 wander：
+		# Test A/B 實測角色常常因為 context.visible 是空的、或（#794 之後）
+		# 幻覺出來的 talk 對象在驗證層就被擋掉，導致 LLM 這輪交回空
+		# tasks——原本站在原地等下一輪，現在到處走走，才有機會碰到人。
+		# wander（#753）本身不看需求、純隨機取附近一格，所以只能放在
+		# 「什麼都不缺」這個分支，不能碰上面 move_to(lowest-need) 那條：
+		# 危急狀態下亂走會讓角色更難被找到食物/水源，等於拆掉現有唯一
+		# 在保護生存底線的路徑
 		if tasks_added == 0 and _current_task.is_empty():
 			var fallback_place := ""
 			if stats != null and stats.needs_attention():
@@ -1493,7 +1630,7 @@ func _request_next_decision(
 			if not fallback_place.is_empty():
 				_push_llm_tasks([{"action": "move_to", "params": {"place": fallback_place}, "priority": 0.0}], data)
 			else:
-				_push_llm_tasks([{"action": "idle", "params": {}, "priority": 0.0}], data)
+				_push_llm_tasks([{"action": "wander", "params": {}, "priority": 0.0}], data)
 
 		# emotion（#351）：每次決策都必填，validate_tasks() 已經驗證過 type／
 		# intensity 合法，這裡直接套用，不再二次判斷——AI 自己宣告的內在狀態，
@@ -2015,7 +2152,7 @@ func _on_perform_finished(completed: bool) -> void:
 	_pursuit_done = false
 	_clear_current_task(true)
 	_push_daily_event("你的表演結束了。")
-	if llm_decision_enabled and not _awaiting_decision:
+	if llm_decision_enabled and not _awaiting_decision and not is_offline_asleep:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
 
@@ -2041,34 +2178,32 @@ func _on_action_interrupted() -> void:
 		_pursuit_done = false
 		return
 
-	# 清空前先存一份快照——character.gd::attack() 的呼叫順序是
-	# force_interrupt()（跑到這裡，把 current_place 清空）先於 _on_attacked()
-	# （記事實句），直接讀 current_place 的話 _on_attacked() 永遠拿到空字串
-	# （CodeRabbit review 抓到）。#426：改存即時座標反查的結果，不是
-	# current_place 本身——force_interrupt() 這裡 stop_moving() 剛執行完、
-	# 位置還沒被任何東西改變，正是「事情發生當下人真正站在哪」，比
-	# current_place（任務目的地，移動途中被攻擊時還沒走到）準確
-	_place_before_interrupt = _resolve_actual_place()
 	_pursued_place = ""
 	_pursuit_done = false
 	_clear_current_task(false)
-	if llm_decision_enabled and not _awaiting_decision:
+	if llm_decision_enabled and not _awaiting_decision and not is_offline_asleep:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
 
 # 被攻擊記成事實句（純客觀事件，不貼「這很可怕」之類的主觀標籤——見 CLAUDE.md
 # 「遊戲機制規格：AI 自主性自檢」），讓下次決策／睡前反思能讀到發生過這件事。
-# 地點用 _on_action_interrupted() 存的快照，不是這裡當下的 current_place——
-# 見 _push_daily_event() 的 location_override 說明
+# character.gd::attack() 呼叫順序是這裡先於 force_interrupt()（#851）：位置還沒
+# 被 stop_moving() 等中斷收尾動過，直接呼叫 _resolve_actual_place() 即為「事情
+# 發生當下人真正站在哪」，不用另外存快照——見 _push_daily_event() 的
+# location_override 說明。also_pending=true：force_interrupt() 接著會立即問一次
+# 新決策，那次決策也要讀得到這件事，不能只等睡前反思（#851）
 func _on_attacked(attacker: Character) -> void:
 	super._on_attacked(attacker)
 	_push_daily_event(
-		"你被 %s 攻擊了" % attacker.character_name, [attacker.character_id], _place_before_interrupt
+		"你被 %s 攻擊了" % attacker.character_name,
+		[attacker.character_id],
+		_resolve_actual_place(),
+		true,
 	)
 
 # 被救助記成事實句，跟 _on_attacked() 同一個理由（純客觀事件，不貼標籤，見
 # CLAUDE.md「遊戲機制規格：AI 自主性自檢」）。搬運中角色不是自己在移動，
-# 不需要比照 _on_attacked() 那樣取中斷前快照，直接用 current_place 就是對的
+# 不需要比照 _on_attacked() 那樣即時位置反查，直接用 current_place 就是對的
 func _on_rescued(hauler: Character) -> void:
 	_push_daily_event("你被 %s 救助了，脫離昏迷" % hauler.character_name, [hauler.character_id])
 
@@ -2554,6 +2689,18 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 	if is_dead:
 		return
 
+	# 入眠中不重算任何東西——跟死屍同一種「石化，不再仲裁」的立場，差別是
+	# 入眠不是終局狀態。觸發與解除都改掛在真實決策結果上（見
+	# _request_next_decision() 的失敗／成功分支）：readiness 是探測完就定型的
+	# 快照，不會自己更新，掛在它上面的話 provider 玩到一半失效不會入眠、
+	# 入了眠也沒有任何路徑會再探測，角色會永久凍結。這裡只負責低頻補打恢復
+	# 探測——事件驅動（GameClock 的 time_changed 訊號本身就是事件）、節流在
+	# OFFLINE_RECOVERY_PROBE_INTERVAL_MINUTES，不是持續輪詢，跟 ai_service.gd
+	# reload_config() 註解「不做背景輪詢」的既有原則不衝突
+	if is_offline_asleep:
+		_probe_offline_recovery()
+		return
+
 	# 先結算這一分鐘的回復，再重算要做什麼：反過來的話，剛被換掉的那筆任務
 	# 會用新任務的 current_state 結算最後一分鐘
 	_apply_action_recovery()
@@ -2562,6 +2709,27 @@ func _on_time_changed(_hour: int, _minute: int) -> void:
 	_process_appointment(_now_minutes())
 	_scan_for_performers()
 	_reevaluate()
+
+# 入眠中的低頻恢復探測（issue #827）：入眠之後沒有任何決策會再發出，解除
+# 得靠這裡主動補打一次 reload_config_and_wait()——跟 game_manager.gd 的
+# activate_llm_decision_if_ready() 同一種「事件觸發、補打一次再重判」的
+# 先例，不是 AIService 自己在背景輪詢。fire-and-forget，不 await：呼叫端
+# （_on_time_changed）不需要等探測結果才能繼續，這個遊戲分鐘本來就沒有
+# 其他事要做了
+func _probe_offline_recovery() -> void:
+	var now := _now_minutes()
+	if now < _offline_probe_not_before_minute:
+		return
+	_offline_probe_not_before_minute = now + OFFLINE_RECOVERY_PROBE_INTERVAL_MINUTES
+	await AIService.reload_config_and_wait()
+	# 探測吃 await，等待期間角色可能已經醒（debug ai_decision off）或死了
+	if is_dead or not is_offline_asleep:
+		return
+	if bool(AIService.get_readiness(get_provider_name()).get("ready", false)):
+		exit_offline_sleep()
+		# 立刻補一次仲裁：醒來的這個遊戲分鐘就接回正常的任務排程，不用等
+		# 下一個分鐘的 _on_time_changed()（那時也會跑，這裡只是不用多等一秒）
+		_reevaluate()
 
 # 力竭時強制進入休息，直到 stamina 恢復
 func _force_rest_until_recovered(now_minutes: int) -> void:
@@ -2640,12 +2808,14 @@ func _autosave_on_wake() -> void:
 # #265：真正的重新仲裁邏輯搬進 _reevaluate_once()，這個函式只負責
 # trampoline——見上面 _reevaluating／_reevaluate_pending 的宣告註解
 func _reevaluate() -> void:
-	# 死屍不重新仲裁（CodeRabbit review 抓到）：擋在 trampoline 這一層，一次
-	# 涵蓋所有會走到這裡的路徑——_on_time_changed()、_on_action_interrupted()
+	# 死屍／入眠中不重新仲裁（CodeRabbit review 抓到）：擋在 trampoline 這一層，
+	# 一次涵蓋所有會走到這裡的路徑——_on_time_changed()、_on_action_interrupted()
 	# 各自已經有 is_dead 判斷，但 _end_work() → Agent._on_work_finished() →
 	# _reevaluate() 這條（work_at() 死亡當下同步被 force_interrupt() 收尾時
-	# 觸發）沒有，漏了就會讓死屍立刻選中並執行新任務
-	if is_dead:
+	# 觸發）沒有，漏了就會讓死屍立刻選中並執行新任務。is_offline_asleep 同理：
+	# 入眠中石化在原地，_on_work_finished()／_on_perform_finished() 這類在途
+	# 動作的收尾路徑仍可能撞進來，不能讓它們繞過石化重新仲裁
+	if is_dead or is_offline_asleep:
 		return
 
 	if _reevaluating:
@@ -2707,7 +2877,8 @@ func _reevaluate_once() -> void:
 	# LONG_ACTION_CHECKPOINT_INTERVAL 分鐘額外問一次「繼續」或「放棄」，跟下面
 	# duration 到期的「做完了，問下一步」是兩個獨立的事件——這裡問的當下任務
 	# 還沒做完，`elapsed < duration` 排除掉終點那一刻（那一刻交給下面那個分支
-	# 處理，不重複問）。條件跟下面那個分支同一套（llm 來源、talk 任務排除），
+	# 處理，不重複問）。條件跟下面那個分支大致同一套（llm 來源、talk 任務排除；
+	# duration 完成分支另多一條 is_working() 排除，見那裡的註解），
 	# 多加 _checkpoint_decision_pending 避免自己的請求還沒回來又觸發一次。
 	# elapsed % INTERVAL == 0 不需要額外記「上次問過哪一分鐘」：_on_time_changed
 	# 每個遊戲分鐘只呼叫一次，elapsed 每次重算剛好前進 1，同一個間隔倍數只會
@@ -2741,10 +2912,21 @@ func _reevaluate_once() -> void:
 	# 發起下一次決策請求。等待期間不 return——照樣往下跑完整套仲裁流程，
 	# 從池子（schedule 任務、上一輪還沒被選中的 llm 任務）挑 fallback 頂著，
 	# 不空等、不卡頓，是《10》§5.1 講的「天然容錯」
+	# is_working() 排除（#846 第 1 輪 review major）：work 任務要先走到工作站
+	# 才 work_at()，走路吃掉大半 duration 時，elapsed 抵達門檻那一刻 _run_work()
+	# 協程可能還在跑。不排除的話這裡照樣 _remove_task()＋記 _logged=true，
+	# 之後 _consider_switch() 又因 _logged 判 current 不成立、整段跳過
+	# _is_preemptible()（含 not _working 保護）把角色中途調走——協程下一個
+	# time_changed 偵測到離開 WORK_RANGE，_end_work() 收尾但不撥款，
+	# today_log 已記 ok=true 工資卻落空。工作中的任務交給 _run_work() 自己收尾
+	# （開工後 WORK_DURATION_MINUTES 內必定結束，不會卡死），收尾沿
+	# _on_work_finished() → _reevaluate() 回到這裡，elapsed 仍過門檻、
+	# is_working() 已為 false，完成判定自然補上——_logged 只在真正做完後標記
 	if llm_decision_enabled and not _awaiting_decision \
 			and _current_task.get("source", "") == "llm" \
 			and _current_task.get("id", "") != _active_talk_task_id \
 			and not is_performing() \
+			and not is_working() \
 			and not _current_task.get("_logged", false) \
 			and now_minutes - _current_task_started_at >= int(ceil(_effective_action_duration(_current_task.get("duration", 0.0)))):
 		# 做完的那筆要先離開池子。llm 任務沒有 window，不像 schedule 靠時間窗
@@ -2926,7 +3108,19 @@ func _consider_switch(best: Dictionary, best_score: float, now: String, now_minu
 	# not current_still_valid → _select() 的 outgoing_ok=true，today_log 記
 	# ok=true——跟過期／出窗同一種「自然結束」收尾，不是被搶占（ok=false）
 	# 那條；要不要為前提失效另立更細的訊號是產品決策，見《行程佇列與任務仲裁》
-	var current_still_valid := not _is_expired(_current_task, now_minutes) \
+	#
+	# _logged：llm 任務做滿 duration 後（_reevaluate_once() 的事件驅動觸發）
+	# 只 _remove_task() + 標記 _logged=true，不清空 _current_task——等待下
+	# 一次決策回覆期間，池子裡的 fallback 任務要能頂上來。但這裡原本沒把
+	# _logged 算進「這筆還算不算數」，一筆已經做完、已經離開任務池的殭屍
+	# 任務會被當成仍在進行，繼續用它原本的分數跟新候選比 HYSTERESIS——分數
+	# 通常贏（例如排進時間窗的 schedule 任務 110 分），導致往後每一輪重新
+	# 仲裁，任何比它分數低的候選永遠選不中，且因為 best 本身不為空，
+	# _reevaluate_once() 兩條 STUCK_RETRY 補漏分支（都掛在 best.is_empty()
+	# 上）完全碰不到這個情境。實測（Test B 診斷測試）踩到：一筆完成的 work
+	# 任務卡成殭屍，之後 51 遊戲天沒有任何新任務被選中，直到力竭反射介入
+	var current_still_valid := not bool(_current_task.get("_logged", false)) \
+		and not _is_expired(_current_task, now_minutes) \
 		and _in_window_or_unwindowed(_current_task, now) \
 		and _preconditions_met(_current_task)
 
@@ -3121,24 +3315,46 @@ func resolve(action: String, params: Dictionary) -> Dictionary:
 			if matches.size() > 1:
 				return {"success": false, "reason": "有多個人叫這個名字，無法確定要找誰"}
 		"eat":
+			# 跟 _eat_failure_reason_text(EAT_NO_FOOD) 共用 _no_supply_reason_text()：
+			# llm 任務在這裡就被攔下、根本進不了 eat()，回自製短句的話兩條路徑
+			# 講的不是同一句事實，這條路徑也拿不到賣場清單（robot-ru review 抓到）
 			if inventory == null or _find_food_slot().is_empty():
-				return {"success": false, "reason": "背包裡沒有食物可以吃"}
+				return {"success": false, "reason": _no_supply_reason_text("食物", "food")}
 		"drink":
 			if inventory == null or _find_drink_slot().is_empty():
-				return {"success": false, "reason": "背包裡沒有飲品可以喝"}
+				return {"success": false, "reason": _no_supply_reason_text("飲品", "drink")}
+		"medicate":
+			# 失敗訊息走 _medicate_failure_reason_text()，跟 _pursue_medicate_task()
+			# 共用同一套事實句——附上由 Shop.CATALOGS × effect_injury 推導的販售
+			# 地點（見該 helper 的說明），跟 eat／drink 回 _no_supply_reason_text()
+			# 是同一種「兩條路徑講同一句事實」的立場
+			if inventory == null or _find_curative_slot().is_empty():
+				return {"success": false, "reason": _medicate_failure_reason_text(Character.MEDICATE_NO_MEDICINE)}
+		"use_item":
+			# 硬規則：背包裡真的有這個 item_id 才放行，跟 eat／drink 同一種
+			# 「目標/前提是不是真的存在」檢查（#865）。不走 _no_supply_reason_text()
+			# ——那支只認得 food／drink 兩種分類，use_item 是任意 item_id 查詢
+			var use_item_id: String = str(params.get("item_id", ""))
+			if inventory == null or not inventory.has_item(use_item_id, 1):
+				return {"success": false, "reason": "背包裡沒有這個東西"}
 		"buy":
-			# 檢查錢夠不夠（需要先查地點的商店目錄）、商品存不存在、背包有沒有空間
+			# 檢查錢夠不夠（需要先查地點的商店目錄）、商品存不存在、背包有沒有空間。
+			# 失敗原因一律走 _buy_failure_reason_text()，跟 buy_from() 的原因碼共用
+			# 同一套中文事實——這些前置攔截是 buy 任務實際會走到的失敗路徑
+			# （_pursue_buy_task() 一定先跑 resolve()、通過才呼叫 buy_from()），
+			# 回自製短句的話 ITEM_NOT_FOUND 的商品清單在唯一會發生的路徑上構不到
+			# （robot-ru review 抓到）
 			var place: String = str(params.get("place", ""))
 			if not Shop.has_shop(place):
-				return {"success": false, "reason": "這裡沒有商店"}
+				return {"success": false, "reason": _buy_failure_reason_text(Character.BUY_TARGET_NOT_FOUND, place)}
 			var item_id: String = str(params.get("item_id", ""))
 			var price := Shop.get_price(place, item_id)
 			if price < 0:
-				return {"success": false, "reason": "這間商店沒有這個商品"}
+				return {"success": false, "reason": _buy_failure_reason_text(Character.BUY_ITEM_NOT_FOUND, place)}
 			if inventory == null:
-				return {"success": false, "reason": "背包裡沒有地方放東西"}
+				return {"success": false, "reason": _buy_failure_reason_text(Character.BUY_NO_INVENTORY, place)}
 			if inventory.get_money() < price:
-				return {"success": false, "reason": "身上沒有夠的錢"}
+				return {"success": false, "reason": _buy_failure_reason_text(Inventory.MONEY_NOT_ENOUGH, place)}
 			# 檢查是否有空位或是否可以堆疊（add_item 會幫我們檢查）
 			# 這裡先用樂觀假設，真的失敗讓 buy_from() 退款並傳回原因碼
 		"gather":
@@ -3477,6 +3693,17 @@ func _pursue_current_task() -> void:
 		_pursue_drink_task()
 		return
 
+	# medicate 跟 eat／drink 同一種「呼叫一次就完成」（#865）
+	if current_state == "medicate":
+		_pursue_medicate_task()
+		return
+
+	# use_item 跟 eat／drink 同一種「呼叫一次就完成」，差別是不自動找分類、
+	# 由 params.item_id 指名（#865）
+	if current_state == "use_item":
+		_pursue_use_item_task()
+		return
+
 	# buy 跟 eat／drink 同理：呼叫一次就完成（#340）
 	if current_state == "buy":
 		_pursue_buy_task()
@@ -3767,11 +3994,12 @@ func _pursue_eat_task() -> void:
 	if proceed:
 		food_item = str(_find_food_slot().get("item_id", ""))
 		var reason := eat()
-		last_action_result = reason
 		if reason != Character.EAT_OK:
+			last_action_result = _eat_failure_reason_text(reason)
 			push_warning("Agent %s: eat 失敗（%s）" % [character_name, reason])
 			_mark_schedule_retry_backoff(_current_task)
 		else:
+			last_action_result = reason
 			var food_name := ItemDatabase.get_display_name(food_item)
 			_push_daily_event("你吃了%s。" % food_name)
 		# 連續失敗事實句涵蓋所有實際執行的動作，不分來源——跟 talk 的既有規則
@@ -3814,11 +4042,12 @@ func _pursue_drink_task() -> void:
 	if proceed:
 		drink_item = str(_find_drink_slot().get("item_id", ""))
 		var reason := drink()
-		last_action_result = reason
 		if reason != Character.DRINK_OK:
+			last_action_result = _drink_failure_reason_text(reason)
 			push_warning("Agent %s: drink 失敗（%s）" % [character_name, reason])
 			_mark_schedule_retry_backoff(_current_task)
 		else:
+			last_action_result = reason
 			var drink_name := ItemDatabase.get_display_name(drink_item)
 			_push_daily_event("你喝了%s。" % drink_name)
 		# 不分來源都記——理由同 _pursue_eat_task()
@@ -3837,6 +4066,81 @@ func _pursue_drink_task() -> void:
 	# 重新仲裁，不立刻補一次 _reevaluate() 的話，等回應期間排程或 fallback
 	# 任務不會被馬上接手，得空等到下一次 GameClock time_changed（跟 murmur
 	# 那條同一個問題）
+	_reevaluate()
+
+# medicate 任務的執行（#865）：跟 _pursue_drink_task() 完全同一種形狀，只是換
+# 呼叫 medicate() 而不是 drink()、_find_curative_slot() 而不是 _find_drink_slot()
+func _pursue_medicate_task() -> void:
+	stop_moving()
+	var proceed := true
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		proceed = result["success"]
+		if not proceed:
+			_track_action_result_for_facts("medicate", false)
+
+	var medicine_item := ""
+	if proceed:
+		medicine_item = str(_find_curative_slot().get("item_id", ""))
+		var reason := medicate()
+		if reason != Character.MEDICATE_OK:
+			last_action_result = _medicate_failure_reason_text(reason)
+			push_warning("Agent %s: medicate 失敗（%s）" % [character_name, reason])
+			_mark_schedule_retry_backoff(_current_task)
+		else:
+			last_action_result = reason
+			var medicine_name := ItemDatabase.get_display_name(medicine_item)
+			_push_daily_event("你服用了%s治傷。" % medicine_name)
+		# 不分來源都記——理由同 _pursue_eat_task()
+		_track_action_result_for_facts("medicate", reason == Character.MEDICATE_OK)
+
+	if _current_task.get("source", "") == "llm":
+		_remove_task(_current_task.get("id", ""))
+	_clear_current_task(last_action_result == Character.MEDICATE_OK)
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
+	# CodeRabbit review：_request_next_decision() 只有在非同步回應回來後才會
+	# 重新仲裁，不立刻補一次 _reevaluate() 的話，等回應期間排程或 fallback
+	# 任務不會被馬上接手，得空等到下一次 GameClock time_changed（跟 drink
+	# 那條同一個問題）
+	_reevaluate()
+
+# use_item 任務的執行（#865）：跟 _pursue_eat_task()／_pursue_drink_task()
+# 同一種「呼叫一次就完成」形狀，差別是不自動找分類（食物/飲品以外的道具，
+# 像 medicine，沒有共通分類可找），直接用 params.item_id 指名要用哪一個。
+# use_item 不在 daily schedule 模板上，理論上永遠是 llm 來源，但跟其他
+# _pursue_*_task() 一樣不假設這件事，用同一套「source == llm 才 resolve／
+# 移出任務池」判斷保持一致
+func _pursue_use_item_task() -> void:
+	stop_moving()
+	var item_id: String = str(_current_task.get("params", {}).get("item_id", ""))
+	var proceed := true
+	if _current_task.get("source", "") == "llm":
+		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
+		last_action_result = result["reason"]
+		proceed = result["success"]
+		if not proceed:
+			_track_action_result_for_facts("use_item", false)
+
+	if proceed:
+		var reason := use_item(item_id)
+		if reason != Character.USE_ITEM_OK:
+			last_action_result = _use_item_failure_reason_text(reason)
+			push_warning("Agent %s: use_item 失敗（%s）" % [character_name, reason])
+			_mark_schedule_retry_backoff(_current_task)
+		else:
+			last_action_result = reason
+			var item_name := ItemDatabase.get_display_name(item_id)
+			_push_daily_event("你使用了%s。" % item_name)
+		# 不分來源都記——理由同 _pursue_eat_task()
+		_track_action_result_for_facts("use_item", reason == Character.USE_ITEM_OK)
+
+	if _current_task.get("source", "") == "llm":
+		_remove_task(_current_task.get("id", ""))
+	_clear_current_task(last_action_result == Character.USE_ITEM_OK, item_id)
+	if llm_decision_enabled and not _awaiting_decision:
+		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
 
 # work 任務的執行（#358）：長動作，執行協程會自己跑 5 遊戲分鐘。
@@ -3990,7 +4294,9 @@ func _pursue_buy_task() -> void:
 		stop_moving()
 		_pursued_place = ""
 		_pursuit_done = false
-		last_action_result = Character.BUY_TARGET_NOT_FOUND
+		# 失敗原因同樣翻成中文——這個守衛是「LLM 填了不是商店的 place」最
+		# 常見的失敗路徑，不能把英文常數原樣塞進 last_action_result
+		last_action_result = _buy_failure_reason_text(Character.BUY_TARGET_NOT_FOUND, place)
 		if failed_task_source == "llm":
 			_remove_task(failed_task_id)
 		else:
@@ -4058,9 +4364,11 @@ func _pursue_buy_task() -> void:
 	if proceed:
 		var item_id: String = str(_current_task.get("params", {}).get("item_id", ""))
 		var reason := buy_from(place, item_id)
-		last_action_result = reason
 		if reason != Character.BUY_OK:
+			last_action_result = _buy_failure_reason_text(reason, place)
 			push_warning("Agent %s: buy 失敗（%s）" % [character_name, reason])
+		else:
+			last_action_result = reason
 
 	if _current_task.get("source", "") == "llm":
 		_remove_task(_current_task.get("id", ""))
@@ -4077,6 +4385,160 @@ func _pursue_buy_task() -> void:
 	if llm_decision_enabled and not _awaiting_decision:
 		_request_next_decision(_today_plan_needs_new_goal())
 	_reevaluate()
+
+# issue #795：buy_from() 回傳的原始代碼（TARGET_NOT_FOUND／TOO_FAR／
+# ITEM_NOT_FOUND／NOT_ENOUGH／NO_SPACE 等）先前原封不動塞進
+# last_action_result，下一輪 prompt 就是一串英文常數——走路失敗那幾條
+# 分支（「走不到商店，無法購買」）早就是手寫中文，買東西失敗卻沒有，
+# 純粹是疏漏。這裡補齊中文人話，ITEM_NOT_FOUND 額外用 Shop.list_items()
+# 列出這個地點真正賣什麼，同時給 item_id 與中文顯示名——AISchema 只擋
+# 空字串、不做顯示名→id 正規化，只給顯示名的話 LLM 照字面填中文會再撞
+# 一次同樣的錯。不做模糊比對／引擎幫它選「最接近」的品項直接買——見
+# #795 的討論，那等於引擎替 AI 決定它真正想要什麼，這裡只給事實，
+# 選擇權留給 LLM 自己
+func _buy_failure_reason_text(reason: String, place: String) -> String:
+	match reason:
+		Character.BUY_TARGET_NOT_FOUND:
+			# 同一個原因碼有兩種觸發：地點真的沒有商店（_pursue_buy_task() 守衛
+			# (a)、buy_from() 的 has_shop 檢查），跟有商店但錨點解析不出來（守衛
+			# (b)——_pursue_buy_task() 的 anchors 檢查、buy_from() 的 anchors.has()
+			# 檢查）。後者該地點其實是商店，context.shop 還列著它，講「沒有商店」
+			# 是假事實——用 Shop.has_shop() 區分兩種事實句（robot-ru review 抓到）
+			if not Shop.has_shop(place):
+				return "%s 沒有可以購買的商店" % place
+			return "%s 是商店，但找不到可以走過去的位置" % place
+		Character.BUY_TOO_FAR:
+			return "距離商店太遠，無法購買"
+		Character.BUY_NO_INVENTORY:
+			return "沒有背包，無法購買"
+		Character.BUY_ITEM_NOT_FOUND:
+			var names: Array[String] = []
+			for item_id in Shop.list_items(place):
+				names.append("%s（%s）" % [item_id, ItemDatabase.get_display_name(item_id)])
+			return "%s沒有賣這個東西，目前只賣：%s" % [place, ", ".join(names)]
+		Inventory.MONEY_NOT_ENOUGH:
+			return "身上的錢不夠，無法購買"
+		Inventory.MONEY_INVALID_AMOUNT:
+			return "購買金額有誤，無法購買"
+		Inventory.ADD_NO_SPACE:
+			return "背包已滿，無法購買"
+		_:
+			return "購買失敗（%s）" % reason
+
+# issue #820：eat()／drink() 的失敗代碼跟修 #795 之前的 buy_from() 是同一種
+# 疏漏——resolve() 對 llm 來源任務已經先擋掉「背包沒有食物/飲品」這條最常見
+# 的路（回中文），但 schedule 來源任務不走 resolve()，以及 EAT_NO_STATS 這種
+# resolve() 沒檢查的情況，還是會讓 eat()/drink() 的原始英文代碼直接進
+# last_action_result。這裡補齊翻譯；「沒有食物/飲品」這條只陳述事實——背包
+# 真的沒有該分類時講背包現況，加上由 Shop.CATALOGS × ItemDatabase.category
+# 推導出哪些地點有賣該分類（item_id ＋中文顯示名，見 _no_supply_reason_text()）；
+# 背包有 X 但 use_item() 失敗時只講「這份 X 用不成功」——同一個原因碼的兩種
+# 事實在 helper 內部區分。不寫死地點名、也不給「可以去哪買」的行動建議：引擎
+# 只報告發生什麼，下一步怎麼補是 LLM 自己的判斷，跟 _buy_failure_reason_text()
+# 只給事實、不替 AI 猜是同一立場
+func _eat_failure_reason_text(reason: String) -> String:
+	match reason:
+		Character.EAT_NO_INVENTORY:
+			return "沒有背包，無法吃東西"
+		Character.EAT_NO_FOOD:
+			return _no_supply_reason_text("食物", "food")
+		Character.EAT_NO_STATS:
+			return "沒有生理數值可以恢復，無法吃東西"
+		_:
+			return "吃東西失敗（%s）" % reason
+
+func _drink_failure_reason_text(reason: String) -> String:
+	match reason:
+		Character.DRINK_NO_INVENTORY:
+			return "沒有背包，無法喝東西"
+		Character.DRINK_NO_DRINK:
+			return _no_supply_reason_text("飲品", "drink")
+		Character.DRINK_NO_STATS:
+			return "沒有生理數值可以恢復，無法喝東西"
+		_:
+			return "喝東西失敗（%s）" % reason
+
+func _use_item_failure_reason_text(reason: String) -> String:
+	match reason:
+		Character.USE_ITEM_IS_DEAD:
+			return "死了，無法使用道具"
+		Character.USE_ITEM_NO_INVENTORY:
+			return "沒有背包，無法使用道具"
+		Character.USE_ITEM_NOT_FOUND:
+			return "背包裡沒有這個道具"
+		Character.USE_ITEM_NO_STATS:
+			return "沒有生理數值可以恢復，無法使用道具"
+		Inventory.USE_NOT_FOUND:
+			return "背包裡沒有這個道具"
+		Inventory.USE_NOT_CONSUMABLE:
+			return "這個道具不是消耗品，用了沒有效果"
+		Inventory.USE_INVALID_STATS:
+			return "這個道具的數值設定有誤，無法使用"
+		Inventory.USE_INVALID_EFFECT:
+			return "這個道具的效果設定有誤，無法使用"
+		Inventory.USE_REMOVE_FAILED:
+			return "這個道具用不成功"
+		_:
+			return "使用道具失敗（%s）" % reason
+
+# medicate() 的失敗代碼翻譯，形狀比照 _eat_failure_reason_text()／
+# _use_item_failure_reason_text()（#865）：resolve() 對 llm 來源任務會先擋掉
+# 「背包裡沒有能治傷的藥品」這條最常見的路（回中文），但 schedule 來源任務
+# 不走 resolve()，MEDICATE_NO_STATS 這種 resolve() 沒檢查的情況也一樣——不能
+# 讓原始英文代碼直接進 last_action_result（硬規定三）。「沒有能治傷的藥品」
+# 這條只陳述事實：medicate() 對「找到了但 inventory.use_item() 失敗」也回
+# NO_MEDICINE，這時「沒有藥品」是假事實——先核對 _find_curative_slot()，還
+# 找得到就只講「這份藥品用不成功」；真的沒有才補上由 Shop.CATALOGS ×
+# ItemDatabase.effect_injury 推導出哪些地點有賣治傷道具（不寫死地點名，也
+# 不給「可以去哪買」的行動建議，立場同 _no_supply_reason_text()）
+func _medicate_failure_reason_text(reason: String) -> String:
+	match reason:
+		Character.MEDICATE_NO_INVENTORY:
+			return "沒有背包，無法服藥"
+		Character.MEDICATE_NO_MEDICINE:
+			if inventory != null and not _find_curative_slot().is_empty():
+				return "這份藥品用不成功"
+			var place_facts: Array[String] = []
+			for place in Shop.CATALOGS:
+				var items: Array[String] = []
+				for item_id in Shop.CATALOGS[place]:
+					if float(ItemDatabase.get_item(item_id).get("effect_injury", 0.0)) < 0.0:
+						items.append("%s（%s）" % [item_id, ItemDatabase.get_display_name(item_id)])
+				if not items.is_empty():
+					place_facts.append("%s：%s" % [place, ", ".join(items)])
+			if place_facts.is_empty():
+				return "背包裡沒有能治傷的藥品，目前沒有地點賣治傷的藥品"
+			return "背包裡沒有能治傷的藥品。目前有賣治傷藥品的地點：%s" % "；".join(place_facts)
+		Character.MEDICATE_NO_STATS:
+			return "沒有生理數值可以恢復，無法服藥"
+		_:
+			return "服藥失敗（%s）" % reason
+
+# 「背包裡沒有 X」的訊息組裝。開口前先核對背包現況：eat()／drink() 對「找到
+# X 但 use_item() != USE_OK」也回 NO_FOOD／NO_DRINK，這時「背包裡沒有 X」是
+# 假事實——只陳述「這份 X 用不成功」，不附賣場清單；保守修法是不動
+# character.gd 的原因碼契約，在訊息組裝這端區分兩種事實（robot-ru review 抓到）。
+# 背包真的沒有該分類（或根本沒有背包）時才講「沒有 X」——一句背包現況，加上
+# 由 Shop.CATALOGS × ItemDatabase.category 推導出哪些地點有賣該分類（item_id
+# ＋中文顯示名），不寫死地點名（誰在賣照實列，商店資料改了訊息跟著變），也
+# 不給「可以去哪裡買」的行動建議——下一步怎麼補是 LLM 自己的判斷。沒有任何
+# 地點賣該分類時只留背包現況那句
+func _no_supply_reason_text(noun: String, category: String) -> String:
+	if inventory != null:
+		var slot: Dictionary = _find_food_slot() if category == "food" else _find_drink_slot()
+		if not slot.is_empty():
+			return "這份%s用不成功" % noun
+	var place_facts: Array[String] = []
+	for place in Shop.CATALOGS:
+		var items: Array[String] = []
+		for item_id in Shop.CATALOGS[place]:
+			if ItemDatabase.get_item(item_id).get("category", "") == category:
+				items.append("%s（%s）" % [item_id, ItemDatabase.get_display_name(item_id)])
+		if not items.is_empty():
+			place_facts.append("%s：%s" % [place, ", ".join(items)])
+	if place_facts.is_empty():
+		return "背包裡沒有%s，目前沒有地點賣%s" % [noun, noun]
+	return "背包裡沒有%s。目前有賣%s的地點：%s" % [noun, noun, "；".join(place_facts)]
 
 # gather 任務的執行（#574）：跟 _pursue_work_task() 同理，先走到地點錨點，
 # 抵達後才執行；跟 eat／drink／buy 同理，呼叫一次就完成，不像 nap 那樣佔滿
@@ -4268,6 +4730,12 @@ const WANDER_RANGE_CELLS := 6
 ## 選這個選項完全憑它自己判斷（《00》原則二）。目的地只在任務剛開始時選一次
 ## （用任務 id 比對是不是同一趟），不是每次重算都重選，否則角色會在原地
 ## 對著一連串新亂數目標反覆折返，永遠走不到任何一個
+## #818 review：原本抵達第一個目的地就立刻收尾，跟其他長動作（work／sleep／
+## gather）不同——那些占滿整段 duration 才問下一步，wander 卻通常 2-3 遊戲
+## 分鐘就走完一整輪決策，決策請求頻率變成 3-4 倍，多半撞上 AIService 的
+## min_interval_sec 冷卻白跑。改成抵達後若還沒做滿 duration，重新挑一個附近
+## 目的地繼續晃，直到 duration 用完（或附近真的挑不出下一個點）才收尾——
+## 跟其他長動作同一套「占滿 duration」節奏
 func _pursue_wander_task() -> void:
 	if _current_task.get("source", "") == "llm":
 		var result := resolve(str(_current_task.get("action", "")), _current_task.get("params", {}))
@@ -4299,6 +4767,15 @@ func _pursue_wander_task() -> void:
 		return
 
 	stop_moving()
+
+	var elapsed := _now_minutes() - _current_task_started_at
+	var duration := int(_current_task.get("duration", 0.0))
+	if elapsed < duration:
+		var next_leg: Variant = _pick_wander_target()
+		if next_leg != null:
+			_wander_target = next_leg
+			return
+
 	last_action_result = ""
 	_track_action_result_for_facts("wander", true)
 	_finish_task_and_request_next()
@@ -5531,6 +6008,12 @@ func debug_set_llm_decision(enabled: bool) -> Dictionary:
 	# 世代淘汰掉，見它自己的註解
 	if state_changed:
 		_decision_generation += 1
+
+	# 關閉開關時順手解除入眠（issue #827）：入眠是「模型失效，暫停 AI 決策」
+	# 的狀態，決策都被手動關掉之後角色該走回排程模式繼續動，不能永遠石化在
+	# 「被天神召喚中」——不然 ai_decision <name> off 看起來會像把角色弄死了
+	if not enabled and is_offline_asleep:
+		exit_offline_sleep()
 
 	if not enabled or _awaiting_decision:
 		return {"triggered": false}

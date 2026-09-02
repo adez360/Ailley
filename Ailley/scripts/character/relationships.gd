@@ -129,8 +129,11 @@ func load_save_data(data: Dictionary) -> void:
 		# trust 欄位，DEFAULT_RECORD 已經沒有這個 key，get()/duplicate() 自然
 		# 不會把它復活，不用另外過濾
 		var saved_met_count: Variant = saved.get("met_count")
-		if saved_met_count is int:
-			record["met_count"] = maxi(0, saved_met_count)
+		# JsonSaveService 走 JSON.parse_string()，JSON 數字一律回 float（同
+		# character.gd load_save_data() 的 #861 bug pattern）——只驗 is int
+		# 會讓存檔的 met_count 永遠落在預設值 0；轉型後再夾下限
+		if saved_met_count is int or saved_met_count is float:
+			record["met_count"] = maxi(0, int(saved_met_count))
 		var saved_appearance: Variant = saved.get("appearance_cache")
 		if saved_appearance is String:
 			record["appearance_cache"] = saved_appearance
@@ -140,6 +143,8 @@ func load_save_data(data: Dictionary) -> void:
 		# 缺席（舊存檔沒有這個欄位）沿用 DEFAULT_RECORD 的 -1，跟其餘欄位
 		# 「型別不對就沿用預設值」同一套規則——-1 本身就是合法的「從沒見過」
 		var saved_last_seen: Variant = saved.get("last_seen")
-		if saved_last_seen is int:
-			record["last_seen"] = maxi(-1, saved_last_seen)
+		# 同上面 met_count：JSON 讀回來是 float，只驗 is int 會讓 last_seen
+		# 永遠落回 -1
+		if saved_last_seen is int or saved_last_seen is float:
+			record["last_seen"] = maxi(-1, int(saved_last_seen))
 		records[other_id] = record

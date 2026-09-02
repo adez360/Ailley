@@ -344,10 +344,12 @@ func get_save_data() -> Dictionary:
 ## 清掉，否則場上角色的舊 L1 會在讀檔後跟新載入的 L2/L4 混在一起。
 ##
 ## entries 陣列本身或裡面任一筆不是預期形狀（不是 Array／不是 Dictionary／
-## level 不是 2、3 或 4）時整筆跳過，不中途 push_error 中斷——存檔是外部檔案，
-## 不假設它沒被手改過，但也不用像 Stats.SPEC 那樣逐欄位補值，因為這裡的欄位
-## 全部由引擎自己的 add_candidate() 產生，不是模型輸出。驗證完才一次替換
-## entries／_next_id，中途不動本體，避免格式錯誤只套用到一半
+## level 不是 2、3 或 4／缺少 content、valence、decay_value、created_day 這幾個
+## 會被其他函式方括號索引讀取的欄位，見 _has_required_fields()）時整筆跳過，
+## 不中途 push_error 中斷——存檔是外部檔案，不假設它沒被手改過，但也不用像
+## Stats.SPEC 那樣逐欄位補值，因為這裡的欄位全部由引擎自己的 add_candidate()
+## 產生，不是模型輸出。驗證完才一次替換 entries／_next_id，中途不動本體，
+## 避免格式錯誤只套用到一半
 ## embedding 存檔時是 JSON 陣列（float 元素），讀回來要轉成 PackedFloat32Array
 ## 才能參與 _cosine_similarity()。型別不是 Array，或裡面有非數字元素，就
 ## 回退成空陣列，不炸掉呼叫端——content/importance/valence 等其餘欄位依然
@@ -367,6 +369,34 @@ static func _parse_stored_embedding(raw_embedding: Variant) -> PackedFloat32Arra
 	return floats
 
 
+## entries 裡除了 level（呼叫端已經驗證過）之外的其餘欄位，正常情況下全部由
+## 引擎自己的 add_candidate() 產生、形狀固定，不是模型輸出。但存檔是外部檔案，
+## 缺欄位的 entry（手改過、或版本升級留下的舊格式）混進來時，不會在讀檔當下
+## 出錯——要等到下一次 decay_all()（valence／decay_value）、
+## _demote_oldest_l4_if_full()（created_day）、get_life_highlights()
+## （content／created_day）這些直接用方括號索引讀欄位的地方才噴
+## `Invalid access to property or key`，而且已經隔了一輪遊戲循環，距離問題
+## 根源（讀檔缺欄位）很遠、不好追（issue #664）。這裡只查「缺了會真的讓某處
+## 讀檔後崩潰」的那幾個欄位，不是每個欄位都查——importance／related_npcs／
+## location_id／embedding 都只用 .get() 讀，缺了不會炸，不需要在這裡把關。
+##
+## decay_value／created_day 接受 int 或 float：JSON 存檔的所有數字經
+## JsonSaveService 讀回來一律是 float（同一個病根見 issue #857／#861），
+## 只認 is int 的話，正常存檔內容也會被這裡誤判成「型別不對」整筆跳過
+func _has_required_fields(entry: Dictionary) -> bool:
+	if not (entry.get("content") is String):
+		return false
+	if not (entry.get("valence") is String):
+		return false
+	var decay_value: Variant = entry.get("decay_value")
+	if not (decay_value is int or decay_value is float):
+		return false
+	var created_day: Variant = entry.get("created_day")
+	if not (created_day is int or created_day is float):
+		return false
+	return true
+
+
 func load_save_data(data: Dictionary) -> void:
 	l1.clear()
 
@@ -379,6 +409,8 @@ func load_save_data(data: Dictionary) -> void:
 				continue
 			var entry: Dictionary = (raw_entry as Dictionary).duplicate(true)
 			if entry.get("level") != 2 and entry.get("level") != 3 and entry.get("level") != 4:
+				continue
+			if not _has_required_fields(entry):
 				continue
 			entry["embedding"] = _parse_stored_embedding(entry.get("embedding"))
 			parsed.append(entry)
