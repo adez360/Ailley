@@ -19,7 +19,8 @@ var _history_index := 0
 
 
 func _ready() -> void:
-	# 正式建置完全關閉，不留任何手勢/參數可以叫回來（issue #356）：這裡的指令
+	# 正式建置完全關閉，不留任何手勢/參數可以叫回來（正式版玩家可見的 AI 狀態
+	# 呈現方式待 issue #1020 落地，在那之前這是唯一入口）：這裡的指令
 	# 能存讀檔、開關角色的 LLM 決策迴圈、直接送 LLM 探針請求（真的打雲端 API），
 	# 誤按都是實際後果，不是單純介面問題。set_process_input(false) 讓 _input()
 	# 整個不會被引擎呼叫，比在 _input() 裡面判斷更早關掉，也不用另外建
@@ -694,9 +695,9 @@ func _cmd_reflect(args: PackedStringArray) -> void:
 # spawn <template_id>
 #
 # #73 驗證用：從 GameManager 的角色庫模板動態生成一隻角色、投放進場景樹。
-# 沿用 agent.tscn（跟 Agent/Agent2 同一份場景）——動態生成的角色目前沒有
-# schedule 來源，_load_schedule() 查不到節點名對應的 assignments 會噴一次
-# 警告一次錯誤，那是誠實反映「這隻角色還沒有行程表」，不是這個指令壞了
+# 沿用 agent.tscn（跟 Agent/Agent2 同一份場景）——spawn_character() 會清空
+# schedule_template 並標記 schedule_optional，_load_schedule() 對動態生成的
+# 角色直接走無排程路徑，不會噴「沒有行程表」的警告與錯誤（#1003）
 const AGENT_SCENE := preload("res://scenes/agent.tscn")
 
 func _cmd_spawn(args: PackedStringArray) -> void:

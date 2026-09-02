@@ -64,6 +64,32 @@ func _place_shape_node(area: Node) -> CollisionShape2D:
 	return null
 
 
+## 世界座標是否落在某個地點 Area2D 的矩形範圍內（可選 margin，像素）。
+## resolve_from_position() 與 is_within() 共用同一份矩形包含判斷，只是前者
+## 對場上每個地點都測一次找最近的、後者只問「這一個已知地點」
+func _area_contains(area: Node2D, shape_node: CollisionShape2D, position: Vector2, margin: float = 0.0) -> bool:
+	var half: Vector2 = (shape_node.shape as RectangleShape2D).size / 2.0 + Vector2(margin, margin)
+	var local_pos: Vector2 = area.to_local(position) - shape_node.position
+	return absf(local_pos.x) <= half.x and absf(local_pos.y) <= half.y
+
+
+## 世界座標是否落在指定地點的 Area2D 範圍內（issue #1022）。買賣三個檢查點
+## （player.gd::_nearest_shop_place()／character.gd::buy_from()／
+## vending_menu.gd::_process()）原本各自複製「離錨點中心 BUY_RANGE(32px) 內」
+## 的點+半徑判斷——#814 把地點從 Marker2D 換成 64×64 的 Area2D 矩形之後，
+## 這個判斷沒跟著換，站在矩形內大半範圍（半徑外接方形的四個角、以及被建築
+## 碰撞擋住只能貼邊靠近的方向）反而被判定「太遠」，商店幾乎按不進去。統一
+## 走這裡的矩形包含判斷，不再各自維護一份半徑
+func is_within(place_name: String, position: Vector2, margin: float = 0.0) -> bool:
+	if not has(place_name):
+		return false
+	var area: Node2D = get_node(NodePath(place_name))
+	var shape_node := _place_shape_node(area)
+	if shape_node == null or not (shape_node.shape is RectangleShape2D):
+		return position.distance_to(area.global_position) <= margin
+	return _area_contains(area, shape_node, position, margin)
+
+
 ## 用 character_id 的雜湊值在地點的 Area2D 矩形範圍內算一個固定點（issue #814，
 ## 前身是 #657 的 _overlap_offset()）。同一個角色每次呼叫都拿到同一個點——
 ## 不能每次都不同，否則移動中的抵達判定（_has_arrived_at()）會追著一個一直
@@ -191,9 +217,7 @@ func resolve_from_position(position: Vector2) -> String:
 		var shape_node := _place_shape_node(area)
 		if shape_node == null or not (shape_node.shape is RectangleShape2D):
 			continue
-		var half: Vector2 = (shape_node.shape as RectangleShape2D).size / 2.0
-		var local_pos: Vector2 = area.to_local(position) - shape_node.position
-		if absf(local_pos.x) > half.x or absf(local_pos.y) > half.y:
+		if not _area_contains(area, shape_node, position):
 			continue
 		var distance: float = position.distance_to(area.global_position)
 		if distance < nearest_distance:

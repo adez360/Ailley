@@ -35,14 +35,14 @@ func _ready() -> void:
 	set_process(false)		# 只在選單開著時才需要量距離
 	hint_label.text = L10n.t("UI_VENDING_CLOSE_HINT")
 
-# 走出 BUY_RANGE 就自己關掉。選單擋不住移動（方向鍵照樣走），沒有這段的話
-# 玩家可以邊開著選單邊走到地圖另一頭，價格照顯示、每次點都回 BUY_TOO_FAR
-# 而且只有 push_warning 看不到，同時 player.gd 又因為「選單開著」放掉 E，
-# 等於整個卡住。跟對話走遠自然散場是同一種收法
+# 走出地點的 Area2D 範圍就自己關掉（issue #1022：改用跟 buy_from() 一致的
+# 矩形包含判斷，不是離錨點中心的固定半徑）。選單擋不住移動（方向鍵照樣走），
+# 沒有這段的話玩家可以邊開著選單邊走到地圖另一頭，價格照顯示、每次點都回
+# BUY_TOO_FAR 而且只有 push_warning 看不到，同時 player.gd 又因為「選單開著」
+# 放掉 E，等於整個卡住。跟對話走遠自然散場是同一種收法
 func _process(_delta: float) -> void:
 	var anchors := get_tree().get_first_node_in_group("place_anchors")
-	if not is_instance_valid(_buyer) or anchors == null or not anchors.has(_place) \
-			or _buyer.get_body_position().distance_to(anchors.resolve(_place)) > Character.BUY_RANGE:
+	if not is_instance_valid(_buyer) or anchors == null or not anchors.is_within(_place, _buyer.get_body_position()):
 		close()
 
 func is_open() -> bool:

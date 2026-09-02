@@ -250,6 +250,14 @@ func spawn_character(scene: PackedScene, identity: Dictionary) -> Character:
 	# 欄位，spawn_character() 收的是泛型 Character，不該假設一定是 Agent
 	if character.get("schedule_template") != null:
 		character.set("schedule_template", "")
+		# 清空這個動作本身就是「這隻角色不接排程」的意思：連同標記
+		# schedule_optional 給 agent.gd::_load_schedule()，讓它對這隻角色
+		# 直接走無排程路徑，不報 assignments 查不到／模板空的警告與錯誤
+		# （#1003：建角面板投放的角色設計上就是純 LLM 驅動，不該有排程）。
+		# 同樣只有 Agent 有這個欄位（player.gd 沒有），get() 對化身者回
+		# null，這個判斷式自動跳過
+		if character.get("schedule_optional") != null:
+			character.set("schedule_optional", true)
 
 	# 掛在 current_scene 底下會落在 World（y_sort_enabled）外面，跟 Player／
 	# Level 的裝飾物完全脫鉤——動態生成的角色彼此之間、跟其他角色之間都不會

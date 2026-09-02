@@ -94,7 +94,7 @@ res://sidecar/models/<model 檔名>                檔名取 provider.model，�
 `LlamaSidecar` 自己身上（可用 `game_eval` 直接讀）。**刻意不另外做彈窗或
 玩家可見的錯誤通知**——本機 AI 連不上時，遊戲既有的「AI 未就緒→排程模式」
 容錯行為本來就會接手（跟 `ai_config.json` 找不到、格式錯誤等既有失敗情境
-是同一條路），正式版給玩家看的 AI 狀態 UI 是 issue #356 的範圍，不在這裡
+是同一條路），正式版給玩家看的 AI 狀態 UI 是 issue #1020 的範圍，不在這裡
 重新發明一套。
 
 ## 關閉：引擎拆樹時才收，不搶在 GameManager 存檔之前

@@ -31,7 +31,8 @@ func _ready() -> void:
 	# return 的話這行永遠不會跑到，變成每幀白白呼叫 queue_redraw()
 	set_process(false)
 
-	# 正式建置關閉（issue #356）。唯一的呼叫端是 debug_console.gd 的 debug
+	# 正式建置關閉（正式版玩家可見的 AI 狀態呈現方式待 issue #1020 落地）。
+	# 唯一的呼叫端是 debug_console.gd 的 debug
 	# 指令，主控台自己已經在正式建置整個關掉，這裡不加入 group 是防禦性的
 	# 第二道——之後任何地方誤用 get_first_node_in_group("debug_overlay") 都會
 	# 拿到 null，不會意外把疊圖叫出來
