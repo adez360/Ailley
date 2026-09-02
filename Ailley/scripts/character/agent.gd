@@ -1263,7 +1263,7 @@ func _decide_with_watchdog(
 		# 算進最壞值也不會低估。期限只是保底不是目標延遲——多等一輪比
 		# 把稍後會完成的合法排隊請求安靜丟掉好（PR #864 review major）
 		timeout_sec = (
-			provider.timeout * (AIService.RETRY_LIMIT + 1) * (AIService.POOL_SIZE + 1)
+			provider.timeout * (AIService.RETRY_LIMIT + 1) * (AIService.active_pool_size() + 1)
 			+ DECISION_WATCHDOG_GRACE_SEC
 		)
 

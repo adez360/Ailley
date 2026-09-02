@@ -39,8 +39,6 @@ extends Node
 ## 金鑰只在 _send() 組 Authorization header 時碰得到。任何要進 log 或
 ## 回傳給呼叫端的字串都先過 _scrub()。
 
-const POOL_SIZE := 3
-
 ## 這次呼叫屬於哪一種，決定要不要吃速率限制。
 ##
 ## SCHEDULED   —— 行程重排等由系統自己發動的呼叫。吃冷卻與每日配額
@@ -91,6 +89,14 @@ const READINESS_RETRY_DELAY_SEC := 3.0
 
 var config: AIConfig
 
+## 真正建出來的池子大小（CodeRabbit review 抓到，PR #1002）：_pool 只在
+## _ready() 建一次，不會跟著 reload_config() 換掉的 config.pool_size 一起變。
+## 需要「這一局實際能同時處理幾個請求」的呼叫端（agent.gd 的逾時保底公式）
+## 要讀這個，不要直接讀 config.pool_size——玩家中途改設定檔重載之後，
+## 兩者可能不一致，用 config 那份會讓保底公式的基準跟實際池子脫鉤
+func active_pool_size() -> int:
+	return _pool.size()
+
 var _pool: Array[HTTPRequest] = []
 var _busy := {}					# HTTPRequest -> _Job，沒有 key 就代表這個節點閒著
 var _queue: Array = []			# 等節點的 _Job，出隊順序見 _next_job_index()
@@ -123,7 +129,11 @@ signal readiness_batch_finished(generation: int)
 func _ready() -> void:
 	reload_config()
 
-	for i in POOL_SIZE:
+	# 池子大小照開機當下讀到的設定值建一次（issue #1000）：玩家改設定檔、
+	# 呼叫 reload_config_and_wait() 熱重載，不會跟著重建這批 HTTPRequest
+	# 節點——池子大小屬於「要重開遊戲才生效」的那一類設定，跟 timeout／
+	# base_url 這種每次送出前才讀的欄位不同
+	for i in config.pool_size:
 		var http := HTTPRequest.new()
 		http.name = "Request%d" % i
 		# 逐 provider 的逾時在 _send() 送出前才設定（不同 provider 可能給

@@ -70,9 +70,10 @@ res://sidecar/models/<model 檔名>                檔名取 provider.model，�
 2. 執行檔／模型檔用 `FileAccess.file_exists()` 檢查，缺一個就 `push_warning`
    並停在 `Status.MISSING_BINARY`／`MISSING_MODEL`，不嘗試拉起
 3. `OS.create_process(binary_path, args, false)`，`args` 帶 `-m <model_path>
-   --host 127.0.0.1 --port <port> --parallel <AIService.POOL_SIZE> -c 16000`
-   （`--parallel` 引用 `AIService.POOL_SIZE` 同一份常數、兩邊不脫鉤，對齊
-   關係見《04 Godot與AI資料介接規格》§1）
+   --host 127.0.0.1 --port <port> --parallel <pool_size> -c <sidecar.context_size>`
+   （兩個參數都讀 `ai_config.json`：`--parallel` 對齊 `pool_size`（預設 3）、
+   `-c` 對齊 `sidecar.context_size`（預設 16000），都是開機生效、不熱重載，
+   數值權威定義見《04 Godot與AI資料介接規格》§3）
 4. 叫起後先等 `CRASH_CHECK_SEC`（2 秒）觀察窗——沒撐過這段代表根本起不來
    （最常見原因是埠被佔用、`bind()` 失敗立刻結束），標記 `Status.CRASHED`
 5. 撐過觀察窗後改成輪詢 `_probe_port()`，`STARTUP_TIMEOUT_SEC`（30 秒）內
