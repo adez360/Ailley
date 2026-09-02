@@ -2,8 +2,8 @@
 class_name TestHomeAssignment
 extends McpTestSuite
 
-## 驗證 home 的動態供給核心（issue #391 round-robin，issue #751 動態成長）：
-## 占用判斷、沿用檢查、動態成長／拆除目前零自動化覆蓋。
+## 驗證 home 的動態供給核心（issue #391 round-robin，issue #825 完全動態）：
+## 占用判斷、沿用檢查、動態成長／拆除的 DB 語意。
 ##
 ## 純 DatabaseManager 層寫法（跟 test_stats.gd 同一種：不掛場景樹）：
 ## 「世界名冊」是場景狀態不是 DB 狀態，CharacterStatePersistence 把它收成
@@ -12,13 +12,16 @@ extends McpTestSuite
 ## DB 用測試字首（thhome_）的 npc 列模擬占用，teardown 清掉；home_assignment
 ## 游標是共用 DB 的單一列，每個測試前保存、teardown 還原。
 ##
+## issue #825 後地圖上沒有畫死的家，loc_home_* 也不再被開機 seed——這套件
+## 每個測試自己在 setup() 塞 loc_home_01~05 當 active fixture、teardown()
+## 還原成 is_active=0（migration 13 之後的常態）。
+##
 ## 不在本套件涵蓋範圍：需要真場景的部分——loc_home_* 錨點、has_for()/
 ## resolve_for() 的 home 轉譯、_world_character_ids() 對 characters 群組的
-## 抓取、_grow_home_supply() 真的生成場景節點（house.tscn instantiate、
-## NavGrid 落點搜尋）。這套件裡呼叫 _grow_home_supply() 只會走到「找不到
-## NavGrid，回傳 Vector2.INF」那條防呆分支，驗證的是「沒有場景時不會崩潰、
-## 仍回傳一個合法值」，不是真的成長行為——那個留給 project_run + game_eval
-## 在編輯器裡活的場景驗證（同 test_bury.gd 的取捨）。
+## 抓取、_grow_home_supply() 真的生成場景節點（house_001/002 instantiate、
+## NavGrid 落點搜尋、從涼亭錨點起算落點）。這套件裡呼叫 _grow_home_supply()
+## 只會走到「找不到 NavGrid，回傳 Vector2.INF」那條防呆分支——真正的成長
+## 留給 project_run + game_eval 在編輯器裡活的場景驗證（同 test_bury.gd 的取捨）。
 
 const PERSISTENCE_NODE_PATH := "CharacterStatePersistence"
 const TEST_NPC_PREFIX := "thhome_"
@@ -43,20 +46,46 @@ func suite_setup(_ctx: Dictionary) -> void:
 		skip_suite("資料庫還沒 seed 完成，無法測 location/npc 表")
 
 
+## setup() 塞 loc_home_01~05 當 active fixture：issue #825 後開機不再 seed
+## 這些列，但沿用／占用／round-robin 的語意測試都需要一批現成的 active 家
+const FIXTURE_HOME_COUNT := 5
+
+
 func setup() -> void:
 	_saved_cursor = _persistence._get_home_cursor()
-	_persistence._ensure_home_locations_seeded()
+
+	for i in range(1, FIXTURE_HOME_COUNT + 1):
+		var location_id := _home_id(i)
+		if DatabaseManager.select("location", "location_id = '%s'" % location_id, ["location_id"]).is_empty():
+			DatabaseManager.insert("location", {
+				"location_id": location_id,
+				"name": "Home %d" % i,
+				"description": "",
+				"location_type": "home",
+				"capacity": 1,
+				"danger": 0,
+				"is_active": 1,
+			})
+			_created_location_ids.append(location_id)
+		else:
+			DatabaseManager.update(
+				"location", {"is_active": 1}, "location_id = '%s'" % location_id
+			)
 
 
 func teardown() -> void:
 	DatabaseManager.delete("npc", "npc_id LIKE '%s%%'" % TEST_NPC_PREFIX)
 
-	# 測試中可能經 _grow_home_supply()／_create_or_reactivate_home() 額外
-	# 建出動態 location 列（沒有場景時不會生出場景節點，但 DB 列會留下）——
-	# 清掉，不讓一次測試跑完後汙染下一輪的 _active_home_location_ids()
+	# fixture 或測試中經 _grow_home_supply()／_create_or_reactivate_home() 額外
+	# 建出的動態 location 列（沒有場景時不會生出場景節點，但 DB 列會留下）——
+	# 我們建的直接刪；migration 13 帶進來的既有 loc_home_* 還原成 is_active=0
 	for location_id in _created_location_ids:
 		DatabaseManager.delete("location", "location_id = '%s'" % location_id)
 	_created_location_ids.clear()
+
+	DatabaseManager.update(
+		"location", {"is_active": 0}, "location_type = 'home'"
+	)
 
 	if _saved_cursor >= 0:
 		_persistence._set_home_cursor(_saved_cursor)
@@ -92,20 +121,17 @@ func _home_id(index: int) -> String:
 	return "%s%02d" % [_persistence.HOME_LOCATION_PREFIX, index]
 
 
-## 游標歸零後連續分配 5 次，拿到 01～05 全不重複，且游標剛好繞回起點
-## （5 間都是靜態，issue #751 不影響這個場景）
-func test_five_consecutive_assignments_cover_all_homes_without_duplicates() -> void:
+## 游標歸零後連續分配 FIXTURE_HOME_COUNT 次，拿到 01～05 全不重複，且
+## 游標剛好繞回起點（fixture 的 5 間都 active，沒觸發成長）
+func test_consecutive_assignments_cover_active_homes_without_duplicates() -> void:
 	_persistence._set_home_cursor(0)
 
-	var count: int = _persistence.STATIC_HOME_ANCHOR_COUNT
-	assert_eq(count, 5, "5 間靜態家是 level.tscn 裡的永久內容（issue #391）")
-
 	var assigned := {}
-	for i in count:
+	for i in FIXTURE_HOME_COUNT:
 		var home: String = _persistence._assign_next_home_location({})
 		assert_true(
 			_persistence._is_valid_home_location_id(home),
-			"第 %d 次分配 %s 應是合法的 loc_home_0N 命名" % [i + 1, home]
+			"第 %d 次分配 %s 應是合法的 loc_home_NN 命名" % [i + 1, home]
 		)
 		assert_false(
 			assigned.has(home),
@@ -113,19 +139,18 @@ func test_five_consecutive_assignments_cover_all_homes_without_duplicates() -> v
 		)
 		assigned[home] = true
 
-	assert_eq(assigned.size(), count, "5 次分配應涵蓋全部 5 間靜態家")
-	assert_eq(_persistence._get_home_cursor(), 0, "分配完 5 間游標應繞回 0")
+	assert_eq(assigned.size(), FIXTURE_HOME_COUNT, "應涵蓋全部 %d 間 active fixture" % FIXTURE_HOME_COUNT)
+	assert_eq(_persistence._get_home_cursor(), 0, "分配完一輪游標應繞回 0")
 
 
-## issue #751：5 間靜態家全滿時不再走溢出共用安全閥，改成呼叫
-## _grow_home_supply()。這裡沒有掛場景樹，NavGrid 找不到，
-## _find_home_placement() 回傳 Vector2.INF——驗證這個「沒有場景」的邊界
-##情形不會讓整個分配崩潰，仍會落到「跟現有家共用」的最終防呆，回傳值
-## 依然合法。真正的成長（NavGrid 找到落點、house.tscn instantiate）留給
-## project_run + game_eval
+## 現有 active 家全滿時改呼叫 _grow_home_supply()（issue #825：不犧牲每人一間）。
+## 這裡沒有掛場景樹，NavGrid 找不到，_find_home_placement() 回傳 Vector2.INF
+## ——驗證這個「沒有場景」的邊界情形不會讓整個分配崩潰，仍會落到「跟現有家
+## 共用」的最終防呆，回傳值依然合法。真正的成長（NavGrid 找到落點、
+## house_001/002 instantiate）留給 project_run + game_eval
 func test_grow_falls_back_gracefully_without_scene() -> void:
 	var all_occupied := {}
-	for i in range(1, _persistence.STATIC_HOME_ANCHOR_COUNT + 1):
+	for i in range(1, FIXTURE_HOME_COUNT + 1):
 		all_occupied[_home_id(i)] = true
 
 	var result: String = _persistence._assign_next_home_location(all_occupied)
@@ -153,11 +178,27 @@ func test_valid_id_has_no_upper_bound() -> void:
 	)
 
 
-## _home_location_index()：靜態範圍與動態範圍的邊界判斷
+## _home_location_index()：編號解析，非法命名回傳 -1
 func test_home_location_index_boundary() -> void:
 	assert_eq(_persistence._home_location_index(_home_id(5)), 5, "loc_home_05 是編號 5")
 	assert_eq(_persistence._home_location_index(_home_id(6)), 6, "loc_home_06 是編號 6")
 	assert_eq(_persistence._home_location_index("home_001"), -1, "舊格式不是合法編號")
+
+
+## _home_scene_path()：奇數編號用 house_001、偶數用 house_002
+func test_home_scene_path_alternates_by_parity() -> void:
+	assert_eq(
+		_persistence._home_scene_path(_home_id(1)), _persistence.HOME_SCENE_ODD,
+		"loc_home_01 是奇數，用 house_001"
+	)
+	assert_eq(
+		_persistence._home_scene_path(_home_id(2)), _persistence.HOME_SCENE_EVEN,
+		"loc_home_02 是偶數，用 house_002"
+	)
+	assert_eq(
+		_persistence._home_scene_path(_home_id(7)), _persistence.HOME_SCENE_ODD,
+		"loc_home_07 是奇數，用 house_001"
+	)
 
 
 ## 舊格式（issue #391 之前）寫的 home_001 這類舊值，會被視為無效、
@@ -262,9 +303,9 @@ func test_home_of_character_no_longer_in_world_is_reusable() -> void:
 
 ## _next_new_home_location_id()：取現有編號的最小缺口，不是無止盡往後加
 func test_next_new_home_location_id_fills_gap() -> void:
-	# 靜態 5 間（1~5）都已 seed，缺口從 6 開始
+	# fixture 的 loc_home_01~05 都在，缺口從 6 開始
 	var next_id: String = _persistence._next_new_home_location_id()
-	assert_eq(next_id, _home_id(6), "5 間靜態家都在，下一個新編號應是 6")
+	assert_eq(next_id, _home_id(6), "01~05 都在，下一個新編號應是 6")
 
 	# 手動建一筆 loc_home_06（模擬先前成長過），下一個缺口應該是 7，不是跳號
 	assert_true(
