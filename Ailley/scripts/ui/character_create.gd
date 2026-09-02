@@ -588,6 +588,15 @@ func _template_row(entry: Dictionary) -> Control:
 	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(name_label)
 
+	var deploy_button := Button.new()
+	# 投放成一般 NPC（issue #974）：deploy_from_library(id, false)，跟「操控」
+	# 共用同一套投放機制，差別只在 as_player。列表只列未投放模板，不需要
+	# disabled 判斷
+	deploy_button.text = "UI_CL_BTN_DEPLOY"
+	deploy_button.focus_mode = Control.FOCUS_NONE
+	deploy_button.pressed.connect(_on_template_deploy_pressed.bind(id))
+	row.add_child(deploy_button)
+
 	var embody_button := Button.new()
 	# 操控（#726 自舊角色庫面板移植）：把這筆未投放模板直接投放為玩家化身
 	# （deploy_from_library(id, true)）。列表只列未投放模板，不需要 disabled 判斷
@@ -613,6 +622,14 @@ func _on_template_row_gui_input(event: InputEvent, id: String) -> void:
 
 func _on_template_delete_pressed(id: String) -> void:
 	GameManager.remove_from_library(id)
+	_refresh_template_list()
+
+func _on_template_deploy_pressed(id: String) -> void:
+	if GameManager.deploy_from_library(id, false) == null:
+		_template_capacity_label.text = L10n.t("UI_CL_DEPLOY_FAILED")
+		_template_capacity_label.add_theme_color_override("font_color", EMBER)
+		return
+	_template_capacity_label.remove_theme_color_override("font_color")
 	_refresh_template_list()
 
 func _on_template_embody_pressed(id: String) -> void:

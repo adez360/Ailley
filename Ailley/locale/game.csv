@@ -189,6 +189,8 @@ UI_CL_DEPLOY_FAILED,"投放失敗（已投放或世界人數已滿）","Deploy f
 UI_CS_TITLE,"地圖角色","Characters on Map"
 UI_CS_EMPTY,"地圖上還沒有角色","No characters on the map"
 UI_CS_BTN_ADD,"＋ 新增角色","+ Add Character"
+UI_CS_BTN_RECALL,"收回","Recall"
+UI_CS_RECALL_EMBODIED,"化身角色無法收回","Cannot recall your embodied character"
 UI_PAUSED,"已暫停","Paused"
 FAIL_TARGET_NOT_FOUND,"附近沒有這個對象。","There's no one there."
 FAIL_TARGET_IS_SELF,"不能對自己這麼做。","You can't do that to yourself."
