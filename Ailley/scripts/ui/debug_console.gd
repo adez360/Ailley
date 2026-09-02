@@ -778,18 +778,18 @@ func _cmd_save(_args: PackedStringArray) -> void:
 		_error("存檔失敗：%s" % character_name)
 
 	if not result["world_ok"]:
-		_error("世界存檔失敗：%s" % GameManager.DEFAULT_WORLD_ID)
+		_error("世界存檔失敗：%s" % GameManager.active_world_id)
 		return
 
-	_print("[color=88ff88]已存檔[/color]  %d 個角色 + 世界 %s" % [result["character_count"], GameManager.DEFAULT_WORLD_ID])
+	_print("[color=88ff88]已存檔[/color]  %d 個角色 + 世界 %s" % [result["character_count"], GameManager.active_world_id])
 
 # load   讀回世界本身 + 場景裡目前每個角色各自的存檔。只套用場景裡找得到的
 # 角色——存檔裡有記載但場景沒有的角色不會被生出來，那是 player 加入世界
 # 那條流程的範圍，不在這則骨架內（見 issue #21 範圍界線）
 func _cmd_load(_args: PackedStringArray) -> void:
-	var world_data := SaveService.get_world(GameManager.DEFAULT_WORLD_ID)
+	var world_data := SaveService.get_world(GameManager.active_world_id)
 	if world_data.is_empty():
-		_error("沒有世界存檔 %s" % GameManager.DEFAULT_WORLD_ID)
+		_error("沒有世界存檔 %s" % GameManager.active_world_id)
 		return
 	GameManager.apply_world_save_data(world_data)
 
@@ -809,7 +809,7 @@ func _cmd_load(_args: PackedStringArray) -> void:
 		count += 1
 
 	_print("[color=88ff88]已讀檔[/color]  %d 個角色 + 世界 %s（第 %d 天）" % [
-		count, GameManager.DEFAULT_WORLD_ID, GameClock.day
+		count, GameManager.active_world_id, GameClock.day
 	])
 
 func _get_overlay() -> Node:

@@ -151,15 +151,15 @@ func _apply_startup_ai_state() -> void:
 ## 主選單——呼叫端（_ready()）要跟著提前 return，不能繼續對正要被換掉的場景
 ## 做任何操作（CodeRabbit review 抓到，PR #467）
 func _apply_continue() -> bool:
-	if not SaveService.has_world(GameManager.DEFAULT_WORLD_ID):
-		push_error("main_scene: continue_requested 但世界存檔 %s 不存在，返回主選單" % GameManager.DEFAULT_WORLD_ID)
+	if not SaveService.has_world(GameManager.active_world_id):
+		push_error("main_scene: continue_requested 但世界存檔 %s 不存在，返回主選單" % GameManager.active_world_id)
 		GameManager.continue_load_failed = true
 		get_tree().change_scene_to_file(MAIN_MENU_SCENE)
 		return false
 
-	var world_data := SaveService.get_world(GameManager.DEFAULT_WORLD_ID)
+	var world_data := SaveService.get_world(GameManager.active_world_id)
 	if not SaveService.is_world_data_valid(world_data):
-		push_error("main_scene: 世界存檔 %s 讀取失敗或格式不完整（可能已損毀），返回主選單" % GameManager.DEFAULT_WORLD_ID)
+		push_error("main_scene: 世界存檔 %s 讀取失敗或格式不完整（可能已損毀），返回主選單" % GameManager.active_world_id)
 		GameManager.continue_load_failed = true
 		get_tree().change_scene_to_file(MAIN_MENU_SCENE)
 		return false

@@ -4,6 +4,10 @@ extends "res://scripts/save/save_service.gd"
 ## user://saves_<hash>/ 底下（跟 ai_config_<hash>.json 同一層 user://，但分子目錄
 ## 避免混在一起；hash 依 checkout 隔離，見 CHARACTERS_DIR/WORLDS_DIR）。
 ##
+## 本地多存檔槽位（issue #810）：世界檔以 world_NNN 命名共存多個，角色檔
+## 寫入時戳上所屬世界（world_id 欄位），讀取時過濾——都在角色讀寫三個
+## 函式收口，呼叫端不用管現在玩的是哪個世界。
+##
 ## 只管檔案讀寫與 version 欄位遞增，不知道 character／world 的資料形狀——那是
 ## 呼叫端（Character.get_save_data() 等）的事，這裡收到什麼 Dictionary 就存什麼，
 ## 見 note/規格書/14_存檔資料存取層規格書.md §2.2「整包讀寫」。
@@ -61,17 +65,49 @@ var _held_locks: Dictionary = {} # lock_dir(String) -> true，這個 process 目
 
 
 func has_character(id: String) -> bool:
-	return FileAccess.file_exists("%s/%s.json" % [CHARACTERS_DIR, id])
+	var path := "%s/%s.json" % [CHARACTERS_DIR, id]
+	if not FileAccess.file_exists(path):
+		return false
+	var data := _read(path)
+	if data.is_empty():
+		# 檔案存在但解析不出來（損毀）：維持「存過但讀不出來」的既有語意，
+		# 不能因為比對不了 world_id 就降級成「從沒存過」——呼叫端靠
+		# has_character()==true 且 get_character()=={} 看到讀檔失敗（見
+		# save_service.gd has_character() 的註解）
+		return true
+	return _character_in_active_world(data)
 
 
 func get_character(id: String) -> Dictionary:
-	return _read("%s/%s.json" % [CHARACTERS_DIR, id])
+	var data := _read("%s/%s.json" % [CHARACTERS_DIR, id])
+	if not _character_in_active_world(data):
+		return {}
+	return data
+
+
+## 角色存檔的世界歸屬過濾（issue #810）：save_character() 寫入時會戳上
+## world_id，讀取時比對是否屬於 GameManager.active_world_id——world_001
+## 的角色檔在 active_world_id=world_002 時要當成「沒有這份存檔」，不然
+## 換世界會把上一個世界的角色狀態套到新世界。缺 world_id 的 legacy 存檔
+## （單一世界時代寫的）一律視為 DEFAULT_WORLD_ID，維持既有單槽存檔可用。
+## 空 Dictionary（沒有存檔或讀不出來）一律不算符合
+func _character_in_active_world(data: Dictionary) -> bool:
+	if data.is_empty():
+		return false
+	var saved_world: Variant = data.get("world_id", GameManager.DEFAULT_WORLD_ID)
+	return saved_world is String and saved_world == GameManager.active_world_id
 
 
 ## 整包覆蓋，不做局部欄位更新（見《14》§2.2）。version 在這裡遞增，
 ## 不是呼叫端的事——呼叫端只管資料本身長什麼樣。寫入前要先拿到這份存檔的
 ## session 鎖，鎖被別的活著的 process 持有時拒絕寫入（見檔頭說明）
+##
+## 世界歸屬在這裡收口（issue #810）：寫入前把 GameManager.active_world_id
+## 戳進 world_id 欄位，呼叫端（Character.get_save_data() 等）不用知道目前
+## 玩哪個世界；讀取端的過濾見 _character_in_active_world()。直接改到呼叫端
+## 傳進來的 Dictionary——它都是當場 get_save_data() 新造的，沒有其他人引用
 func save_character(id: String, data: Dictionary) -> bool:
+	data["world_id"] = GameManager.active_world_id
 	var path := "%s/%s.json" % [CHARACTERS_DIR, id]
 	if not _acquire_write_lock(path):
 		return false
@@ -91,6 +127,38 @@ func save_world(id: String, data: Dictionary) -> bool:
 	if not _acquire_write_lock(path):
 		return false
 	return _write(WORLDS_DIR, id, data)
+
+
+## WORLDS_DIR 底下所有 world_*.json 的世界 id，依名稱排序（issue #810，
+## 主選單的「繼續遊戲」世界選擇面板用）。目錄不存在（一個世界都沒存過）
+## 回傳空清單
+func list_world_ids() -> Array[String]:
+	var ids: Array[String] = []
+	var dir := DirAccess.open(WORLDS_DIR)
+	if dir == null:
+		return ids
+	dir.list_dir_begin()
+	var filename := dir.get_next()
+	while filename != "":
+		if not dir.current_is_dir() and filename.begins_with("world_") and filename.ends_with(".json"):
+			ids.append(filename.trim_suffix(".json"))
+		filename = dir.get_next()
+	dir.list_dir_end()
+	ids.sort()
+	return ids
+
+
+## 下一個空槽位的 id（issue #810，主選單「開始新遊戲」的新槽位建議用）：
+## 取現有 world_NNN 的最大號 +1，三位數補零（world_001 之後是 world_002…）。
+## 一個世界都沒有時回到 DEFAULT_WORLD_ID 起算。檔名編號超過三位數（玩家
+## 手動建到 world_1000）時 %03d 不會截斷，照原樣四位輸出
+func next_free_world_id() -> String:
+	var max_num := 0
+	for id in list_world_ids():
+		var suffix := id.trim_prefix("world_")
+		if suffix.is_valid_int():
+			max_num = maxi(max_num, int(suffix))
+	return "world_%03d" % (max_num + 1)
 
 
 ## process 正常結束時釋放這個 process 持有的所有鎖。_held_locks 只會記這個

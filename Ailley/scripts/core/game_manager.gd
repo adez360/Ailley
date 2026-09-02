@@ -8,9 +8,17 @@ extends Node
 ## 卡著舊角色的背包內容，新角色買東西也不會刷新畫面）
 signal player_body_changed(new_player: Character)
 
-## 目前只有一個世界，MVP 沒有建立/選擇世界的流程，先固定一個 id 頂著——
-## 真的要支援多世界時，這裡才需要變成可選清單
+# issue #810：本地多存檔槽位。每個世界存檔檔名 world_NNN 從這裡起算
+# （第一個槽位就是 DEFAULT_WORLD_ID），之後由 SaveService.next_free_world_id()
+# 繼續編號。常數保留給 legacy 存檔認定與 fallback 用
 const DEFAULT_WORLD_ID := "world_001"
+
+## 本輪遊戲實際要存讀哪個世界。主選單在進場前設定：「繼續遊戲」設成玩家
+## 選中的世界、「開始新遊戲」設成選定的新槽位（見 main_menu.gd）。刻意不
+## 放進 reset_for_new_game()——reset 的其他欄位是「同一個世界重新開一輪」
+## 的殘留狀態，active_world_id 是「現在玩的是哪個世界」，兩者不同層；
+## 換世界的唯一入口是回主選單重選，進場路徑都會先設好才進場
+var active_world_id: String = DEFAULT_WORLD_ID
 
 ## 這個世界允不允許 player 加入，建立世界時就該決定的旗標（見
 ## note/技術/存檔.md「允不允許 player 加入，也屬於世界」）。MVP 沒有建立
@@ -722,7 +730,7 @@ func save_all() -> Dictionary:
 	return {
 		"character_count": character_count,
 		"character_failures": character_failures,
-		"world_ok": SaveService.save_world(DEFAULT_WORLD_ID, get_world_save_data()),
+		"world_ok": SaveService.save_world(active_world_id, get_world_save_data()),
 	}
 
 # 場上一個角色都沒有代表現在停在主選單，不是真的在玩——GameClock 是 autoload，
@@ -771,7 +779,7 @@ func _autosave_on_day_change() -> void:
 	for character_name in result["character_failures"]:
 		push_error("跨日自動存檔失敗：%s" % character_name)
 	if not result["world_ok"]:
-		push_error("跨日自動存檔失敗：世界 %s" % DEFAULT_WORLD_ID)
+		push_error("跨日自動存檔失敗：世界 %s" % active_world_id)
 
 # 只有 Agent 有睡眠反思（Player 沒有 request_sleep_reflection()），逐幀輪詢
 # 而不是額外接訊號——反思本身已經用 _sleep_reflection_in_flight／
@@ -831,7 +839,7 @@ func save_before_leaving() -> bool:
 	for character_name in result["character_failures"]:
 		push_error("離開遊戲存檔失敗：%s" % character_name)
 	if not result["world_ok"]:
-		push_error("離開遊戲存檔失敗：世界 %s" % DEFAULT_WORLD_ID)
+		push_error("離開遊戲存檔失敗：世界 %s" % active_world_id)
 	return result["world_ok"] and result["character_failures"].is_empty()
 
 # 重置執行期會殘留的世界層欄位（issue #875）：GameManager 是 autoload，整個
