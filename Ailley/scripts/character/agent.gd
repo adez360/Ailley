@@ -490,6 +490,16 @@ func get_provider_name() -> String:
 ## 原本驗證過的 summary 完全沒被讀取，白白花了 LLM 的輸出 token）
 var last_reflection_summary := ""
 
+## 這個 provider 現在能不能接決策（#357 快照語意的轉發口）。HumanInput
+## （#156）不吃 AIService 的網路就緒探測——真人永遠「在線」，直接視為
+## ready；其餘來源照舊轉 AIService.get_readiness()。開場（main_scene.gd）、
+## 投放／還原（game_manager.gd）與入眠恢復探測的呼叫端都走這裡，
+## 不各自判斷「這是不是真人來源」
+func get_provider_readiness() -> Dictionary:
+	if _provider.always_ready():
+		return {"ready": true, "reason": ""}
+	return AIService.get_readiness(_provider.provider_name())
+
 ## 今天發生的事，純客觀事實句，睡前反思（request_sleep_reflection()）一次
 ## 送給 LLM 評分後清空（#168，《03》§5）。跟 Memory.l1 不是同一回事——l1 是
 ## 固定 8 條的滾動視窗，這裡是「睡前都留著」的緩衝區，語意不同不共用。
@@ -895,6 +905,11 @@ func _make_provider() -> DecisionProvider:
 		# 空字串（MVP 5 個排程 NPC 沒走建角面板）時，LocalLLMProvider 自己
 		# 退回既有的字面值行為，這裡不用另外分支
 		return LocalLLMProvider.new(model_name)
+	elif decision_source == "human":
+		# #156：《12》§3.4 HumanInput——真人即時代打。決策面板與短 30s／
+		# 中 120s 逾時（《99》P-22 #2）都在 HumanInputProvider／
+		# HumanDecisionPanel 內處理，這裡只負責路由
+		return HumanInputProvider.new(self)
 	else:
 		reason = "decision_source '%s' 不是已知值" % decision_source
 
@@ -1267,20 +1282,27 @@ func _decide_with_watchdog(
 	_run_decide_into_state(state, envelope, policy, context)
 
 	var timeout_sec := DECISION_WATCHDOG_FALLBACK_TIMEOUT_SEC
-	var provider := AIService.config.get_provider(_provider.provider_name())
-	if provider != null and provider.timeout > 0.0:
-		# 期限不只是「一次 HTTP 往返」的長度：時鐘從這裡起跑，涵蓋請求在
-		# AIService._queue 排隊與節點池對 retryable 失敗（network／HTTP 5xx）
-		# 內部重試 RETRY_LIMIT 次的階段。POOL_SIZE 個節點全被佔住時，排隊
-		# 最壞要等 POOL_SIZE 份「每份最多 (RETRY_LIMIT + 1) × timeout」的
-		# 請求做完，自己再花一份同樣的最壞值，所以取 POOL_SIZE + 1 份。
-		# 逾時本身（RESULT_TIMEOUT）不重試（ai_service.gd::_interpret()），
-		# 算進最壞值也不會低估。期限只是保底不是目標延遲——多等一輪比
-		# 把稍後會完成的合法排隊請求安靜丟掉好（PR #864 review major）
-		timeout_sec = (
-			provider.timeout * (AIService.RETRY_LIMIT + 1) * (AIService.active_pool_size() + 1)
-			+ DECISION_WATCHDOG_GRACE_SEC
-		)
+	var self_managed_timeout := _provider.watchdog_timeout_sec()
+	if self_managed_timeout != 0.0:
+		# 自管逾時的 provider（HumanInput，#156）：短 30s／中 120s（P-22 #2）
+		# 由 provider 與面板自己計時，這裡不吃 AIConfig timeout，只拿它宣告的
+		# 預算當看門狗保底——負值是「自管」的標記，絕對值才是秒數
+		timeout_sec = absf(self_managed_timeout)
+	else:
+		var provider := AIService.config.get_provider(_provider.provider_name())
+		if provider != null and provider.timeout > 0.0:
+			# 期限不只是「一次 HTTP 往返」的長度：時鐘從這裡起跑，涵蓋請求在
+			# AIService._queue 排隊與節點池對 retryable 失敗（network／HTTP 5xx）
+			# 內部重試 RETRY_LIMIT 次的階段。POOL_SIZE 個節點全被佔住時，排隊
+			# 最壞要等 POOL_SIZE 份「每份最多 (RETRY_LIMIT + 1) × timeout」的
+			# 請求做完，自己再花一份同樣的最壞值，所以取 POOL_SIZE + 1 份。
+			# 逾時本身（RESULT_TIMEOUT）不重試（ai_service.gd::_interpret()），
+			# 算進最壞值也不會低估。期限只是保底不是目標延遲——多等一輪比
+			# 把稍後會完成的合法排隊請求安靜丟掉好（PR #864 review major）
+			timeout_sec = (
+				provider.timeout * (AIService.RETRY_LIMIT + 1) * (AIService.active_pool_size() + 1)
+				+ DECISION_WATCHDOG_GRACE_SEC
+			)
 
 	var deadline_msec := Time.get_ticks_msec() + int(timeout_sec * 1000.0)
 	while not state["done"] and Time.get_ticks_msec() < deadline_msec:
@@ -1681,12 +1703,24 @@ func _request_next_decision(
 		# 探測或入眠發生當下還在飛的回應成功抵達，AIService 自己不做背景輪詢
 		# （見 ai_service.gd reload_config() 註解）的既有原則不變
 		if llm_decision_enabled and not is_dead and not is_offline_asleep:
-			await AIService.reload_config_and_wait()
-			if llm_decision_enabled and not is_dead and not is_offline_asleep \
-					and not bool(AIService.get_readiness(get_provider_name()).get("ready", false)):
+			if _provider.always_ready():
+				# HumanInput（#156）：《12》§6.2／P-22 #2 中逾時 120 秒真人沒有
+				# 決策，視同離線走 §4.5 入眠流程——「真人沒回應」不是網路瞬斷，
+				# 不用 reload_config_and_wait() 再確認。先設恢復探測節流（比照
+				# 下方 LLM 分支）：真人來源 always_ready()，不先節流的話入眠後
+				# 下一輪 _probe_offline_recovery() 立刻探測成功，等於只睡一瞬，
+				# 面板馬上又跳出來。節流後由 _probe_offline_recovery() 的低頻
+				# 探測兜底，一個探測週期後醒來接回決策迴圈
 				_offline_probe_not_before_minute = _now_minutes() \
 					+ OFFLINE_RECOVERY_PROBE_INTERVAL_MINUTES
-				enter_offline_sleep("model_unavailable")
+				enter_offline_sleep("no_response")
+			else:
+				await AIService.reload_config_and_wait()
+				if llm_decision_enabled and not is_dead and not is_offline_asleep \
+						and not bool(get_provider_readiness().get("ready", false)):
+					_offline_probe_not_before_minute = _now_minutes() \
+						+ OFFLINE_RECOVERY_PROBE_INTERVAL_MINUTES
+					enter_offline_sleep("model_unavailable")
 	else:
 		# 決策成功代表 provider 活著（issue #827）：入眠發生當下還在飛的決策
 		# 回應成功抵達時，順手把入眠解除。檢查點／反思這類不吃 _awaiting_decision
@@ -2820,7 +2854,7 @@ func _probe_offline_recovery() -> void:
 	# 探測吃 await，等待期間角色可能已經醒（debug ai_decision off）或死了
 	if is_dead or not is_offline_asleep:
 		return
-	if bool(AIService.get_readiness(get_provider_name()).get("ready", false)):
+	if bool(get_provider_readiness().get("ready", false)):
 		exit_offline_sleep()
 		# 立刻補一次仲裁：醒來的這個遊戲分鐘就接回正常的任務排程，不用等
 		# 下一個分鐘的 _on_time_changed()（那時也會跑，這裡只是不用多等一秒）

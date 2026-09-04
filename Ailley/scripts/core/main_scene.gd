@@ -107,7 +107,7 @@ func _apply_startup_ai_state() -> void:
 		var agent := node as Agent
 		if agent == null:
 			continue
-		var readiness := AIService.get_readiness(agent.get_provider_name())
+		var readiness := agent.get_provider_readiness()	# #156：真人來源永遠 ready，不吃網路探測
 		if bool(readiness.get("ready", false)):
 			ready_count += 1
 			ready_agents.append(agent)
@@ -133,7 +133,7 @@ func _apply_startup_ai_state() -> void:
 		for agent in not_ready_agents:
 			if not is_instance_valid(agent):
 				continue
-			var readiness := AIService.get_readiness(agent.get_provider_name())
+			var readiness := agent.get_provider_readiness()
 			if bool(readiness.get("ready", false)):
 				ready_count += 1
 				ready_agents.append(agent)

@@ -1,8 +1,8 @@
 class_name DecisionProvider
 extends RefCounted
 
-## 決策來源。agent.gd 只認得這個介面，不知道也不在乎背後是本機模型還是雲端模型
-## （《12》§3、§5.1）。HumanInput／RemotePlayer 留給之後的 issue。
+## 決策來源。agent.gd 只認得這個介面，不知道也不在乎背後是本機模型、雲端模型
+## 還是真人（《12》§3、§5.1）。RemotePlayer 留給之後的 issue。
 
 ## 實際要傳給 AIService.request() 的 provider 名字。LocalLLMProvider／
 ## RemoteLLMProvider 都只是「決定這個字串是什麼」，其餘邏輯共用（#213），
@@ -34,3 +34,19 @@ func max_validation_retries() -> int:
 ## provider 完全可能是兩個不同的東西
 func provider_name() -> String:
 	return _provider_name
+
+
+## 這個 provider 是否不吃 AIService 的網路就緒探測。LLM 來源要靠探測判斷
+## 「連得上才開決策」；HumanInput（#156）沒有網路可言，真人永遠視為就緒，
+## agent.gd::get_provider_readiness() 與 game_manager.gd／main_scene.gd 的
+## 開關判定都吃這個，不用各自判斷「這是不是真人來源」
+func always_ready() -> bool:
+	return false
+
+
+## agent.gd 看門狗的逾時來源。0.0（預設）＝照舊走 AIConfig provider 的
+## timeout／DECISION_WATCHDOG_FALLBACK_TIMEOUT_SEC；負值＝provider 自管逾時
+## （HumanInput 的短 30s／中 120s，《99》P-22 #2），絕對值是看門狗的保底
+## 上限——面板自己會在中逾時收掉，這裡只是防 await 永遠不 resolve 的最後一道
+func watchdog_timeout_sec() -> float:
+	return 0.0
