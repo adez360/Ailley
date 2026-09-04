@@ -655,7 +655,7 @@ func _refresh_template_list() -> void:
 ## 已下葬屍體列（issue #999）不可套用也不可投放，整列只有「永久移除」一顆鈕
 func _template_row(entry: Dictionary) -> Control:
 	var id: String = entry.get("id", "")
-	var buried := entry.get("deployed", false) and GameManager.is_library_entry_buried(id)
+	var buried: bool = entry.get("deployed", false) and GameManager.is_library_entry_buried(id)
 
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 4)
